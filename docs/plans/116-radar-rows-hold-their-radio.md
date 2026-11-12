@@ -1,6 +1,6 @@
 # Plan 116 — radar: a row holds its radio while it is on (the window scheduler goes)
 
-**Status:** draft 2026-11-12, for the operator's OK. Decisions below are the operator's of 2026-11-12.
+**Status:** approved 2026-11-12; PR 1 next. Decisions below are the operator's of 2026-11-12.
 
 ## Why
 
@@ -80,9 +80,9 @@ picker, the hold switch removed from the rows that had it.
 **Then plan 106 step 3e** moves the lease book to `radio-scheduler` on the radio's host, row by row. Its protocol gets
 simpler: no rungs, no turns; a holder renews while its reader gets samples (liveness), a later hand switch displaces.
 
-## Open questions for the operator
+## Decided after the draft (operator, 2026-11-12)
 
-1. **SAT-REC switched on:** record continuously on its band, or only during predicted passes while holding the radio
-   between them (no reopen either way)?
-2. **The station an unpinned former rotator listens to:** "the first" today means DDK2 (RTTY), DWD 7.88 MHz (WFAX),
-   the first HFDL cluster, TLL (VOR). Keep those, or should each row's settings require a pick?
+- **Go.**
+- **SAT-REC switched on records continuously** on its band, like any other row.
+- **An unpinned former rotator listens to the first station**, as today: DDK2 (RTTY), DWD 7.88 MHz (WFAX), the first
+  HFDL cluster, TLL (VOR). The existing pin changes it.
