@@ -264,7 +264,9 @@ postings were dropped as abroad (2026-11-10). Replaced by the official data:
   Countries keep their former names the same way (`Countries` aliases: Turkey/Türkiye, Czech Republic/Czechia). Hosts on masi's egress allow-list (`s3.pilw.io` for EHAK, `download.geonames.org` for postal codes; production allows any host, the chart's default list needs both).
 - **A fresh database and the tests** start from a snapshot in masi's resources (the same columns, its source dates in its
   header and in `NOTICE`); the service brings it current. A run that reads nothing changes nothing and fails.
-- **No guards (the operator, 2026-11-12: "drop guards"; "make sure we don't mass-retire after source issues").** The
+- **No guards (the operator, 2026-11-12: "drop guards"; "make sure we don't mass-retire after source issues") - DEFERRED
+  the same day ("guards/healing are a things of distant future/next plan"): until that plan, masi's places:ee runs WITH
+  the guards below and retires a place on one read that lacks it.** The
   "far fewer places", "postal codes" and "mass rename" guards and Force update go: they compared a read with the
   database, so a hand edit looked like a mass rename and the guard protected the damage. Every run writes the source as
   it is. Proposed in their place, no thresholds anywhere, **awaiting the operator's decision** (report of 2026-11-12):
@@ -441,7 +443,7 @@ to the activity log with who and when.
   its places source's schedule (how often: monthly by default, a day of the month and a time, shown in words and saved as
   the source's cron, Tallinn time), its last run (when, what changed, the note), **Run now** (one run at once, through the
   same runner and claims as any run - never two at a time). No Force update: with no guards (2026-11-12) every run
-  replaces and marks. Replace and mark, never delete: a renamed
+  replaces and marks (deferred with the guards to the upkeep plan: today the guards stand). Replace and mark, never delete: a renamed
   place keeps its old names, a place no longer carried is marked retired, a postal code no longer given is marked with
   the date it stopped. Endpoints under `/admin/countries/
   {code}/places` (`MANAGE_USERS`), each action written to the activity log with who and when.
