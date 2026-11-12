@@ -68,7 +68,7 @@ district, street, postal code - and by range from a point or an address. One add
 ### Official addresses (Estonia's house level)
 - `official_address(id, country, source, ref, place_id, street, house, postcode, full_text, lat, lon, source_date,
   retired_on)` (as built in A3: `source` a key of `source(key)`, `ref` the register's id - Estonia's ADR_ID - `place_id`
-  the deepest place, `retired_on` as `place`'s), unique `(country, source, ref)`; 1.37 million Estonian rows, read
+  the deepest place, `retired_on` as `place`'s), unique `(source, country, ref)` (led by the source: its foreign key's index); 1.37 million Estonian rows, read
   monthly from `sihtnumbrid.zip` (148 MB of CSV), diff-only by `ref`, never deleted (an address gone from the file is
   retired). Its components resolve to places by the join `places-feeds.md` section 3 describes (component 2 =
   municipality, component 3 = settlement when EHAK has it there).
@@ -216,7 +216,7 @@ resolution keeps method, score and resolver version, so a new version re-resolve
   2.5 M fit; France's BAN and the Netherlands' BAG (several times more) do not in a 3 GiB heap - decide a database-side
   comparison (refs staged per run, a chunked anti-join to retire) before copying this design.
 - **Open for A4/A5:** OpenSearch comes in A6, after A4 - so A4's resolver finds an official address in Postgres: by
-  ADS id on `(country, source, ref)`, and by text on a normalised `full_text` (an expression index in A4's changeset;
+  ADS id on `(source, country, ref)`, and by text on a normalised `full_text` (an expression index in A4's changeset;
   only the monthly run writes the table). A5: an address resolved to an official one that is later retired keeps its
   link (the row stays); a new resolver version re-resolves it.
 | A4 | The resolver on all levels and the house; measured on production's 27k company addresses and the job location strings, the hand-checked set, precision and review share in the PR | none |
