@@ -253,6 +253,11 @@ resolution keeps method, score and resolver version, so a new version re-resolve
   component collapsed ("Tartu linn, Tartu linn") recover 28; an apartment the file does not list falls to its house
   ("Estonia pst 5-410a" -> "Estonia pst 5") for 6. Together **13,439 of 13,906 (96.6%) at house level**; 15 Estonian
   texts fall to a place ("Harju maakond, Tallinn"; "..., Rõõmu küla"), 452 are foreign.
+- **A4a built (masi branch feat/address-resolver, 117c045a):** `AddressResolver`, version 1. Measured on the real data by
+  an env-gated test: the Land Board's file loaded through `addresses:ee`'s own collector in **103 s** (1,369,879 added -
+  the first run's cost in production, about), then production's 13,906 distinct registered addresses resolved in 2.2 s:
+  13,439 at house level (26,879 of 27,349 companies, **98.3%**), 15 at an Estonian place, 12 a country, 440 foreign and
+  unknown. Changeset 130 indexes `official_address (country, full_text)`.
 - **A4 in two PRs:** A4a - the official step (index, the rules above), the place-level fallback for the register's
   Estonian form, foreign text marked NONE (country only when it names one), the resolver version; measured on the real
   file by an env-gated test. A4b - free text (job locations, people's): the lexicon parser, case forms, levels with
