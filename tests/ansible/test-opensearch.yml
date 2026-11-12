@@ -39,6 +39,23 @@
         executable: /bin/bash
       changed_when: true
 
+    # production's namespace baseline (infra cluster-config schnappy-default-deny): DNS, the namespace, istiod - without
+    # it the chart's own policy (DNS only out) leaves the sidecar no way to istiod, and the pod never becomes ready
+    - name: The namespace baseline policy, production's
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../../../infra/clusters/production/cluster-config/schnappy-default-deny.yaml"
+        dest: /root/ostest-default-deny.yaml
+        mode: '0600'
+
+    - name: Apply it to the test namespace
+      ansible.builtin.shell: |
+        set -euo pipefail
+        sed 's/^  namespace: schnappy-production$/  namespace: {{ ns }}/' /root/ostest-default-deny.yaml | grep -q 'namespace: {{ ns }}$'
+        sed 's/^  namespace: schnappy-production$/  namespace: {{ ns }}/' /root/ostest-default-deny.yaml | kubectl apply -f -
+      args:
+        executable: /bin/bash
+      changed_when: true
+
     - name: Sync platform charts
       ansible.builtin.import_tasks: tasks/sync-platform-charts.yml
 
@@ -94,6 +111,8 @@
         {{ kc }} describe pod schnappy-opensearch-0 | tail -40
         {{ kc }} logs schnappy-opensearch-0 -c opensearch --tail=80
         {{ kc }} logs schnappy-opensearch-0 -c config --tail=20
+        {{ kc }} logs schnappy-opensearch-0 -c istio-proxy --tail=60 || true
+        {{ kc }} logs schnappy-opensearch-0 -c istio-proxy --previous --tail=60 || true
       args:
         executable: /bin/bash
       changed_when: false
