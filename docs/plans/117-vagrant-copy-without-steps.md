@@ -1,0 +1,109 @@
+# Plan 117 — the Vagrant copy of production, without upgrade steps
+
+**Status:** decided 2026-11-13 (operator); implementation next, the Vagrant run at the end.
+
+## Why
+
+Plan 100's upgrade is done in production (all 62 steps, 00-61; Argo: 31 apps Synced on infra/platform `main`). Its
+Vagrant harness still builds the copy as production stood on 2026-10-02 and replays the steps on it, and production's
+own procedure (`deploy:upgrade:*`, the ledger on ten) still wants a step for every change. A Velero setting
+(skip ephemeral volumes, after VeleroDailyBackupMissing on 2026-11-13) could be tested only by framing it as step 62.
+Operator, 2026-11-13: "if the upgrade is complete, then why to run its tests?" — "update current vagrant test suites,
+so upgrade step is gone and like we start with prod versions" — "plan it and test in vagrant at the end".
+
+## Decisions (operator, 2026-11-13)
+
+1. **No steps.** The copy is built from infra/platform `main` — production as it runs now, at production's versions.
+2. **Production's upgrade procedure goes too**: `deploy:upgrade:*`, `scripts/upgrade-production.py` and what only it
+   uses. The ledger ConfigMap `kube-system/upgrade-ledger` on ten stays until the operator OKs deleting it.
+3. **A change is tested by applying it to a built copy**: build from `main` once, mirror the change's branches
+   (`INFRA_REF`/`PLATFORM_REF`) into the copy's Forgejo, Argo syncs them as production's would, then **every check
+   runs** — none is chosen per change.
+
+## The model
+
+| Task | What it does |
+|---|---|
+| `test:copy:inventory` | Reads production now (read-only: ten and both Pis, `version-inventory*.sh`) into `tests/ansible/copy/prod-inventory.txt` and the Pis' versions into `pi-versions.yml`. Run before a build when production changed. |
+| `test:copy:build` | From nothing: VMs, the Pi stack at production's versions, kubeadm, then the Argo layer from `main` (or `INFRA_REF`/`PLATFORM_REF`), seeded data, the recorded scrape pools; ends with the inventory against production's. VMs stay up. |
+| `test:copy:change INFRA_REF=… PLATFORM_REF=…` | On the built copy: mirror the branches, Argo settles on them, then `test:copy:check`. |
+| `test:copy:check` | Every check, always: Argo settled, data, survival, storage, metrics, k6 smoke, production-data, isolation, barman base backup, Postgres recovery and Velero volume restore (restore-check), Velero backup from production's schedule (backup-check), Scylla Manager backup, certificate renewal (cert-check), the PR-env sweeper (sweeper-check), the inventory against production's (minus the change's own lines, which it prints). |
+| `vagrant:destroy` | As today. |
+
+`tests/ansible/upgrade/` becomes `tests/ansible/copy/` (`git mv`, paths updated).
+
+## What goes
+
+- **Steps:** `tests/ansible/upgrade/steps/` (62 files), `defaults-committed.txt`, `api-versions.txt`,
+  `targets-allowed-missing.txt`, `prod-transient.txt`, `production-argocd-state.yml` (moot past step 31),
+  `tempo-flush.yml`.
+- **Scripts:** `upgrade-production.py` (its live inventory read moves to `test:copy:inventory` first),
+  `upgrade-rules.py`, `upgrade-expected-inventory.py`, `upgrade-defaults.py`, `upgrade-merge-step.sh`,
+  `upgrade-merge-order.py`, `argo-helm-diff.py`, `upgrade-full-steps.sh`, `upgrade-build-with-pin.sh`,
+  `upgrade-step-playbooks.sh`, `upgrade-restack.py`, `upgrade-restack-in-place.sh`, `vagrant-image-digests.sh`,
+  `vagrant-image-listing.sh`, `tempo-flush.py`, `check-mode-lint.py` (its only caller was the full run).
+- **Taskfile:** `_upgrade:base` and `test:upgrade:*` (replaced by `test:copy:*`), `test:clickhouse-pin`,
+  `test:upgrade:wave0`, every `deploy:upgrade:*`.
+- **Wave 0** (the pre-step backup of stateful stores into the Pi store, production procedure's): `upgrade-backup.yml`
+  and its tasks, `wave0-rehearsal.yml`, `tasks/wave0-pg-dump.yml`, `files/pg-dump-verify.py`, the inventory's
+  `upgrade_backup_*` variables.
+- **Production upgrade playbooks used only by it:** `upgrade-prepull.yml`, `tasks/image-store-room.yml`.
+- **One-shot migrations already done in production:** `eso-helm-forget.yml` (step 44), `strimzi-v1-conversion.yml`
+  (step 37).
+- **`tests/clickhouse-pin/`** (steps 59/61's rollback pin).
+- **Unit harnesses of only the above** (~45): argo-helm-diff, backup-window, build-with-pin, check-mode-lint,
+  confirm-typeahead, finished-pods, full-run-proof-order, image-digests, k8s-holds-follow-production, plan-steps,
+  prepull, production-argocd-state, production-state-gateway, production-state-gluster, proof-integrity,
+  remote-timeouts, restack-own, runner-checks, runner-refusals, runner-review, scrape-pools-gone, step-abort-defaults,
+  step-fence, step-host-recheck, step-lines, step-order, step-stamper, step-tags-same-on-copy, tempo-flush,
+  tempo-flush-traces, upgrade-abort, upgrade-defaults, upgrade-ledger, upgrade-merged-steps, upgrade-merge-order,
+  upgrade-merge-step, upgrade-proof-freeze, upgrade-restack, upgrade-resume, defaults-follow-inventory (+
+  `defaults_baseline.py`), eso-helm-record, backup-parts, backup-space, scylla-snapshot-fresh,
+  upgrade-backup-guards, wave0-guards, pg-dump-verify; waiter-kill's strimzi case.
+
+**Kept** (reusable for the next version change, applied as a change on the copy): `upgrade-kubeadm.yml`,
+`upgrade-containerd.yml`, `postgres-analyze.yml`, `restart-mesh-workloads.yml`, `acme-check.yml`, with their
+harnesses.
+
+## What is rewired
+
+- **`production-state.yml`:** only what ten has that no repo creates (namespaces, the CNPG owner secret, the
+  ServiceAccounts, the wildcard and its check). The pre-step put-backs (CNI/crictl unheld, Gateway API CRDs
+  client-side, Keycloak's pre-step unit, Gluster before step 00) go — at production's state they are wrong.
+- **`survival-check.yml`:** defaults are production's: ClickHouse compatibility 25.8, users `schnappy`.
+- **`argo-settled.yml` / `files/argo-settled.py`:** no `--step`/`restart_step`; `expect_apps` records the copy's apps
+  after the build and a change may add or remove apps — its own (named in the output) are allowed.
+- **`restore-check.yml`:** the fresh-backup path only (no `restore_backup=wave0`, no `restore_server` undo).
+- **`backup-check.yml`:** the volumes it expects are the emptyDirs the schedule's resource policy does not skip; a
+  backup that copies none (every emptyDir skipped) passes when the policy says so; the kopia epoch job runs only when
+  a volume was copied.
+- **`upgrade-step-checks.sh` → `copy-checks.sh`:** no step arguments.
+- **`vagrant-gitops-mirror.py`, `vagrant-preload-*.sh`, `vagrant-smoke.sh`:** wording; floating digests no longer
+  written for a proof.
+- **`inventory/vagrant.yml`:** no baseline pins (`external_secrets_by_helm_override`,
+  `kubelet_grace_in_kubelet_config_map`) — the playbooks' defaults are production's; no Wave 0 variables.
+- **`pi-baseline.yml` → `pi-versions.yml`**, written by `test:copy:inventory` (2026-11-13: the file says Forgejo
+  15.0.3 / Patroni 4.1.0 / Vault 1.21.3; the playbooks pin 15.0.9 / 4.1.5 / 1.21.4 — production is read, not assumed).
+- **`vagrant-allowed-missing.txt`:** the left-outs at production's versions.
+- **Harnesses with step wiring** (keep, rewire): argo-settled, argocd-versions, base-backup-major, bootstrap-vault-eso,
+  argocd-reader, inventory-diff, keycloak-db-url, pi-restore-check, postgres-analyze, process-groups,
+  production-data-check, restore-check-cleanup, side-cluster-delete, scylla-backup-check, sweeper-check, step-checks
+  (→ copy-checks), versitygw-checksum.
+- **Docs:** plan 100's status (done, harness retired by this plan), plan 101's Pi upgrade path (a change on the
+  copy), DR-PROCEDURE's Wave 0 bucket line.
+
+## Order
+
+1. `test:copy:inventory` and production's inventory captured (read-only).
+2. The tasks, the checks' rewiring, the deletions, the harnesses; `bash tests/ansible/unit/run.sh` green, ansible-lint
+   green.
+3. `backup-check.yml` reads the schedule's resource policy (the first change it must prove).
+4. Full review (architecture, test-quality).
+5. **Vagrant, at the end:** `test:copy:build` (from `main`) → `test:copy:check` green → `test:copy:change
+   INFRA_REF=fix/velero-skip-ephemeral PLATFORM_REF=fix/velero-runbooks` green (backup-check sees every emptyDir
+   skipped and the backup Completed; restore-check still restores a volume) → `vagrant:destroy`.
+6. Push ops; then the Velero change to infra/platform `main`, one on-demand backup on production must end Completed.
+
+## Open
+
+- The ledger ConfigMap `kube-system/upgrade-ledger` on ten: delete it (a production write) once the operator OKs.
