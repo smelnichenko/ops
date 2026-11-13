@@ -117,6 +117,29 @@ term_default() {  # term_default <pid>
 # look waits for it again; one that never stops is KILLed at the grace's end. A process named so only after this read
 # (forked, then exec'd as the name) waits for the next look, stopped first - KILLed on a list read before its fork,
 # its child was never TERMed
+# the process ignores TERM (SigIgn's bit 15)
+term_ignored() {  # term_ignored <pid>
+  local k v ign=""
+  while read -r k v; do
+    [ "$k" = SigIgn: ] && ign=$v
+  done 2> /dev/null < "/proc/$1/status"
+  [ -n "$ign" ] && (( (16#$ign & 0x4000) != 0 ))
+}
+
+# the processes of the job ignoring the TERM right after it went - by pid, their start kept (a pid reused is another
+# process): they lost it. One that stops ignoring later - a child forked by a deaf job (it inherits the ignore) that sets
+# a handler - is sent it once then (resend_term); counted sent, it ran to the grace with its handler never run, KILLed.
+# Read after the TERM, not before: one that switched from ignoring to catching in between got it
+declare -gA _pg_ignored=()
+mark_ignored() {  # mark_ignored <pgid>
+  local _mi_procs _mi_x _mi_p
+  job_processes "$1" _mi_procs
+  for _mi_x in "${_mi_procs[@]}"; do
+    _mi_p=${_mi_x% *}
+    term_ignored "$_mi_p" && start_of "$_mi_p" "_pg_ignored[$_mi_p]"
+  done
+}
+
 # a process's start (clock ticks since boot, /proc/<pid>/stat field 22) into the variable named; empty when gone
 start_of() {  # start_of <pid> <variable>
   local _so_st
@@ -202,6 +225,14 @@ resend_term() {  # resend_term <pgid> <the TERM's time, uptime_cs> <sent variabl
     fi
   done
   for p in "${!deflt[@]}"; do [[ $_sent != *" $p "* ]] || lost+="$p "; done
+  # one that ignored the TERM when it went and ignores it no more: lost it - sent once (then forgotten)
+  for p in "${!parent[@]}"; do
+    [ -n "${_pg_ignored[$p]:-}" ] || continue
+    term_ignored "$p" && continue
+    start_of "$p" st
+    [ "$st" = "${_pg_ignored[$p]}" ] && [[ $lost != *" $p "* ]] && lost+="$p "
+    unset "_pg_ignored[$p]"
+  done
   # one started since the TERM whose parent left the job (re-parented: a lost process it was forked by ended of the
   # TERM sent again before the look saw it) - lost with it; never TERMed, it ran to the grace, KILLed
   for p in "${!deflt[@]}"; do
@@ -264,6 +295,7 @@ stop_groups() {  # stop_groups [-n <command name>] <grace seconds> <pgid>...
     # cleanup command among them - never lost it)
     signal_job TERM "$g" t
     term_at[$g]=$t
+    mark_ignored "$g"
     signal_job CONT "$g"
   done
   uptime_cs now

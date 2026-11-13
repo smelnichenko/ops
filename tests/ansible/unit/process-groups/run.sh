@@ -263,6 +263,24 @@ wait "$h" 2> /dev/null; rc=$?
 check "a lost process's child started after the TERM, catching it: TERMed once - its handler run once, nothing killed" \
   "$rc $((SECONDS - t0 < 3)) $(grep -c '^caught$' "$W/after.ready.n" 2> /dev/null) $(grep -c killed "$W/after.out")" \
   "143 1 1 0"
+# one there when the TERM went but ignoring it - forked by the deaf job, the ignore inherited - that catches TERM later:
+# it lost the TERM (counted sent, it ran to the grace with its handler never run, KILLed - a loaded host put the TERM in
+# that window: 11 of 24 runs). Sent once once it stops ignoring. Here the window held open: the forked subshell waits
+# 1.5 s before it drops the ignore, the TERM 0.8 s after ready (under load either way round the fixed stop passes: a TERM
+# before the fork, or after the handler, is the plain case)
+set -m
+bash -c 'trap "" TERM; echo ready > "$0"; sleep 0.5
+  ( read -r -t 1.5 _ <> <(:) || true; trap - TERM; exec bash -c "trap \"echo caught >> \\\"\$0\\\"; exit 143\" TERM; echo \$\$ > \"\$0.pid\"; for _ in \$(seq 600); do sleep 0.1; done" "$0.n" ) &
+  until [ -s "$0.n.pid" ]; do sleep 0.05; done; trap - TERM; wait' "$W/inh.ready" & h=$!
+set +m
+ready "$W/inh.ready"
+sleep 0.8
+t0=$SECONDS
+if mine "$h"; then stop_groups 5 "$h" > "$W/inh.out"; fi
+wait "$h" 2> /dev/null; rc=$?
+check "one there at the TERM ignoring it (inherited), catching it later: TERMed once then - its handler run once, nothing killed" \
+  "$rc $((SECONDS - t0 < 3)) $(grep -c '^caught$' "$W/inh.ready.n" 2> /dev/null) $(grep -c killed "$W/inh.out")" \
+  "143 1 1 0"
 # -n <name>: every process of that name in the job KILLed at once - one that appears during the grace (go-task run by
 # a command after the TERM: it swallows one and runs the step's next command) too, at the next look, not at the
 # grace's end - and what it started since the TERM TERMed once (its handler run, not KILLed)
