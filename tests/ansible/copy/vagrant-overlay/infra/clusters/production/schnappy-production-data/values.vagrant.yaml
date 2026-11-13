@@ -1,7 +1,7 @@
 # Vagrant only (the copy of production): memory REQUESTS shrunk so production fits the copy's node (ten's pods use
 # ~30 GB; operator 2026-10-02). Requests only decide scheduling - limits stay production's. Postgres keeps its 2
 # instances: the copy must see CNPG's switchover and the major-version upgrade as production will. Sized with the apps'
-# overlay (its header: the 18 GB node, ~15.8 GiB requested in all).
+# overlay (its header: the 18 GB node, ~15.3 GiB requested in all, the JVMs' heaps).
 postgres:
   resources:
     # not below shared_buffers (production's 512MB): CNPG's webhook refuses the Cluster, the data app's sync fails
@@ -14,8 +14,9 @@ scylla:
   resources:
     requests: { memory: 1Gi }        # ten: 2Gi
 # OpenSearch's heap is fixed (-Xms = -Xmx): its 2 GB are held from the start whatever the copy's few documents need -
-# 1 GB here, the one value of real memory the copy changes (its index is derived, built again from Postgres)
+# 512 MB here (its index is derived, built again from Postgres; at 1 GB it held 1.47 GB in the copy, 2026-11-14).
+# Kafka's heap is the chart's own (1 GB, strimzi-kafka.yaml), no value to set
 opensearch:
-  heap: 1g                           # ten: 2g
+  heap: 512m                         # ten: 2g
   resources:
     requests: { memory: 512Mi }      # ten: 3Gi (its limit production's)

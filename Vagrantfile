@@ -196,7 +196,7 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
     k.vm.network "private_network", ip: "192.168.56.10"
     k.vm.provider "libvirt" do |v|
       # 18 GB (2026-11-13; was 20): the workstation's radar station needs its room (pi1's comment) - the copy's requests
-      # sized to it (tests/ansible/copy/vagrant-overlay, ~15.8 GiB of ~17.4 allocatable)
+      # and the JVMs' heaps sized to it (tests/ansible/copy/vagrant-overlay, ~15.3 GiB of ~17.4 allocatable)
       v.memory = 18432
       # production's pods request ~8 CPUs (ten: 20, 44% requested). With 8 the copy sat at 98% and a new pod - the
       # k6 smoke, a rollout's surge pod - could not be scheduled (2026-10-03). vCPUs cost the host no memory.

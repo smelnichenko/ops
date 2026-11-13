@@ -160,7 +160,7 @@ Correctness, security, architecture, platform reliability, test-quality (~120 re
 The third build's VMs held 25 GB of the workstation's 30 while another session's work ran: the host swapped 14 GB, the
 Argo settle timed out, and the radar station on the same host died (22:17, restarted 22:17:30). Now:
 - **VMs 22 GB**: the node 18 GB (was 20), each Pi 2 GB (was 2.5; the Pi stack uses ~1.3).
-- **Requests sized to the 18 GB node** (~17.4 GiB allocatable): ~15.8 GiB in all, computed from production's running
+- **Requests sized to the 18 GB node** (~17.4 GiB allocatable): ~15.3 GiB in all, computed from production's running
   pods with the overlay's values - the apps 384 Mi, masi-browser 256 Mi, Kafka 384 Mi, OpenSearch 512 Mi with a 1 GB heap
   (its fixed heap the one real-memory saving: a derived index), every sidecar 96 Mi and istiod 256 Mi (new overlay:
   `istio/istiod-values.vagrant.yaml`), Prometheus 256 Mi (`prometheus/values.vagrant.yaml`). Postgres stays 512 Mi
@@ -171,8 +171,13 @@ Argo settle timed out, and the radar station on the same host died (22:17, resta
   running VM when the host's available memory is under 2 GB on two polls 5 s apart - the run fails, said in
   `.copy/host-guard.log`, the station keeps its memory. Every Vagrant suite here is guarded, not only the copy.
 - The unit runner fences `virsh` too; CI's image carries ruby (the hook is tested by loading the Vagrantfile).
-- Not known yet: the copy's real memory use inside 18 GB (production's same pods use ~30 GB, mostly its data) - measured
-  on the next build (`kubectl top`, the guest's `free`), recorded here.
+- **The JVMs' heaps too** (the fourth build, 2026-11-14 00:00-01:12): requests alone did not fit - the JVMs grew to
+  production's heap caps (masi 3g x2, monitor 2g x2, chat/chess/admin 1g), the pods held 16.9 of the node's 18 GB
+  (kube-apiserver 2.15 GB, OpenSearch 1.47, chat 1.37, admin 1.35, masi 1.21, Argo's controller 1.06), the kernel
+  OOM-killed JVMs, load 350, kube-apiserver calls timed out and the Argo settle failed at 40 min. The host was fine
+  throughout (4.3 GB available, the guard never tripped; the VMs 22.2 GB resident). Now the test environment's heaps
+  (monitor 1g, chat/chess/admin/masi 512m - schnappy-test-apps runs the same apps on them), masi one replica (as
+  there), OpenSearch 512m; Kafka's 1 GB is the chart's own. ~14.7 GB of pods expected - measured on the next build.
 
 ## Open
 

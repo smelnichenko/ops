@@ -1,21 +1,29 @@
 # Vagrant only (the copy of production): memory REQUESTS shrunk so production fits the copy's node (ten's pods use
-# ~30 GB; operator 2026-10-02). Requests only decide scheduling - limits, and so the JVMs' sizing, stay production's.
+# ~30 GB; operator 2026-10-02). Requests only decide scheduling. Limits stay production's.
 # Production grew past it (2026-11-13: masi and monitor at 2 replicas, OpenSearch - 25.9 GiB requested of the node's
 # 19.4 allocatable, ten pods Pending, the data app's init-users hook never reached, every app's database login
 # refused). Then the 20 GB node itself was too big for the workstation: the host swapped, the radar station beside it
-# died (2026-11-13 22:17) - the node is 18 GB (~17.4 GiB allocatable), every overlay's requests ~15.8 GiB in all
-# (computed from production's pods with these values), ~1.6 GiB for the checks' own pods and a rollout's surge pod.
+# died (2026-11-13 22:17) - the node is 18 GB (~17.4 GiB allocatable), every overlay's requests ~15.3 GiB in all
+# (computed from production's pods with these values), ~2 GiB for the checks' own pods and a rollout's surge pod.
+# The JVMs' heaps too (2026-11-14): at production's caps (masi 3g x2, monitor 2g x2, chat/chess/admin 1g) they grew
+# to them and the node ran out - the pods held 16.9 of its 18 GB, the kernel killed JVMs, kube-apiserver stalled (load
+# 350), the Argo settle never came. Here the heaps the test environment runs these apps on (schnappy-test-apps), the
+# flags production's, and masi one replica as there.
 # The images are production's own (its values' tags).
 app:
+  javaOpts: -Xmx1g -XX:+UseZGC -XX:+UseStringDeduplication   # ten: -Xmx2g
   resources:
     requests: { memory: 384Mi }      # ten: 3Gi (per replica, 2 replicas)
 chatService:
+  javaOpts: -Xmx512m -XX:+UseZGC     # ten: -Xmx1g
   resources:
     requests: { memory: 384Mi }      # ten: 1536Mi
 chessService:
+  javaOpts: -Xmx512m -XX:+UseZGC     # ten: -Xmx1g
   resources:
     requests: { memory: 384Mi }      # ten: 1536Mi
 admin:
+  javaOpts: -Xmx512m -XX:+UseZGC     # ten: -Xmx1g
   resources:
     requests: { memory: 256Mi }      # ten: 512Mi
 
@@ -30,6 +38,8 @@ hyperfoil:
 # masi #123, 2026-10-19). The copy never sends: Send off, and any masi mail (the digest on request) to a sink that
 # cannot be delivered.
 masiService:
+  replicas: 1                        # ten: 2
+  javaOpts: -Xmx512m -XX:+UseZGC -Djdk.virtualThreadScheduler.parallelism=2 -XX:+ExitOnOutOfMemoryError -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/tmp   # ten: -Xmx3g
   resources:
     requests: { memory: 384Mi }      # ten: 2Gi (per replica, 2 replicas)
   browser:
