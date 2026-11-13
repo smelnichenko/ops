@@ -73,7 +73,9 @@ district, street, postal code - and by range from a point or an address. One add
   is retired). **No place is stored with it** (changeset 131, the operator 2026-11-13: "there should be no execution
   order dependency"): the place an address lies in is found when it is read (`AddressResolver.Resolver.placeOfAddress`),
   among the places current then, by the join `places-feeds.md` section 3 describes (component 2 = municipality,
-  component 3 = settlement when EHAK has it there). `addresses:ee` and `places:ee` run in either order.
+  component 3 = settlement when EHAK has it there). `addresses:ee` and `places:ee` run in either order. Former names
+  never place an address (the operator, 2026-11-13: "no"): an address the Board's file still writes with a village's
+  old name lies in its municipality until the file has the new one.
 - Settlements' postal codes come from the same file, read by `places:ee` itself (`addressesUrl`, by the same join) -
   independent of `addresses:ee`. GeoNames stays for Estonia's former names.
 
