@@ -258,6 +258,21 @@ resolution keeps method, score and resolver version, so a new version re-resolve
   the first run's cost in production, about), then production's 13,906 distinct registered addresses resolved in 2.2 s:
   13,439 at house level (26,879 of 27,349 companies, **98.3%**), 15 at an Estonian place, 12 a country, 440 foreign and
   unknown. Changeset 130 indexes `official_address (country, full_text)`.
+- **A4b, designed from production's 166 distinct job location strings (2026-11-13):**
+  - Shapes seen: a single place ("Tallinn" 375, "Tartu"); a hierarchy ("Tallinn, Harjumaa" 218, "Tallinn, Harju, Estonia",
+    "Tartu, Tartumaa", "Harju maakond, Lääne-Harju vald, Ämari"); a list ("Tallinn, Tartu", "Tallinn / Tartu", "Tallinn,
+    London", "Tallinn, Stockholm, Hämeenlinna, ..."); reach ("Europe" 147, "Worldwide", "Remote, Global", "EMEA", "Nordics",
+    "Baltics", "Anywhere in France"); a foreign city with its country ("London, United Kingdom", "Kyiv, Ukraine", "San
+    Francisco, CA"); mixtures ("Amsterdam, Netherlands; Remote - Europe", "Tallinn, Spain (Remote)", "Europe I Netherlands
+    (remote)").
+  - Order of work: split on the list separators (";", " / ", " | ", " or ") -> take reach out of each part (the gate's own
+    reading of remote and regions, read-only) -> decide hierarchy or list for the commas (a part that is a level above the
+    one before it - a county form, a country - continues one place; two parts of one level are two places) -> resolve each
+    place: Estonian names by their searchable form with the type word optional ("Tartu" = "Tartu linn", "Harjumaa" =
+    "Harju" = "Harju maakond"), inside the level above when given, scored by plan 114's level weights and kind priors on
+    the 0-1 scale, a tie kept unresolved; a foreign city at its country's precision (no foreign gazetteer yet).
+  - Measured on a hand-checked set: the 166 strings labelled (place or reach, at which level), precision and the
+    review share reported in the PR.
 - **From A4a's review, for the steps after it:**
   - A5's changeset: a `tied` column (a text two candidates answered: never guessed, listed for review) and
     `resolved_country` (the resolver's country when no country row is held, a foreign one); `address.country` stays the
