@@ -1,6 +1,6 @@
 ---
 # A CNPG barman base backup of {{ cluster }} (namespace {{ pg_namespace }}) named {{ cnpg_backup }}, to the object
-# store the cluster archives to; it must complete. Used by postgres-base-backup.yml and the upgrade test's
+# store the cluster archives to; it must complete. Used by postgres-base-backup.yml and the Vagrant copy's
 # restore-check.yml.
 - name: Back the cluster up now ({{ cnpg_backup }})
   kubernetes.core.k8s:

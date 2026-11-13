@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # vagrant-preload-images.sh — put production's application images (git.pmon.dev/schnappy/*) into the Vagrant
-# kubeadm node's containerd, so the upgrade test runs exactly what ten runs without any registry credential in the
+# kubeadm node's containerd, so the Vagrant copy runs exactly what ten runs without any registry credential in the
 # VMs. The host's docker (logged in to git.pmon.dev) pulls each image; `docker save` streams it into the node's
 # k8s.io namespace. The charts use pullPolicy IfNotPresent with fixed commit tags, so the kubelet never pulls.
 #

@@ -183,7 +183,7 @@
       changed_when: false
 
     # Vagrant only, as this whole file. Kopia closes an index epoch after 24 h at the earliest: production backs up
-    # once a day, so its index stays small, while this check backs up volumes at every run - in the upgrade test's
+    # once a day, so its index stays small, while this check backs up volumes at every run - in the Vagrant copy's
     # runs the repository reached 4237 index blobs and each backup took ~25 s longer than the one before (2026-10-03).
     # An hourly epoch (kopia's floor with its 20-minute refresh) lets Velero's hourly quick maintenance compact it. Set
     # once, after the backup that created the repository, with the kopia release Velero 1.18 builds on - only when this

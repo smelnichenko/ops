@@ -2,7 +2,7 @@
 # version-inventory.sh — print every versioned component of a kubeadm node, one sorted line each:
 #   <kind> <name> <version>
 # Read-only. Runs ON the node (production `ten` or the Vagrant kubeadm VM) with kubectl access, so the same output
-# from both can be diffed: the upgrade test's baseline is valid only when the two inventories are identical.
+# from both can be diffed: the Vagrant copy is production's only when the two inventories are identical.
 #
 #   ssh ten 'bash -s' < scripts/version-inventory.sh > prod.txt
 #   vagrant ssh kubeadm -c 'sudo bash -s' < scripts/version-inventory.sh > vagrant.txt

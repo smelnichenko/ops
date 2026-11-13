@@ -263,7 +263,7 @@
     # ── TLS: one CA, per-Pi certs signed by it (production's layout) ────
     # Production's Vault certs (2026-04-04) are signed by one CA and carry the node IP, the keepalived VIP and
     # 127.0.0.1, so ESO trusts one CA (the vault-pi-ca Secret) for both Pis and reaches Vault through the VIP. This
-    # playbook used to self-sign each Pi without the VIP - a fresh deployment (the Vagrant upgrade test) could not
+    # playbook used to self-sign each Pi without the VIP - a fresh deployment (the Vagrant copy) could not
     # reach Vault through the VIP. Every step is guarded: a Pi that already has its CA / cert (production) is untouched.
     - name: Stat the Vault cert (already issued?)
       ansible.builtin.stat:

@@ -131,11 +131,40 @@ Code review, architecture, platform reliability; every finding fixed but the one
   manifests only; the server's logs, not a node-agent's; FailedValidation rows. `deploy:backup` from the schedule.
 - Sonar's open issues (argocd-repos.py: S3776, S5332) fixed.
 
+## Second full review (2026-11-13 evening) - what changed
+
+Correctness, security, architecture, platform reliability, test-quality (~120 reverts in a copy of the tree).
+
+- **A change's inventory** is judged from the build's own (`.copy/vagrant-inventory-build.txt`): a difference the build
+  had too fails (production moved since); the copy right after the change settled is kept, and what the checks change
+  after it fails (a leftover); a comparison with no verdict fails. A change applied again needs no rebuild.
+- **`.copy/copy-refs`** holds each ref with its commit, written before the change is applied; a build clears it; an
+  applied playbook stays marked.
+- **`test:copy:playbook`** runs under `env -i` (production's `.env` never reaches a playbook on the copy);
+  `RESTARTS_EXPECTED=true` for kubeadm/containerd.
+- **Mirror**: judged against `origin/main`, renames as both paths, and a values key the overlay sets refused.
+- **One copy run at a time** (`scripts/copy-lock.sh`, the outermost go-task process holds it).
+- **Pins**: caddy too; a reported version must be one; `stale`/`not-running`/`unknown` refused.
+- **Harnesses**: copy tasks pinned whole (`copy-tasks/expected.json`), production-inventory, copy-lock, the pin wiring.
+- **Velero alerts** (platform): `VeleroScheduledBackupFailed` read the last-status gauge, which Velero resets within a
+  minute - it never fired; now the failure and validation counters. Runbooks name `backups.velero.io` (`backup` alone is
+  CNPG's here).
+- **The copy no longer fit the VM**: production grew (masi and monitor at 2 replicas, OpenSearch) - 25.9 GiB requested
+  of 19.4 allocatable; Scylla and OpenSearch Pending held the data app's sync before its init-users hook, so every app's
+  login failed. The overlay's requests sized to ~18 GiB (limits production's).
+- process-groups: a process that ignored the TERM when it came (forked by a deaf job) and catches it later is sent it
+  once - it was counted sent and KILLed at the grace with its handler never run.
+
 ## Open
 
 - ~~The ledger ConfigMap `kube-system/upgrade-ledger` on ten~~: deleted 2026-11-13 18:2x with the operator's OK, its
   events saved first in `docs/plans/100-upgrade-ledger.txt`.
 
-- process-groups' harness fails under all-core CPU load (11 of 24 runs, five timing cases; never at CI's 4 jobs in
-  the suite runs so far) - from before this plan, its own investigation next.
+- process-groups' harness under all-core CPU load: one of its five failing cases is fixed (above); the other four
+  (-n task scans, a session's check) to measure again under load once the Vagrant run is done.
+- **Velero mechanism (operator's decision)**: the resource policy (as approved) or `defaultVolumesToFsBackup: false` on
+  both schedules - Velero then reads only the opted-in data volumes (all hostPath: skipped as ever), no policy, no PV
+  lookup per PVC (with a policy a PVC whose PV vanished mid-backup fails it: Woodpecker's CI PVCs in the weekly).
+- **One-way changes to Kafka, ClickHouse, Grafana**: Wave 0 was their only pre-change backup; Velero holds no volume
+  data. A one-way change to one of them needs its backup named in its own plan first.
 

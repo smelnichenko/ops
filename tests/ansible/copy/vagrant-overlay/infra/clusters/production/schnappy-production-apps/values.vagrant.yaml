@@ -1,15 +1,21 @@
 # Vagrant only (the copy of production): memory REQUESTS shrunk so production fits the 20 GB VM (ten's pods use
 # ~30 GB; operator 2026-10-02). Requests only decide scheduling - limits, and so the JVMs' sizing, stay production's.
+# Production grew past it (2026-11-13: masi and monitor at 2 replicas, OpenSearch - 25.9 GiB requested of the node's
+# 19.4 allocatable, ten pods Pending, the data app's init-users hook never reached, every app's database login
+# refused): requests sized to ~18 GiB in all, room for a rollout's surge pod.
 # The images are production's own (its values' tags).
 app:
   resources:
-    requests: { memory: 1Gi }        # ten: 3Gi
+    requests: { memory: 512Mi }      # ten: 3Gi (per replica, 2 replicas)
 chatService:
   resources:
-    requests: { memory: 768Mi }      # ten: 1536Mi
+    requests: { memory: 512Mi }      # ten: 1536Mi
 chessService:
   resources:
-    requests: { memory: 768Mi }      # ten: 1536Mi
+    requests: { memory: 512Mi }      # ten: 1536Mi
+admin:
+  resources:
+    requests: { memory: 256Mi }      # ten: 512Mi
 
 # The nightly Hyperfoil load test's image is a floating git.pmon.dev/schnappy/hyperfoil:latest, which the kubelet
 # pulls on every run (pull policy Always) from production's registry - unreachable here by design. Its 03:00 pod sat
@@ -17,11 +23,13 @@ chessService:
 hyperfoil:
   enabled: false
 
-# masi's Send (plan 103) mails REAL recruiters from production. This copy restores production's database, so a package
+# masi's Send mails REAL recruiters from production. This copy restores production's database, so a package
 # production has already sent can still be REVIEWED here - one press would mail the same recruiter twice (review of
 # masi #123, 2026-10-19). The copy never sends: Send off, and any masi mail (the digest on request) to a sink that
 # cannot be delivered.
 masiService:
+  resources:
+    requests: { memory: 640Mi }      # ten: 2Gi (per replica, 2 replicas)
   apply:
     enabled: false
     production: false

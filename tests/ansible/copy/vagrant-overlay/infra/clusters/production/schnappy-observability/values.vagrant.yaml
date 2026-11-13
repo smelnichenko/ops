@@ -1,4 +1,4 @@
-# Vagrant only (upgrade test): Alertmanager must not mail anyone. Production's receiver and routes stay as they are;
+# Vagrant only (the copy of production): Alertmanager must not mail anyone. Production's receiver and routes stay as they are;
 # only delivery is a dead end - the operator's address and Resend's SMTP are replaced, so a test alert cannot leave the
 # cluster even if the mail password were real (2026-10-02: the first Vagrant Alertmanager tried smtp.resend.com).
 alertmanager:
@@ -7,7 +7,7 @@ alertmanager:
     host: 127.0.0.1
     port: 1
 
-# Vagrant only (upgrade test): the querier asks the ingesters for the last 4 h only and the store-gateway for
+# Vagrant only (the copy of production): the querier asks the ingesters for the last 4 h only and the store-gateway for
 # anything older than 1 h (production: 13 h / 12 h, Mimir's defaults), so survival-check's query at the seed's time is
 # answered from the stored blocks 4 h after the seed - what a Mimir major must still read. The store-gateway then
 # loads young blocks too: by default it skips those with samples from the last 10 h (ignore-blocks-within, paired
@@ -15,7 +15,20 @@ alertmanager:
 # it failed the consistency check (2026-10-06, 4.5 h into a full run). Takes effect with platform's
 # mimir.extraArgs (main has them).
 mimir:
+  resources:
+    requests: { memory: 256Mi }      # ten: 512Mi
   extraArgs:
     - -querier.query-store-after=1h
     - -querier.query-ingesters-within=4h
     - -blocks-storage.bucket-store.ignore-blocks-within=0
+
+# memory REQUESTS sized with the apps' and data's overlays (~18 GiB in all on the 19.4 GiB node; limits production's)
+clickhouse:
+  resources:
+    requests: { memory: 256Mi }      # ten: 512Mi
+tempo:
+  resources:
+    requests: { memory: 256Mi }      # ten: 512Mi
+grafana:
+  resources:
+    requests: { memory: 128Mi }      # ten: 256Mi

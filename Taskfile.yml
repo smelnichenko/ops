@@ -426,8 +426,12 @@ tasks:
   test:copy:build:
     desc: Build the Vagrant copy of production from nothing - production's inventory read first, the Pis and the node at its versions, every VM booted cold once, then the Argo layer on infra/platform main; ends with the copy's inventory against production's (VMs stay up)
     cmds:
+      # one copy run at a time (scripts/copy-lock.sh): another session's run refused, named
+      - cmd: scripts/copy-lock.sh
       # the mirror clones the LOCAL repos: their main must be origin's (production's) - refused otherwise
       - cmd: scripts/copy-main-current.sh ../infra ../platform
+      # a copy from nothing: what the last one carried (a change, a playbook) is gone with it
+      - cmd: scripts/copy-refs.sh reset
       - task: test:copy:inventory
       # the record is tracked: what production moved since the last read shows here, to commit with the build's result
       - cmd: git status --short -- tests/ansible/copy/prod-inventory.txt tests/ansible/copy/pi-versions.yml
@@ -445,6 +449,8 @@ tasks:
     vars:
       ALLOWED_MISSING: tests/ansible/copy/vagrant-allowed-missing.txt
     cmds:
+      # one copy run at a time (scripts/copy-lock.sh): another session's run refused, named
+      - cmd: scripts/copy-lock.sh
       # run on its own too: the mirror clones the LOCAL repos, whose main must be origin's
       - cmd: scripts/copy-main-current.sh ../infra ../platform
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/vms-ready.yml
@@ -457,6 +463,8 @@ tasks:
       - cmd: env -i HOME="$HOME" PATH="$PATH" scripts/vagrant-gitops-mirror.py --infra-ref main --platform-ref main
       # the refs the copy runs, for a later test:copy:check run on its own
       - cmd: scripts/copy-refs.sh set main main
+      # the mains the copy is built from: a change after production's main moved is warned (copy-main-current.sh)
+      - cmd: for r in infra platform; do echo "$r $(git -C ../$r rev-parse main)"; done > .copy/copy-built
       # Argo CD's Forgejo account on the copy, as production's (its token in the Vagrant Vault, from which setup-argocd
       # gives the repo-creds their credentials and the copy's ExternalSecret merges them): after the mirror (its repos),
       # before setup-argocd. Its infra the mirrored copy (no PR-env generator - the copy's committed list)
@@ -469,7 +477,7 @@ tasks:
       # objects ten has that no git repo creates (each documented in the playbook), production's wildcard certificate too
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/production-state.yml
       # as on the Pis: Caddy serves git/auth/nexus.pmon.dev on 443 with that wildcard
-      - cmd: env -i HOME="$HOME" PATH="$PATH" bash -c 'cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-caddy.yml'
+      - cmd: env -i HOME="$HOME" PATH="$PATH" bash -c 'cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-caddy.yml -e @../../tests/ansible/copy/pi-versions.yml'
       # the schnappy realm, which production keeps only in its Keycloak database: from the auth chart's import + Vault.
       # Before Argo: istiod fetches the realm's keys when it starts
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/keycloak-realm.yml
@@ -488,6 +496,8 @@ tasks:
       # every version the Vagrant copy runs is production's (minus the documented left-outs)
       - cmd: scripts/vagrant-inventory.sh
       - cmd: scripts/inventory-diff.sh tests/ansible/copy/prod-inventory.txt .copy/vagrant-inventory.txt {{.ALLOWED_MISSING}}
+      # production's, judged: the baseline a change's inventory is judged from
+      - cmd: cp .copy/vagrant-inventory.txt .copy/vagrant-inventory-build.txt
 
   test:copy:change:
     desc: "Apply a change to the built copy as production receives it - INFRA_REF and/or PLATFORM_REF (branches of ../infra, ../platform; main where not given) mirrored to the copy's Forgejo, Argo settled on them - then every check (test:copy:check). APPS_CHANGED=true when the change adds or removes Argo apps; SCRAPE_POOLS_GONE=<pool>,<pool> for scrape pools it removes on purpose"
@@ -498,19 +508,21 @@ tasks:
       APPS_CHANGED: '{{.APPS_CHANGED | default "false"}}'
       SCRAPE_POOLS_GONE: '{{.SCRAPE_POOLS_GONE | default ""}}'
     cmds:
+      # one copy run at a time (scripts/copy-lock.sh): another session's run refused, named
+      - cmd: scripts/copy-lock.sh
       # each ref holds production's main (origin/main), and the local main the mirror clones is it
       - cmd: scripts/copy-main-current.sh ../infra:{{.INFRA_REF}} ../platform:{{.PLATFORM_REF}}
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/vms-ready.yml
       # the change's images on the node before Argo sees it - a pull after the push raced Argo's own poll
       - cmd: scripts/vagrant-preload-images.sh ../infra ../platform {{.INFRA_REF}} {{.PLATFORM_REF}}
-      # the copy's inventory before the change: what differs from production after it, and did before, is not the change's
-      - cmd: scripts/vagrant-inventory.sh && cp .copy/vagrant-inventory.txt .copy/vagrant-inventory-before-change.txt
-      - cmd: env -i HOME="$HOME" PATH="$PATH" scripts/vagrant-gitops-mirror.py --infra-ref {{.INFRA_REF}} --platform-ref {{.PLATFORM_REF}}
-      # the refs the copy runs now, for a later test:copy:check run on its own
+      # the refs the copy is to run, recorded first (their commits now): one that fails half-way is still a change's copy
       - cmd: scripts/copy-refs.sh set '{{.INFRA_REF}}' '{{.PLATFORM_REF}}'
+      - cmd: env -i HOME="$HOME" PATH="$PATH" scripts/vagrant-gitops-mirror.py --infra-ref {{.INFRA_REF}} --platform-ref {{.PLATFORM_REF}}
       # Argo on the pushed commits, every app green and every pod ready; the apps the build recorded - or, for a change
       # that adds or removes apps, recorded anew (their names printed)
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/argo-settled.yml -e expect_mirror=true {{if eq .APPS_CHANGED "true"}}-e record_apps=true{{else}}-e expect_apps=true{{end}} -e restart_stage=change-$(date +%Y%m%d%H%M%S) {{.COPY_SETTLE}}
+      # the copy as the change left it, before any check: the change's own differences from it, a check's leftovers after
+      - cmd: scripts/vagrant-inventory.sh && cp .copy/vagrant-inventory.txt .copy/vagrant-inventory-after-change.txt
       - task: test:copy:check
         vars:
           INFRA_REF: '{{.INFRA_REF}}'
@@ -525,17 +537,25 @@ tasks:
       vars: [PLAYBOOK]
     vars:
       ARGS: '{{.ARGS | default ""}}'
+      # true for a playbook that restarts the control plane on purpose (upgrade-kubeadm, upgrade-containerd): its
+      # restarts are recorded, not judged; the check after it judges against them
+      RESTARTS_EXPECTED: '{{.RESTARTS_EXPECTED | default "false"}}'
     cmds:
+      # one copy run at a time (scripts/copy-lock.sh): another session's run refused, named
+      - cmd: scripts/copy-lock.sh
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/vms-ready.yml
-      # the copy's inventory before the change: what differs from production after it, and did before, is not the change's
-      - cmd: scripts/vagrant-inventory.sh && cp .copy/vagrant-inventory.txt .copy/vagrant-inventory-before-change.txt
       # the guard first in the same run: a host that is no Vagrant VM is dropped from the playbook's plays
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/vagrant-only-play.yml playbooks/{{.PLAYBOOK}} {{.ARGS}}
+      # marked first, before it runs (one that fails half-way still left a change on the copy): a later test:copy:check
+      # run on its own judges the copy's inventory as a change's
+      - cmd: scripts/copy-refs.sh playbook '{{.PLAYBOOK}}'
+      # production's secrets (ops/.env, loaded by the Taskfile) never reach it: a playbook that reads its environment
+      # (seed-vault-secrets) would put them in the copy's Vault
+      - cmd: env -i HOME="$HOME" PATH="$PATH" bash -c 'cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/vagrant-only-play.yml playbooks/{{.PLAYBOOK}} {{.ARGS}}'
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/isolate-pis.yml
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/isolate-cluster.yml
-      # the copy now runs a change: a later test:copy:check run on its own judges its inventory as a change's
-      - cmd: scripts/copy-refs.sh playbook '{{.PLAYBOOK}}'
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/argo-settled.yml -e expect_apps=true -e restart_stage=playbook-$(date +%Y%m%d%H%M%S) {{.COPY_SETTLE}}
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/argo-settled.yml -e expect_apps=true -e restart_stage=playbook-$(date +%Y%m%d%H%M%S) -e restarts_expected={{.RESTARTS_EXPECTED}} {{.COPY_SETTLE}}
+      # the copy as the change left it, before any check: the change's own differences from it, a check's leftovers after
+      - cmd: scripts/vagrant-inventory.sh && cp .copy/vagrant-inventory.txt .copy/vagrant-inventory-after-change.txt
       - task: test:copy:check
         vars:
           CHANGE: 'yes'
@@ -557,6 +577,8 @@ tasks:
       SCRAPE_POOLS_GONE: '{{.SCRAPE_POOLS_GONE | default ""}}'
       ALLOWED_MISSING: tests/ansible/copy/vagrant-allowed-missing.txt
     cmds:
+      # one copy run at a time (scripts/copy-lock.sh): another session's run refused, named
+      - cmd: scripts/copy-lock.sh
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/argo-settled.yml -e expect_mirror=true -e expect_apps=true -e restart_stage=check-$(date +%Y%m%d%H%M%S) -e stable_polls=1 -e poll_seconds=3
       # the independent checks at the same time (scripts/copy-checks.sh says what each proves): the slowest, not the sum
       - cmd: COPY_SCRAPE_POOLS_GONE='{{.SCRAPE_POOLS_GONE}}' scripts/copy-checks.sh '{{.INFRA_REF}}' '{{.PLATFORM_REF}}'
@@ -575,12 +597,13 @@ tasks:
       # a preview prefix, a wrong CA fails it
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/sweeper-check.yml
       # the inventory last, after every check (a check's leftovers show): production's, minus the documented left-outs;
-      # after a change, the differences it made printed for review, any the copy had before it failing
+      # after a change: its own differences printed for review, any the build had too failing (production moved), and
+      # what the checks changed since the change settled failing (a check's leftovers)
       - cmd: scripts/vagrant-inventory.sh
       - cmd: |
           if [ "{{.CHANGE}}" = yes ]; then
-            scripts/copy-change-inventory.sh tests/ansible/copy/prod-inventory.txt .copy/vagrant-inventory-before-change.txt \
-              .copy/vagrant-inventory.txt {{.ALLOWED_MISSING}}
+            scripts/copy-change-inventory.sh tests/ansible/copy/prod-inventory.txt .copy/vagrant-inventory-build.txt \
+              .copy/vagrant-inventory-after-change.txt .copy/vagrant-inventory.txt {{.ALLOWED_MISSING}}
           else
             scripts/inventory-diff.sh tests/ansible/copy/prod-inventory.txt .copy/vagrant-inventory.txt {{.ALLOWED_MISSING}}
           fi
@@ -1240,10 +1263,12 @@ tasks:
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-velero.yml
 
   deploy:backup:
-    desc: "PRODUCTION: a manual Velero backup from the daily schedule (schnappy-production, its resource policy) - in the running server pod (exec deploy/velero picked a node-agent pod)"
+    desc: "PRODUCTION: a manual Velero backup from the daily schedule (schnappy-production, its resource policy) - in the running server pod (exec deploy/velero picked a node-agent pod); waited for, failing unless Completed"
     prompt: "Start a Velero backup on PRODUCTION?"
     cmds:
-      - ssh {{.TARGET_USER}}@{{.TARGET_HOST}} 'kubectl -n velero exec "$(kubectl -n velero get pod -l name=velero --field-selector=status.phase=Running -o name | head -1)" -c velero -- /velero backup create manual-$(date +%Y%m%d-%H%M) --from-schedule velero-schnappy-daily'
+      # waited for, and judged: anything but Completed fails the task (its phase said)
+      - |
+        ssh {{.TARGET_USER}}@{{.TARGET_HOST}} 'set -e; n=manual-$(date +%Y%m%d-%H%M); kubectl -n velero exec "$(kubectl -n velero get pod -l name=velero --field-selector=status.phase=Running -o name | head -1)" -c velero -- /velero backup create "$n" --from-schedule velero-schnappy-daily --wait > /dev/null; p=$(kubectl -n velero get backups.velero.io "$n" -o jsonpath="{.status.phase} errors={.status.errors} warnings={.status.warnings}"); echo "$n: $p"; [ "${p%% *}" = Completed ]'
 
   deploy:restore:verify:
     desc: Run k6 smoke tests to validate a Velero restore

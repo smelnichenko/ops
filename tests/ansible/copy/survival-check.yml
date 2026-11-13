@@ -177,7 +177,7 @@
         _grafana.rc != 0 or _grafana.stdout_lines[1] != dashboard_text
         or (mode == 'verify' and (_seed.grafana_uids | difference(_grafana.stdout_lines[0] | from_json)) | length > 0)
 
-    # Grafana 13 (step 50) moved how plugins and datasources load: each datasource answers its own health check - the
+    # Grafana 13 moved how plugins and datasources load: each datasource answers its own health check - the
     # ClickHouse plugin (installed at start), Mimir, Tempo
     - name: Grafana - every datasource healthy
       ansible.builtin.shell:
@@ -221,7 +221,7 @@
       until: _trace.rc == 0 and 'upgrade-canary' in _trace.stdout
 
     # Tempo's metrics generator (service graphs, span metrics into Mimir) runs on: a fresh span, its call counted - Tempo 3
-    # (step 54) rebuilt the generator
+    # rebuilt the generator
     # a span name of its own for each run (fixed once - a lookup in a variable runs again at each use): its span-metrics
     # series is new, so a count proves this run's span
     - name: Tempo - this run's span name and trace ID

@@ -44,6 +44,9 @@ if users is None or users.get("replace") != "replace":
 print(r.findtext("profiles/default/compatibility") or "-", ",".join(sorted(names)))' <<< "$ch_xml") \
   || { echo "clickhouse-users.xml of platform $platform_ref: not parsed"; exit 1; }
 [ "$clickhouse_compat" != - ] || clickhouse_compat=""
+# both go into Ansible extra vars, where text is a template: a version, user names - nothing else from the ref
+[[ $clickhouse_compat =~ ^([0-9]+\.[0-9]+)?$ && $clickhouse_users =~ ^[A-Za-z0-9_-]+(,[A-Za-z0-9_-]+)*$ ]] \
+  || { echo "clickhouse-users.xml of platform $platform_ref: compatibility '$clickhouse_compat', users '$clickhouse_users' - not a version and user names"; exit 1; }
 # own_jobs, stop_groups
 source scripts/lib/process-groups.sh
 # the checks' own bound (below): above every check's own - data-check's retries alone wait up to ~3085 s (each until's

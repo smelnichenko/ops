@@ -3,7 +3,8 @@
 <service> <version>` lines), written as extra vars where the playbooks pin another version, so the Vagrant copy
 installs production's (scripts/production-inventory.sh calls it after reading production). Forgejo and Vault carry
 their amd64 checksum (kept from the pins file when the version is unchanged, else read from the release); versitygw
-only at a version its task file has checksums for. Refuses: a service the Pis run at two versions, or on neither.
+only at a version its task file has checksums for. Refuses: a service the Pis run at two versions, or on neither, or at
+what is no version.
 """
 import re
 import sys
@@ -42,7 +43,10 @@ PINNED = [
     ("consul", "consul_version", lambda: play_var(f"{pb}/setup-consul.yml", "consul_version")),
     ("keycloak", "keycloak_version", lambda: play_var(f"{pb}/setup-pi-services.yml", "keycloak_version")),
     ("versitygw", "vgw_version", vgw_default),
+    ("caddy", "caddy_version", lambda: play_var(f"{pb}/setup-caddy.yml", "caddy_version")),
 ]
+# a version as the Pis report one: what production's services say goes into an extra-vars file, where text is a template
+VERSION = re.compile(r"[0-9][0-9A-Za-z.+~-]*")
 try:
     old = yaml.safe_load(open(pins_path)) or {}
 except FileNotFoundError:
@@ -53,6 +57,8 @@ for name, _, _ in PINNED:
     if len(seen) != 1:
         sys.exit(f"the Pis run {name} {sorted(seen) or 'nowhere'} - one version expected on both")
     running[name] = seen.pop()
+    if not VERSION.fullmatch(running[name]):
+        sys.exit(f"the Pis report {name} {running[name]!r} - not a version")
 
 
 def sha_forgejo(v):

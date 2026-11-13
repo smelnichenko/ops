@@ -45,6 +45,12 @@ case_ "a left-out allowed by name: production's at another version, missing - pa
 case_ "  allowed by name, but the copy runs another version: fails" 1 "$(sed 's/8.2.3/8.4.0/' <<< "$base")" "image docker.io/library/redis *" "+image docker.io/library/redis 8.4.0"
 case_ "  a name is the whole line but its version: redis-extra not covered by redis" 1 "$(grep -v redis <<< "$base")" "image docker.io/library/redis-extra *"
 case_ "a '? ' line read as the line" 0 "$(grep -v redis <<< "$base")" "? image docker.io/library/redis *"
+case_ "a '? ' line's image extra in the copy (production synced over a day ago, the copy just now): passes" 0 "$base
+image grafana/k6 1.7.1" "? image grafana/k6 *"
+case_ "  an extra line no '? ' entry names: fails" 1 "$base
+image grafana/k6 1.7.1" "image grafana/k6 1.7.1"
+case_ "  a '? ' entry by exact version: another version extra fails" 1 "$base
+image curlimages/curl 8.11.0" "? image curlimages/curl 8.10.1"
 # every allow-list line is one production has (by name for ` *`) - but a `? ` line, production's own only for a while:
 # a left-out line production moved past leaves the copy unjudged there
 stale=$(grep -v -E '^\s*(#|$)' "$U/vagrant-allowed-missing.txt" | grep -v '^? ' | while read -r l; do

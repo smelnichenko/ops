@@ -37,8 +37,8 @@ for pi in "${pis[@]}"; do
   [ -s "$work/pi.$pi" ] || { echo "$pi's inventory came back empty"; exit 1; }
 done
 sort -u "$work/ten" "$work"/pi.* > "$work/inventory"
-if grep -E '^pi .* (stale|not-running)$' "$work/inventory"; then
-  echo "a Pi service above is stale or not running - production's version is not known: fix the Pi, then read again"
+if grep -E '^pi .* (stale|not-running|unknown)$' "$work/inventory"; then
+  echo "a Pi service above is stale, not running or of no known version - production's version is not known: fix the Pi, then read again"
   exit 1
 fi
 # the Pis' pins from it - both files moved in only once both are written: a failed checksum read leaves neither changed

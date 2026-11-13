@@ -1,6 +1,6 @@
 #!/bin/bash
 # The playbook defaults that restate what production runs - cert-manager, External Secrets, metrics-server, Istio,
-# Gateway API, Cilium, local-path, the Kubernetes packages, the Argo CD chart, the data operators' charts - equal
+# Gateway API, Cilium, local-path, the Kubernetes packages, containerd.io, the Argo CD chart, the data operators' charts - equal
 # production's inventory (tests/ansible/copy/prod-inventory.txt): they build the Vagrant copy's node layer and a DR
 # rebuild (task deploy:kubeadm). One moved without the other (two sources of truth) fails here, naming both - not at
 # the end of a two-hour build.
@@ -22,6 +22,7 @@ MAP = [
     (P + "setup-kubeadm.yml", "var", "cilium_version", r"helm kube-system/cilium cilium-(\S+) .*"),
     (P + "setup-kubeadm.yml", "var", "local_path_provisioner_version", r"image (?:docker\.io/)?rancher/local-path-provisioner (\S+)"),
     (P + "setup-kubeadm.yml", "var", "k8s_package_version", r"pkg kubeadm (\S+) .*"),
+    (P + "setup-kubeadm.yml", "var", "containerd_io_version", r"pkg containerd\.io (\d+\.\d+\.\d+)-\S+ .*"),
     (P + "setup-argocd.yml", "var", "argocd_chart_version", r"helm argocd/argocd argo-cd-(\S+) .*"),
     (P + "setup-kubeadm.yml", "helm", "cnpg", r"argo-chart cnpg cloudnative-pg@(\S+)"),
     (P + "setup-kubeadm.yml", "helm", "strimzi", r"argo-chart strimzi strimzi-kafka-operator@(\S+)"),

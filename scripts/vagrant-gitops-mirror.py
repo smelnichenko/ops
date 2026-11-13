@@ -157,16 +157,51 @@ def masked(changed, drops, replaced):
     return sorted(c for c in changed if hit(c))
 
 
-def refuse_masked(name, src, ref, drops):
-    """A change's ref (not main): refused when it touches what the overlay drops or replaces."""
+def leaves(doc, path=()):
+    """A values document's leaves, by key path: a list or a scalar is one (Helm replaces a list whole)."""
+    if isinstance(doc, dict) and doc:
+        out = {}
+        for k, v in doc.items():
+            out.update(leaves(v, path + (str(k),)))
+        return out
+    return {path: doc}
+
+
+def masked_keys(before, after, overlay):
+    """The key paths a change moves (added, removed, changed) that the overlay's values set too - one over or under the
+    other: the copy runs the overlay's value there, never the change's."""
+    b, a = leaves(before or {}), leaves(after or {})
+    moved = {k for k in b.keys() | a.keys() if b.get(k, object()) != a.get(k, object())}
+    mine = set(leaves(overlay or {}))
+    return sorted(".".join(k) for k in moved
+                  if any(k[:len(o)] == o or o[:len(k)] == k for o in mine))
+
+
+def at(src, rev, path):
+    """A file's YAML at a revision, None where it is not there."""
+    r = subprocess.run(["git", "-C", src, "show", f"{rev}:{path}"], capture_output=True, text=True)
+    return yaml.safe_load(r.stdout) if r.returncode == 0 else None
+
+
+def refuse_masked(name, src, ref, drops, base="origin/main"):
+    """A change's ref (not main): refused when it touches what the overlay drops or replaces - a path (a rename read as
+    the old path gone and the new one added), or a key of a values file the overlay's <name>.vagrant.yaml sets too.
+    Judged against production's main (origin's): a local main behind it read production's own commits as the change's."""
     if ref == "main":
         return
-    changed = subprocess.run(["git", "-C", src, "diff", "--name-only", f"main...{ref}"],
+    changed = subprocess.run(["git", "-C", src, "diff", "--no-renames", "--name-only", f"{base}...{ref}"],
                              capture_output=True, text=True, check=True).stdout.split()
     over = os.path.join(OVERLAY, name)
     # every overlay file is written over the repo's at its path, there or not
     replaced = {os.path.relpath(os.path.join(r, f), over) for r, _, fs in os.walk(over) for f in fs}
     hits = masked(changed, drops, replaced)
+    for c in changed:
+        sibling = os.path.join(over, re.sub(r"\.ya?ml$", ".vagrant.yaml", c))
+        if c.endswith((".yaml", ".yml")) and os.path.isfile(sibling):
+            merge = subprocess.run(["git", "-C", src, "merge-base", base, ref], capture_output=True, text=True,
+                                   check=True).stdout.strip()
+            hits += [f"{c}: {k}" for k in masked_keys(at(src, merge, c), at(src, ref, c),
+                                                       yaml.safe_load(open(sibling)))]
     if hits:
         sys.exit(f"REFUSED: {name} {ref} changes what the copy's overlay drops or replaces - it would pass untested:\n  "
                  + "\n  ".join(hits))

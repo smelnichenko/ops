@@ -1,0 +1,157 @@
+{
+ "COPY_SETTLE": "-e restart_quiet=120 -e stable_polls=2 -e poll_seconds=5",
+ "_copy:base": {
+  "cmds": [
+   "vagrant destroy -f",
+   "set -euo pipefail left=$(vagrant status --machine-readable | awk -F, '$3 == \"state\" && $4 != \"not_created\" {print $2 \"=\" $4}') [ -z \"$left\" ] || { echo \"VMs not destroyed: $left\"; exit 1; }",
+   "vagrant up",
+   {
+    "task": "_vagrant:pi-stack",
+    "vars": {
+     "PI_ARGS": "-e @../../tests/ansible/copy/pi-versions.yml"
+    }
+   },
+   "cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-gluster.yml",
+   "cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-pi-services.yml --tags versitygw -e @../../tests/ansible/copy/pi-versions.yml",
+   "cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-keepalived.yml",
+   "cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-kubeadm.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml -e platform_by_argo_override=true",
+   "cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-host-hardening.yml"
+  ],
+  "vars": {}
+ },
+ "test:copy:argo": {
+  "cmds": [
+   "scripts/copy-lock.sh",
+   "scripts/copy-main-current.sh ../infra ../platform",
+   "cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/vms-ready.yml",
+   "env -i HOME=\"$HOME\" PATH=\"$PATH\" bash -c 'set -a && . tests/ansible/copy/vagrant-secrets.env && set +a && cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/seed-vault-secrets.yml'",
+   "cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-vault-cleanup-policy.yml",
+   "env -i HOME=\"$HOME\" PATH=\"$PATH\" scripts/vagrant-gitops-mirror.py --infra-ref main --platform-ref main",
+   "scripts/copy-refs.sh set main main",
+   "for r in infra platform; do echo \"$r $(git -C ../$r rev-parse main)\"; done > .copy/copy-built",
+   "cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-argocd-reader.yml -e reader_repos_file=../../../tests/ansible/copy/vagrant-argocd-reader-repos.yml",
+   "scripts/vagrant-preload-images.sh ../infra ../platform main main",
+   "scripts/vagrant-preload-floating.sh",
+   "cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/isolate-cluster.yml",
+   "cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/production-state.yml",
+   "env -i HOME=\"$HOME\" PATH=\"$PATH\" bash -c 'cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-caddy.yml -e @../../tests/ansible/copy/pi-versions.yml'",
+   "cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/keycloak-realm.yml",
+   "cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-argocd.yml",
+   "cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/argo-settled.yml -e expect_mirror=true -e record_apps=true -e restart_stage=build-$(date +%Y%m%d%H%M%S) {{.COPY_SETTLE}}",
+   "cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/data-check.yml -e mode=seed",
+   "cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/survival-check.yml -e mode=seed",
+   "cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/metrics-check.yml -e record_scrape_pools=true",
+   "scripts/vagrant-smoke.sh main main",
+   "scripts/vagrant-inventory.sh",
+   "scripts/inventory-diff.sh tests/ansible/copy/prod-inventory.txt .copy/vagrant-inventory.txt {{.ALLOWED_MISSING}}",
+   "cp .copy/vagrant-inventory.txt .copy/vagrant-inventory-build.txt"
+  ],
+  "vars": {
+   "ALLOWED_MISSING": "tests/ansible/copy/vagrant-allowed-missing.txt"
+  }
+ },
+ "test:copy:build": {
+  "cmds": [
+   "scripts/copy-lock.sh",
+   "scripts/copy-main-current.sh ../infra ../platform",
+   "scripts/copy-refs.sh reset",
+   {
+    "task": "test:copy:inventory",
+    "vars": {}
+   },
+   "git status --short -- tests/ansible/copy/prod-inventory.txt tests/ansible/copy/pi-versions.yml",
+   {
+    "task": "_copy:base",
+    "vars": {}
+   },
+   "vagrant halt",
+   "vagrant up --no-provision",
+   "cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/vms-ready.yml",
+   {
+    "task": "test:copy:argo",
+    "vars": {}
+   }
+  ],
+  "vars": {}
+ },
+ "test:copy:change": {
+  "cmds": [
+   "scripts/copy-lock.sh",
+   "scripts/copy-main-current.sh ../infra:{{.INFRA_REF}} ../platform:{{.PLATFORM_REF}}",
+   "cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/vms-ready.yml",
+   "scripts/vagrant-preload-images.sh ../infra ../platform {{.INFRA_REF}} {{.PLATFORM_REF}}",
+   "scripts/copy-refs.sh set '{{.INFRA_REF}}' '{{.PLATFORM_REF}}'",
+   "env -i HOME=\"$HOME\" PATH=\"$PATH\" scripts/vagrant-gitops-mirror.py --infra-ref {{.INFRA_REF}} --platform-ref {{.PLATFORM_REF}}",
+   "cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/argo-settled.yml -e expect_mirror=true {{if eq .APPS_CHANGED \"true\"}}-e record_apps=true{{else}}-e expect_apps=true{{end}} -e restart_stage=change-$(date +%Y%m%d%H%M%S) {{.COPY_SETTLE}}",
+   "scripts/vagrant-inventory.sh && cp .copy/vagrant-inventory.txt .copy/vagrant-inventory-after-change.txt",
+   {
+    "task": "test:copy:check",
+    "vars": {
+     "CHANGE": "yes",
+     "INFRA_REF": "{{.INFRA_REF}}",
+     "PLATFORM_REF": "{{.PLATFORM_REF}}",
+     "SCRAPE_POOLS_GONE": "{{.SCRAPE_POOLS_GONE}}"
+    }
+   }
+  ],
+  "vars": {
+   "APPS_CHANGED": "{{.APPS_CHANGED | default \"false\"}}",
+   "INFRA_REF": "{{.INFRA_REF | default \"main\"}}",
+   "PLATFORM_REF": "{{.PLATFORM_REF | default \"main\"}}",
+   "SCRAPE_POOLS_GONE": "{{.SCRAPE_POOLS_GONE | default \"\"}}"
+  }
+ },
+ "test:copy:check": {
+  "cmds": [
+   "scripts/copy-lock.sh",
+   "cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/argo-settled.yml -e expect_mirror=true -e expect_apps=true -e restart_stage=check-$(date +%Y%m%d%H%M%S) -e stable_polls=1 -e poll_seconds=3",
+   "COPY_SCRAPE_POOLS_GONE='{{.SCRAPE_POOLS_GONE}}' scripts/copy-checks.sh '{{.INFRA_REF}}' '{{.PLATFORM_REF}}'",
+   "cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/barman-check.yml",
+   "cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/cert-check.yml",
+   "cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/restore-check.yml",
+   "cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/backup-check.yml",
+   "cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/scylla-backup-check.yml",
+   "cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/sweeper-check.yml",
+   "scripts/vagrant-inventory.sh",
+   "if [ \"{{.CHANGE}}\" = yes ]; then scripts/copy-change-inventory.sh tests/ansible/copy/prod-inventory.txt .copy/vagrant-inventory-build.txt \\ .copy/vagrant-inventory-after-change.txt .copy/vagrant-inventory.txt {{.ALLOWED_MISSING}} else scripts/inventory-diff.sh tests/ansible/copy/prod-inventory.txt .copy/vagrant-inventory.txt {{.ALLOWED_MISSING}} fi"
+  ],
+  "vars": {
+   "ALLOWED_MISSING": "tests/ansible/copy/vagrant-allowed-missing.txt",
+   "CHANGE": "{{.CHANGE | default .COPY_CHANGE}}",
+   "COPY_CHANGE": {
+    "sh": "scripts/copy-refs.sh change"
+   },
+   "COPY_INFRA_REF": {
+    "sh": "scripts/copy-refs.sh infra"
+   },
+   "COPY_PLATFORM_REF": {
+    "sh": "scripts/copy-refs.sh platform"
+   },
+   "INFRA_REF": "{{.INFRA_REF | default .COPY_INFRA_REF}}",
+   "PLATFORM_REF": "{{.PLATFORM_REF | default .COPY_PLATFORM_REF}}",
+   "SCRAPE_POOLS_GONE": "{{.SCRAPE_POOLS_GONE | default \"\"}}"
+  }
+ },
+ "test:copy:playbook": {
+  "cmds": [
+   "scripts/copy-lock.sh",
+   "cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/vms-ready.yml",
+   "scripts/copy-refs.sh playbook '{{.PLAYBOOK}}'",
+   "env -i HOME=\"$HOME\" PATH=\"$PATH\" bash -c 'cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/vagrant-only-play.yml playbooks/{{.PLAYBOOK}} {{.ARGS}}'",
+   "cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/isolate-pis.yml",
+   "cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/isolate-cluster.yml",
+   "cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/argo-settled.yml -e expect_apps=true -e restart_stage=playbook-$(date +%Y%m%d%H%M%S) -e restarts_expected={{.RESTARTS_EXPECTED}} {{.COPY_SETTLE}}",
+   "scripts/vagrant-inventory.sh && cp .copy/vagrant-inventory.txt .copy/vagrant-inventory-after-change.txt",
+   {
+    "task": "test:copy:check",
+    "vars": {
+     "CHANGE": "yes"
+    }
+   }
+  ],
+  "vars": {
+   "ARGS": "{{.ARGS | default \"\"}}",
+   "RESTARTS_EXPECTED": "{{.RESTARTS_EXPECTED | default \"false\"}}"
+  }
+ }
+}

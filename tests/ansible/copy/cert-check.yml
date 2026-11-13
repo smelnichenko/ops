@@ -33,7 +33,7 @@
         {{ kubectl }} -n {{ item.split()[0] }} patch certificates.cert-manager.io {{ item.split()[1] }}
         --subresource=status --type=json
         -p '[{"op": "add", "path": "/status/conditions/-", "value": {"type": "Issuing", "status": "True",
-        "reason": "ManuallyTriggered", "message": "renewed by the upgrade test",
+        "reason": "ManuallyTriggered", "message": "renewed by cert-check on the Vagrant copy",
         "lastTransitionTime": "{{ lookup('ansible.builtin.pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"}}]'
       loop: "{{ _before.stdout_lines }}"
       changed_when: true

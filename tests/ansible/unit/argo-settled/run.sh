@@ -508,8 +508,8 @@ rc, out = run(A, [pod("x", "x1", 3)], "--restart-history", H5, "--step", "31")
 check("the earlier file's last restart step counts", (rc, "(30, 31)" in out), (1, True), out)
 
 # argo-settled.yml's command line, rendered by Ansible's templar as the playbook holds it: --restarts-expected exactly
-# when the step asks (the runner passes its yes / no) - a wiring that always passed it would record every crash loop
-# and never judge one; the restart history only with a step
+# when the stage asks (test:copy:playbook's RESTARTS_EXPECTED) - a wiring that always passed it would record every crash
+# loop and never judge one; the restart history only with a stage
 import yaml
 sys.path.insert(0, "tests/ansible/unit")
 from templar import render
@@ -522,6 +522,9 @@ for stage, want in (("build", True), ("change", True), ("", False)):
     check(f"  labelled by its stage, stage {stage or 'none'}",
           argv[argv.index("--step") + 1] if "--step" in argv else None, stage or None)
     check(f"  the copy's settle syncs a stalled app (--sync-stalled), stage {stage or 'none'}", "--sync-stalled" in argv, True)
+for stage, expected, want in (("playbook-1", True, True), ("playbook-1", False, False), ("", True, False)):
+    argv = render(script, **{**base, "restart_stage": stage, "restarts_expected": expected}).split()
+    check(f"  --restarts-expected: stage {stage or 'none'}, asked {expected}", "--restarts-expected" in argv, want)
 
 # the settle's values reach the script as given (the copy's deciding settles: the Taskfile's COPY_SETTLE) and are the
 # playbook's own by default - a wiring that dropped one ran every settle at the script's; both read from where they are

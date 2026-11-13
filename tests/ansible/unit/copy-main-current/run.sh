@@ -19,6 +19,7 @@ g -C "$W/repo" checkout -q main
 run() { out=$(bash "$S" "$@" 2>&1); echo "$?"; }
 said() { bash "$S" "$@" 2>&1 | tail -1; }  # the last repo's line
 check "main = origin/main: passes" "$(run "$W/repo")" 0
+check "  said so" "$(said "$W/repo" | grep -c '= origin/main$')" 1
 g -C "$W/origin" commit -q --allow-empty -m two
 check "main behind origin/main: refused" "$(run "$W/repo")" 1
 g -C "$W/repo" pull -q --ff-only
@@ -36,6 +37,16 @@ check "  one cut from an older main" "$(said "$W/repo:old-change" | grep -c 'doe
 check "  a ref not there, or not a commit (a tree)" \
   "$(said "$W/repo:nosuch" | grep -c 'no ref nosuch') $(said "$W/repo:change^{tree}" | grep -c 'no ref')" "1 1"
 check "  main ahead of origin/main" "$(said "$W/repo" | grep -c 'bring main to origin/main first')" 1
+# production's main moved since the copy was built: the change passes, warned with the count
+export COPY_BUILT_FILE=$W/built
+echo "repo $(git -C "$W/repo" rev-parse origin/main)" > "$W/built"
+check "  production's main where the build had it: no warning" "$(bash "$S" "$W/repo:change" 2>&1 | grep -c WARNING)" 0
+g -C "$W/origin" commit -q --allow-empty -m three
+g -C "$W/repo" fetch -q origin && g -C "$W/repo" branch -q -f change2 origin/main
+out=$(bash "$S" "$W/repo:change2" 2>&1); rc=$?
+check "  production's main moved 1 commit since the build: passes, warned" \
+  "$rc $(grep -c "moved 1 commit(s) since the copy was built" <<< "$out")" "0 1"
+unset COPY_BUILT_FILE
 g -C "$W/repo" remote set-url origin "$W/nowhere"
 check "origin unreachable: refused (not judged on a stale origin/main)" "$([ "$(run "$W/repo:change")" != 0 ] && echo refused)" refused
 echo "copy-main-current: $([ $fails = 0 ] && echo ALL-PASS || echo "$fails FAILED")"

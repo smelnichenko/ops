@@ -32,6 +32,7 @@ own = {
     "consul": str(yaml.safe_load(open(f"{pb}/setup-consul.yml"))[0]["vars"]["consul_version"]),
     "keycloak": str(yaml.safe_load(open(f"{pb}/setup-pi-services.yml"))[0]["vars"]["keycloak_version"]),
     "versitygw": re.search(r"vgw_version \| default\('([0-9.]+)'\)", open(f"{pb}/tasks/versitygw.yml").read())[1],
+    "caddy": str(yaml.safe_load(open(f"{pb}/setup-caddy.yml"))[0]["vars"]["caddy_version"]),
 }
 OFFLINE = {**os.environ, "https_proxy": "http://127.0.0.1:9", "http_proxy": "http://127.0.0.1:9",
            "HTTPS_PROXY": "http://127.0.0.1:9", "HTTP_PROXY": "http://127.0.0.1:9"}
@@ -125,6 +126,12 @@ check("forgejo and vault at new versions, no checksum kept: each fetched from it
 check("  the run's line names each service, the pinned ones so", (" (pinned)" in out, f"forgejo {fv} (pinned)" in out,
       f"consul {own['consul']} (pinned)" in out), (True, True, False))
 oldtext = yaml.safe_dump({"forgejo_version": "0.0.1", "forgejo_checksums": {"amd64": "cd" * 32}})
+for kept, label in (({"forgejo_version": fv}, "no checksum key"), ({"forgejo_version": fv, "forgejo_checksums": {"amd64": ""}},
+                                                                         "an empty checksum")):
+    rc, text, asked, out = fetch_run({**own, "forgejo": fv}, {furl: f"{'55' * 32}  x"}, old=yaml.safe_dump(kept))
+    check(f"  forgejo pinned at the file's version with {label}: fetched, not crashed",
+          (rc, asked, (yaml.safe_load(text) or {}).get("forgejo_checksums") if text else None),
+          (0, [furl], {"amd64": "55" * 32}))
 rc, text, asked, out = fetch_run({**own, "forgejo": fv}, {}, old=oldtext)
 check("  forgejo at a version the file has no checksum for, its fetch failing: refused, the pins file as it was",
       (rc != 0, asked, text), (True, [furl], oldtext))
@@ -144,13 +151,46 @@ check("versitygw at a version without checksums: refused, said", (rc != 0, "has 
 rc, body, err = run(own, pi2={"consul": bumped(own["consul"])})
 check("the Pis at two versions of one service: refused, said", (rc != 0, "one version expected on both" in err),
       (True, True))
+check("caddy at another version than its playbook's: pinned", run({**own, "caddy": bumped(own["caddy"])})[:2],
+      (0, {"caddy_version": bumped(own["caddy"])}))
+rc, body, err = run({**own, "patroni": "{{lookup('pipe','id')}}"})
+check("a reported version that is no version (a template): refused, nothing written", (rc != 0, "not a version" in err, body),
+      (True, True, None))
+for word in ("stale", "not-running", "unknown"):
+    rc, body, err = run({**own, "patroni": word})
+    check(f"a Pi service reported {word}: refused, said - never written as its version",
+          (rc != 0, "not a version" in err and "patroni" in err, body), (True, True, None))
 rc, body, err = run({**own, "keycloak": None})
 check("a service on neither Pi: refused, said", (rc != 0, "keycloak" in err and "nowhere" in err), (True, True))
+# the pins reach every Pi playbook that installs a pinned service - each run of it in the Pi stack ends with PI_ARGS (on
+# setup-vault-pi after vault's own vars files: the last -e wins), the pgbouncer pass gets them, the build passes the file
+TT = yaml.safe_load(open("Taskfile.yml"))["tasks"]
+def plays(task):
+    out = []
+    for c in TT[task].get("cmds") or []:
+        c = c if isinstance(c, str) else (c.get("cmd") or "")
+        m = re.search(r"playbooks/(setup-(?:consul|pi-services|patroni|vault-pi))\.yml(.*)$", c)
+        if m:
+            out.append((m.group(1), m.group(2).strip()))
+    return out
+got = plays("_vagrant:pi-stack") + plays("_vagrant:pi-pgbouncer")
+check("each Pi playbook run of the stack ends with the pins (vault's after its vars files)",
+      [(name, args.endswith("{{.PI_ARGS}}"), args.index("{{.PI_ARGS}}") > args.rfind("-e @vars/") if "{{.PI_ARGS}}" in args else None)
+       for name, args in got],
+      [("setup-consul", True, True), ("setup-pi-services", True, True), ("setup-patroni", True, True),
+       ("setup-vault-pi", True, True), ("setup-pi-services", True, True)])
+pg = next(c for c in TT["_vagrant:pi-stack"]["cmds"] if isinstance(c, dict) and c.get("task") == "_vagrant:pi-pgbouncer")
+base = next(c for c in TT["_copy:base"]["cmds"] if isinstance(c, dict) and c.get("task") == "_vagrant:pi-stack")
+check("  the pgbouncer pass gets them; the build passes the pins file, which exists",
+      (pg.get("vars", {}).get("PI_ARGS"), base.get("vars", {}).get("PI_ARGS"),
+       os.path.isfile("deploy/ansible/../../tests/ansible/copy/pi-versions.yml")),
+      ("{{.PI_ARGS}}", "-e @../../tests/ansible/copy/pi-versions.yml", True))
 # the pins reach every playbook that installs these: setup-consul and the versitygw run too (go-task's PI_ARGS / the file)
 tf = open("Taskfile.yml").read()
-check("the copy's Pi stack passes the pins to setup-consul, and its versitygw run reads the file",
+check("the copy's Pi stack passes the pins to setup-consul; its versitygw and caddy runs read the file",
       (bool(re.search(r"playbooks/setup-consul\.yml \{\{\.PI_ARGS\}\}", tf)),
-       "setup-pi-services.yml --tags versitygw -e @../../tests/ansible/copy/pi-versions.yml" in tf), (True, True))
+       "setup-pi-services.yml --tags versitygw -e @../../tests/ansible/copy/pi-versions.yml" in tf,
+       "playbooks/setup-caddy.yml -e @../../tests/ansible/copy/pi-versions.yml" in tf), (True, True, True))
 print("pi-versions: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 PY_PI_VERSIONS

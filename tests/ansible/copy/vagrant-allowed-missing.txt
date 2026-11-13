@@ -15,18 +15,20 @@ crd-name modelproviderconfigs.kagent.dev
 crd-name remotemcpservers.kagent.dev
 crd-name sandboxagents.kagent.dev
 crd-name toolservers.kagent.dev
+# kagent's database (kagent is left out)
 image docker.io/library/postgres 18.3-alpine
 argo-chart woodpecker *
 image docker.io/woodpeckerci/woodpecker-agent *
 image docker.io/woodpeckerci/woodpecker-server *
 image sonarqube *
+# SonarQube's setup Job (SonarQube is left out)
 image curlimages/curl 8.12.1
 # the nightly Hyperfoil load test (off in Vagrant: its image is a floating :latest, so the kubelet pulls it from
 # production's registry on every run, and an isolated copy can never run it)
 image git.pmon.dev/schnappy/hyperfoil latest
-# the k6 smoke's PostSync Job (curl waits for the app, then k6), listed only for the 24 h it is kept after each sync
-# (ttlSecondsAfterFinished) - on ten when its inventory was taken
-? image curlimages/curl *
+# the k6 smoke's PostSync Job (curl waits for the app, then k6), kept 24 h after each sync (ttlSecondsAfterFinished):
+# production and the copy each have it or not by when they last synced - either way not judged
+? image curlimages/curl 8.10.1
 ? image grafana/k6 *
 # Nexus runs on the Pis in production only (the Vagrant copy builds no Nexus)
 pi pi1 nexus *

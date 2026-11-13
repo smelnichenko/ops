@@ -30,6 +30,9 @@ case "$*" in *storage-check*) ;; *) [ -z "${GO:-}" ] || for _ in $(seq 2400); do
 case "$*" in */data-check.yml*) [ -z "${STOPPER:-}" ] || { echo $$ > "$STOPPER"; kill -STOP $$; } ;; esac
 got=$(timeout 1 cat 2> /dev/null || true)
 echo "check $* read stdin: [$got]"
+# the ssh config the checks' ssh reads (VAGRANT_SSH_CONFIG): its keepalives, its connect bound
+case "$*" in */storage-check.yml*) echo "sshcfg: $(grep -E '^ *(ServerAliveInterval|ServerAliveCountMax|ConnectTimeout) ' \
+  "${VAGRANT_SSH_CONFIG:-/dev/null}" | tr -s ' ' | sed 's/^ //' | paste -sd, -) after: $(sed -n 1p "${VAGRANT_SSH_CONFIG:-/dev/null}")" ;; esac
 case "$*" in *metrics-check*) [ -n "${ALL_PASS:-}" ] || exit 1 ;; esac
 STUB
 cat > "$T/scripts/vagrant-smoke.sh" <<'STUB'
@@ -53,6 +56,10 @@ git -C "$T/platform" init -q -b p && git -C "$T/platform" add -A \
 git -C "$T/platform" checkout -q -b q
 ch_users '' '' grafana > "$T/platform/helm/schnappy-observability/files/clickhouse-users.xml"
 git -C "$T/platform" -c user.name=t -c user.email=t@t commit -q -am q
+# branch r: a compatibility that is no version (a template - an extra var is one in Ansible)
+git -C "$T/platform" checkout -q -b r
+ch_users "{{lookup('pipe','id')}}" '' grafana > "$T/platform/helm/schnappy-observability/files/clickhouse-users.xml"
+git -C "$T/platform" -c user.name=t -c user.email=t@t commit -q -am r
 export COPY_PLATFORM_DIR="$T/platform"
 t0=$(date +%s)
 out=$(echo "THE CALLER'S INPUT" | PATH="$T/bin:$PATH" timeout -k 5 60 bash "$T/scripts/copy-checks.sh" i p 2>&1)
@@ -76,6 +83,8 @@ check() {
   echo "FAIL $1: got $2, want $3"; printf '%s\n' "$out" | sed 's/^/    /'; fails=$((fails + 1))
 }
 check "no check read the caller's stdin" "$(grep -c "THE CALLER'S INPUT" <<< "$out")" 0
+check "every check's ssh: vagrant's own config, then keepalives 15 s x4 and a 30 s connect bound - a stalled VM ends its check" \
+  "$(grep -c '^sshcfg: ServerAliveInterval 15,ServerAliveCountMax 4,ConnectTimeout 30 after: Host kubeadm$' <<< "$out")" 1
 # each check's own command, exactly (the stubs echo their arguments): the data check VERIFIES (a seed there re-seeds
 # and passes), the isolation's proof alone, none in check mode, the smoke on the refs in their order
 for want in "check -i inventory/vagrant.yml ../../tests/ansible/copy/data-check.yml -e mode=verify read stdin: []" \
@@ -110,6 +119,9 @@ for bad in 'a b' ',a' 'a,' 'a,,b'; do
   check "pools gone '$bad' (a space, an empty name): refused before any check" \
     "$rc $(grep -c 'scrape pool names, comma-separated' <<< "$out") $(grep -c '^===== check' <<< "$out")" "1 1 0"
 done
+out=$(ALL_PASS=1 PATH="$T/bin:$PATH" timeout -k 5 60 bash "$T/scripts/copy-checks.sh" i r < /dev/null 2>&1); rc=$?
+check "a compatibility that is no version (a template from the ref): refused before any check" \
+  "$rc $(grep -c 'not a version and user names' <<< "$out") $(grep -c '^===== check' <<< "$out")" "1 1 0"
 # a ref the platform repo does not have: refused before any check (no guessed pin)
 out=$(ALL_PASS=1 PATH="$T/bin:$PATH" timeout -k 5 60 bash "$T/scripts/copy-checks.sh" i nosuchref < /dev/null 2>&1); rc=$?
 check "a platform ref that is not there: refused before any check" \

@@ -132,7 +132,7 @@
         mode: '0644'
         content: |
           [Unit]
-          Description=Vagrant upgrade test: no traffic to the production LAN
+          Description=Vagrant copy of production: no traffic to the production LAN
           # loaded before any interface is up, as nftables.service orders itself
           DefaultDependencies=no
           Wants=network-pre.target
@@ -172,7 +172,7 @@
           metadata:
             name: vagrant-deny-production-lan
           spec:
-            description: Vagrant upgrade test - no pod may reach the production LAN
+            description: Vagrant copy of production - no pod may reach the production LAN
             endpointSelector: {}
             enableDefaultDeny:
               egress: false

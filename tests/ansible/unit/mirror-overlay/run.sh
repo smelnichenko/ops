@@ -75,6 +75,8 @@ git("init", "-q", "-b", "main")
 open(os.path.join(g, "clusters/production/argocd/apps/woodpecker.yaml"), "w").write(APP)
 open(os.path.join(g, "clusters/production/argocd/apps/velero.yaml"), "w").write(APP)
 git("add", "-A"); git("commit", "-q", "-m", "main")
+# production's main: origin's (a change is judged against it, never against a local main)
+git("update-ref", "refs/remotes/origin/main", "main")
 git("checkout", "-q", "-b", "c-ok")
 open(os.path.join(g, "clusters/production/argocd/apps/velero.yaml"), "a").write("# changed\n")
 git("commit", "-q", "-am", "ok")
@@ -92,12 +94,61 @@ check("a change to a dropped app: refused, the path named",
       (r is not None and "REFUSED" in r, "woodpecker.yaml" in (r or ""), "velero.yaml" in (r or "")), (True, True, False))
 check("a change outside the overlay: mirrored", refused("c-ok"), None)
 check("main: never refused", refused("main"), None)
-# main moved on after c-ok was cut, in a file the overlay drops: the change is c-ok's own diff (main...ref), not main's
-# moves since read backwards (main..ref) - accepted
-git("checkout", "-q", "main")
+# production's main moved on after c-ok was cut, in a file the overlay drops: the change is c-ok's own diff
+# (origin/main...ref), not main's moves since read backwards (..) - accepted. The local main stays behind (not fetched
+# into): a change cut from production's new main is judged against origin's, never against the stale local one
+git("checkout", "-q", "-b", "prod", "main")
 open(os.path.join(g, "clusters/production/argocd/apps/woodpecker.yaml"), "a").write("# main moved\n")
 git("commit", "-q", "-am", "main moved")
-check("a change cut before main moved a dropped file: its own diff judged, accepted", refused("c-ok"), None)
+git("update-ref", "refs/remotes/origin/main", "prod")
+check("a change cut before production's main moved a dropped file: its own diff judged, accepted", refused("c-ok"), None)
+git("checkout", "-q", "-b", "c-new", "prod")
+open(os.path.join(g, "clusters/production/argocd/apps/velero.yaml"), "a").write("# new\n")
+git("commit", "-q", "-am", "new")
+check("a change cut from production's main, the local main behind it: accepted (production's moves are not its own)",
+      refused("c-new"), None)
+# a rename out of a dropped path: the old path gone counts - refused
+git("checkout", "-q", "-b", "c-rename", "prod")
+os.makedirs(os.path.join(g, "elsewhere"))
+git("mv", "clusters/production/argocd/apps/woodpecker.yaml", "elsewhere/woodpecker.yaml")
+git("commit", "-q", "-m", "rename")
+r = refused("c-rename")
+check("a rename out of a dropped path: refused, the old path named",
+      (r is not None and "REFUSED" in r, "clusters/production/argocd/apps/woodpecker.yaml" in (r or "")), (True, True))
+# a values key the overlay's <name>.vagrant.yaml sets too: the copy runs the overlay's value - refused, the key named;
+# a key beside it, mirrored; a whole subtree replaced over the overlay's key, refused
+check("masked_keys: a key the overlay sets, one under it, one over it - not one beside it",
+      m.masked_keys({"s": {"d": {"paused": False, "ttl": "1h"}, "l": [1]}},
+                    {"s": {"d": {"paused": True, "ttl": "2h"}, "l": [2]}, "n": {"x": 1}},
+                    {"s": {"d": {"paused": True}}, "n": 0}),
+      ["n.x", "s.d.paused"])
+check("masked_keys: a key set whole (null to a list) where the overlay sets one under it: masked",
+      m.masked_keys({"x": None}, {"x": [1]}, {"x": {"y": 1}}), ["x"])
+kov = os.path.join(work, "key-overlay")
+os.makedirs(os.path.join(kov, "infra/clusters/production/velero"))
+open(os.path.join(kov, "infra/clusters/production/velero/values.vagrant.yaml"), "w").write(
+    "schedules:\n  daily:\n    paused: true\n")
+git("checkout", "-q", "-b", "values-base", "prod")
+os.makedirs(os.path.join(g, "clusters/production/velero"))
+open(os.path.join(g, "clusters/production/velero/values.yaml"), "w").write(
+    "schedules:\n  daily:\n    paused: false\n    ttl: 1h\n")
+git("add", "-A"); git("commit", "-q", "-m", "values")
+git("update-ref", "refs/remotes/origin/main", "values-base")
+def values_change(branch, text):
+    git("checkout", "-q", "-b", branch, "values-base")
+    open(os.path.join(g, "clusters/production/velero/values.yaml"), "w").write(text)
+    git("commit", "-q", "-am", branch)
+real_overlay, m.OVERLAY = m.OVERLAY, kov
+values_change("k-paused", "schedules:\n  daily:\n    paused: true\n    ttl: 1h\n")
+values_change("k-ttl", "schedules:\n  daily:\n    paused: false\n    ttl: 2h\n")
+values_change("k-whole", "schedules: []\n")
+r1, r2, r3 = refused("k-paused"), refused("k-ttl"), refused("k-whole")
+m.OVERLAY = real_overlay
+check("a values key the overlay sets (schedules.daily.paused): refused, the file and key named",
+      (r1 is not None and "REFUSED" in r1, "clusters/production/velero/values.yaml: schedules.daily.paused" in (r1 or "")),
+      (True, True))
+check("  a key beside it (ttl): mirrored", r2, None)
+check("  the subtree replaced over it: refused", r3 is not None and "REFUSED" in r3, True)
 # the overlay's own files: a change to a path the overlay writes over is refused
 ov = os.path.join(work, "overlay")
 os.makedirs(os.path.join(ov, "infra/clusters/production/argocd/apps"))
@@ -113,7 +164,8 @@ os.makedirs(os.path.join(pg, "helm/schnappy-mesh/templates"))
 subprocess.run(["git", "-C", pg, "init", "-q", "-b", "main"], check=True)
 open(os.path.join(pg, "helm/schnappy-mesh/templates/certificates.yaml"), "w").write("a: 1\n")
 open(os.path.join(pg, "README"), "w").write("r\n")
-for args in (["add", "-A"], ["commit", "-q", "-m", "main"], ["checkout", "-q", "-b", "p-masked"]):
+for args in (["add", "-A"], ["commit", "-q", "-m", "main"], ["update-ref", "refs/remotes/origin/main", "main"],
+             ["checkout", "-q", "-b", "p-masked"]):
     subprocess.run(["git", "-C", pg, "-c", "user.name=t", "-c", "user.email=t@t", *args], check=True, capture_output=True)
 open(os.path.join(pg, "helm/schnappy-mesh/templates/certificates.yaml"), "a").write("b: 2\n")
 subprocess.run(["git", "-C", pg, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-am", "masked"],
