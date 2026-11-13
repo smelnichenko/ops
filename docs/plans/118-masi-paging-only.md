@@ -16,8 +16,10 @@ search/list/etc" (after 2026-11-11: "make sure we use paging everywhere and neve
   the picture status (10,000 rows read to count them).
 - The source table (225 rows) read whole by `GET /sources`, `/dashboard`, `/stats` and stored in every report.
 - `ResultSizes` (every result counted, 1,000 rows the limit) failed the tests but only warned in production.
-- Biggest tables a request reaches today: company 29k, contact 12k, person 12k, source_run 9k; register_company 372k
-  only through the register lookups (26 at most each); official_address 1.37M through no endpoint.
+- Biggest tables a request reaches today: company 29k, contact 12k, person 12k, source_run 9k, job_listing 2.9k, activity
+  2.4k, job 2.3k (production, 2026-11-13); register_company 372k only through the register lookups (26 at most each);
+  official_address 1.37M through no endpoint. A page's total is an uncounted `count(*)` over its filter: fine at these
+  sizes; a table past 100k rows pages by key and caps its count.
 
 ## Decisions
 
@@ -35,10 +37,12 @@ search/list/etc" (after 2026-11-11: "make sure we use paging everywhere and neve
 
 | # | What | Visible |
 |---|---|---|
-| 1 | `Paging` on every paged endpoint; `@BoundedList` + `BoundedResultsTest`; `PagingEverywhereTest` (every GET with a size, found in the handler mapping: size 100000, page -1, a page past 100k rows); a request's oversized read stopped in production; `GET /packages` needs `job`; `/persons/of-company` removed; caps: contact ids <= 200, connections <= 200, CV versions newest 200, deadlines <= 1,000, exact register name <= 26, picture status counted to 1,000 | none |
-| 2 | `/stats` and `/stats/daily` aggregated in SQL (no rows into memory, a fixed number of queries); retune and picture backfill as background work answering 202 with what was queued | none |
+| 1 | masi #248: `Paging` on every paged endpoint (ArchUnit: controllers only through it; `PagedResponse` only from a Page); `@BoundedList` + `BoundedResultsTest` over every response record however deep (52 endpoints say their bound); `PagingEverywhereTest` (every GET with a size, from the handler mapping); a request's oversized read stopped in production; `/stats`, report generation and the retune read their large windows a page (500) at a time by id, the retune estimate counted; package artifacts read without their bytes; `GET /packages` needs `job`; `/persons/of-company` removed; caps: contact ids <= 200, connections <= 200, CV versions newest 200, deadlines <= 1,000, exact register name <= 26; the picture status counted in the database | none |
+| 2 | `/stats/daily` in a fixed number of queries (about 9 a day today, ~3,300 for a year); the picture backfill as background work answering 202 | none |
 | 3 | Sources paged: `GET /sources` a page (sort and counts on the server), the dashboard's and the stats' sources a page or counts, reports storing a capped source health; the site's Sources page, dashboard and report detail with it - a rendered sample for the operator's OK first | Sources page, dashboard, reports |
 
 ## Status
 
-- 2026-11-13: audit done; PR 1 built on masi branch `feat/bounded-api` (gate running).
+- 2026-11-13: audit done; PR 1 = masi #248, both reviews' findings fixed (the architecture review's critical: the guard
+  would have stopped `/stats`, report generation and the retune - their windows now read by page in PR 1); merge held
+  for the 15:23 UTC GitHub sweep (a deploy cuts it), then the next :45 window.
