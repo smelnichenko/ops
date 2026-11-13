@@ -296,6 +296,16 @@ resolution keeps method, score and resolver version, so a new version re-resolve
     comment on changeset 124 now says so. A pin test holds the resolver's reading to its VERSION.
   - Done here as well: the county-last form masi writes when the register gives no full text (turned round to the Board's
     order).
+  - **After the test-quality review** (160 single-mechanism reverts, 59 survived; masi PR 246):
+    - Free text is in the register's form only when a municipality follows the county. "Harju maakond, Töö toimub
+      klientide juures, üle Eesti" had been read as one exact Harju address. It is now Harju, then Estonia.
+    - A remote phrase that names nothing as a whole takes the region or country its first words name ("Remote in Europe
+      with preference for Germany" is Europe). A sentence's end separates parts ("St. Louis" stays one).
+    - A text's parts split on `;` outside brackets only.
+    - Nine gap tests cover ties broken whichever namesake came first, an alev and an alevik of one name tied, the
+      score's cap, the larger place first, and a real tie (Kose). The checked set: 212 places, review share 20.8%.
+    - Left for A5: a stored-version re-resolution test (unit tests cannot reach it), and a re-extraction of production's
+      location strings with a diff against the set, as a job.
   - **Moved to a later step:** the Estonian case forms ("Tallinnas") and fuzzy matching of misspellings - neither occurs
     in production's 166 job strings.
   - **For A5:**
