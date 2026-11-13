@@ -16,6 +16,18 @@ gets it - an infra/platform branch with `task test:copy:change INFRA_REF= PLATFO
 `task test:copy:playbook PLAYBOOK= ARGS=` - every check green, then production. Each item's release notes read before
 its branch: breaking changes, order between components, the one-way ones named.
 
+## Delivery (operator 2026-11-13: "upgrade with argocd, tested in vagrant, hopefully in less than 62 branches")
+
+- **One wave = one infra branch + one platform branch** carrying every Argo-managed bump of the wave, proven together by
+  one `task test:copy:change INFRA_REF=upgrade/wave-N PLATFORM_REF=upgrade/wave-N` (every check green), merged - Argo
+  upgrades production. A wave is split only when its copy run fails and the cause is not plain. Waves 1-2: ~4 branches.
+- **What Argo cannot carry** - what exists before Argo or outside the cluster: Kubernetes and containerd on the node,
+  Cilium (the network Argo runs on), Argo CD itself (`setup-argocd.yml`), the Gateway API CRDs (`setup-kubeadm.yml`),
+  the Pis' services. Their bumps are ops version vars, proven with `task test:copy:playbook` in the same copy run as
+  the wave's branches, then their PRODUCTION `deploy:*` tasks. The ops defaults that restate Argo's charts
+  (`defaults-follow-production`) move in the same ops commit as the wave's merge.
+- Renovate (proposed, not decided) could open each wave's grouped PRs by itself; the proof and the merge stay ours.
+
 ## Wave 1 — patches, the Pis' security updates, plan 101's pending upgrades
 
 **1a. Cluster (one infra + one platform branch, one `test:copy:change`)**
