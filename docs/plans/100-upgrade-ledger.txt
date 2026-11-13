@@ -1,0 +1,1183 @@
+# kube-system/upgrade-ledger on ten, saved 2026-11-13 before its deletion (plan 117: the upgrade tooling is gone).
+## events
+2026-10-12T18:26:20Z 02-istio-chart-repo begun in-production-since-2026-10-03
+2026-10-12T18:26:20Z 02-istio-chart-repo done in-production-since-2026-10-03
+2026-10-12T18:28:41Z 00-gluster-boot start begin aqua:882729:c9dbef8c:882706
+2026-10-12T18:28:44Z 00-gluster-boot end begin failed aqua:882729:c9dbef8c:882706
+2026-10-12T18:32:22Z 00-gluster-boot start begin aqua:887235:23dfe22b:887211
+2026-10-12T18:32:26Z 00-gluster-boot end begin failed aqua:887235:23dfe22b:887211
+2026-10-12T18:35:29Z 00-gluster-boot start begin aqua:915911:dcf3d513:915872
+2026-10-12T18:35:32Z 00-gluster-boot end begin failed aqua:915911:dcf3d513:915872
+2026-10-12T18:38:28Z 00-gluster-boot start begin aqua:926743:97372308:926720
+2026-10-12T18:38:31Z 00-gluster-boot end begin failed aqua:926743:97372308:926720
+2026-10-12T23:37:18Z 00-gluster-boot start begin aqua:1327844:219629fa:1327820
+2026-10-12T23:38:04Z 00-gluster-boot apps argocd-extras,cert-manager,cluster-config,cnpg,external-secrets,istio-base,istio-cni,istiod,kagent,kagent-crds,metrics-server,porkbun-webhook,prometheus,root,schnappy-infra-data,schnappy-infra-mesh,schnappy-observability,schnappy-production-apps,schnappy-production-data,schnappy-production-mesh,schnappy-production-realtime,schnappy-sonarqube,schnappy-test,schnappy-test-apps,schnappy-test-data,schnappy-test-mesh,scylla-manager,scylla-operator,strimzi,velero,woodpecker
+2026-10-12T23:38:04Z 00-gluster-boot begun
+2026-10-12T23:38:05Z 00-gluster-boot end begin passed aqua:1327844:219629fa:1327820
+2026-10-12T23:40:28Z 00-gluster-boot start preview aqua:1331546:1a5fa732:1331520
+2026-10-12T23:41:17Z 00-gluster-boot previewed
+2026-10-12T23:41:18Z 00-gluster-boot end preview passed aqua:1331546:1a5fa732:1331520
+2026-10-12T23:43:53Z 00-gluster-boot start playbooks aqua:1335786:df143aa7:1335659
+2026-10-12T23:45:34Z 00-gluster-boot playbooks
+2026-10-12T23:45:35Z 00-gluster-boot end playbooks passed aqua:1335786:df143aa7:1335659
+2026-10-12T23:47:51Z 00-gluster-boot start done aqua:1340620:98ab5fe3:1340595
+2026-10-12T23:48:42Z 00-gluster-boot checked since=2026-10-12T23:47:53Z
+2026-10-12T23:48:42Z 00-gluster-boot end done passed aqua:1340620:98ab5fe3:1340595
+2026-10-13T00:05:05Z 00-gluster-boot start done aqua:1361464:b030641e:1361438
+2026-10-13T00:05:56Z 00-gluster-boot done
+2026-10-13T00:05:56Z 00-gluster-boot end done passed aqua:1361464:b030641e:1361438
+2026-10-13T00:08:20Z 01-argocd-root-retry start begin aqua:1365235:818aed8a:1365211
+2026-10-13T00:09:05Z 01-argocd-root-retry apps argocd-extras,cert-manager,cluster-config,cnpg,external-secrets,istio-base,istio-cni,istiod,kagent,kagent-crds,metrics-server,porkbun-webhook,prometheus,root,schnappy-infra-data,schnappy-infra-mesh,schnappy-observability,schnappy-production-apps,schnappy-production-data,schnappy-production-mesh,schnappy-production-realtime,schnappy-sonarqube,schnappy-test,schnappy-test-apps,schnappy-test-data,schnappy-test-mesh,scylla-manager,scylla-operator,strimzi,velero,woodpecker
+2026-10-13T00:09:05Z 01-argocd-root-retry begun
+2026-10-13T00:09:06Z 01-argocd-root-retry end begin passed aqua:1365235:818aed8a:1365211
+2026-10-13T00:09:06Z 01-argocd-root-retry start merge infra aqua:1366224:cdeeb6c1:1366198
+2026-10-13T00:09:20Z 01-argocd-root-retry merged infra d29a5c2d9e0c5603e502c1384fddc330ace8fabd
+2026-10-13T00:12:34Z 01-argocd-root-retry settled infra d29a5c2d9e0c5603e502c1384fddc330ace8fabd
+2026-10-13T00:12:35Z 01-argocd-root-retry end merge passed aqua:1366224:cdeeb6c1:1366198
+2026-10-13T00:12:35Z 01-argocd-root-retry start preview aqua:1370025:4411d8eb:1369997
+2026-10-13T00:12:43Z 01-argocd-root-retry previewed
+2026-10-13T00:12:44Z 01-argocd-root-retry end preview passed aqua:1370025:4411d8eb:1369997
+2026-10-13T00:12:53Z 01-argocd-root-retry start playbooks aqua:1370462:b4abee86:1370289
+2026-10-13T00:13:09Z 01-argocd-root-retry playbooks
+2026-10-13T00:13:10Z 01-argocd-root-retry end playbooks passed aqua:1370462:b4abee86:1370289
+2026-10-13T00:13:10Z 01-argocd-root-retry start done aqua:1370878:35d1d8e7:1370821
+2026-10-13T00:14:01Z 01-argocd-root-retry checked since=2026-10-13T00:13:13Z
+2026-10-13T00:14:02Z 01-argocd-root-retry end done passed aqua:1370878:35d1d8e7:1370821
+2026-10-13T00:30:41Z 01-argocd-root-retry start done aqua:1390095:d70a4006:1390069
+2026-10-13T00:31:32Z 01-argocd-root-retry done
+2026-10-13T00:31:32Z 01-argocd-root-retry end done passed aqua:1390095:d70a4006:1390069
+2026-10-13T00:39:57Z 03-istio-1.26 start begin aqua:1400861:daccf111:1400837
+2026-10-13T00:40:42Z 03-istio-1.26 apps argocd-extras,cert-manager,cluster-config,cnpg,external-secrets,istio-base,istio-cni,istiod,kagent,kagent-crds,metrics-server,porkbun-webhook,prometheus,root,schnappy-infra-data,schnappy-infra-mesh,schnappy-observability,schnappy-production-apps,schnappy-production-data,schnappy-production-mesh,schnappy-production-realtime,schnappy-sonarqube,schnappy-test,schnappy-test-apps,schnappy-test-data,schnappy-test-mesh,scylla-manager,scylla-operator,strimzi,velero,woodpecker
+2026-10-13T00:40:43Z 03-istio-1.26 begun
+2026-10-13T00:40:43Z 03-istio-1.26 end begin passed aqua:1400861:daccf111:1400837
+2026-10-13T00:40:44Z 03-istio-1.26 start merge infra aqua:1401816:aa9c0bbf:1401790
+2026-10-13T00:42:14Z 03-istio-1.26 merged infra 0d7c7a4493b3ab9bceac493c5432f4ade7f15045
+2026-10-13T00:43:44Z 03-istio-1.26 settled infra 0d7c7a4493b3ab9bceac493c5432f4ade7f15045
+2026-10-13T00:43:44Z 03-istio-1.26 end merge passed aqua:1401816:aa9c0bbf:1401790
+2026-10-13T00:43:45Z 03-istio-1.26 start preview aqua:1405273:d03453a4:1405246
+2026-10-13T00:43:57Z 03-istio-1.26 previewed
+2026-10-13T00:43:58Z 03-istio-1.26 end preview passed aqua:1405273:d03453a4:1405246
+2026-10-13T00:44:07Z 03-istio-1.26 start playbooks aqua:1405816:1b215cc1:1405642
+2026-10-13T00:47:27Z 03-istio-1.26 playbooks
+2026-10-13T00:47:28Z 03-istio-1.26 end playbooks passed aqua:1405816:1b215cc1:1405642
+2026-10-13T00:47:37Z 03-istio-1.26 start defaults aqua:1409580:f3d53b6c:1409436
+2026-10-13T00:47:38Z 03-istio-1.26 end defaults failed aqua:1409580:f3d53b6c:1409436
+2026-10-13T00:53:45Z 03-istio-1.26 start defaults aqua:1416769:30b5be10:1416656
+2026-10-13T00:54:11Z 03-istio-1.26 defaults 15fa8a9b1f3525518b1862e030f0a0c10e8e0483
+2026-10-13T00:54:11Z 03-istio-1.26 end defaults passed aqua:1416769:30b5be10:1416656
+2026-10-13T00:54:12Z 03-istio-1.26 start done aqua:1417387:f460a580:1417361
+2026-10-13T00:56:00Z 03-istio-1.26 end done failed aqua:1417387:f460a580:1417361
+2026-10-13T08:31:40Z 03-istio-1.26 start done aqua:1897446:c3e926bc:1897420
+2026-10-13T08:32:32Z 03-istio-1.26 checked since=2026-10-13T08:31:43Z
+2026-10-13T08:32:32Z 03-istio-1.26 end done passed aqua:1897446:c3e926bc:1897420
+2026-10-13T08:57:11Z 03-istio-1.26 start done aqua:1924862:21394976:1924816
+2026-10-13T08:58:03Z 03-istio-1.26 done
+2026-10-13T08:58:03Z 03-istio-1.26 end done passed aqua:1924862:21394976:1924816
+2026-10-13T08:59:37Z 04-istio-1.27 start begin aqua:1927528:57a6c951:1927505
+2026-10-13T09:00:44Z 04-istio-1.27 apps argocd-extras,cert-manager,cluster-config,cnpg,external-secrets,istio-base,istio-cni,istiod,kagent,kagent-crds,metrics-server,porkbun-webhook,prometheus,root,schnappy-infra-data,schnappy-infra-mesh,schnappy-observability,schnappy-production-apps,schnappy-production-data,schnappy-production-mesh,schnappy-production-realtime,schnappy-sonarqube,schnappy-test,schnappy-test-apps,schnappy-test-data,schnappy-test-mesh,scylla-manager,scylla-operator,strimzi,velero,woodpecker
+2026-10-13T09:00:44Z 04-istio-1.27 begun
+2026-10-13T09:00:45Z 04-istio-1.27 end begin passed aqua:1927528:57a6c951:1927505
+2026-10-13T09:00:45Z 04-istio-1.27 start merge infra aqua:1928890:a981316f:1928855
+2026-10-13T09:01:16Z 04-istio-1.27 merged infra c4f66dd5c359aebd92f334a7d7b0aca0405a532a
+2026-10-13T09:04:00Z 04-istio-1.27 settled infra c4f66dd5c359aebd92f334a7d7b0aca0405a532a
+2026-10-13T09:04:00Z 04-istio-1.27 end merge passed aqua:1928890:a981316f:1928855
+2026-10-13T09:04:01Z 04-istio-1.27 start preview aqua:1932465:d794d15d:1932440
+2026-10-13T09:04:14Z 04-istio-1.27 previewed
+2026-10-13T09:04:14Z 04-istio-1.27 end preview passed aqua:1932465:d794d15d:1932440
+2026-10-13T09:04:58Z 04-istio-1.27 start playbooks aqua:1933567:9a8e01a0:1932833
+2026-10-13T09:07:17Z 04-istio-1.27 playbooks
+2026-10-13T09:07:17Z 04-istio-1.27 end playbooks passed aqua:1933567:9a8e01a0:1932833
+2026-10-13T09:07:22Z 04-istio-1.27 start defaults aqua:1936179:68e001b6:1936086
+2026-10-13T09:07:36Z 04-istio-1.27 defaults 2027f43a291cce25ec56f53f7c53958055e04035
+2026-10-13T09:07:37Z 04-istio-1.27 end defaults passed aqua:1936179:68e001b6:1936086
+2026-10-13T09:28:09Z 04-istio-1.27 start done aqua:1959308:51a7bc25:1959282
+2026-10-13T09:29:01Z 04-istio-1.27 checked since=2026-10-13T09:28:12Z
+2026-10-13T09:29:02Z 04-istio-1.27 end done passed aqua:1959308:51a7bc25:1959282
+2026-10-13T10:49:22Z 04-istio-1.27 start done aqua:2043599:f7001637:2043553
+2026-10-13T10:50:14Z 04-istio-1.27 done
+2026-10-13T10:50:14Z 04-istio-1.27 end done passed aqua:2043599:f7001637:2043553
+2026-10-13T11:00:43Z 05-istio-1.28 start begin aqua:2056197:994191b3:2056173
+2026-10-13T11:01:28Z 05-istio-1.28 apps argocd-extras,cert-manager,cluster-config,cnpg,external-secrets,istio-base,istio-cni,istiod,kagent,kagent-crds,metrics-server,porkbun-webhook,prometheus,root,schnappy-infra-data,schnappy-infra-mesh,schnappy-observability,schnappy-production-apps,schnappy-production-data,schnappy-production-mesh,schnappy-production-realtime,schnappy-sonarqube,schnappy-test,schnappy-test-apps,schnappy-test-data,schnappy-test-mesh,scylla-manager,scylla-operator,strimzi,velero,woodpecker
+2026-10-13T11:01:29Z 05-istio-1.28 begun
+2026-10-13T11:01:29Z 05-istio-1.28 end begin passed aqua:2056197:994191b3:2056173
+2026-10-13T11:01:30Z 05-istio-1.28 start merge infra aqua:2057108:6ab0e247:2057082
+2026-10-13T11:02:02Z 05-istio-1.28 merged infra 0031fc8f41726c5a025cd65be493dee64e6167f0
+2026-10-13T11:03:41Z 05-istio-1.28 settled infra 0031fc8f41726c5a025cd65be493dee64e6167f0
+2026-10-13T11:03:41Z 05-istio-1.28 end merge passed aqua:2057108:6ab0e247:2057082
+2026-10-13T11:03:42Z 05-istio-1.28 start preview aqua:2059626:fc34e9c8:2059600
+2026-10-13T11:03:55Z 05-istio-1.28 previewed
+2026-10-13T11:03:55Z 05-istio-1.28 end preview passed aqua:2059626:fc34e9c8:2059600
+2026-10-13T11:04:02Z 05-istio-1.28 start playbooks aqua:2060106:3084e733:2059984
+2026-10-13T11:07:20Z 05-istio-1.28 playbooks
+2026-10-13T11:07:20Z 05-istio-1.28 end playbooks passed aqua:2060106:3084e733:2059984
+2026-10-13T11:07:25Z 05-istio-1.28 start defaults aqua:2063743:0d822ac0:2063650
+2026-10-13T11:07:38Z 05-istio-1.28 defaults d7132db60ccb76ec73b2dd646873a85cf6fadda1
+2026-10-13T11:07:38Z 05-istio-1.28 end defaults passed aqua:2063743:0d822ac0:2063650
+2026-10-13T11:29:05Z 05-istio-1.28 start done aqua:2088935:90ef605e:2088909
+2026-10-13T11:29:57Z 05-istio-1.28 checked since=2026-10-13T11:29:08Z
+2026-10-13T11:29:57Z 05-istio-1.28 end done passed aqua:2088935:90ef605e:2088909
+2026-10-13T11:47:31Z 05-istio-1.28 start done aqua:2110212:28426b29:2110188
+2026-10-13T11:48:23Z 05-istio-1.28 done
+2026-10-13T11:48:23Z 05-istio-1.28 end done passed aqua:2110212:28426b29:2110188
+2026-10-13T11:49:36Z 06-istio-1.29 start begin aqua:2112861:23a27f20:2112837
+2026-10-13T11:50:21Z 06-istio-1.29 apps argocd-extras,cert-manager,cluster-config,cnpg,external-secrets,istio-base,istio-cni,istiod,kagent,kagent-crds,metrics-server,porkbun-webhook,prometheus,root,schnappy-infra-data,schnappy-infra-mesh,schnappy-observability,schnappy-production-apps,schnappy-production-data,schnappy-production-mesh,schnappy-production-realtime,schnappy-sonarqube,schnappy-test,schnappy-test-apps,schnappy-test-data,schnappy-test-mesh,scylla-manager,scylla-operator,strimzi,velero,woodpecker
+2026-10-13T11:50:21Z 06-istio-1.29 begun
+2026-10-13T11:50:22Z 06-istio-1.29 end begin passed aqua:2112861:23a27f20:2112837
+2026-10-13T11:50:22Z 06-istio-1.29 start merge infra aqua:2113813:5593e7ee:2113787
+2026-10-13T11:51:21Z 06-istio-1.29 merged infra 8bbd3f6b4945ff2aea817276c4ef1f19c6202e8d
+2026-10-13T11:53:10Z 06-istio-1.29 settled infra 8bbd3f6b4945ff2aea817276c4ef1f19c6202e8d
+2026-10-13T11:53:11Z 06-istio-1.29 end merge passed aqua:2113813:5593e7ee:2113787
+2026-10-13T11:53:11Z 06-istio-1.29 start preview aqua:2116878:8f6d35d1:2116853
+2026-10-13T11:53:24Z 06-istio-1.29 previewed
+2026-10-13T11:53:24Z 06-istio-1.29 end preview passed aqua:2116878:8f6d35d1:2116853
+2026-10-13T11:54:20Z 06-istio-1.29 start playbooks aqua:2118572:7881add4:2117264
+2026-10-13T11:57:19Z 06-istio-1.29 playbooks
+2026-10-13T11:57:20Z 06-istio-1.29 end playbooks passed aqua:2118572:7881add4:2117264
+2026-10-13T11:58:15Z 06-istio-1.29 start defaults aqua:2122975:1fb92115:2121741
+2026-10-13T11:58:32Z 06-istio-1.29 defaults 636eda29487f836fc162114747392fc39ca4c201
+2026-10-13T11:58:33Z 06-istio-1.29 end defaults passed aqua:2122975:1fb92115:2121741
+2026-10-13T12:22:41Z 06-istio-1.29 start done aqua:2191185:7d2ca675:2191160
+2026-10-13T12:23:32Z 06-istio-1.29 checked since=2026-10-13T12:22:44Z
+2026-10-13T12:23:33Z 06-istio-1.29 end done passed aqua:2191185:7d2ca675:2191160
+2026-10-13T13:07:47Z 06-istio-1.29 start done aqua:2373282:de8eaa97:2373256
+2026-10-13T13:08:38Z 06-istio-1.29 done
+2026-10-13T13:08:38Z 06-istio-1.29 end done passed aqua:2373282:de8eaa97:2373256
+2026-10-13T13:09:57Z 07-gateway-api start begin aqua:2375689:54ff3900:2375652
+2026-10-13T13:10:42Z 07-gateway-api apps argocd-extras,cert-manager,cluster-config,cnpg,external-secrets,istio-base,istio-cni,istiod,kagent,kagent-crds,metrics-server,porkbun-webhook,prometheus,root,schnappy-infra-data,schnappy-infra-mesh,schnappy-observability,schnappy-production-apps,schnappy-production-data,schnappy-production-mesh,schnappy-production-realtime,schnappy-sonarqube,schnappy-test,schnappy-test-apps,schnappy-test-data,schnappy-test-mesh,scylla-manager,scylla-operator,strimzi,velero,woodpecker
+2026-10-13T13:10:42Z 07-gateway-api begun
+2026-10-13T13:10:43Z 07-gateway-api end begin passed aqua:2375689:54ff3900:2375652
+2026-10-13T13:10:56Z 07-gateway-api start backup etcd aqua:2376816:8dd6f43e:2376582
+2026-10-13T13:11:17Z 07-gateway-api backup etcd
+2026-10-13T13:11:18Z 07-gateway-api end backup passed aqua:2376816:8dd6f43e:2376582
+2026-10-13T13:11:18Z 07-gateway-api start preview aqua:2377352:1649bcf4:2377307
+2026-10-13T13:11:28Z 07-gateway-api previewed
+2026-10-13T13:11:28Z 07-gateway-api end preview passed aqua:2377352:1649bcf4:2377307
+2026-10-13T13:11:51Z 07-gateway-api start playbooks aqua:2378000:94f395b3:2377620
+2026-10-13T13:12:08Z 07-gateway-api playbooks
+2026-10-13T13:12:08Z 07-gateway-api end playbooks passed aqua:2378000:94f395b3:2377620
+2026-10-13T13:12:28Z 07-gateway-api start defaults aqua:2378730:1bcc000c:2378369
+2026-10-13T13:12:40Z 07-gateway-api defaults 9b93493fe5226a57354d990159bfaf4a21d562e9
+2026-10-13T13:12:40Z 07-gateway-api end defaults passed aqua:2378730:1bcc000c:2378369
+2026-10-13T13:26:41Z 07-gateway-api start done aqua:2395944:64912940:2395918
+2026-10-13T13:27:32Z 07-gateway-api checked since=2026-10-13T13:26:44Z
+2026-10-13T13:27:32Z 07-gateway-api end done passed aqua:2395944:64912940:2395918
+2026-10-13T13:50:50Z 07-gateway-api start done aqua:2553092:ce45bf92:2553066
+2026-10-13T13:51:42Z 07-gateway-api done
+2026-10-13T13:51:42Z 07-gateway-api end done passed aqua:2553092:ce45bf92:2553066
+2026-10-13T13:53:24Z 08-istio-1.30 start begin aqua:2573326:6bbc6757:2573295
+2026-10-13T13:55:14Z 08-istio-1.30 apps argocd-extras,cert-manager,cluster-config,cnpg,external-secrets,istio-base,istio-cni,istiod,kagent,kagent-crds,metrics-server,porkbun-webhook,prometheus,root,schnappy-infra-data,schnappy-infra-mesh,schnappy-observability,schnappy-production-apps,schnappy-production-data,schnappy-production-mesh,schnappy-production-realtime,schnappy-sonarqube,schnappy-test,schnappy-test-apps,schnappy-test-data,schnappy-test-mesh,scylla-manager,scylla-operator,strimzi,velero,woodpecker
+2026-10-13T13:55:15Z 08-istio-1.30 begun
+2026-10-13T13:55:15Z 08-istio-1.30 end begin passed aqua:2573326:6bbc6757:2573295
+2026-10-13T13:55:16Z 08-istio-1.30 start merge infra aqua:2585366:f1533638:2585296
+2026-10-13T13:56:10Z 08-istio-1.30 merged infra 07918c1142092f6b12dc07f1afc2f08ac63c1fcb
+2026-10-13T13:58:10Z 08-istio-1.30 settled infra 07918c1142092f6b12dc07f1afc2f08ac63c1fcb
+2026-10-13T13:58:10Z 08-istio-1.30 end merge passed aqua:2585366:f1533638:2585296
+2026-10-13T13:58:11Z 08-istio-1.30 start preview aqua:2604492:529cc24b:2604397
+2026-10-13T13:58:24Z 08-istio-1.30 previewed
+2026-10-13T13:58:24Z 08-istio-1.30 end preview passed aqua:2604492:529cc24b:2604397
+2026-10-13T13:58:33Z 08-istio-1.30 start playbooks aqua:2605548:179b5dec:2605399
+2026-10-13T14:01:29Z 08-istio-1.30 playbooks
+2026-10-13T14:01:30Z 08-istio-1.30 end playbooks passed aqua:2605548:179b5dec:2605399
+2026-10-13T14:02:24Z 08-istio-1.30 start defaults aqua:2610090:e55f34d9:2609112
+2026-10-13T14:02:38Z 08-istio-1.30 defaults 003bcdb7abe2d05f79033bb229bd846e1e1b64b3
+2026-10-13T14:02:38Z 08-istio-1.30 end defaults passed aqua:2610090:e55f34d9:2609112
+2026-10-13T14:19:37Z 08-istio-1.30 start done aqua:2693526:320ec291:2693497
+2026-10-13T14:20:29Z 08-istio-1.30 checked since=2026-10-13T14:19:40Z
+2026-10-13T14:20:30Z 08-istio-1.30 end done passed aqua:2693526:320ec291:2693497
+2026-10-13T14:36:09Z 08-istio-1.30 start done aqua:2735108:8dc71181:2735082
+2026-10-13T14:37:01Z 08-istio-1.30 done
+2026-10-13T14:37:01Z 08-istio-1.30 end done passed aqua:2735108:8dc71181:2735082
+2026-10-13T14:37:02Z 09-istio-1.31 start begin aqua:2736191:969e4823:2736168
+2026-10-13T14:38:10Z 09-istio-1.31 apps argocd-extras,cert-manager,cluster-config,cnpg,external-secrets,istio-base,istio-cni,istiod,kagent,kagent-crds,metrics-server,porkbun-webhook,prometheus,root,schnappy-infra-data,schnappy-infra-mesh,schnappy-observability,schnappy-production-apps,schnappy-production-data,schnappy-production-mesh,schnappy-production-realtime,schnappy-sonarqube,schnappy-test,schnappy-test-apps,schnappy-test-data,schnappy-test-mesh,scylla-manager,scylla-operator,strimzi,velero,woodpecker
+2026-10-13T14:38:11Z 09-istio-1.31 begun
+2026-10-13T14:38:11Z 09-istio-1.31 end begin passed aqua:2736191:969e4823:2736168
+2026-10-13T14:38:12Z 09-istio-1.31 start merge infra aqua:2737543:4dc38939:2737518
+2026-10-13T14:38:43Z 09-istio-1.31 merged infra 76f3c8ba2070d4f9233250c513075928e1474c95
+2026-10-13T14:40:22Z 09-istio-1.31 settled infra 76f3c8ba2070d4f9233250c513075928e1474c95
+2026-10-13T14:40:22Z 09-istio-1.31 end merge passed aqua:2737543:4dc38939:2737518
+2026-10-13T14:40:23Z 09-istio-1.31 start preview aqua:2740084:d9cf15aa:2740058
+2026-10-13T14:40:35Z 09-istio-1.31 previewed
+2026-10-13T14:40:36Z 09-istio-1.31 end preview passed aqua:2740084:d9cf15aa:2740058
+2026-10-13T14:41:08Z 09-istio-1.31 start playbooks aqua:2741002:35375833:2740461
+2026-10-13T14:45:20Z 09-istio-1.31 playbooks
+2026-10-13T14:45:22Z 09-istio-1.31 end playbooks passed aqua:2741002:35375833:2740461
+2026-10-13T14:46:03Z 09-istio-1.31 start defaults aqua:2746143:fc57a74c:2745434
+2026-10-13T14:46:26Z 09-istio-1.31 defaults 5ae1201de963705f30eca6d021c6bef4c78d76f4
+2026-10-13T14:46:26Z 09-istio-1.31 end defaults passed aqua:2746143:fc57a74c:2745434
+2026-10-13T15:00:40Z 09-istio-1.31 start done aqua:2762817:3556e786:2762790
+2026-10-13T15:01:31Z 09-istio-1.31 checked since=2026-10-13T15:00:43Z
+2026-10-13T15:01:32Z 09-istio-1.31 end done passed aqua:2762817:3556e786:2762790
+2026-10-13T15:06:56Z 09-istio-1.31 start done aqua:2814473:78e1b79d:2814448
+2026-10-13T15:07:49Z 09-istio-1.31 done
+2026-10-13T15:07:49Z 09-istio-1.31 end done passed aqua:2814473:78e1b79d:2814448
+2026-10-13T15:07:50Z 10-velero start begin aqua:2821949:11c7017f:2821923
+2026-10-13T15:08:36Z 10-velero apps argocd-extras,cert-manager,cluster-config,cnpg,external-secrets,istio-base,istio-cni,istiod,kagent,kagent-crds,metrics-server,porkbun-webhook,prometheus,root,schnappy-infra-data,schnappy-infra-mesh,schnappy-observability,schnappy-production-apps,schnappy-production-data,schnappy-production-mesh,schnappy-production-realtime,schnappy-sonarqube,schnappy-test,schnappy-test-apps,schnappy-test-data,schnappy-test-mesh,scylla-manager,scylla-operator,strimzi,velero,woodpecker
+2026-10-13T15:08:36Z 10-velero begun
+2026-10-13T15:08:37Z 10-velero end begin passed aqua:2821949:11c7017f:2821923
+2026-10-13T15:08:37Z 10-velero start merge infra aqua:2825596:ac53e117:2825565
+2026-10-13T15:09:03Z 10-velero merged infra 0e1fa44d9bd7e02a1de5fccbb843a00f13ddb8e6
+2026-10-13T15:15:30Z 10-velero settled infra 0e1fa44d9bd7e02a1de5fccbb843a00f13ddb8e6
+2026-10-13T15:15:30Z 10-velero end merge passed aqua:2825596:ac53e117:2825565
+2026-10-13T15:15:31Z 10-velero start done aqua:2867339:1db310aa:2867314
+2026-10-13T15:16:23Z 10-velero end done failed aqua:2867339:1db310aa:2867314
+2026-10-13T15:18:42Z 10-velero start done aqua:2873048:ba82217e:2873021
+2026-10-13T15:19:34Z 10-velero checked since=2026-10-13T15:18:45Z
+2026-10-13T15:19:34Z 10-velero end done passed aqua:2873048:ba82217e:2873021
+2026-10-13T15:33:38Z 10-velero start done aqua:2891624:bb254b95:2891599
+2026-10-13T15:34:29Z 10-velero done
+2026-10-13T15:34:29Z 10-velero end done passed aqua:2891624:bb254b95:2891599
+2026-10-13T15:34:30Z 11-cilium start begin aqua:2892685:05cdd67e:2892661
+2026-10-13T15:35:16Z 11-cilium apps argocd-extras,cert-manager,cluster-config,cnpg,external-secrets,istio-base,istio-cni,istiod,kagent,kagent-crds,metrics-server,porkbun-webhook,prometheus,root,schnappy-infra-data,schnappy-infra-mesh,schnappy-observability,schnappy-production-apps,schnappy-production-data,schnappy-production-mesh,schnappy-production-realtime,schnappy-sonarqube,schnappy-test,schnappy-test-apps,schnappy-test-data,schnappy-test-mesh,scylla-manager,scylla-operator,strimzi,velero,woodpecker
+2026-10-13T15:35:16Z 11-cilium begun
+2026-10-13T15:35:17Z 11-cilium end begin passed aqua:2892685:05cdd67e:2892661
+2026-10-13T15:35:17Z 11-cilium start preview aqua:2893645:68b61379:2893606
+2026-10-13T15:35:31Z 11-cilium end preview failed aqua:2893645:68b61379:2893606
+2026-10-13T21:47:36Z 11-cilium start preview aqua:1711232:38ad1ad1:1711205
+2026-10-13T21:47:55Z 11-cilium previewed
+2026-10-13T21:47:56Z 11-cilium end preview passed aqua:1711232:38ad1ad1:1711205
+2026-10-13T21:48:01Z 11-cilium start playbooks aqua:1711815:b0cbe52d:1711717
+2026-10-13T21:49:24Z 11-cilium playbooks
+2026-10-13T21:49:25Z 11-cilium end playbooks passed aqua:1711815:b0cbe52d:1711717
+2026-10-13T21:49:34Z 11-cilium start defaults aqua:1713520:3d20cb2d:1713381
+2026-10-13T21:49:43Z 11-cilium defaults 61b78030873be5b5eca3da0945ef37c57c91625b
+2026-10-13T21:49:44Z 11-cilium end defaults passed aqua:1713520:3d20cb2d:1713381
+2026-10-13T21:49:45Z 11-cilium start done aqua:1713838:37d6e487:1713812
+2026-10-13T21:50:37Z 11-cilium checked since=2026-10-13T21:49:48Z
+2026-10-13T21:50:37Z 11-cilium end done passed aqua:1713838:37d6e487:1713812
+2026-10-13T21:56:42Z 11-cilium start done aqua:1722137:1189135e:1722113
+2026-10-13T21:57:34Z 11-cilium done
+2026-10-13T21:57:34Z 11-cilium end done passed aqua:1722137:1189135e:1722113
+2026-10-13T21:57:35Z 12-kubelet-shutdown-grace start begin aqua:1723240:c26cad90:1723209
+2026-10-13T21:58:23Z 12-kubelet-shutdown-grace apps argocd-extras,cert-manager,cluster-config,cnpg,external-secrets,istio-base,istio-cni,istiod,kagent,kagent-crds,metrics-server,porkbun-webhook,prometheus,root,schnappy-infra-data,schnappy-infra-mesh,schnappy-observability,schnappy-production-apps,schnappy-production-data,schnappy-production-mesh,schnappy-production-realtime,schnappy-sonarqube,schnappy-test,schnappy-test-apps,schnappy-test-data,schnappy-test-mesh,scylla-manager,scylla-operator,strimzi,velero,woodpecker
+2026-10-13T21:58:23Z 12-kubelet-shutdown-grace begun
+2026-10-13T21:58:24Z 12-kubelet-shutdown-grace end begin passed aqua:1723240:c26cad90:1723209
+2026-10-13T21:58:25Z 12-kubelet-shutdown-grace start preview aqua:1724232:c34ba661:1724205
+2026-10-13T21:58:30Z 12-kubelet-shutdown-grace previewed
+2026-10-13T21:58:31Z 12-kubelet-shutdown-grace end preview passed aqua:1724232:c34ba661:1724205
+2026-10-13T21:58:35Z 12-kubelet-shutdown-grace start playbooks aqua:1724505:b904a286:1724431
+2026-10-13T21:58:45Z 12-kubelet-shutdown-grace playbooks
+2026-10-13T21:58:46Z 12-kubelet-shutdown-grace end playbooks passed aqua:1724505:b904a286:1724431
+2026-10-13T21:58:47Z 12-kubelet-shutdown-grace start done aqua:1724819:69b7a526:1724794
+2026-10-13T21:59:38Z 12-kubelet-shutdown-grace checked since=2026-10-13T21:58:50Z
+2026-10-13T21:59:39Z 12-kubelet-shutdown-grace end done passed aqua:1724819:69b7a526:1724794
+2026-10-13T22:10:08Z 12-kubelet-shutdown-grace start done aqua:1880551:476120ad:1880525
+2026-10-13T22:10:59Z 12-kubelet-shutdown-grace done
+2026-10-13T22:10:59Z 12-kubelet-shutdown-grace end done passed aqua:1880551:476120ad:1880525
+2026-10-13T22:11:00Z 13-kubernetes-1.34.12 start begin aqua:1881522:c63182a2:1881501
+2026-10-13T22:11:46Z 13-kubernetes-1.34.12 apps argocd-extras,cert-manager,cluster-config,cnpg,external-secrets,istio-base,istio-cni,istiod,kagent,kagent-crds,metrics-server,porkbun-webhook,prometheus,root,schnappy-infra-data,schnappy-infra-mesh,schnappy-observability,schnappy-production-apps,schnappy-production-data,schnappy-production-mesh,schnappy-production-realtime,schnappy-sonarqube,schnappy-test,schnappy-test-apps,schnappy-test-data,schnappy-test-mesh,scylla-manager,scylla-operator,strimzi,velero,woodpecker
+2026-10-13T22:11:46Z 13-kubernetes-1.34.12 begun
+2026-10-13T22:11:47Z 13-kubernetes-1.34.12 end begin passed aqua:1881522:c63182a2:1881501
+2026-10-13T22:12:59Z 13-kubernetes-1.34.12 start backup etcd aqua:1883811:b1d96d74:1883708
+2026-10-13T22:13:16Z 13-kubernetes-1.34.12 backup etcd
+2026-10-13T22:13:17Z 13-kubernetes-1.34.12 end backup passed aqua:1883811:b1d96d74:1883708
+2026-10-13T22:13:18Z 13-kubernetes-1.34.12 start preview aqua:1884283:50b1826f:1884258
+2026-10-13T22:13:24Z 13-kubernetes-1.34.12 previewed
+2026-10-13T22:13:25Z 13-kubernetes-1.34.12 end preview passed aqua:1884283:50b1826f:1884258
+2026-10-13T22:13:29Z 13-kubernetes-1.34.12 start playbooks aqua:1884614:55fde986:1884534
+2026-10-13T22:17:03Z 13-kubernetes-1.34.12 playbooks
+2026-10-13T22:17:04Z 13-kubernetes-1.34.12 end playbooks passed aqua:1884614:55fde986:1884534
+2026-10-13T22:17:07Z 13-kubernetes-1.34.12 start defaults aqua:1888194:b6d19c2a:1888141
+2026-10-13T22:17:16Z 13-kubernetes-1.34.12 defaults e38a3a608eecb5e1ffe242846b3bfa97394f59a9
+2026-10-13T22:17:16Z 13-kubernetes-1.34.12 end defaults passed aqua:1888194:b6d19c2a:1888141
+2026-10-13T22:17:17Z 13-kubernetes-1.34.12 start done aqua:1888479:28688bac:1888453
+2026-10-13T22:20:47Z 13-kubernetes-1.34.12 checked since=2026-10-13T22:17:20Z
+2026-10-13T22:20:48Z 13-kubernetes-1.34.12 end done passed aqua:1888479:28688bac:1888453
+2026-10-13T22:26:17Z 13-kubernetes-1.34.12 start done aqua:1898324:0d5902e3:1898298
+2026-10-13T22:27:09Z 13-kubernetes-1.34.12 done
+2026-10-13T22:27:10Z 13-kubernetes-1.34.12 end done passed aqua:1898324:0d5902e3:1898298
+2026-10-13T22:27:11Z 14-containerd start begin aqua:1899322:39fd3b64:1899299
+2026-10-13T22:27:57Z 14-containerd apps argocd-extras,cert-manager,cluster-config,cnpg,external-secrets,istio-base,istio-cni,istiod,kagent,kagent-crds,metrics-server,porkbun-webhook,prometheus,root,schnappy-infra-data,schnappy-infra-mesh,schnappy-observability,schnappy-production-apps,schnappy-production-data,schnappy-production-mesh,schnappy-production-realtime,schnappy-sonarqube,schnappy-test,schnappy-test-apps,schnappy-test-data,schnappy-test-mesh,scylla-manager,scylla-operator,strimzi,velero,woodpecker
+2026-10-13T22:27:58Z 14-containerd begun
+2026-10-13T22:27:58Z 14-containerd end begin passed aqua:1899322:39fd3b64:1899299
+2026-10-13T22:27:59Z 14-containerd start preview aqua:1900231:fbb9f503:1900206
+2026-10-13T22:28:08Z 14-containerd previewed
+2026-10-13T22:28:08Z 14-containerd end preview passed aqua:1900231:fbb9f503:1900206
+2026-10-13T22:28:55Z 14-containerd start playbooks aqua:1901246:dfcccc81:1900511
+2026-10-13T22:29:31Z 14-containerd playbooks
+2026-10-13T22:29:31Z 14-containerd end playbooks passed aqua:1901246:dfcccc81:1900511
+2026-10-13T22:29:41Z 14-containerd start defaults aqua:1902142:2d4e663e:1901960
+2026-10-13T22:29:58Z 14-containerd defaults fc86d7112a10dd3f7702d51906539ba888ddec07
+2026-10-13T22:29:58Z 14-containerd end defaults passed aqua:1902142:2d4e663e:1901960
+2026-10-13T22:29:59Z 14-containerd start done aqua:1902544:19557c2b:1902519
+2026-10-13T22:32:48Z 14-containerd checked since=2026-10-13T22:30:02Z
+2026-10-13T22:32:49Z 14-containerd end done passed aqua:1902544:19557c2b:1902519
+2026-10-13T22:39:40Z 14-containerd start done aqua:1912661:5111defa:1912623
+2026-10-13T22:40:31Z 14-containerd done
+2026-10-13T22:40:31Z 14-containerd end done passed aqua:1912661:5111defa:1912623
+2026-10-13T22:40:32Z 15-scylla-operator-1.20.3 start begin aqua:1913629:47dc903e:1913607
+2026-10-13T22:41:18Z 15-scylla-operator-1.20.3 apps argocd-extras,cert-manager,cluster-config,cnpg,external-secrets,istio-base,istio-cni,istiod,kagent,kagent-crds,metrics-server,porkbun-webhook,prometheus,root,schnappy-infra-data,schnappy-infra-mesh,schnappy-observability,schnappy-production-apps,schnappy-production-data,schnappy-production-mesh,schnappy-production-realtime,schnappy-sonarqube,schnappy-test,schnappy-test-apps,schnappy-test-data,schnappy-test-mesh,scylla-manager,scylla-operator,strimzi,velero,woodpecker
+2026-10-13T22:41:19Z 15-scylla-operator-1.20.3 begun
+2026-10-13T22:41:19Z 15-scylla-operator-1.20.3 end begin passed aqua:1913629:47dc903e:1913607
+2026-10-13T22:41:20Z 15-scylla-operator-1.20.3 start merge infra aqua:1914596:3ffeb197:1914570
+2026-10-13T22:41:50Z 15-scylla-operator-1.20.3 merged infra 643c95aa2ca4bd2b0c8eb76ad7e876c7a391c9e4
+2026-10-13T22:43:58Z 15-scylla-operator-1.20.3 settled infra 643c95aa2ca4bd2b0c8eb76ad7e876c7a391c9e4
+2026-10-13T22:43:59Z 15-scylla-operator-1.20.3 end merge passed aqua:1914596:3ffeb197:1914570
+2026-10-13T22:44:06Z 15-scylla-operator-1.20.3 start defaults aqua:1917505:44d44417:1917388
+2026-10-13T22:44:14Z 15-scylla-operator-1.20.3 defaults 78b26b63d758f9f4ad0d76228156fab6a2a6d0a6
+2026-10-13T22:44:15Z 15-scylla-operator-1.20.3 end defaults passed aqua:1917505:44d44417:1917388
+2026-10-13T22:44:15Z 15-scylla-operator-1.20.3 start done aqua:1917811:236215f7:1917783
+2026-10-13T22:45:29Z 15-scylla-operator-1.20.3 checked since=2026-10-13T22:44:19Z
+2026-10-13T22:45:30Z 15-scylla-operator-1.20.3 end done passed aqua:1917811:236215f7:1917783
+2026-10-13T22:51:02Z 15-scylla-operator-1.20.3 start done aqua:1925134:7880af7f:1925108
+2026-10-13T22:51:54Z 15-scylla-operator-1.20.3 done
+2026-10-13T22:51:54Z 15-scylla-operator-1.20.3 end done passed aqua:1925134:7880af7f:1925108
+2026-10-13T22:51:55Z 16-scylladb-2025.1-test start begin aqua:1926181:9603a832:1926157
+2026-10-13T22:52:42Z 16-scylladb-2025.1-test apps argocd-extras,cert-manager,cluster-config,cnpg,external-secrets,istio-base,istio-cni,istiod,kagent,kagent-crds,metrics-server,porkbun-webhook,prometheus,root,schnappy-infra-data,schnappy-infra-mesh,schnappy-observability,schnappy-production-apps,schnappy-production-data,schnappy-production-mesh,schnappy-production-realtime,schnappy-sonarqube,schnappy-test,schnappy-test-apps,schnappy-test-data,schnappy-test-mesh,scylla-manager,scylla-operator,strimzi,velero,woodpecker
+2026-10-13T22:52:42Z 16-scylladb-2025.1-test begun
+2026-10-13T22:52:43Z 16-scylladb-2025.1-test end begin passed aqua:1926181:9603a832:1926157
+2026-10-13T22:52:43Z 16-scylladb-2025.1-test start merge infra aqua:1927080:13c8bc03:1927054
+2026-10-13T22:52:58Z 16-scylladb-2025.1-test merged infra 0739bf447fd53c69b9d2aeac437d0c791060a3ff
+2026-10-13T22:55:08Z 16-scylladb-2025.1-test settled infra 0739bf447fd53c69b9d2aeac437d0c791060a3ff
+2026-10-13T22:55:08Z 16-scylladb-2025.1-test end merge passed aqua:1927080:13c8bc03:1927054
+2026-10-13T22:55:09Z 16-scylladb-2025.1-test start done aqua:1930035:0fe0ba9f:1930009
+2026-10-13T22:56:01Z 16-scylladb-2025.1-test checked since=2026-10-13T22:55:12Z
+2026-10-13T22:56:01Z 16-scylladb-2025.1-test end done passed aqua:1930035:0fe0ba9f:1930009
+2026-10-13T23:03:57Z 16-scylladb-2025.1-test start done aqua:1939630:683770d7:1939590
+2026-10-13T23:04:47Z 16-scylladb-2025.1-test done
+2026-10-13T23:04:48Z 16-scylladb-2025.1-test end done passed aqua:1939630:683770d7:1939590
+2026-10-13T23:04:48Z 17-scylladb-2025.1 start begin aqua:1940662:251415c5:1940638
+2026-10-13T23:05:35Z 17-scylladb-2025.1 apps argocd-extras,cert-manager,cluster-config,cnpg,external-secrets,istio-base,istio-cni,istiod,kagent,kagent-crds,metrics-server,porkbun-webhook,prometheus,root,schnappy-infra-data,schnappy-infra-mesh,schnappy-observability,schnappy-production-apps,schnappy-production-data,schnappy-production-mesh,schnappy-production-realtime,schnappy-sonarqube,schnappy-test,schnappy-test-apps,schnappy-test-data,schnappy-test-mesh,scylla-manager,scylla-operator,strimzi,velero,woodpecker
+2026-10-13T23:05:35Z 17-scylladb-2025.1 begun
+2026-10-13T23:05:36Z 17-scylladb-2025.1 end begin passed aqua:1940662:251415c5:1940638
+2026-10-13T23:05:40Z 17-scylladb-2025.1 start backup scylla aqua:1941660:508c23ce:1941551
+2026-10-13T23:06:13Z 17-scylladb-2025.1 backup scylla
+2026-10-13T23:06:13Z 17-scylladb-2025.1 end backup passed aqua:1941660:508c23ce:1941551
+2026-10-13T23:06:14Z 17-scylladb-2025.1 start merge infra aqua:1942353:9ee8a497:1942308
+2026-10-13T23:06:39Z 17-scylladb-2025.1 merged infra 29b2d94229b264fa9be2763c1e63e69f25cc0276
+2026-10-13T23:08:37Z 17-scylladb-2025.1 settled infra 29b2d94229b264fa9be2763c1e63e69f25cc0276
+2026-10-13T23:08:38Z 17-scylladb-2025.1 end merge passed aqua:1942353:9ee8a497:1942308
+2026-10-13T23:08:39Z 17-scylladb-2025.1 start done aqua:1944810:a4281ab5:1944784
+2026-10-13T23:09:30Z 17-scylladb-2025.1 scylla-backup
+2026-10-13T23:10:18Z 17-scylladb-2025.1 checked since=2026-10-13T23:09:30Z
+2026-10-13T23:10:18Z 17-scylladb-2025.1 end done passed aqua:1944810:a4281ab5:1944784
+2026-10-13T23:16:11Z 17-scylladb-2025.1 start done aqua:1952692:0c864ee3:1952666
+2026-10-13T23:17:01Z 17-scylladb-2025.1 done
+2026-10-13T23:17:02Z 17-scylladb-2025.1 end done passed aqua:1952692:0c864ee3:1952666
+2026-10-14T00:56:25Z 18-scylla-operator-1.21 start begin aqua:3111593:e643feb1:3111569
+2026-10-14T00:57:12Z 18-scylla-operator-1.21 apps argocd-extras,cert-manager,cluster-config,cnpg,external-secrets,istio-base,istio-cni,istiod,kagent,kagent-crds,metrics-server,porkbun-webhook,prometheus,root,schnappy-infra-data,schnappy-infra-mesh,schnappy-observability,schnappy-production-apps,schnappy-production-data,schnappy-production-mesh,schnappy-production-realtime,schnappy-sonarqube,schnappy-test,schnappy-test-apps,schnappy-test-data,schnappy-test-mesh,scylla-manager,scylla-operator,strimzi,velero,woodpecker
+2026-10-14T00:57:12Z 18-scylla-operator-1.21 begun
+2026-10-14T00:57:13Z 18-scylla-operator-1.21 end begin passed aqua:3111593:e643feb1:3111569
+2026-10-14T00:57:13Z 18-scylla-operator-1.21 start merge infra aqua:3112493:fbb129b7:3112467
+2026-10-14T01:10:21Z 18-scylla-operator-1.21 merged infra f011c61134dc99028980a0af3413023c1dcb831d
+2026-10-14T01:14:05Z 18-scylla-operator-1.21 settled infra f011c61134dc99028980a0af3413023c1dcb831d
+2026-10-14T01:14:05Z 18-scylla-operator-1.21 end merge passed aqua:3112493:fbb129b7:3112467
+2026-10-14T01:14:10Z 18-scylla-operator-1.21 start defaults aqua:3128429:01443d55:3128343
+2026-10-14T01:14:20Z 18-scylla-operator-1.21 defaults 9e19caf06f84ac770a560bb5c1144b44beda0198
+2026-10-14T01:14:20Z 18-scylla-operator-1.21 end defaults passed aqua:3128429:01443d55:3128343
+2026-10-14T01:14:21Z 18-scylla-operator-1.21 start done aqua:3128725:945b45c0:3128698
+2026-10-14T01:15:13Z 18-scylla-operator-1.21 scylla-backup
+2026-10-14T01:16:02Z 18-scylla-operator-1.21 checked since=2026-10-14T01:15:13Z
+2026-10-14T01:16:02Z 18-scylla-operator-1.21 end done passed aqua:3128725:945b45c0:3128698
+2026-10-14T01:25:38Z 18-scylla-operator-1.21 start done aqua:3140994:3703f9de:3140956
+2026-10-14T01:26:29Z 18-scylla-operator-1.21 done
+2026-10-14T01:26:30Z 18-scylla-operator-1.21 end done passed aqua:3140994:3703f9de:3140956
+2026-10-14T01:26:30Z 19-scylladb-2026.1-test start begin aqua:3142003:178bcebc:3141981
+2026-10-14T01:27:17Z 19-scylladb-2026.1-test apps argocd-extras,cert-manager,cluster-config,cnpg,external-secrets,istio-base,istio-cni,istiod,kagent,kagent-crds,metrics-server,porkbun-webhook,prometheus,root,schnappy-infra-data,schnappy-infra-mesh,schnappy-observability,schnappy-production-apps,schnappy-production-data,schnappy-production-mesh,schnappy-production-realtime,schnappy-sonarqube,schnappy-test,schnappy-test-apps,schnappy-test-data,schnappy-test-mesh,scylla-manager,scylla-operator,strimzi,velero,woodpecker
+2026-10-14T01:27:17Z 19-scylladb-2026.1-test begun
+2026-10-14T01:27:18Z 19-scylladb-2026.1-test end begin passed aqua:3142003:178bcebc:3141981
+2026-10-14T01:27:19Z 19-scylladb-2026.1-test start merge infra aqua:3142907:b8635209:3142881
+2026-10-14T01:44:13Z 19-scylladb-2026.1-test merged infra 6e13b72c6ee5f8318646f6e9895258cf6ba25037
+2026-10-14T01:46:22Z 19-scylladb-2026.1-test settled infra 6e13b72c6ee5f8318646f6e9895258cf6ba25037
+2026-10-14T01:46:22Z 19-scylladb-2026.1-test end merge passed aqua:3142907:b8635209:3142881
+2026-10-14T01:46:23Z 19-scylladb-2026.1-test start done aqua:3160600:3fe97ee9:3160574
+2026-10-14T01:47:14Z 19-scylladb-2026.1-test checked since=2026-10-14T01:46:26Z
+2026-10-14T01:47:14Z 19-scylladb-2026.1-test end done passed aqua:3160600:3fe97ee9:3160574
+2026-10-14T01:52:48Z 19-scylladb-2026.1-test start done aqua:3167972:daba8c75:3167948
+2026-10-14T01:53:38Z 19-scylladb-2026.1-test done
+2026-10-14T01:53:39Z 19-scylladb-2026.1-test end done passed aqua:3167972:daba8c75:3167948
+2026-10-14T01:53:39Z 20-scylladb-2026.1 start begin aqua:3168992:8460d97a:3168952
+2026-10-14T01:54:25Z 20-scylladb-2026.1 apps argocd-extras,cert-manager,cluster-config,cnpg,external-secrets,istio-base,istio-cni,istiod,kagent,kagent-crds,metrics-server,porkbun-webhook,prometheus,root,schnappy-infra-data,schnappy-infra-mesh,schnappy-observability,schnappy-production-apps,schnappy-production-data,schnappy-production-mesh,schnappy-production-realtime,schnappy-sonarqube,schnappy-test,schnappy-test-apps,schnappy-test-data,schnappy-test-mesh,scylla-manager,scylla-operator,strimzi,velero,woodpecker
+2026-10-14T01:54:26Z 20-scylladb-2026.1 begun
+2026-10-14T01:54:26Z 20-scylladb-2026.1 end begin passed aqua:3168992:8460d97a:3168952
+2026-10-14T01:54:31Z 20-scylladb-2026.1 start backup scylla aqua:3169959:3e3ae592:3169868
+2026-10-14T01:55:04Z 20-scylladb-2026.1 backup scylla
+2026-10-14T01:55:05Z 20-scylladb-2026.1 end backup passed aqua:3169959:3e3ae592:3169868
+2026-10-14T01:55:06Z 20-scylladb-2026.1 start merge infra aqua:3170655:5b5a0c08:3170630
+2026-10-14T01:55:21Z 20-scylladb-2026.1 merged infra 256404fdacda27c59c23533caccc1f16bcd3ebe9
+2026-10-14T01:57:20Z 20-scylladb-2026.1 settled infra 256404fdacda27c59c23533caccc1f16bcd3ebe9
+2026-10-14T01:57:20Z 20-scylladb-2026.1 end merge passed aqua:3170655:5b5a0c08:3170630
+2026-10-14T01:57:21Z 20-scylladb-2026.1 start done aqua:3172976:7a8e5bfc:3172950
+2026-10-14T01:58:15Z 20-scylladb-2026.1 scylla-backup
+2026-10-14T01:59:03Z 20-scylladb-2026.1 checked since=2026-10-14T01:58:15Z
+2026-10-14T01:59:04Z 20-scylladb-2026.1 end done passed aqua:3172976:7a8e5bfc:3172950
+2026-10-14T02:06:16Z 20-scylladb-2026.1 start done aqua:3182624:b121a17a:3182598
+2026-10-14T02:07:09Z 20-scylladb-2026.1 done
+2026-10-14T02:07:09Z 20-scylladb-2026.1 end done passed aqua:3182624:b121a17a:3182598
+2026-10-14T02:07:10Z 21-scylla-operator-1.22 start begin aqua:3183676:59141589:3183654
+2026-10-14T02:07:57Z 21-scylla-operator-1.22 apps argocd-extras,cert-manager,cluster-config,cnpg,external-secrets,istio-base,istio-cni,istiod,kagent,kagent-crds,metrics-server,porkbun-webhook,prometheus,root,schnappy-infra-data,schnappy-infra-mesh,schnappy-observability,schnappy-production-apps,schnappy-production-data,schnappy-production-mesh,schnappy-production-realtime,schnappy-sonarqube,schnappy-test,schnappy-test-apps,schnappy-test-data,schnappy-test-mesh,scylla-manager,scylla-operator,strimzi,velero,woodpecker
+2026-10-14T02:07:57Z 21-scylla-operator-1.22 begun
+2026-10-14T02:07:57Z 21-scylla-operator-1.22 end begin passed aqua:3183676:59141589:3183654
+2026-10-14T02:07:58Z 21-scylla-operator-1.22 start merge infra aqua:3185207:09d8a96b:3185173
+2026-10-14T02:08:52Z 21-scylla-operator-1.22 merged infra d8489fa8a682725d8b214370c7d6a3c7777bb0b2
+2026-10-14T02:12:16Z 21-scylla-operator-1.22 settled infra d8489fa8a682725d8b214370c7d6a3c7777bb0b2
+2026-10-14T02:12:17Z 21-scylla-operator-1.22 end merge passed aqua:3185207:09d8a96b:3185173
+2026-10-14T02:12:21Z 21-scylla-operator-1.22 start defaults aqua:3189703:22479ad9:3189607
+2026-10-14T02:12:29Z 21-scylla-operator-1.22 defaults 00b09999654aa96fcf9201986b248d8fd5cbb41e
+2026-10-14T02:12:29Z 21-scylla-operator-1.22 end defaults passed aqua:3189703:22479ad9:3189607
+2026-10-14T02:12:30Z 21-scylla-operator-1.22 start done aqua:3189998:a64b0eee:3189973
+2026-10-14T02:13:21Z 21-scylla-operator-1.22 scylla-backup
+2026-10-14T02:15:15Z 21-scylla-operator-1.22 checked since=2026-10-14T02:13:22Z
+2026-10-14T02:15:16Z 21-scylla-operator-1.22 end done passed aqua:3189998:a64b0eee:3189973
+2026-10-14T02:21:10Z 21-scylla-operator-1.22 start done aqua:3199196:ac5c6336:3199169
+2026-10-14T02:22:35Z 21-scylla-operator-1.22 done
+2026-10-14T02:22:35Z 21-scylla-operator-1.22 end done passed aqua:3199196:ac5c6336:3199169
+2026-10-14T02:22:36Z 22-apt-cacher-ng start begin aqua:3200755:1b28e063:3200732
+2026-10-14T02:23:23Z 22-apt-cacher-ng apps argocd-extras,cert-manager,cluster-config,cnpg,external-secrets,istio-base,istio-cni,istiod,kagent,kagent-crds,metrics-server,porkbun-webhook,prometheus,root,schnappy-infra-data,schnappy-infra-mesh,schnappy-observability,schnappy-production-apps,schnappy-production-data,schnappy-production-mesh,schnappy-production-realtime,schnappy-sonarqube,schnappy-test,schnappy-test-apps,schnappy-test-data,schnappy-test-mesh,scylla-manager,scylla-operator,strimzi,velero,woodpecker
+2026-10-14T02:23:24Z 22-apt-cacher-ng begun
+2026-10-14T02:23:24Z 22-apt-cacher-ng end begin passed aqua:3200755:1b28e063:3200732
+2026-10-14T02:23:25Z 22-apt-cacher-ng start merge platform aqua:3201677:801c9082:3201653
+2026-10-14T02:23:43Z 22-apt-cacher-ng merged platform 8a4cace72d6261165e68bda5f94a90d2ca84cd79
+2026-10-14T02:25:10Z 22-apt-cacher-ng settled platform 8a4cace72d6261165e68bda5f94a90d2ca84cd79
+2026-10-14T02:25:11Z 22-apt-cacher-ng end merge passed aqua:3201677:801c9082:3201653
+2026-10-14T02:25:12Z 22-apt-cacher-ng start done aqua:3203631:5042c35e:3203605
+2026-10-14T02:26:06Z 22-apt-cacher-ng end done failed aqua:3203631:5042c35e:3203605
+2026-10-14T02:33:21Z 22-apt-cacher-ng start done aqua:3235329:aaf5ffcf:3235124
+2026-10-14T02:34:12Z 22-apt-cacher-ng end done failed aqua:3235329:aaf5ffcf:3235124
+2026-10-14T02:53:55Z 22-apt-cacher-ng start done aqua:3403971:e2461e19:3403945
+2026-10-14T02:54:48Z 22-apt-cacher-ng checked since=2026-10-14T02:53:58Z
+2026-10-14T02:54:48Z 22-apt-cacher-ng end done passed aqua:3403971:e2461e19:3403945
+2026-10-14T03:00:15Z 22-apt-cacher-ng start done aqua:3410788:32bc499c:3410764
+2026-10-14T03:01:15Z 22-apt-cacher-ng done
+2026-10-14T03:01:16Z 22-apt-cacher-ng end done passed aqua:3410788:32bc499c:3410764
+2026-10-14T04:38:20Z 23-cert-manager start begin aqua:3502676:07e9bb3e:3502653
+2026-10-14T04:39:06Z 23-cert-manager apps argocd-extras,cert-manager,cluster-config,cnpg,external-secrets,istio-base,istio-cni,istiod,kagent,kagent-crds,metrics-server,porkbun-webhook,prometheus,root,schnappy-infra-data,schnappy-infra-mesh,schnappy-observability,schnappy-production-apps,schnappy-production-data,schnappy-production-mesh,schnappy-production-realtime,schnappy-sonarqube,schnappy-test,schnappy-test-apps,schnappy-test-data,schnappy-test-mesh,scylla-manager,scylla-operator,strimzi,velero,woodpecker
+2026-10-14T04:39:07Z 23-cert-manager begun
+2026-10-14T04:39:07Z 23-cert-manager end begin passed aqua:3502676:07e9bb3e:3502653
+2026-10-14T04:39:08Z 23-cert-manager start merge infra aqua:3503632:ff66e000:3503605
+2026-10-14T04:39:45Z 23-cert-manager merged infra 789ec38b71017b1db1ff75623b72b35ca1f024a9
+2026-10-14T04:41:12Z 23-cert-manager settled infra 789ec38b71017b1db1ff75623b72b35ca1f024a9
+2026-10-14T04:41:13Z 23-cert-manager end merge passed aqua:3503632:ff66e000:3503605
+2026-10-14T04:41:17Z 23-cert-manager start defaults aqua:3505950:38f339ca:3505862
+2026-10-14T04:41:27Z 23-cert-manager defaults bc36005167b7cc43b06860087a3425b01a0d033a
+2026-10-14T04:41:27Z 23-cert-manager end defaults passed aqua:3505950:38f339ca:3505862
+2026-10-14T04:41:28Z 23-cert-manager start done aqua:3506255:81cde20d:3506229
+2026-10-14T04:43:26Z 23-cert-manager acme-check
+2026-10-14T04:44:15Z 23-cert-manager checked since=2026-10-14T04:43:27Z
+2026-10-14T04:44:16Z 23-cert-manager end done passed aqua:3506255:81cde20d:3506229
+2026-10-14T04:49:35Z 23-cert-manager start done aqua:3515675:c64d28a5:3515649
+2026-10-14T04:50:28Z 23-cert-manager done
+2026-10-14T04:50:28Z 23-cert-manager end done passed aqua:3515675:c64d28a5:3515649
+2026-10-14T04:50:56Z 24-cnpg start begin aqua:3517519:6584d9e2:3517497
+2026-10-14T04:51:43Z 24-cnpg apps argocd-extras,cert-manager,cluster-config,cnpg,external-secrets,istio-base,istio-cni,istiod,kagent,kagent-crds,metrics-server,porkbun-webhook,prometheus,root,schnappy-infra-data,schnappy-infra-mesh,schnappy-observability,schnappy-production-apps,schnappy-production-data,schnappy-production-mesh,schnappy-production-realtime,schnappy-sonarqube,schnappy-test,schnappy-test-apps,schnappy-test-data,schnappy-test-mesh,scylla-manager,scylla-operator,strimzi,velero,woodpecker
+2026-10-14T04:51:44Z 24-cnpg begun
+2026-10-14T04:51:44Z 24-cnpg end begin passed aqua:3517519:6584d9e2:3517497
+2026-10-14T04:51:45Z 24-cnpg start merge infra aqua:3518496:04be0b6d:3518470
+2026-10-14T04:52:04Z 24-cnpg merged infra f6738a94a8b382f89b8753b08e5c49557429370f
+2026-10-14T04:53:52Z 24-cnpg settled infra f6738a94a8b382f89b8753b08e5c49557429370f
+2026-10-14T04:53:53Z 24-cnpg end merge passed aqua:3518496:04be0b6d:3518470
+2026-10-14T04:53:57Z 24-cnpg start defaults aqua:3520836:fe1d0b9c:3520762
+2026-10-14T04:54:05Z 24-cnpg defaults c843ea71418fce72819ef0e0422b5e413d1b534b
+2026-10-14T04:54:06Z 24-cnpg end defaults passed aqua:3520836:fe1d0b9c:3520762
+2026-10-14T04:54:07Z 24-cnpg start done aqua:3521148:cd27a38b:3521122
+2026-10-14T04:56:28Z 24-cnpg base-backup
+2026-10-14T04:57:18Z 24-cnpg checked since=2026-10-14T04:56:29Z
+2026-10-14T04:57:19Z 24-cnpg end done passed aqua:3521148:cd27a38b:3521122
+2026-10-14T05:02:36Z 24-cnpg start done aqua:3529974:d5133715:3529947
+2026-10-14T05:04:29Z 24-cnpg done
+2026-10-14T05:04:30Z 24-cnpg end done passed aqua:3529974:d5133715:3529947
+2026-10-14T07:53:21Z 25-versitygw start begin aqua:3688429:735a330f:3688406
+2026-10-14T07:54:08Z 25-versitygw apps argocd-extras,cert-manager,cluster-config,cnpg,external-secrets,istio-base,istio-cni,istiod,kagent,kagent-crds,metrics-server,porkbun-webhook,prometheus,root,schnappy-infra-data,schnappy-infra-mesh,schnappy-observability,schnappy-production-apps,schnappy-production-data,schnappy-production-mesh,schnappy-production-realtime,schnappy-sonarqube,schnappy-test,schnappy-test-apps,schnappy-test-data,schnappy-test-mesh,scylla-manager,scylla-operator,strimzi,velero,woodpecker
+2026-10-14T07:54:08Z 25-versitygw begun
+2026-10-14T07:54:08Z 25-versitygw end begin passed aqua:3688429:735a330f:3688406
+2026-10-14T07:54:09Z 25-versitygw start merge platform aqua:3689564:4e03e10a:3689537
+2026-10-14T07:54:53Z 25-versitygw merged platform cf02ea60ee63887846eee952d93d05d5b71e3dfa
+2026-10-14T07:56:21Z 25-versitygw settled platform cf02ea60ee63887846eee952d93d05d5b71e3dfa
+2026-10-14T07:56:21Z 25-versitygw end merge passed aqua:3689564:4e03e10a:3689537
+2026-10-14T07:56:22Z 25-versitygw start preview aqua:3691967:9094adb1:3691941
+2026-10-14T07:56:45Z 25-versitygw previewed
+2026-10-14T07:56:45Z 25-versitygw end preview passed aqua:3691967:9094adb1:3691941
+2026-10-14T07:56:52Z 25-versitygw start playbooks aqua:3692670:bee768de:3692552
+2026-10-14T07:57:25Z 25-versitygw playbooks
+2026-10-14T07:57:26Z 25-versitygw end playbooks passed aqua:3692670:bee768de:3692552
+2026-10-14T07:57:30Z 25-versitygw start defaults aqua:3693604:ba1c99f6:3693516
+2026-10-14T07:57:38Z 25-versitygw defaults 3e8b214abd5fdf5b283f7f856462a3af664e5ee2
+2026-10-14T07:57:39Z 25-versitygw end defaults passed aqua:3693604:ba1c99f6:3693516
+2026-10-14T07:57:40Z 25-versitygw start done aqua:3693920:19ec340e:3693877
+2026-10-14T08:03:11Z 25-versitygw end done failed aqua:3693920:19ec340e:3693877
+2026-10-14T08:05:54Z 25-versitygw start done aqua:3701973:3d3c28cb:3701947
+2026-10-14T08:08:04Z 25-versitygw base-backup
+2026-10-14T08:11:25Z 25-versitygw velero-backup
+2026-10-14T08:12:14Z 25-versitygw checked since=2026-10-14T08:11:26Z
+2026-10-14T08:12:14Z 25-versitygw end done passed aqua:3701973:3d3c28cb:3701947
+2026-10-14T09:10:52Z 25-versitygw start done aqua:3969834:d809bf10:3969788
+2026-10-14T09:11:44Z 25-versitygw done
+2026-10-14T09:11:44Z 25-versitygw end done passed aqua:3969834:d809bf10:3969788
+2026-10-14T09:11:45Z 26-local-path start begin aqua:3971279:32a1cd03:3971244
+2026-10-14T09:12:32Z 26-local-path apps argocd-extras,cert-manager,cluster-config,cnpg,external-secrets,istio-base,istio-cni,istiod,kagent,kagent-crds,metrics-server,porkbun-webhook,prometheus,root,schnappy-infra-data,schnappy-infra-mesh,schnappy-observability,schnappy-production-apps,schnappy-production-data,schnappy-production-mesh,schnappy-production-realtime,schnappy-sonarqube,schnappy-test,schnappy-test-apps,schnappy-test-data,schnappy-test-mesh,scylla-manager,scylla-operator,strimzi,velero,woodpecker
+2026-10-14T09:12:33Z 26-local-path begun
+2026-10-14T09:12:33Z 26-local-path end begin passed aqua:3971279:32a1cd03:3971244
+2026-10-14T09:12:50Z 26-local-path start preview aqua:3972696:9bf76f0e:3972670
+2026-10-14T09:13:04Z 26-local-path previewed
+2026-10-14T09:13:05Z 26-local-path end preview passed aqua:3972696:9bf76f0e:3972670
+2026-10-14T10:21:59Z 26-local-path start playbooks aqua:36920:bf15e4d8:36760
+2026-10-14T10:22:46Z 26-local-path playbooks
+2026-10-14T10:22:46Z 26-local-path end playbooks passed aqua:36920:bf15e4d8:36760
+2026-10-14T10:22:50Z 26-local-path start defaults aqua:37881:551f65a7:37790
+2026-10-14T10:22:58Z 26-local-path defaults 5047ca2382a4d6e0cdf7c56fb4658283b2823e4b
+2026-10-14T10:22:58Z 26-local-path end defaults passed aqua:37881:551f65a7:37790
+2026-10-14T10:22:59Z 26-local-path start done aqua:38137:cca2c4f1:38111
+2026-10-14T10:24:03Z 26-local-path checked since=2026-10-14T10:23:02Z
+2026-10-14T10:24:03Z 26-local-path end done passed aqua:38137:cca2c4f1:38111
+2026-10-14T10:29:16Z 26-local-path start done aqua:45091:b704b6ea:45065
+2026-10-14T10:30:08Z 26-local-path done
+2026-10-14T10:30:08Z 26-local-path end done passed aqua:45091:b704b6ea:45065
+2026-10-14T10:30:09Z 27-kube-prometheus-stack start begin aqua:46163:5029fd67:46139
+2026-10-14T10:30:56Z 27-kube-prometheus-stack apps argocd-extras,cert-manager,cluster-config,cnpg,external-secrets,istio-base,istio-cni,istiod,kagent,kagent-crds,metrics-server,porkbun-webhook,prometheus,root,schnappy-infra-data,schnappy-infra-mesh,schnappy-observability,schnappy-production-apps,schnappy-production-data,schnappy-production-mesh,schnappy-production-realtime,schnappy-sonarqube,schnappy-test,schnappy-test-apps,schnappy-test-data,schnappy-test-mesh,scylla-manager,scylla-operator,strimzi,velero,woodpecker
+2026-10-14T10:30:56Z 27-kube-prometheus-stack begun
+2026-10-14T10:30:57Z 27-kube-prometheus-stack end begin passed aqua:46163:5029fd67:46139
+2026-10-14T10:33:05Z 27-kube-prometheus-stack start merge infra aqua:49531:7a6cd0d9:49505
+2026-10-14T10:33:38Z 27-kube-prometheus-stack merged infra 898cf832e2495ac378a0df17d866f113695d039d
+2026-10-14T10:38:36Z 27-kube-prometheus-stack settled infra 898cf832e2495ac378a0df17d866f113695d039d
+2026-10-14T10:38:36Z 27-kube-prometheus-stack end merge passed aqua:49531:7a6cd0d9:49505
+2026-10-14T10:40:40Z 27-kube-prometheus-stack start defaults aqua:57049:be1b14c1:55135
+2026-10-14T10:40:48Z 27-kube-prometheus-stack defaults 9a721289eca54eff849cc53b57e8daf6617633e3
+2026-10-14T10:40:48Z 27-kube-prometheus-stack end defaults passed aqua:57049:be1b14c1:55135
+2026-10-14T10:40:49Z 27-kube-prometheus-stack start done aqua:57335:22b61702:57310
+2026-10-14T10:41:52Z 27-kube-prometheus-stack checked since=2026-10-14T10:40:52Z
+2026-10-14T10:41:52Z 27-kube-prometheus-stack end done passed aqua:57335:22b61702:57310
+2026-10-14T10:47:13Z 27-kube-prometheus-stack start done aqua:63918:c4d5bbe5:63893
+2026-10-14T10:48:05Z 27-kube-prometheus-stack done
+2026-10-14T10:48:05Z 27-kube-prometheus-stack end done passed aqua:63918:c4d5bbe5:63893
+2026-10-14T10:48:06Z 28-grafana start begin aqua:64968:8100f0cd:64945
+2026-10-14T10:48:53Z 28-grafana apps argocd-extras,cert-manager,cluster-config,cnpg,external-secrets,istio-base,istio-cni,istiod,kagent,kagent-crds,metrics-server,porkbun-webhook,prometheus,root,schnappy-infra-data,schnappy-infra-mesh,schnappy-observability,schnappy-production-apps,schnappy-production-data,schnappy-production-mesh,schnappy-production-realtime,schnappy-sonarqube,schnappy-test,schnappy-test-apps,schnappy-test-data,schnappy-test-mesh,scylla-manager,scylla-operator,strimzi,velero,woodpecker
+2026-10-14T10:48:54Z 28-grafana begun
+2026-10-14T10:48:54Z 28-grafana end begin passed aqua:64968:8100f0cd:64945
+2026-10-14T10:49:21Z 28-grafana start merge infra aqua:66809:51bebb41:66773
+2026-10-14T10:49:53Z 28-grafana merged infra 023702deccadef315301aab6c16501950d6795fd
+2026-10-14T10:51:20Z 28-grafana settled infra 023702deccadef315301aab6c16501950d6795fd
+2026-10-14T10:51:21Z 28-grafana end merge passed aqua:66809:51bebb41:66773
+2026-10-14T10:51:22Z 28-grafana start done aqua:69011:137a4411:68985
+2026-10-14T10:52:13Z 28-grafana checked since=2026-10-14T10:51:25Z
+2026-10-14T10:52:13Z 28-grafana end done passed aqua:69011:137a4411:68985
+2026-10-14T10:57:34Z 28-grafana start done aqua:75878:8e0be00b:75838
+2026-10-14T10:58:25Z 28-grafana done
+2026-10-14T10:58:26Z 28-grafana end done passed aqua:75878:8e0be00b:75838
+2026-10-14T10:58:26Z 29-mimir start begin aqua:76929:bf216325:76905
+2026-10-14T10:59:13Z 29-mimir apps argocd-extras,cert-manager,cluster-config,cnpg,external-secrets,istio-base,istio-cni,istiod,kagent,kagent-crds,metrics-server,porkbun-webhook,prometheus,root,schnappy-infra-data,schnappy-infra-mesh,schnappy-observability,schnappy-production-apps,schnappy-production-data,schnappy-production-mesh,schnappy-production-realtime,schnappy-sonarqube,schnappy-test,schnappy-test-apps,schnappy-test-data,schnappy-test-mesh,scylla-manager,scylla-operator,strimzi,velero,woodpecker
+2026-10-14T10:59:13Z 29-mimir begun
+2026-10-14T10:59:13Z 29-mimir end begin passed aqua:76929:bf216325:76905
+2026-10-14T11:01:15Z 29-mimir start merge infra aqua:80124:eddc5446:80080
+2026-10-14T11:01:39Z 29-mimir merged infra c2b52db8b2e965d80d94d78c5d68f035c4d668ef
+2026-10-14T11:03:16Z 29-mimir settled infra c2b52db8b2e965d80d94d78c5d68f035c4d668ef
+2026-10-14T11:03:17Z 29-mimir end merge passed aqua:80124:eddc5446:80080
+2026-10-14T11:03:18Z 29-mimir start done aqua:82665:530e840f:82639
+2026-10-14T11:04:40Z 29-mimir checked since=2026-10-14T11:03:21Z
+2026-10-14T11:04:40Z 29-mimir end done passed aqua:82665:530e840f:82639
+2026-10-14T11:35:46Z 29-mimir start done aqua:118671:83dac688:118645
+2026-10-14T11:36:37Z 29-mimir done
+2026-10-14T11:36:38Z 29-mimir end done passed aqua:118671:83dac688:118645
+2026-10-14T11:36:38Z 30-fluent-bit start begin aqua:119648:1720680c:119625
+2026-10-14T11:37:25Z 30-fluent-bit apps argocd-extras,cert-manager,cluster-config,cnpg,external-secrets,istio-base,istio-cni,istiod,kagent,kagent-crds,metrics-server,porkbun-webhook,prometheus,root,schnappy-infra-data,schnappy-infra-mesh,schnappy-observability,schnappy-production-apps,schnappy-production-data,schnappy-production-mesh,schnappy-production-realtime,schnappy-sonarqube,schnappy-test,schnappy-test-apps,schnappy-test-data,schnappy-test-mesh,scylla-manager,scylla-operator,strimzi,velero,woodpecker
+2026-10-14T11:37:25Z 30-fluent-bit begun
+2026-10-14T11:37:26Z 30-fluent-bit end begin passed aqua:119648:1720680c:119625
+2026-10-14T11:41:19Z 30-fluent-bit start merge platform aqua:124600:62acc6f4:124574
+2026-10-14T11:41:40Z 30-fluent-bit merged platform 6c66d684d3de06c13978b4445a0206eae23bfe6a
+2026-10-14T11:42:57Z 30-fluent-bit settled platform 6c66d684d3de06c13978b4445a0206eae23bfe6a
+2026-10-14T11:42:57Z 30-fluent-bit end merge passed aqua:124600:62acc6f4:124574
+2026-10-14T11:42:58Z 30-fluent-bit start merge infra aqua:127579:07d35470:127552
+2026-10-14T11:43:12Z 30-fluent-bit merged infra aa4e6241638ccc9c503233e620e3d0526e829382
+2026-10-14T11:44:39Z 30-fluent-bit settled infra aa4e6241638ccc9c503233e620e3d0526e829382
+2026-10-14T11:44:39Z 30-fluent-bit end merge passed aqua:127579:07d35470:127552
+2026-10-14T11:44:40Z 30-fluent-bit start done aqua:129549:da8c495d:129524
+2026-10-14T11:45:31Z 30-fluent-bit checked since=2026-10-14T11:44:43Z
+2026-10-14T11:45:32Z 30-fluent-bit end done passed aqua:129549:da8c495d:129524
+2026-10-14T11:52:50Z 30-fluent-bit start done aqua:138375:eb9bc8c4:138349
+2026-10-14T11:53:41Z 30-fluent-bit done
+2026-10-14T11:53:41Z 30-fluent-bit end done passed aqua:138375:eb9bc8c4:138349
+2026-10-14T11:53:42Z 31-argocd start begin aqua:139459:335ea0e1:139436
+2026-10-14T11:54:28Z 31-argocd apps argocd-extras,cert-manager,cluster-config,cnpg,external-secrets,istio-base,istio-cni,istiod,kagent,kagent-crds,metrics-server,porkbun-webhook,prometheus,root,schnappy-infra-data,schnappy-infra-mesh,schnappy-observability,schnappy-production-apps,schnappy-production-data,schnappy-production-mesh,schnappy-production-realtime,schnappy-sonarqube,schnappy-test,schnappy-test-apps,schnappy-test-data,schnappy-test-mesh,scylla-manager,scylla-operator,strimzi,velero,woodpecker
+2026-10-14T11:54:29Z 31-argocd begun
+2026-10-14T11:54:29Z 31-argocd end begin passed aqua:139459:335ea0e1:139436
+2026-10-14T11:54:30Z 31-argocd start preview aqua:140410:3846dd1d:140384
+2026-10-14T11:54:50Z 31-argocd previewed
+2026-10-14T11:54:50Z 31-argocd end preview passed aqua:140410:3846dd1d:140384
+2026-10-14T11:56:58Z 31-argocd start playbooks aqua:143357:38c38cfa:143227
+2026-10-14T11:58:00Z 31-argocd playbooks
+2026-10-14T11:58:00Z 31-argocd end playbooks passed aqua:143357:38c38cfa:143227
+2026-10-14T11:58:04Z 31-argocd start defaults aqua:144634:050af731:144539
+2026-10-14T11:58:12Z 31-argocd defaults f527665719039849fcff2c2bd30224050cc3fb0a
+2026-10-14T11:58:13Z 31-argocd end defaults passed aqua:144634:050af731:144539
+2026-10-14T11:58:14Z 31-argocd start done aqua:144945:7ef3a28b:144900
+2026-10-14T11:59:16Z 31-argocd checked since=2026-10-14T11:58:17Z
+2026-10-14T11:59:17Z 31-argocd end done passed aqua:144945:7ef3a28b:144900
+2026-10-14T12:06:00Z 31-argocd start done aqua:153208:efa54cfe:153182
+2026-10-14T12:06:52Z 31-argocd done
+2026-10-14T12:06:53Z 31-argocd end done passed aqua:153208:efa54cfe:153182
+2026-10-14T12:06:53Z 32-cilium-1.20 start begin aqua:154253:f186cf27:154233
+2026-10-14T12:07:40Z 32-cilium-1.20 apps argocd-extras,cert-manager,cluster-config,cnpg,external-secrets,istio-base,istio-cni,istiod,kagent,kagent-crds,metrics-server,porkbun-webhook,prometheus,root,schnappy-infra-data,schnappy-infra-mesh,schnappy-observability,schnappy-production-apps,schnappy-production-data,schnappy-production-mesh,schnappy-production-realtime,schnappy-sonarqube,schnappy-test,schnappy-test-apps,schnappy-test-data,schnappy-test-mesh,scylla-manager,scylla-operator,strimzi,velero,woodpecker
+2026-10-14T12:07:41Z 32-cilium-1.20 begun
+2026-10-14T12:07:41Z 32-cilium-1.20 end begin passed aqua:154253:f186cf27:154233
+2026-10-14T12:07:42Z 32-cilium-1.20 start preview aqua:155189:4f9b6c6c:155163
+2026-10-14T12:08:00Z 32-cilium-1.20 previewed
+2026-10-14T12:08:00Z 32-cilium-1.20 end preview passed aqua:155189:4f9b6c6c:155163
+2026-10-14T13:08:54Z 32-cilium-1.20 start playbooks aqua:214653:576571ef:214547
+2026-10-14T13:10:07Z 32-cilium-1.20 playbooks
+2026-10-14T13:10:07Z 32-cilium-1.20 end playbooks passed aqua:214653:576571ef:214547
+2026-10-14T13:10:13Z 32-cilium-1.20 start defaults aqua:216069:380f9f70:215968
+2026-10-14T13:10:25Z 32-cilium-1.20 defaults 49fd6ad555537115180150e92ae3c5856027b107
+2026-10-14T13:10:26Z 32-cilium-1.20 end defaults passed aqua:216069:380f9f70:215968
+2026-10-14T13:10:26Z 32-cilium-1.20 start done aqua:216424:80078641:216398
+2026-10-14T13:11:40Z 32-cilium-1.20 checked since=2026-10-14T13:10:30Z
+2026-10-14T13:11:40Z 32-cilium-1.20 end done passed aqua:216424:80078641:216398
+2026-10-14T13:31:55Z 32-cilium-1.20 start done aqua:239060:e013bf81:239034
+2026-10-14T13:32:46Z 32-cilium-1.20 done
+2026-10-14T13:32:47Z 32-cilium-1.20 end done passed aqua:239060:e013bf81:239034
+2026-10-14T13:32:47Z 33-argocd-3.4 start begin aqua:240124:4f13ca9d:240101
+2026-10-14T13:33:34Z 33-argocd-3.4 apps argocd-extras,cert-manager,cluster-config,cnpg,external-secrets,istio-base,istio-cni,istiod,kagent,kagent-crds,metrics-server,porkbun-webhook,prometheus,root,schnappy-infra-data,schnappy-infra-mesh,schnappy-observability,schnappy-production-apps,schnappy-production-data,schnappy-production-mesh,schnappy-production-realtime,schnappy-sonarqube,schnappy-test,schnappy-test-apps,schnappy-test-data,schnappy-test-mesh,scylla-manager,scylla-operator,strimzi,velero,woodpecker
+2026-10-14T13:33:34Z 33-argocd-3.4 begun
+2026-10-14T13:33:34Z 33-argocd-3.4 end begin passed aqua:240124:4f13ca9d:240101
+2026-10-14T13:33:35Z 33-argocd-3.4 start preview aqua:241070:2e7b9735:241044
+2026-10-14T13:33:55Z 33-argocd-3.4 previewed
+2026-10-14T13:33:56Z 33-argocd-3.4 end preview passed aqua:241070:2e7b9735:241044
+2026-10-14T13:48:30Z 33-argocd-3.4 start playbooks aqua:256832:0b950880:256751
+2026-10-14T13:49:55Z 33-argocd-3.4 playbooks
+2026-10-14T13:49:55Z 33-argocd-3.4 end playbooks passed aqua:256832:0b950880:256751
+2026-10-14T13:49:59Z 33-argocd-3.4 start defaults aqua:258453:7de017ee:258376
+2026-10-14T13:50:08Z 33-argocd-3.4 defaults 3488f712c92305e3d1f252b598284998e5adeaba
+2026-10-14T13:50:08Z 33-argocd-3.4 end defaults passed aqua:258453:7de017ee:258376
+2026-10-14T13:50:09Z 33-argocd-3.4 start done aqua:258729:4e2ec83c:258702
+2026-10-14T13:51:12Z 33-argocd-3.4 checked since=2026-10-14T13:50:12Z
+2026-10-14T13:51:13Z 33-argocd-3.4 end done passed aqua:258729:4e2ec83c:258702
+2026-10-14T14:07:37Z 33-argocd-3.4 start done aqua:276937:c0859493:276912
+2026-10-14T14:08:29Z 33-argocd-3.4 done
+2026-10-14T14:08:29Z 33-argocd-3.4 end done passed aqua:276937:c0859493:276912
+2026-10-14T14:08:30Z 34-argocd-3.5 start begin aqua:277978:7ce7d310:277955
+2026-10-14T14:09:17Z 34-argocd-3.5 apps argocd-extras,cert-manager,cluster-config,cnpg,external-secrets,istio-base,istio-cni,istiod,kagent,kagent-crds,metrics-server,porkbun-webhook,prometheus,root,schnappy-infra-data,schnappy-infra-mesh,schnappy-observability,schnappy-production-apps,schnappy-production-data,schnappy-production-mesh,schnappy-production-realtime,schnappy-sonarqube,schnappy-test,schnappy-test-apps,schnappy-test-data,schnappy-test-mesh,scylla-manager,scylla-operator,strimzi,velero,woodpecker
+2026-10-14T14:09:17Z 34-argocd-3.5 begun
+2026-10-14T14:09:18Z 34-argocd-3.5 end begin passed aqua:277978:7ce7d310:277955
+2026-10-14T14:09:18Z 34-argocd-3.5 start preview aqua:278925:4b41769d:278898
+2026-10-14T14:09:39Z 34-argocd-3.5 previewed
+2026-10-14T14:09:39Z 34-argocd-3.5 end preview passed aqua:278925:4b41769d:278898
+2026-10-14T18:53:37Z 34-argocd-3.5 start playbooks aqua:544465:7c382efe:544392
+2026-10-14T18:54:56Z 34-argocd-3.5 playbooks
+2026-10-14T18:54:56Z 34-argocd-3.5 end playbooks passed aqua:544465:7c382efe:544392
+2026-10-14T18:55:00Z 34-argocd-3.5 start defaults aqua:545998:507167e8:545906
+2026-10-14T18:55:12Z 34-argocd-3.5 defaults 14f692a3f3915580337598e95114ec8c199af42c
+2026-10-14T18:55:12Z 34-argocd-3.5 end defaults passed aqua:545998:507167e8:545906
+2026-10-14T18:55:13Z 34-argocd-3.5 start done aqua:546311:f4c8a90c:546285
+2026-10-14T18:56:17Z 34-argocd-3.5 checked since=2026-10-14T18:55:16Z
+2026-10-14T18:56:17Z 34-argocd-3.5 end done passed aqua:546311:f4c8a90c:546285
+2026-10-14T19:02:12Z 34-argocd-3.5 start done aqua:553871:46f80a45:553827
+2026-10-14T19:04:36Z 34-argocd-3.5 done
+2026-10-14T19:04:37Z 34-argocd-3.5 end done passed aqua:553871:46f80a45:553827
+2026-10-14T19:04:37Z 35-cert-manager-1.21 start begin aqua:556304:616c8209:556281
+2026-10-14T19:06:20Z 35-cert-manager-1.21 apps argocd-extras,cert-manager,cluster-config,cnpg,external-secrets,istio-base,istio-cni,istiod,kagent,kagent-crds,metrics-server,porkbun-webhook,prometheus,root,schnappy-infra-data,schnappy-infra-mesh,schnappy-observability,schnappy-production-apps,schnappy-production-data,schnappy-production-mesh,schnappy-production-realtime,schnappy-sonarqube,schnappy-test,schnappy-test-apps,schnappy-test-data,schnappy-test-mesh,scylla-manager,scylla-operator,strimzi,velero,woodpecker
+2026-10-14T19:06:21Z 35-cert-manager-1.21 begun
+2026-10-14T19:06:21Z 35-cert-manager-1.21 end begin passed aqua:556304:616c8209:556281
+2026-10-14T19:09:16Z 35-cert-manager-1.21 start merge infra aqua:561229:760a105f:561204
+2026-10-14T19:09:47Z 35-cert-manager-1.21 merged infra 670ee8514671b15084ed43cd668231b9d13c45a0
+2026-10-14T19:11:24Z 35-cert-manager-1.21 settled infra 670ee8514671b15084ed43cd668231b9d13c45a0
+2026-10-14T19:11:24Z 35-cert-manager-1.21 end merge passed aqua:561229:760a105f:561204
+2026-10-14T19:11:29Z 35-cert-manager-1.21 start defaults aqua:563696:11e0efa4:563618
+2026-10-14T19:11:38Z 35-cert-manager-1.21 defaults 46a8d5ca6de313a6ed59167d23ab54deb3324aa8
+2026-10-14T19:11:38Z 35-cert-manager-1.21 end defaults passed aqua:563696:11e0efa4:563618
+2026-10-14T19:11:39Z 35-cert-manager-1.21 start done aqua:564012:ba8a247b:563986
+2026-10-14T19:13:47Z 35-cert-manager-1.21 acme-check
+2026-10-14T19:14:35Z 35-cert-manager-1.21 checked since=2026-10-14T19:13:47Z
+2026-10-14T19:14:36Z 35-cert-manager-1.21 end done passed aqua:564012:ba8a247b:563986
+2026-10-14T19:43:14Z 35-cert-manager-1.21 start done aqua:594655:b52a810b:594629
+2026-10-14T19:44:05Z 35-cert-manager-1.21 done
+2026-10-14T19:44:06Z 35-cert-manager-1.21 end done passed aqua:594655:b52a810b:594629
+2026-10-14T19:44:07Z 36-strimzi-v1-templates start begin aqua:595706:a05e6619:595683
+2026-10-14T19:44:53Z 36-strimzi-v1-templates apps argocd-extras,cert-manager,cluster-config,cnpg,external-secrets,istio-base,istio-cni,istiod,kagent,kagent-crds,metrics-server,porkbun-webhook,prometheus,root,schnappy-infra-data,schnappy-infra-mesh,schnappy-observability,schnappy-production-apps,schnappy-production-data,schnappy-production-mesh,schnappy-production-realtime,schnappy-sonarqube,schnappy-test,schnappy-test-apps,schnappy-test-data,schnappy-test-mesh,scylla-manager,scylla-operator,strimzi,velero,woodpecker
+2026-10-14T19:44:53Z 36-strimzi-v1-templates begun
+2026-10-14T19:44:53Z 36-strimzi-v1-templates end begin passed aqua:595706:a05e6619:595683
+2026-10-14T19:47:05Z 36-strimzi-v1-templates start merge platform aqua:599004:446c7fec:598971
+2026-10-14T19:47:19Z 36-strimzi-v1-templates merged platform 06aed24a6b5d0c5fafc21d64b444f63a253a12aa
+2026-10-14T19:48:24Z 36-strimzi-v1-templates settled platform 06aed24a6b5d0c5fafc21d64b444f63a253a12aa
+2026-10-14T19:48:24Z 36-strimzi-v1-templates end merge passed aqua:599004:446c7fec:598971
+2026-10-14T19:48:25Z 36-strimzi-v1-templates start done aqua:600531:308f52af:600491
+2026-10-14T19:49:17Z 36-strimzi-v1-templates checked since=2026-10-14T19:48:28Z
+2026-10-14T19:49:17Z 36-strimzi-v1-templates end done passed aqua:600531:308f52af:600491
+2026-10-14T20:25:30Z 36-strimzi-v1-templates start done aqua:637298:dc228767:637272
+2026-10-14T20:26:20Z 36-strimzi-v1-templates done
+2026-10-14T20:26:21Z 36-strimzi-v1-templates end done passed aqua:637298:dc228767:637272
+2026-10-14T20:26:21Z 37-strimzi-conversion start begin aqua:638338:755a74b2:638314
+2026-10-14T20:27:07Z 37-strimzi-conversion apps argocd-extras,cert-manager,cluster-config,cnpg,external-secrets,istio-base,istio-cni,istiod,kagent,kagent-crds,metrics-server,porkbun-webhook,prometheus,root,schnappy-infra-data,schnappy-infra-mesh,schnappy-observability,schnappy-production-apps,schnappy-production-data,schnappy-production-mesh,schnappy-production-realtime,schnappy-sonarqube,schnappy-test,schnappy-test-apps,schnappy-test-data,schnappy-test-mesh,scylla-manager,scylla-operator,strimzi,velero,woodpecker
+2026-10-14T20:27:08Z 37-strimzi-conversion begun
+2026-10-14T20:27:08Z 37-strimzi-conversion end begin passed aqua:638338:755a74b2:638314
+2026-10-14T20:34:05Z 37-strimzi-conversion start backup etcd aqua:646099:326e182f:646022
+2026-10-14T20:34:22Z 37-strimzi-conversion backup etcd
+2026-10-14T20:34:22Z 37-strimzi-conversion end backup passed aqua:646099:326e182f:646022
+2026-10-14T20:34:23Z 37-strimzi-conversion start merge infra aqua:646531:7ee99b61:646507
+2026-10-14T20:35:01Z 37-strimzi-conversion merged infra 62f8da039d126dd42f43ad6dd6e88813424c2529
+2026-10-14T20:36:17Z 37-strimzi-conversion settled infra 62f8da039d126dd42f43ad6dd6e88813424c2529
+2026-10-14T20:36:17Z 37-strimzi-conversion end merge passed aqua:646531:7ee99b61:646507
+2026-10-14T20:36:18Z 37-strimzi-conversion start preview aqua:649026:b5b7ec16:648999
+2026-10-14T20:36:25Z 37-strimzi-conversion previewed
+2026-10-14T20:36:25Z 37-strimzi-conversion end preview passed aqua:649026:b5b7ec16:648999
+2026-10-14T20:36:59Z 37-strimzi-conversion start playbooks aqua:649822:c73a0e0e:649308
+2026-10-14T20:37:40Z 37-strimzi-conversion playbooks
+2026-10-14T20:37:41Z 37-strimzi-conversion end playbooks passed aqua:649822:c73a0e0e:649308
+2026-10-14T20:37:42Z 37-strimzi-conversion start done aqua:650709:79701439:650683
+2026-10-14T20:38:33Z 37-strimzi-conversion checked since=2026-10-14T20:37:45Z
+2026-10-14T20:38:33Z 37-strimzi-conversion end done passed aqua:650709:79701439:650683
+2026-10-15T07:55:07Z 37-strimzi-conversion start done aqua:1285620:0bf5344b:1285584
+2026-10-15T07:55:59Z 37-strimzi-conversion done
+2026-10-15T07:55:59Z 37-strimzi-conversion end done passed aqua:1285620:0bf5344b:1285584
+2026-10-15T07:56:00Z 38-strimzi-1.2 start begin aqua:1286730:d4915549:1286707
+2026-10-15T07:56:47Z 38-strimzi-1.2 apps argocd-extras,cert-manager,cluster-config,cnpg,external-secrets,istio-base,istio-cni,istiod,kagent,kagent-crds,metrics-server,porkbun-webhook,prometheus,root,schnappy-infra-data,schnappy-infra-mesh,schnappy-observability,schnappy-production-apps,schnappy-production-data,schnappy-production-mesh,schnappy-production-realtime,schnappy-sonarqube,schnappy-test,schnappy-test-apps,schnappy-test-data,schnappy-test-mesh,scylla-manager,scylla-operator,strimzi,velero,woodpecker
+2026-10-15T07:56:47Z 38-strimzi-1.2 begun
+2026-10-15T07:56:48Z 38-strimzi-1.2 end begin passed aqua:1286730:d4915549:1286707
+2026-10-15T07:58:38Z 38-strimzi-1.2 start backup kafka aqua:1289698:827ba806:1289592
+2026-10-15T07:59:41Z 38-strimzi-1.2 backup kafka
+2026-10-15T07:59:41Z 38-strimzi-1.2 end backup passed aqua:1289698:827ba806:1289592
+2026-10-15T07:59:42Z 38-strimzi-1.2 start merge infra aqua:1290927:a68374bc:1290901
+2026-10-15T08:00:24Z 38-strimzi-1.2 merged infra a81305d38065115696129cfd4d222df7a611ac66
+2026-10-15T08:03:04Z 38-strimzi-1.2 settled infra a81305d38065115696129cfd4d222df7a611ac66
+2026-10-15T08:03:04Z 38-strimzi-1.2 end merge passed aqua:1290927:a68374bc:1290901
+2026-10-15T08:03:09Z 38-strimzi-1.2 start defaults aqua:1294466:8708bea3:1294377
+2026-10-15T08:03:19Z 38-strimzi-1.2 defaults 549ddd07ba49cebb77009ebd60131e2da25e1b27
+2026-10-15T08:03:19Z 38-strimzi-1.2 end defaults passed aqua:1294466:8708bea3:1294377
+2026-10-15T08:03:20Z 38-strimzi-1.2 start done aqua:1294777:43de2775:1294751
+2026-10-15T08:04:25Z 38-strimzi-1.2 checked since=2026-10-15T08:03:24Z
+2026-10-15T08:04:26Z 38-strimzi-1.2 end done passed aqua:1294777:43de2775:1294751
+2026-10-15T08:10:20Z 38-strimzi-1.2 start done aqua:1302318:e79bbae2:1302282
+2026-10-15T08:11:12Z 38-strimzi-1.2 done
+2026-10-15T08:11:12Z 38-strimzi-1.2 end done passed aqua:1302318:e79bbae2:1302282
+2026-10-15T08:11:13Z 39-kafka-4.3-test start begin aqua:1303337:93ee43a0:1303313
+2026-10-15T08:12:00Z 39-kafka-4.3-test apps argocd-extras,cert-manager,cluster-config,cnpg,external-secrets,istio-base,istio-cni,istiod,kagent,kagent-crds,metrics-server,porkbun-webhook,prometheus,root,schnappy-infra-data,schnappy-infra-mesh,schnappy-observability,schnappy-production-apps,schnappy-production-data,schnappy-production-mesh,schnappy-production-realtime,schnappy-sonarqube,schnappy-test,schnappy-test-apps,schnappy-test-data,schnappy-test-mesh,scylla-manager,scylla-operator,strimzi,velero,woodpecker
+2026-10-15T08:12:00Z 39-kafka-4.3-test begun
+2026-10-15T08:12:01Z 39-kafka-4.3-test end begin passed aqua:1303337:93ee43a0:1303313
+2026-10-15T08:13:02Z 39-kafka-4.3-test start merge infra aqua:1305585:614574c0:1305559
+2026-10-15T08:13:30Z 39-kafka-4.3-test merged infra 92996f31683ba9400e70cb2a36cd893424dd29c1
+2026-10-15T08:14:25Z 39-kafka-4.3-test settled infra 92996f31683ba9400e70cb2a36cd893424dd29c1
+2026-10-15T08:14:25Z 39-kafka-4.3-test end merge passed aqua:1305585:614574c0:1305559
+2026-10-15T08:14:26Z 39-kafka-4.3-test start merge platform aqua:1308373:944dd513:1308347
+2026-10-15T08:14:55Z 39-kafka-4.3-test merged platform 3d2162665be9d72e6264f60ad243c0f2028c75bf
+2026-10-15T08:16:32Z 39-kafka-4.3-test settled platform 3d2162665be9d72e6264f60ad243c0f2028c75bf
+2026-10-15T08:16:32Z 39-kafka-4.3-test end merge passed aqua:1308373:944dd513:1308347
+2026-10-15T08:16:33Z 39-kafka-4.3-test start done aqua:1310672:226dd09b:1310645
+2026-10-15T08:18:08Z 39-kafka-4.3-test checked since=2026-10-15T08:16:36Z
+2026-10-15T08:18:09Z 39-kafka-4.3-test end done passed aqua:1310672:226dd09b:1310645
+2026-10-15T08:26:56Z 39-kafka-4.3-test start done aqua:1321739:7d5f4f57:1321714
+2026-10-15T08:27:47Z 39-kafka-4.3-test done
+2026-10-15T08:27:47Z 39-kafka-4.3-test end done passed aqua:1321739:7d5f4f57:1321714
+2026-10-15T08:27:48Z 40-kafka-4.3 start begin aqua:1322744:1a84bbe7:1322721
+2026-10-15T08:28:34Z 40-kafka-4.3 apps argocd-extras,cert-manager,cluster-config,cnpg,external-secrets,istio-base,istio-cni,istiod,kagent,kagent-crds,metrics-server,porkbun-webhook,prometheus,root,schnappy-infra-data,schnappy-infra-mesh,schnappy-observability,schnappy-production-apps,schnappy-production-data,schnappy-production-mesh,schnappy-production-realtime,schnappy-sonarqube,schnappy-test,schnappy-test-apps,schnappy-test-data,schnappy-test-mesh,scylla-manager,scylla-operator,strimzi,velero,woodpecker
+2026-10-15T08:28:35Z 40-kafka-4.3 begun
+2026-10-15T08:28:35Z 40-kafka-4.3 end begin passed aqua:1322744:1a84bbe7:1322721
+2026-10-15T08:29:24Z 40-kafka-4.3 start backup kafka aqua:1324800:df90e14b:1324668
+2026-10-15T08:30:28Z 40-kafka-4.3 backup kafka
+2026-10-15T08:30:28Z 40-kafka-4.3 end backup passed aqua:1324800:df90e14b:1324668
+2026-10-15T08:30:29Z 40-kafka-4.3 start merge infra aqua:1326004:44df4674:1325979
+2026-10-15T08:32:37Z 40-kafka-4.3 merged infra 6dc4a5e67b59cdd491d18020f1c749cb063c372a
+2026-10-15T08:34:03Z 40-kafka-4.3 settled infra 6dc4a5e67b59cdd491d18020f1c749cb063c372a
+2026-10-15T08:34:03Z 40-kafka-4.3 end merge passed aqua:1326004:44df4674:1325979
+2026-10-15T08:34:04Z 40-kafka-4.3 start merge platform aqua:1330821:22d837ca:1330795
+2026-10-15T08:34:18Z 40-kafka-4.3 merged platform b41478cee095bc7525802d2659ab0938c9239060
+2026-10-15T08:35:13Z 40-kafka-4.3 settled platform b41478cee095bc7525802d2659ab0938c9239060
+2026-10-15T08:35:14Z 40-kafka-4.3 end merge passed aqua:1330821:22d837ca:1330795
+2026-10-15T08:35:14Z 40-kafka-4.3 start done aqua:1332321:9f4087e8:1332296
+2026-10-15T08:36:49Z 40-kafka-4.3 checked since=2026-10-15T08:35:18Z
+2026-10-15T08:36:49Z 40-kafka-4.3 end done passed aqua:1332321:9f4087e8:1332296
+2026-10-15T08:44:10Z 40-kafka-4.3 start done aqua:1341965:77ccbca6:1341937
+2026-10-15T08:45:01Z 40-kafka-4.3 done
+2026-10-15T08:45:02Z 40-kafka-4.3 end done passed aqua:1341965:77ccbca6:1341937
+2026-10-15T08:45:02Z 41-eso-crds start begin aqua:1343007:e06ac62a:1342983
+2026-10-15T08:45:48Z 41-eso-crds apps argocd-extras,cert-manager,cluster-config,cnpg,external-secrets,istio-base,istio-cni,istiod,kagent,kagent-crds,metrics-server,porkbun-webhook,prometheus,root,schnappy-infra-data,schnappy-infra-mesh,schnappy-observability,schnappy-production-apps,schnappy-production-data,schnappy-production-mesh,schnappy-production-realtime,schnappy-sonarqube,schnappy-test,schnappy-test-apps,schnappy-test-data,schnappy-test-mesh,scylla-manager,scylla-operator,strimzi,velero,woodpecker
+2026-10-15T08:45:49Z 41-eso-crds begun
+2026-10-15T08:45:49Z 41-eso-crds end begin passed aqua:1343007:e06ac62a:1342983
+2026-10-15T08:46:55Z 41-eso-crds start merge infra aqua:1345331:c1df9e94:1345304
+2026-10-15T08:47:07Z 41-eso-crds merged infra e0657de668e0954e4636eafffe28508b59afcd20
+2026-10-15T08:48:23Z 41-eso-crds settled infra e0657de668e0954e4636eafffe28508b59afcd20
+2026-10-15T08:48:23Z 41-eso-crds end merge passed aqua:1345331:c1df9e94:1345304
+2026-10-15T08:48:24Z 41-eso-crds start done aqua:1346950:11f4a547:1346925
+2026-10-15T08:49:14Z 41-eso-crds checked since=2026-10-15T08:48:27Z
+2026-10-15T08:49:15Z 41-eso-crds end done passed aqua:1346950:11f4a547:1346925
+2026-10-15T08:55:56Z 41-eso-crds start done aqua:1354984:0b7868ec:1354958
+2026-10-15T08:56:46Z 41-eso-crds done
+2026-10-15T08:56:46Z 41-eso-crds end done passed aqua:1354984:0b7868ec:1354958
+2026-10-15T08:56:47Z 42-kubernetes-1.35 start begin aqua:1356093:4864c65c:1356070
+2026-10-15T08:57:33Z 42-kubernetes-1.35 apps argocd-extras,cert-manager,cluster-config,cnpg,external-secrets,istio-base,istio-cni,istiod,kagent,kagent-crds,metrics-server,porkbun-webhook,prometheus,root,schnappy-infra-data,schnappy-infra-mesh,schnappy-observability,schnappy-production-apps,schnappy-production-data,schnappy-production-mesh,schnappy-production-realtime,schnappy-sonarqube,schnappy-test,schnappy-test-apps,schnappy-test-data,schnappy-test-mesh,scylla-manager,scylla-operator,strimzi,velero,woodpecker
+2026-10-15T08:57:33Z 42-kubernetes-1.35 begun
+2026-10-15T08:57:34Z 42-kubernetes-1.35 end begin passed aqua:1356093:4864c65c:1356070
+2026-10-15T08:58:43Z 42-kubernetes-1.35 start backup etcd aqua:1358387:8339b149:1358335
+2026-10-15T08:59:00Z 42-kubernetes-1.35 backup etcd
+2026-10-15T08:59:00Z 42-kubernetes-1.35 end backup passed aqua:1358387:8339b149:1358335
+2026-10-15T08:59:01Z 42-kubernetes-1.35 start merge infra aqua:1358863:3ac39bbe:1358838
+2026-10-15T08:59:40Z 42-kubernetes-1.35 merged infra 0704f6d1be9dd4fe21d361d1199550d31a714d4d
+2026-10-15T09:00:56Z 42-kubernetes-1.35 settled infra 0704f6d1be9dd4fe21d361d1199550d31a714d4d
+2026-10-15T09:00:56Z 42-kubernetes-1.35 end merge passed aqua:1358863:3ac39bbe:1358838
+2026-10-15T09:00:57Z 42-kubernetes-1.35 start preview aqua:1361114:cccc861c:1361088
+2026-10-15T09:01:04Z 42-kubernetes-1.35 previewed
+2026-10-15T09:01:05Z 42-kubernetes-1.35 end preview passed aqua:1361114:cccc861c:1361088
+2026-10-15T09:01:09Z 42-kubernetes-1.35 start playbooks aqua:1361436:8a39f195:1361380
+2026-10-15T09:08:47Z 42-kubernetes-1.35 playbooks
+2026-10-15T09:08:47Z 42-kubernetes-1.35 end playbooks passed aqua:1361436:8a39f195:1361380
+2026-10-15T09:08:59Z 42-kubernetes-1.35 start defaults aqua:1369390:a80a9ea5:1369182
+2026-10-15T09:09:07Z 42-kubernetes-1.35 defaults ef0c5d73a87e99747daa1d3c199921e8d9561b37
+2026-10-15T09:09:07Z 42-kubernetes-1.35 end defaults passed aqua:1369390:a80a9ea5:1369182
+2026-10-15T09:09:08Z 42-kubernetes-1.35 start done aqua:1369694:55c846a4:1369668
+2026-10-15T09:15:23Z 42-kubernetes-1.35 end done failed aqua:1369694:55c846a4:1369668
+2026-10-15T09:41:31Z 42-kubernetes-1.35 start done aqua:1404115:3cb68493:1404077
+2026-10-15T09:42:22Z 42-kubernetes-1.35 checked since=2026-10-15T09:41:34Z
+2026-10-15T09:42:22Z 42-kubernetes-1.35 end done passed aqua:1404115:3cb68493:1404077
+2026-10-15T10:32:43Z 42-kubernetes-1.35 start done aqua:1457653:7ca2e672:1457628
+2026-10-15T10:33:35Z 42-kubernetes-1.35 done
+2026-10-15T10:33:35Z 42-kubernetes-1.35 end done passed aqua:1457653:7ca2e672:1457628
+2026-10-15T10:33:36Z 43-kubernetes-1.36 start begin aqua:1458681:69407aff:1458657
+2026-10-15T10:34:22Z 43-kubernetes-1.36 apps argocd-extras,cert-manager,cluster-config,cnpg,external-secrets,istio-base,istio-cni,istiod,kagent,kagent-crds,metrics-server,porkbun-webhook,prometheus,root,schnappy-infra-data,schnappy-infra-mesh,schnappy-observability,schnappy-production-apps,schnappy-production-data,schnappy-production-mesh,schnappy-production-realtime,schnappy-sonarqube,schnappy-test,schnappy-test-apps,schnappy-test-data,schnappy-test-mesh,scylla-manager,scylla-operator,strimzi,velero,woodpecker
+2026-10-15T10:34:23Z 43-kubernetes-1.36 begun
+2026-10-15T10:34:23Z 43-kubernetes-1.36 end begin passed aqua:1458681:69407aff:1458657
+2026-10-15T10:44:06Z 43-kubernetes-1.36 start backup etcd aqua:1468959:1388655e:1459632
+2026-10-15T10:44:24Z 43-kubernetes-1.36 backup etcd
+2026-10-15T10:44:25Z 43-kubernetes-1.36 end backup passed aqua:1468959:1388655e:1459632
+2026-10-15T10:44:26Z 43-kubernetes-1.36 start merge infra aqua:1469462:7215c424:1469436
+2026-10-15T10:45:22Z 43-kubernetes-1.36 merged infra f219a3d248ec454f3e04bd9590b3ddb366165388
+2026-10-15T10:46:26Z 43-kubernetes-1.36 settled infra f219a3d248ec454f3e04bd9590b3ddb366165388
+2026-10-15T10:46:27Z 43-kubernetes-1.36 end merge passed aqua:1469462:7215c424:1469436
+2026-10-15T10:46:28Z 43-kubernetes-1.36 start preview aqua:1471903:6d764160:1471877
+2026-10-15T10:46:35Z 43-kubernetes-1.36 previewed
+2026-10-15T10:46:36Z 43-kubernetes-1.36 end preview passed aqua:1471903:6d764160:1471877
+2026-10-15T11:36:48Z 43-kubernetes-1.36 start playbooks aqua:1522732:18013ec7:1522663
+2026-10-15T11:43:48Z 43-kubernetes-1.36 playbooks
+2026-10-15T11:43:49Z 43-kubernetes-1.36 end playbooks passed aqua:1522732:18013ec7:1522663
+2026-10-15T11:43:53Z 43-kubernetes-1.36 start defaults aqua:1529712:cd373e40:1529625
+2026-10-15T11:44:01Z 43-kubernetes-1.36 defaults 88252df2ec2e4918ec9923c9b7a53417eebebaf6
+2026-10-15T11:44:02Z 43-kubernetes-1.36 end defaults passed aqua:1529712:cd373e40:1529625
+2026-10-15T11:44:02Z 43-kubernetes-1.36 start done aqua:1530016:49396645:1529991
+2026-10-15T11:46:59Z 43-kubernetes-1.36 velero-backup
+2026-10-15T11:48:31Z 43-kubernetes-1.36 checked since=2026-10-15T11:47:00Z
+2026-10-15T11:48:31Z 43-kubernetes-1.36 end done passed aqua:1530016:49396645:1529991
+2026-10-15T12:29:50Z 43-kubernetes-1.36 start done aqua:1575518:3b108f3a:1575492
+2026-10-15T12:30:42Z 43-kubernetes-1.36 done
+2026-10-15T12:30:42Z 43-kubernetes-1.36 end done passed aqua:1575518:3b108f3a:1575492
+2026-10-15T12:30:43Z 44-eso-2.12 start begin aqua:1576554:fa8c45bd:1576532
+2026-10-15T12:31:29Z 44-eso-2.12 apps argocd-extras,cert-manager,cluster-config,cnpg,external-secrets,istio-base,istio-cni,istiod,kagent,kagent-crds,metrics-server,porkbun-webhook,prometheus,root,schnappy-infra-data,schnappy-infra-mesh,schnappy-observability,schnappy-production-apps,schnappy-production-data,schnappy-production-mesh,schnappy-production-realtime,schnappy-sonarqube,schnappy-test,schnappy-test-apps,schnappy-test-data,schnappy-test-mesh,scylla-manager,scylla-operator,strimzi,velero,woodpecker
+2026-10-15T12:31:30Z 44-eso-2.12 begun
+2026-10-15T12:31:30Z 44-eso-2.12 end begin passed aqua:1576554:fa8c45bd:1576532
+2026-10-15T12:31:31Z 44-eso-2.12 start merge infra aqua:1577505:8fa29543:1577480
+2026-10-15T12:31:56Z 44-eso-2.12 merged infra c5e8d76d50925f013d07547a9c762698b0c2e9a8
+2026-10-15T12:33:54Z 44-eso-2.12 settled infra c5e8d76d50925f013d07547a9c762698b0c2e9a8
+2026-10-15T12:33:55Z 44-eso-2.12 end merge passed aqua:1577505:8fa29543:1577480
+2026-10-15T12:33:56Z 44-eso-2.12 start preview aqua:1580044:6fc022d3:1580018
+2026-10-15T12:34:00Z 44-eso-2.12 previewed
+2026-10-15T12:34:00Z 44-eso-2.12 end preview passed aqua:1580044:6fc022d3:1580018
+2026-10-15T12:35:01Z 44-eso-2.12 start playbooks aqua:1581589:1be03c25:1581496
+2026-10-15T12:35:11Z 44-eso-2.12 playbooks
+2026-10-15T12:35:11Z 44-eso-2.12 end playbooks passed aqua:1581589:1be03c25:1581496
+2026-10-15T12:35:18Z 44-eso-2.12 start defaults aqua:1581987:24c60c19:1581854
+2026-10-15T12:35:39Z 44-eso-2.12 defaults d1d70943bfd4ed8a66242ba40525c036cec616a9
+2026-10-15T12:35:40Z 44-eso-2.12 end defaults passed aqua:1581987:24c60c19:1581854
+2026-10-15T12:35:41Z 44-eso-2.12 start done aqua:1582489:06cdcc9e:1582463
+2026-10-15T12:36:43Z 44-eso-2.12 checked since=2026-10-15T12:35:44Z
+2026-10-15T12:36:44Z 44-eso-2.12 end done passed aqua:1582489:06cdcc9e:1582463
+2026-10-15T12:42:42Z 44-eso-2.12 start done aqua:1589593:97d45e66:1589567
+2026-10-15T12:43:35Z 44-eso-2.12 done
+2026-10-15T12:43:36Z 44-eso-2.12 end done passed aqua:1589593:97d45e66:1589567
+2026-10-15T12:43:36Z 45-alertmanager-blackbox-ksm start begin aqua:1590647:4120959f:1590623
+2026-10-15T12:44:23Z 45-alertmanager-blackbox-ksm apps argocd-extras,cert-manager,cluster-config,cnpg,external-secrets,istio-base,istio-cni,istiod,kagent,kagent-crds,metrics-server,porkbun-webhook,prometheus,root,schnappy-infra-data,schnappy-infra-mesh,schnappy-observability,schnappy-production-apps,schnappy-production-data,schnappy-production-mesh,schnappy-production-realtime,schnappy-sonarqube,schnappy-test,schnappy-test-apps,schnappy-test-data,schnappy-test-mesh,scylla-manager,scylla-operator,strimzi,velero,woodpecker
+2026-10-15T12:44:24Z 45-alertmanager-blackbox-ksm begun
+2026-10-15T12:44:24Z 45-alertmanager-blackbox-ksm end begin passed aqua:1590647:4120959f:1590623
+2026-10-15T12:44:25Z 45-alertmanager-blackbox-ksm start merge platform aqua:1591579:c4f944a6:1591554
+2026-10-15T12:44:52Z 45-alertmanager-blackbox-ksm merged platform 66a64fd00a5a9f6a0afbf06e88c60eb71da08376
+2026-10-15T12:46:40Z 45-alertmanager-blackbox-ksm settled platform 66a64fd00a5a9f6a0afbf06e88c60eb71da08376
+2026-10-15T12:46:40Z 45-alertmanager-blackbox-ksm end merge passed aqua:1591579:c4f944a6:1591554
+2026-10-15T12:46:41Z 45-alertmanager-blackbox-ksm start done aqua:1594063:21109fad:1594037
+2026-10-15T12:47:32Z 45-alertmanager-blackbox-ksm checked since=2026-10-15T12:46:44Z
+2026-10-15T12:47:33Z 45-alertmanager-blackbox-ksm end done passed aqua:1594063:21109fad:1594037
+2026-10-15T13:12:17Z 45-alertmanager-blackbox-ksm start done aqua:1706198:7101a6aa:1706173
+2026-10-15T13:13:09Z 45-alertmanager-blackbox-ksm done
+2026-10-15T13:13:10Z 45-alertmanager-blackbox-ksm end done passed aqua:1706198:7101a6aa:1706173
+2026-10-15T13:13:10Z 46-postgres-18-test start begin aqua:1707386:c4e26364:1707367
+2026-10-15T13:13:57Z 46-postgres-18-test apps argocd-extras,cert-manager,cluster-config,cnpg,external-secrets,istio-base,istio-cni,istiod,kagent,kagent-crds,metrics-server,porkbun-webhook,prometheus,root,schnappy-infra-data,schnappy-infra-mesh,schnappy-observability,schnappy-production-apps,schnappy-production-data,schnappy-production-mesh,schnappy-production-realtime,schnappy-sonarqube,schnappy-test,schnappy-test-apps,schnappy-test-data,schnappy-test-mesh,scylla-manager,scylla-operator,strimzi,velero,woodpecker
+2026-10-15T13:13:58Z 46-postgres-18-test begun
+2026-10-15T13:13:58Z 46-postgres-18-test end begin passed aqua:1707386:c4e26364:1707367
+2026-10-15T13:14:03Z 46-postgres-18-test start backup postgres aqua:1708996:b66631c8:1708723
+2026-10-15T13:16:14Z 46-postgres-18-test backup postgres
+2026-10-15T13:16:14Z 46-postgres-18-test end backup passed aqua:1708996:b66631c8:1708723
+2026-10-15T13:16:15Z 46-postgres-18-test start merge infra aqua:1712479:010d3877:1712441
+2026-10-15T13:16:32Z 46-postgres-18-test merged infra 4c68d06a08d888a35c0e284b3ac441e407ab6113
+2026-10-15T13:17:58Z 46-postgres-18-test settled infra 4c68d06a08d888a35c0e284b3ac441e407ab6113
+2026-10-15T13:17:58Z 46-postgres-18-test end merge passed aqua:1712479:010d3877:1712441
+2026-10-15T13:17:59Z 46-postgres-18-test start merge platform aqua:1715697:3c141c56:1715671
+2026-10-15T13:18:12Z 46-postgres-18-test merged platform a5b4ec4d54bf4e1dbe99a96575ce22c06571529a
+2026-10-15T13:20:42Z 46-postgres-18-test settled platform a5b4ec4d54bf4e1dbe99a96575ce22c06571529a
+2026-10-15T13:20:43Z 46-postgres-18-test end merge passed aqua:1715697:3c141c56:1715671
+2026-10-15T13:20:44Z 46-postgres-18-test start preview aqua:1718604:2a964a48:1718578
+2026-10-15T13:20:49Z 46-postgres-18-test previewed
+2026-10-15T13:20:50Z 46-postgres-18-test end preview passed aqua:1718604:2a964a48:1718578
+2026-10-15T13:25:21Z 46-postgres-18-test start playbooks aqua:1723478:56f20f3c:1723419
+2026-10-15T13:25:33Z 46-postgres-18-test playbooks
+2026-10-15T13:25:34Z 46-postgres-18-test end playbooks passed aqua:1723478:56f20f3c:1723419
+2026-10-15T13:25:34Z 46-postgres-18-test start done aqua:1723858:8bf68527:1723815
+2026-10-15T13:26:25Z 46-postgres-18-test checked since=2026-10-15T13:25:38Z
+2026-10-15T13:26:26Z 46-postgres-18-test end done passed aqua:1723858:8bf68527:1723815
+2026-10-15T14:09:32Z 46-postgres-18-test start done aqua:1767753:9c3baca6:1767715
+2026-10-15T14:10:23Z 46-postgres-18-test done
+2026-10-15T14:10:24Z 46-postgres-18-test end done passed aqua:1767753:9c3baca6:1767715
+2026-10-15T14:10:24Z 47-postgres-18 start begin aqua:1768760:a9e57dbc:1768736
+2026-10-15T14:11:11Z 47-postgres-18 apps argocd-extras,cert-manager,cluster-config,cnpg,external-secrets,istio-base,istio-cni,istiod,kagent,kagent-crds,metrics-server,porkbun-webhook,prometheus,root,schnappy-infra-data,schnappy-infra-mesh,schnappy-observability,schnappy-production-apps,schnappy-production-data,schnappy-production-mesh,schnappy-production-realtime,schnappy-sonarqube,schnappy-test,schnappy-test-apps,schnappy-test-data,schnappy-test-mesh,scylla-manager,scylla-operator,strimzi,velero,woodpecker
+2026-10-15T14:11:11Z 47-postgres-18 begun
+2026-10-15T14:11:12Z 47-postgres-18 end begin passed aqua:1768760:a9e57dbc:1768736
+2026-10-15T14:11:18Z 47-postgres-18 start backup postgres aqua:1769813:bfa15a55:1769705
+2026-10-15T14:13:31Z 47-postgres-18 backup postgres
+2026-10-15T14:13:31Z 47-postgres-18 end backup passed aqua:1769813:bfa15a55:1769705
+2026-10-15T14:13:32Z 47-postgres-18 start merge infra aqua:1772114:eea2e5bc:1772082
+2026-10-15T14:13:51Z 47-postgres-18 merged infra a4c6bfbbb81b6d71c39b268135c564b997f91f49
+2026-10-15T14:16:21Z 47-postgres-18 settled infra a4c6bfbbb81b6d71c39b268135c564b997f91f49
+2026-10-15T14:17:05Z 47-postgres-18 base-backup
+2026-10-15T14:17:05Z 47-postgres-18 end merge passed aqua:1772114:eea2e5bc:1772082
+2026-10-15T14:17:06Z 47-postgres-18 start merge platform aqua:1777074:c3e6a978:1777048
+2026-10-15T14:17:21Z 47-postgres-18 merged platform c8469d73ec22580c5e7855fcb8b4520db10d2b5a
+2026-10-15T14:18:05Z 47-postgres-18 settled platform c8469d73ec22580c5e7855fcb8b4520db10d2b5a
+2026-10-15T14:18:06Z 47-postgres-18 end merge passed aqua:1777074:c3e6a978:1777048
+2026-10-15T14:18:07Z 47-postgres-18 start preview aqua:1778357:dcf17740:1778332
+2026-10-15T14:18:13Z 47-postgres-18 previewed
+2026-10-15T14:18:14Z 47-postgres-18 end preview passed aqua:1778357:dcf17740:1778332
+2026-10-15T14:19:39Z 47-postgres-18 start playbooks aqua:1780319:1b2b99f6:1780205
+2026-10-15T14:19:55Z 47-postgres-18 playbooks
+2026-10-15T14:19:56Z 47-postgres-18 end playbooks passed aqua:1780319:1b2b99f6:1780205
+2026-10-15T14:19:57Z 47-postgres-18 start done aqua:1780720:736408e6:1780694
+2026-10-15T14:20:48Z 47-postgres-18 checked since=2026-10-15T14:20:00Z
+2026-10-15T14:20:48Z 47-postgres-18 end done passed aqua:1780720:736408e6:1780694
+2026-10-15T15:33:07Z 47-postgres-18 start done aqua:1851267:1a725d41:1851241
+2026-10-15T15:33:59Z 47-postgres-18 done
+2026-10-15T15:34:00Z 47-postgres-18 end done passed aqua:1851267:1a725d41:1851241
+2026-10-15T15:34:01Z 48-valkey-9.1-test start begin aqua:1852558:769c587a:1852516
+2026-10-15T15:34:47Z 48-valkey-9.1-test apps argocd-extras,cert-manager,cluster-config,cnpg,external-secrets,istio-base,istio-cni,istiod,kagent,kagent-crds,metrics-server,porkbun-webhook,prometheus,root,schnappy-infra-data,schnappy-infra-mesh,schnappy-observability,schnappy-production-apps,schnappy-production-data,schnappy-production-mesh,schnappy-production-realtime,schnappy-sonarqube,schnappy-test,schnappy-test-apps,schnappy-test-data,schnappy-test-mesh,scylla-manager,scylla-operator,strimzi,velero,woodpecker
+2026-10-15T15:34:48Z 48-valkey-9.1-test begun
+2026-10-15T15:34:48Z 48-valkey-9.1-test end begin passed aqua:1852558:769c587a:1852516
+2026-10-15T15:34:49Z 48-valkey-9.1-test start merge infra aqua:1853534:84a048fc:1853508
+2026-10-15T15:37:02Z 48-valkey-9.1-test end merge failed aqua:1853534:84a048fc:1853508
+2026-10-15T15:38:20Z 48-valkey-9.1-test start merge infra aqua:1858666:d7101b55:1858641
+2026-10-15T15:38:45Z 48-valkey-9.1-test merged infra 4b39c689ebe433debada08674af97d3c1d3e55ea
+2026-10-15T15:40:22Z 48-valkey-9.1-test settled infra 4b39c689ebe433debada08674af97d3c1d3e55ea
+2026-10-15T15:40:22Z 48-valkey-9.1-test end merge passed aqua:1858666:d7101b55:1858641
+2026-10-15T15:40:23Z 48-valkey-9.1-test start merge platform aqua:1862019:be7282c8:1861993
+2026-10-15T15:40:39Z 48-valkey-9.1-test merged platform 2f36a1ca6ff6b8d3b67a785761141c3334b6c1b2
+2026-10-15T15:41:34Z 48-valkey-9.1-test settled platform 2f36a1ca6ff6b8d3b67a785761141c3334b6c1b2
+2026-10-15T15:41:34Z 48-valkey-9.1-test end merge passed aqua:1862019:be7282c8:1861993
+2026-10-15T15:41:35Z 48-valkey-9.1-test start done aqua:1863494:5296b540:1863470
+2026-10-15T15:43:09Z 48-valkey-9.1-test checked since=2026-10-15T15:41:39Z
+2026-10-15T15:43:10Z 48-valkey-9.1-test end done passed aqua:1863494:5296b540:1863470
+2026-10-15T16:19:05Z 48-valkey-9.1-test start done aqua:1901080:db0ff898:1901039
+2026-10-15T16:19:56Z 48-valkey-9.1-test done
+2026-10-15T16:19:56Z 48-valkey-9.1-test end done passed aqua:1901080:db0ff898:1901039
+2026-10-15T16:19:57Z 49-valkey-9.1 start begin aqua:1902096:6c861451:1902072
+2026-10-15T16:20:43Z 49-valkey-9.1 apps argocd-extras,cert-manager,cluster-config,cnpg,external-secrets,istio-base,istio-cni,istiod,kagent,kagent-crds,metrics-server,porkbun-webhook,prometheus,root,schnappy-infra-data,schnappy-infra-mesh,schnappy-observability,schnappy-production-apps,schnappy-production-data,schnappy-production-mesh,schnappy-production-realtime,schnappy-sonarqube,schnappy-test,schnappy-test-apps,schnappy-test-data,schnappy-test-mesh,scylla-manager,scylla-operator,strimzi,velero,woodpecker
+2026-10-15T16:20:43Z 49-valkey-9.1 begun
+2026-10-15T16:20:44Z 49-valkey-9.1 end begin passed aqua:1902096:6c861451:1902072
+2026-10-15T16:20:45Z 49-valkey-9.1 start merge infra aqua:1903039:48bb99c1:1903013
+2026-10-15T16:21:45Z 49-valkey-9.1 merged infra 302482a370f37aa15d0ea83684cc6d13e05abd02
+2026-10-15T16:23:22Z 49-valkey-9.1 settled infra 302482a370f37aa15d0ea83684cc6d13e05abd02
+2026-10-15T16:23:22Z 49-valkey-9.1 end merge passed aqua:1903039:48bb99c1:1903013
+2026-10-15T16:23:23Z 49-valkey-9.1 start done aqua:1905844:287ecd07:1905820
+2026-10-15T16:24:15Z 49-valkey-9.1 checked since=2026-10-15T16:23:26Z
+2026-10-15T16:24:15Z 49-valkey-9.1 end done passed aqua:1905844:287ecd07:1905820
+2026-10-15T16:32:06Z 49-valkey-9.1 start done aqua:1915375:191be19b:1915349
+2026-10-15T16:32:57Z 49-valkey-9.1 done
+2026-10-15T16:32:58Z 49-valkey-9.1 end done passed aqua:1915375:191be19b:1915349
+2026-10-15T16:32:58Z 50-grafana-13 start begin aqua:1916390:28a0f99c:1916366
+2026-10-15T16:33:45Z 50-grafana-13 apps argocd-extras,cert-manager,cluster-config,cnpg,external-secrets,istio-base,istio-cni,istiod,kagent,kagent-crds,metrics-server,porkbun-webhook,prometheus,root,schnappy-infra-data,schnappy-infra-mesh,schnappy-observability,schnappy-production-apps,schnappy-production-data,schnappy-production-mesh,schnappy-production-realtime,schnappy-sonarqube,schnappy-test,schnappy-test-apps,schnappy-test-data,schnappy-test-mesh,scylla-manager,scylla-operator,strimzi,velero,woodpecker
+2026-10-15T16:33:46Z 50-grafana-13 begun
+2026-10-15T16:33:46Z 50-grafana-13 end begin passed aqua:1916390:28a0f99c:1916366
+2026-10-15T16:34:28Z 50-grafana-13 start backup grafana aqua:1917979:684d9823:1917304
+2026-10-15T16:34:46Z 50-grafana-13 backup grafana
+2026-10-15T16:34:46Z 50-grafana-13 end backup passed aqua:1917979:684d9823:1917304
+2026-10-15T16:34:47Z 50-grafana-13 start merge platform aqua:1918474:cd5de998:1918448
+2026-10-15T16:35:51Z 50-grafana-13 merged platform d3c1ab1559928e0c5ba5a9f9aee3e2cd578a7f74
+2026-10-15T16:36:45Z 50-grafana-13 settled platform d3c1ab1559928e0c5ba5a9f9aee3e2cd578a7f74
+2026-10-15T16:36:46Z 50-grafana-13 end merge passed aqua:1918474:cd5de998:1918448
+2026-10-15T16:36:47Z 50-grafana-13 start merge infra aqua:1921894:3f07c5e5:1921869
+2026-10-15T16:37:17Z 50-grafana-13 merged infra c276a62c85322c0dba1dfe23900af3200eb34f57
+2026-10-15T16:38:44Z 50-grafana-13 settled infra c276a62c85322c0dba1dfe23900af3200eb34f57
+2026-10-15T16:38:45Z 50-grafana-13 end merge passed aqua:1921894:3f07c5e5:1921869
+2026-10-15T16:38:46Z 50-grafana-13 start done aqua:1924085:89e9c9f7:1924061
+2026-10-15T16:39:38Z 50-grafana-13 checked since=2026-10-15T16:38:49Z
+2026-10-15T16:39:38Z 50-grafana-13 end done passed aqua:1924085:89e9c9f7:1924061
+2026-10-15T17:51:43Z 50-grafana-13 start done aqua:1994616:797f4da9:1994591
+2026-10-15T17:52:35Z 50-grafana-13 done
+2026-10-15T17:52:35Z 50-grafana-13 end done passed aqua:1994616:797f4da9:1994591
+2026-10-15T17:52:36Z 51-mimir-3.0 start begin aqua:1995619:b0816837:1995596
+2026-10-15T17:53:23Z 51-mimir-3.0 apps argocd-extras,cert-manager,cluster-config,cnpg,external-secrets,istio-base,istio-cni,istiod,kagent,kagent-crds,metrics-server,porkbun-webhook,prometheus,root,schnappy-infra-data,schnappy-infra-mesh,schnappy-observability,schnappy-production-apps,schnappy-production-data,schnappy-production-mesh,schnappy-production-realtime,schnappy-sonarqube,schnappy-test,schnappy-test-apps,schnappy-test-data,schnappy-test-mesh,scylla-manager,scylla-operator,strimzi,velero,woodpecker
+2026-10-15T17:53:23Z 51-mimir-3.0 begun
+2026-10-15T17:53:23Z 51-mimir-3.0 end begin passed aqua:1995619:b0816837:1995596
+2026-10-15T17:55:45Z 51-mimir-3.0 start backup gateway aqua:1998780:da4e52ff:1996507
+2026-10-15T18:25:20Z 51-mimir-3.0 backup gateway
+2026-10-15T18:25:21Z 51-mimir-3.0 end backup passed aqua:1998780:da4e52ff:1996507
+2026-10-15T18:25:22Z 51-mimir-3.0 start merge infra aqua:2028853:998f2966:2028829
+2026-10-15T18:28:28Z 51-mimir-3.0 merged infra ee1d78a7d0c91a1050c107fa1c7290b4a0917424
+2026-10-15T18:30:05Z 51-mimir-3.0 settled infra ee1d78a7d0c91a1050c107fa1c7290b4a0917424
+2026-10-15T18:30:05Z 51-mimir-3.0 end merge passed aqua:2028853:998f2966:2028829
+2026-10-15T18:30:06Z 51-mimir-3.0 start done aqua:2033693:9214312b:2033648
+2026-10-15T18:30:57Z 51-mimir-3.0 checked since=2026-10-15T18:30:09Z
+2026-10-15T18:30:58Z 51-mimir-3.0 end done passed aqua:2033693:9214312b:2033648
+2026-10-15T18:42:01Z 51-mimir-3.0 start done aqua:2045709:847b66e7:2045683
+2026-10-15T18:42:53Z 51-mimir-3.0 done
+2026-10-15T18:42:53Z 51-mimir-3.0 end done passed aqua:2045709:847b66e7:2045683
+2026-10-15T18:42:54Z 52-mimir-3.1 start begin aqua:2046715:e6489e47:2046692
+2026-10-15T18:43:40Z 52-mimir-3.1 apps argocd-extras,cert-manager,cluster-config,cnpg,external-secrets,istio-base,istio-cni,istiod,kagent,kagent-crds,metrics-server,porkbun-webhook,prometheus,root,schnappy-infra-data,schnappy-infra-mesh,schnappy-observability,schnappy-production-apps,schnappy-production-data,schnappy-production-mesh,schnappy-production-realtime,schnappy-sonarqube,schnappy-test,schnappy-test-apps,schnappy-test-data,schnappy-test-mesh,scylla-manager,scylla-operator,strimzi,velero,woodpecker
+2026-10-15T18:43:41Z 52-mimir-3.1 begun
+2026-10-15T18:43:41Z 52-mimir-3.1 end begin passed aqua:2046715:e6489e47:2046692
+2026-10-15T18:43:42Z 52-mimir-3.1 start merge infra aqua:2047647:f8be9677:2047611
+2026-10-15T18:44:01Z 52-mimir-3.1 merged infra 650693ffc534e3850e8e3555321b7dccdcbc0f24
+2026-10-15T18:45:38Z 52-mimir-3.1 settled infra 650693ffc534e3850e8e3555321b7dccdcbc0f24
+2026-10-15T18:45:38Z 52-mimir-3.1 end merge passed aqua:2047647:f8be9677:2047611
+2026-10-15T18:45:39Z 52-mimir-3.1 start done aqua:2049797:82414b49:2049771
+2026-10-15T18:46:31Z 52-mimir-3.1 checked since=2026-10-15T18:45:42Z
+2026-10-15T18:46:31Z 52-mimir-3.1 end done passed aqua:2049797:82414b49:2049771
+2026-10-15T19:05:13Z 52-mimir-3.1 start done aqua:2070690:6b81727d:2070652
+2026-10-15T19:06:04Z 52-mimir-3.1 done
+2026-10-15T19:06:05Z 52-mimir-3.1 end done passed aqua:2070690:6b81727d:2070652
+2026-10-15T19:06:05Z 53-mimir-3.2 start begin aqua:2071700:4305bbcb:2071679
+2026-10-15T19:06:52Z 53-mimir-3.2 apps argocd-extras,cert-manager,cluster-config,cnpg,external-secrets,istio-base,istio-cni,istiod,kagent,kagent-crds,metrics-server,porkbun-webhook,prometheus,root,schnappy-infra-data,schnappy-infra-mesh,schnappy-observability,schnappy-production-apps,schnappy-production-data,schnappy-production-mesh,schnappy-production-realtime,schnappy-sonarqube,schnappy-test,schnappy-test-apps,schnappy-test-data,schnappy-test-mesh,scylla-manager,scylla-operator,strimzi,velero,woodpecker
+2026-10-15T19:06:52Z 53-mimir-3.2 begun
+2026-10-15T19:06:53Z 53-mimir-3.2 end begin passed aqua:2071700:4305bbcb:2071679
+2026-10-15T19:06:54Z 53-mimir-3.2 start merge infra aqua:2072637:979bd638:2072611
+2026-10-15T19:07:13Z 53-mimir-3.2 merged infra 8534b868010aaf4eaf423c0fe314a7332d748c31
+2026-10-15T19:08:51Z 53-mimir-3.2 settled infra 8534b868010aaf4eaf423c0fe314a7332d748c31
+2026-10-15T19:08:51Z 53-mimir-3.2 end merge passed aqua:2072637:979bd638:2072611
+2026-10-15T19:08:52Z 53-mimir-3.2 start done aqua:2074844:0d5ebf38:2074819
+2026-10-15T19:09:43Z 53-mimir-3.2 checked since=2026-10-15T19:08:55Z
+2026-10-15T19:09:44Z 53-mimir-3.2 end done passed aqua:2074844:0d5ebf38:2074819
+2026-10-15T19:16:09Z 53-mimir-3.2 start done aqua:2082726:403466b4:2082700
+2026-10-15T19:17:01Z 53-mimir-3.2 done
+2026-10-15T19:17:01Z 53-mimir-3.2 end done passed aqua:2082726:403466b4:2082700
+2026-10-15T19:17:02Z 54-tempo-3 start begin aqua:2083739:5fa4110d:2083715
+2026-10-15T19:17:48Z 54-tempo-3 apps argocd-extras,cert-manager,cluster-config,cnpg,external-secrets,istio-base,istio-cni,istiod,kagent,kagent-crds,metrics-server,porkbun-webhook,prometheus,root,schnappy-infra-data,schnappy-infra-mesh,schnappy-observability,schnappy-production-apps,schnappy-production-data,schnappy-production-mesh,schnappy-production-realtime,schnappy-sonarqube,schnappy-test,schnappy-test-apps,schnappy-test-data,schnappy-test-mesh,scylla-manager,scylla-operator,strimzi,velero,woodpecker
+2026-10-15T19:17:49Z 54-tempo-3 begun
+2026-10-15T19:17:49Z 54-tempo-3 end begin passed aqua:2083739:5fa4110d:2083715
+2026-10-15T19:17:57Z 54-tempo-3 start backup gateway aqua:2084771:5de1d5b6:2084665
+2026-10-15T19:47:33Z 54-tempo-3 backup gateway
+2026-10-15T19:47:33Z 54-tempo-3 end backup passed aqua:2084771:5de1d5b6:2084665
+2026-10-15T19:47:34Z 54-tempo-3 start merge platform aqua:2117583:cd17e792:2117557
+2026-10-15T19:57:04Z 54-tempo-3 end merge failed aqua:2117583:cd17e792:2117557
+2026-10-15T19:58:00Z 54-tempo-3 start merge platform aqua:2130111:b8924f26:2130085
+2026-10-15T19:58:24Z 54-tempo-3 merged platform c254410a39f5a99a73ab33ee2a2478fac8c61c9a
+2026-10-15T19:59:19Z 54-tempo-3 settled platform c254410a39f5a99a73ab33ee2a2478fac8c61c9a
+2026-10-15T19:59:19Z 54-tempo-3 end merge passed aqua:2130111:b8924f26:2130085
+2026-10-15T19:59:20Z 54-tempo-3 start merge infra aqua:2132965:6cd07870:2132941
+2026-10-15T20:00:30Z 54-tempo-3 merged infra 15a926bb7b10246d0a2235bd0635ba92b433e073
+2026-10-15T20:01:56Z 54-tempo-3 settled infra 15a926bb7b10246d0a2235bd0635ba92b433e073
+2026-10-15T20:01:57Z 54-tempo-3 end merge passed aqua:2132965:6cd07870:2132941
+2026-10-15T20:01:58Z 54-tempo-3 start done aqua:2135745:0b47d04d:2135719
+2026-10-15T20:02:49Z 54-tempo-3 checked since=2026-10-15T20:02:01Z
+2026-10-15T20:02:50Z 54-tempo-3 end done passed aqua:2135745:0b47d04d:2135719
+2026-10-15T20:08:52Z 54-tempo-3 start done aqua:2143670:321eb865:2143645
+2026-10-15T20:09:44Z 54-tempo-3 done
+2026-10-15T20:09:44Z 54-tempo-3 end done passed aqua:2143670:321eb865:2143645
+2026-10-15T20:09:45Z 55-fluent-bit-5 start begin aqua:2144715:74cc4a3b:2144693
+2026-10-15T20:10:31Z 55-fluent-bit-5 apps argocd-extras,cert-manager,cluster-config,cnpg,external-secrets,istio-base,istio-cni,istiod,kagent,kagent-crds,metrics-server,porkbun-webhook,prometheus,root,schnappy-infra-data,schnappy-infra-mesh,schnappy-observability,schnappy-production-apps,schnappy-production-data,schnappy-production-mesh,schnappy-production-realtime,schnappy-sonarqube,schnappy-test,schnappy-test-apps,schnappy-test-data,schnappy-test-mesh,scylla-manager,scylla-operator,strimzi,velero,woodpecker
+2026-10-15T20:10:31Z 55-fluent-bit-5 begun
+2026-10-15T20:10:32Z 55-fluent-bit-5 end begin passed aqua:2144715:74cc4a3b:2144693
+2026-10-15T20:10:33Z 55-fluent-bit-5 start merge infra aqua:2145654:d5a15302:2145608
+2026-10-15T20:11:40Z 55-fluent-bit-5 merged infra 483e2ae2f149dc9b270fc22fa3b40b1f7c9dba46
+2026-10-15T20:12:55Z 55-fluent-bit-5 settled infra 483e2ae2f149dc9b270fc22fa3b40b1f7c9dba46
+2026-10-15T20:12:56Z 55-fluent-bit-5 end merge passed aqua:2145654:d5a15302:2145608
+2026-10-15T20:12:56Z 55-fluent-bit-5 start done aqua:2148297:a5675db5:2148271
+2026-10-15T20:13:48Z 55-fluent-bit-5 checked since=2026-10-15T20:13:00Z
+2026-10-15T20:13:49Z 55-fluent-bit-5 end done passed aqua:2148297:a5675db5:2148271
+2026-10-15T20:24:09Z 55-fluent-bit-5 start done aqua:2160179:d070a2b3:2160153
+2026-10-15T20:25:00Z 55-fluent-bit-5 done
+2026-10-15T20:25:00Z 55-fluent-bit-5 end done passed aqua:2160179:d070a2b3:2160153
+2026-10-15T20:25:01Z 56-centrifugo-6.9 start begin aqua:2161215:c4319888:2161191
+2026-10-15T20:25:48Z 56-centrifugo-6.9 apps argocd-extras,cert-manager,cluster-config,cnpg,external-secrets,istio-base,istio-cni,istiod,kagent,kagent-crds,metrics-server,porkbun-webhook,prometheus,root,schnappy-infra-data,schnappy-infra-mesh,schnappy-observability,schnappy-production-apps,schnappy-production-data,schnappy-production-mesh,schnappy-production-realtime,schnappy-sonarqube,schnappy-test,schnappy-test-apps,schnappy-test-data,schnappy-test-mesh,scylla-manager,scylla-operator,strimzi,velero,woodpecker
+2026-10-15T20:25:48Z 56-centrifugo-6.9 begun
+2026-10-15T20:25:48Z 56-centrifugo-6.9 end begin passed aqua:2161215:c4319888:2161191
+2026-10-15T20:25:49Z 56-centrifugo-6.9 start merge infra aqua:2162151:62f6a7dc:2162125
+2026-10-15T20:27:24Z 56-centrifugo-6.9 merged infra 1c3bab671fcc031bb9e9389d7534f2f7961e8a32
+2026-10-15T20:28:50Z 56-centrifugo-6.9 settled infra 1c3bab671fcc031bb9e9389d7534f2f7961e8a32
+2026-10-15T20:28:51Z 56-centrifugo-6.9 end merge passed aqua:2162151:62f6a7dc:2162125
+2026-10-15T20:28:52Z 56-centrifugo-6.9 start merge platform aqua:2166825:a2254049:2166799
+2026-10-15T20:30:19Z 56-centrifugo-6.9 merged platform b9b6dd7348f88bbae5ea29a436154f985b4eb8b2
+2026-10-15T20:31:13Z 56-centrifugo-6.9 settled platform b9b6dd7348f88bbae5ea29a436154f985b4eb8b2
+2026-10-15T20:31:14Z 56-centrifugo-6.9 end merge passed aqua:2166825:a2254049:2166799
+2026-10-15T20:31:15Z 56-centrifugo-6.9 start done aqua:2169628:d940baa3:2169601
+2026-10-15T20:32:08Z 56-centrifugo-6.9 checked since=2026-10-15T20:31:19Z
+2026-10-15T20:32:08Z 56-centrifugo-6.9 end done passed aqua:2169628:d940baa3:2169601
+2026-10-15T20:38:45Z 56-centrifugo-6.9 start done aqua:2177338:8208a080:2177312
+2026-10-15T20:39:36Z 56-centrifugo-6.9 done
+2026-10-15T20:39:36Z 56-centrifugo-6.9 end done passed aqua:2177338:8208a080:2177312
+2026-10-15T20:39:37Z 57-sonarqube-26.9 start begin aqua:2178465:46463780:2178441
+2026-10-15T20:40:23Z 57-sonarqube-26.9 apps argocd-extras,cert-manager,cluster-config,cnpg,external-secrets,istio-base,istio-cni,istiod,kagent,kagent-crds,metrics-server,porkbun-webhook,prometheus,root,schnappy-infra-data,schnappy-infra-mesh,schnappy-observability,schnappy-production-apps,schnappy-production-data,schnappy-production-mesh,schnappy-production-realtime,schnappy-sonarqube,schnappy-test,schnappy-test-apps,schnappy-test-data,schnappy-test-mesh,scylla-manager,scylla-operator,strimzi,velero,woodpecker
+2026-10-15T20:40:24Z 57-sonarqube-26.9 begun
+2026-10-15T20:40:24Z 57-sonarqube-26.9 end begin passed aqua:2178465:46463780:2178441
+2026-10-15T20:45:24Z 57-sonarqube-26.9 start backup postgres aqua:2184368:26e24fde:2179498
+2026-10-15T20:49:33Z 57-sonarqube-26.9 backup postgres
+2026-10-15T20:49:33Z 57-sonarqube-26.9 end backup passed aqua:2184368:26e24fde:2179498
+2026-10-15T20:49:34Z 57-sonarqube-26.9 start merge infra aqua:2188439:8786d798:2188413
+2026-10-15T20:52:38Z 57-sonarqube-26.9 merged infra 66c65769ecca7890bd3652b6f258aa2af9f5a7f5
+2026-10-15T20:55:29Z 57-sonarqube-26.9 settled infra 66c65769ecca7890bd3652b6f258aa2af9f5a7f5
+2026-10-15T20:55:29Z 57-sonarqube-26.9 end merge passed aqua:2188439:8786d798:2188413
+2026-10-15T20:55:30Z 57-sonarqube-26.9 start merge platform aqua:2195654:f2c81681:2195607
+2026-10-15T20:55:46Z 57-sonarqube-26.9 merged platform 009d7f17ebae6f6943c3cb445c3beaf7593ed3c6
+2026-10-15T20:56:31Z 57-sonarqube-26.9 settled platform 009d7f17ebae6f6943c3cb445c3beaf7593ed3c6
+2026-10-15T20:56:32Z 57-sonarqube-26.9 end merge passed aqua:2195654:f2c81681:2195607
+2026-10-15T20:56:33Z 57-sonarqube-26.9 start done aqua:2196997:d4289015:2196972
+2026-10-15T20:57:26Z 57-sonarqube-26.9 checked since=2026-10-15T20:56:37Z
+2026-10-15T20:57:27Z 57-sonarqube-26.9 end done passed aqua:2196997:d4289015:2196972
+2026-10-15T21:03:10Z 57-sonarqube-26.9 start done aqua:2204262:a05b033d:2204236
+2026-10-15T21:04:01Z 57-sonarqube-26.9 done
+2026-10-15T21:04:01Z 57-sonarqube-26.9 end done passed aqua:2204262:a05b033d:2204236
+2026-10-15T21:04:02Z 58-clickhouse-compat-24.8 start begin aqua:2205367:01091e98:2205329
+2026-10-15T21:05:31Z 58-clickhouse-compat-24.8 apps argocd-extras,cert-manager,cluster-config,cnpg,external-secrets,istio-base,istio-cni,istiod,kagent,kagent-crds,metrics-server,porkbun-webhook,prometheus,root,schnappy-infra-data,schnappy-infra-mesh,schnappy-observability,schnappy-production-apps,schnappy-production-data,schnappy-production-mesh,schnappy-production-realtime,schnappy-sonarqube,schnappy-test,schnappy-test-apps,schnappy-test-data,schnappy-test-mesh,scylla-manager,scylla-operator,strimzi,velero,woodpecker
+2026-10-15T21:05:31Z 58-clickhouse-compat-24.8 begun
+2026-10-15T21:05:32Z 58-clickhouse-compat-24.8 end begin passed aqua:2205367:01091e98:2205329
+2026-10-15T21:05:33Z 58-clickhouse-compat-24.8 start merge platform aqua:2207022:6572cbb6:2206997
+2026-10-15T21:08:04Z 58-clickhouse-compat-24.8 merged platform d752124fb77e9bb1a1b66ca178e790f511227f30
+2026-10-15T21:09:31Z 58-clickhouse-compat-24.8 settled platform d752124fb77e9bb1a1b66ca178e790f511227f30
+2026-10-15T21:09:32Z 58-clickhouse-compat-24.8 end merge passed aqua:2207022:6572cbb6:2206997
+2026-10-15T21:09:33Z 58-clickhouse-compat-24.8 start done aqua:2211568:73abb421:2211542
+2026-10-15T21:10:24Z 58-clickhouse-compat-24.8 checked since=2026-10-15T21:09:36Z
+2026-10-15T21:10:25Z 58-clickhouse-compat-24.8 end done passed aqua:2211568:73abb421:2211542
+2026-10-15T21:23:44Z 58-clickhouse-compat-24.8 start done aqua:2234029:30a55b80:2234003
+2026-10-15T21:24:35Z 58-clickhouse-compat-24.8 done
+2026-10-15T21:24:36Z 58-clickhouse-compat-24.8 end done passed aqua:2234029:30a55b80:2234003
+2026-10-15T21:24:36Z 59-clickhouse-25.8 start begin aqua:2235078:d2507c01:2235057
+2026-10-15T21:25:23Z 59-clickhouse-25.8 apps argocd-extras,cert-manager,cluster-config,cnpg,external-secrets,istio-base,istio-cni,istiod,kagent,kagent-crds,metrics-server,porkbun-webhook,prometheus,root,schnappy-infra-data,schnappy-infra-mesh,schnappy-observability,schnappy-production-apps,schnappy-production-data,schnappy-production-mesh,schnappy-production-realtime,schnappy-sonarqube,schnappy-test,schnappy-test-apps,schnappy-test-data,schnappy-test-mesh,scylla-manager,scylla-operator,strimzi,velero,woodpecker
+2026-10-15T21:25:23Z 59-clickhouse-25.8 begun
+2026-10-15T21:25:24Z 59-clickhouse-25.8 end begin passed aqua:2235078:d2507c01:2235057
+2026-10-15T21:25:31Z 59-clickhouse-25.8 start backup clickhouse aqua:2236086:8db53e12:2235960
+2026-10-15T21:28:35Z 59-clickhouse-25.8 backup clickhouse
+2026-10-15T21:28:35Z 59-clickhouse-25.8 end backup passed aqua:2236086:8db53e12:2235960
+2026-10-15T21:28:36Z 59-clickhouse-25.8 start merge infra aqua:2239645:a22c9f9f:2239619
+2026-10-15T21:29:20Z 59-clickhouse-25.8 merged infra 59a07ffc8ac90de88c735efaba1db22f9a472aad
+2026-10-15T21:30:56Z 59-clickhouse-25.8 settled infra 59a07ffc8ac90de88c735efaba1db22f9a472aad
+2026-10-15T21:30:57Z 59-clickhouse-25.8 end merge passed aqua:2239645:a22c9f9f:2239619
+2026-10-15T21:30:58Z 59-clickhouse-25.8 start merge platform aqua:2244013:13335a25:2243987
+2026-10-15T21:31:14Z 59-clickhouse-25.8 merged platform f4d845c25cb52c0d44a058cf9ecab2dcfd7ae8aa
+2026-10-15T21:32:08Z 59-clickhouse-25.8 settled platform f4d845c25cb52c0d44a058cf9ecab2dcfd7ae8aa
+2026-10-15T21:32:09Z 59-clickhouse-25.8 end merge passed aqua:2244013:13335a25:2243987
+2026-10-15T21:32:10Z 59-clickhouse-25.8 start done aqua:2245732:b8575180:2245707
+2026-10-15T21:33:03Z 59-clickhouse-25.8 checked since=2026-10-15T21:32:14Z
+2026-10-15T21:33:04Z 59-clickhouse-25.8 end done passed aqua:2245732:b8575180:2245707
+2026-10-15T21:40:13Z 59-clickhouse-25.8 start done aqua:2258490:6fbbcab8:2258466
+2026-10-15T21:41:05Z 59-clickhouse-25.8 done
+2026-10-15T21:41:06Z 59-clickhouse-25.8 end done passed aqua:2258490:6fbbcab8:2258466
+2026-10-15T21:41:07Z 60-clickhouse-compat-25.8 start begin aqua:2259599:cdfa9800:2259576
+2026-10-15T21:41:53Z 60-clickhouse-compat-25.8 apps argocd-extras,cert-manager,cluster-config,cnpg,external-secrets,istio-base,istio-cni,istiod,kagent,kagent-crds,metrics-server,porkbun-webhook,prometheus,root,schnappy-infra-data,schnappy-infra-mesh,schnappy-observability,schnappy-production-apps,schnappy-production-data,schnappy-production-mesh,schnappy-production-realtime,schnappy-sonarqube,schnappy-test,schnappy-test-apps,schnappy-test-data,schnappy-test-mesh,scylla-manager,scylla-operator,strimzi,velero,woodpecker
+2026-10-15T21:41:54Z 60-clickhouse-compat-25.8 begun
+2026-10-15T21:41:54Z 60-clickhouse-compat-25.8 end begin passed aqua:2259599:cdfa9800:2259576
+2026-10-15T21:41:55Z 60-clickhouse-compat-25.8 start merge platform aqua:2260526:4266d6df:2260500
+2026-10-15T21:42:12Z 60-clickhouse-compat-25.8 merged platform f43d984f1e028793cf2d289a754da7c19246a0bf
+2026-10-15T21:43:17Z 60-clickhouse-compat-25.8 settled platform f43d984f1e028793cf2d289a754da7c19246a0bf
+2026-10-15T21:43:17Z 60-clickhouse-compat-25.8 end merge passed aqua:2260526:4266d6df:2260500
+2026-10-15T21:43:18Z 60-clickhouse-compat-25.8 start done aqua:2262086:3807ec23:2262061
+2026-10-15T21:44:41Z 60-clickhouse-compat-25.8 checked since=2026-10-15T21:43:21Z
+2026-10-15T21:44:42Z 60-clickhouse-compat-25.8 end done passed aqua:2262086:3807ec23:2262061
+2026-10-15T22:10:42Z 60-clickhouse-compat-25.8 start done aqua:2389224:59409f67:2389198
+2026-10-15T22:11:34Z 60-clickhouse-compat-25.8 done
+2026-10-15T22:11:34Z 60-clickhouse-compat-25.8 end done passed aqua:2389224:59409f67:2389198
+2026-10-15T22:11:35Z 61-clickhouse-26.8 start begin aqua:2390312:ff66f470:2390288
+2026-10-15T22:12:22Z 61-clickhouse-26.8 apps argocd-extras,cert-manager,cluster-config,cnpg,external-secrets,istio-base,istio-cni,istiod,kagent,kagent-crds,metrics-server,porkbun-webhook,prometheus,root,schnappy-infra-data,schnappy-infra-mesh,schnappy-observability,schnappy-production-apps,schnappy-production-data,schnappy-production-mesh,schnappy-production-realtime,schnappy-sonarqube,schnappy-test,schnappy-test-apps,schnappy-test-data,schnappy-test-mesh,scylla-manager,scylla-operator,strimzi,velero,woodpecker
+2026-10-15T22:12:22Z 61-clickhouse-26.8 begun
+2026-10-15T22:12:23Z 61-clickhouse-26.8 end begin passed aqua:2390312:ff66f470:2390288
+2026-10-15T22:12:31Z 61-clickhouse-26.8 start backup clickhouse aqua:2391460:62ec5383:2391302
+2026-10-15T22:15:42Z 61-clickhouse-26.8 backup clickhouse
+2026-10-15T22:15:42Z 61-clickhouse-26.8 end backup passed aqua:2391460:62ec5383:2391302
+2026-10-15T22:15:43Z 61-clickhouse-26.8 start merge infra aqua:2395619:d6f12c85:2395594
+2026-10-15T22:16:18Z 61-clickhouse-26.8 merged infra 232a8c7edd3b5d871edba27884a541ac6c65e5a1
+2026-10-15T22:18:47Z 61-clickhouse-26.8 settled infra 232a8c7edd3b5d871edba27884a541ac6c65e5a1
+2026-10-15T22:18:48Z 61-clickhouse-26.8 end merge passed aqua:2395619:d6f12c85:2395594
+2026-10-15T22:18:48Z 61-clickhouse-26.8 start merge platform aqua:2405448:36b7b871:2405411
+2026-10-15T22:19:02Z 61-clickhouse-26.8 merged platform 8ec7e0ad9a033830c6cceff1acb98622309ae397
+2026-10-15T22:19:57Z 61-clickhouse-26.8 settled platform 8ec7e0ad9a033830c6cceff1acb98622309ae397
+2026-10-15T22:19:57Z 61-clickhouse-26.8 end merge passed aqua:2405448:36b7b871:2405411
+2026-10-15T22:19:58Z 61-clickhouse-26.8 start done aqua:2410021:defe219e:2409995
+2026-10-15T22:21:33Z 61-clickhouse-26.8 checked since=2026-10-15T22:20:02Z
+2026-10-15T22:21:33Z 61-clickhouse-26.8 end done passed aqua:2410021:defe219e:2409995
+2026-10-15T22:26:50Z 61-clickhouse-26.8 start done aqua:2487692:d3a1776b:2487666
+2026-10-15T22:27:41Z 61-clickhouse-26.8 done
+2026-10-15T22:27:41Z 61-clickhouse-26.8 end done passed aqua:2487692:d3a1776b:2487666

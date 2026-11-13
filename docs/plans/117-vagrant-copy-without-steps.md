@@ -133,7 +133,9 @@ Code review, architecture, platform reliability; every finding fixed but the one
 
 ## Open
 
+- ~~The ledger ConfigMap `kube-system/upgrade-ledger` on ten~~: deleted 2026-11-13 18:2x with the operator's OK, its
+  events saved first in `docs/plans/100-upgrade-ledger.txt`.
+
 - process-groups' harness fails under all-core CPU load (11 of 24 runs, five timing cases; never at CI's 4 jobs in
   the suite runs so far) - from before this plan, its own investigation next.
 
-- The ledger ConfigMap `kube-system/upgrade-ledger` on ten: delete it (a production write) once the operator OKs.
