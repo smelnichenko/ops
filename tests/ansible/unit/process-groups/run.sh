@@ -278,9 +278,9 @@ sleep 0.8
 t0=$SECONDS
 if mine "$h"; then stop_groups 5 "$h" > "$W/inh.out"; fi
 wait "$h" 2> /dev/null; rc=$?
-check "one there at the TERM ignoring it (inherited), catching it later: TERMed once then - its handler run once, nothing killed" \
-  "$rc $((SECONDS - t0 < 3)) $(grep -c '^caught$' "$W/inh.ready.n" 2> /dev/null) $(grep -c killed "$W/inh.out")" \
-  "143 1 1 0"
+check "one there at the TERM ignoring it (inherited), catching it later: TERMed once then - its handler run once, nothing killed (the job ends of its TERM, or by itself once its child has)" \
+  "$(case $rc in 0 | 143) echo ended ;; *) echo "rc $rc" ;; esac) $((SECONDS - t0 < 3)) $(grep -c '^caught$' "$W/inh.ready.n" 2> /dev/null) $(grep -c killed "$W/inh.out")" \
+  "ended 1 1 0"
 # -n <name>: every process of that name in the job KILLed at once - one that appears during the grace (go-task run by
 # a command after the TERM: it swallows one and runs the step's next command) too, at the next look, not at the
 # grace's end - and what it started since the TERM TERMed once (its handler run, not KILLed)

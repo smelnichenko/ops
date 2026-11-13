@@ -1263,7 +1263,7 @@ tasks:
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-velero.yml
 
   deploy:backup:
-    desc: "PRODUCTION: a manual Velero backup from the daily schedule (schnappy-production, its resource policy) - in the running server pod (exec deploy/velero picked a node-agent pod); waited for, failing unless Completed"
+    desc: "PRODUCTION: a manual Velero backup from the daily schedule (schnappy-production, pods left out: manifests only) - in the running server pod (exec deploy/velero picked a node-agent pod); waited for, failing unless Completed"
     prompt: "Start a Velero backup on PRODUCTION?"
     cmds:
       # waited for, and judged: anything but Completed fails the task (its phase said)

@@ -1,13 +1,15 @@
 #!/bin/bash
-# tests/ansible/copy/backup-check.yml's three judgments, each task's shell and environment rendered by Ansible's
-# templar as the playbook holds them and run against a kubectl stub:
-#   - the schedule's resource policy read as Velero reads it - no policy skips nothing; production's (the ephemeral
-#     types, infra clusters/production/velero/values.yaml) read whole; a quote in the ConfigMap read, not run; refused:
-#     a ConfigMap of two keys, a version but v1, a condition but volumeTypes, an action but skip;
-#   - the volumes the backup must hold: each running pod's emptyDirs, minus its backup-volumes-excludes - all of them
-#     "skipped" when the policy skips emptyDir;
-#   - the verdict: every expected volume Completed (one of a pod gone since not counted), none not Completed, no skipped
-#     volume copied, something exercised;
+# tests/ansible/copy/backup-check.yml's judgments, each task as Ansible renders it from the playbook, the shells run
+# against a kubectl stub:
+#   - whether the schedule leaves pods out (excludedResources: pods - production's since 2026-11-13): read from its
+#     template, nothing assumed;
+#   - the backup started: the schedule's template, 1 h to live; narrowed to one workload only where it copies volumes
+#     (pods left out: the whole namespace, manifests only);
+#   - the volumes it must hold where pods are backed up: each running selected pod's emptyDirs, minus its
+#     backup-volumes-excludes; not asked where pods are left out;
+#   - the verdict: pods left out - no volume backup at all, something backed up; pods backed up - every expected volume
+#     Completed (one of a pod gone since not counted), none not Completed, at least one expected; either way an empty
+#     backup fails;
 # and the kopia epoch job only when a volume was copied.
 set -u
 cd "$(dirname "$0")/../../../.." || exit 1
@@ -34,11 +36,12 @@ pv = play["vars"]
 W = tempfile.mkdtemp()
 atexit.register(shutil.rmtree, W, True)
 os.makedirs(f"{W}/bin")
-# kubectl: `get pods` prints $PODS; `get podvolumebackups` $PVBS; `get pods -A ... uid` $UIDS
+# kubectl: `get pods` prints $PODS; `get podvolumebackups` $PVBS; `get pods -A ... uid` $UIDS; the backup's items $ITEMS
 with open(f"{W}/bin/kubectl", "w") as f:
     f.write("""#!/bin/bash
 case "$*" in
   *" get podvolumebackups.velero.io "*) cat "$PVBS" ;;
+  *" get backups.velero.io "*itemsBackedUp*) cat "$ITEMS" ;;
   *" get pods -A "*) cat "$UIDS" ;;
   *" get pods "*) cat "$PODS" ;;
   *) echo "kubectl stub: $*" >&2; exit 9 ;;
@@ -62,53 +65,31 @@ def run(name, files=None, **variables):
     return r.returncode, r.stdout.strip(), r.stderr.strip()
 
 
-# --- the policy ---------------------------------------------------------------------------------------------------
-POLICY = "The volume types the policy skips"
-PRODUCTION = """version: v1
-volumePolicies:
-  - conditions:
-      volumeTypes: [emptyDir, configMap, secret, projected, downwardAPI]
-    action:
-      type: skip
-"""
+def schedule(**template):
+    return {"stdout": json.dumps({"spec": {"template": {"includedNamespaces": ["schnappy-production"], **template}}})}
 
 
-def cm(data, **meta):
-    return {"stdout": json.dumps({"kind": "ConfigMap", "metadata": {"name": "p", **meta}, "data": data})}
+PODS_OUT = schedule(excludedResources=["pods"], defaultVolumesToFsBackup=False)
+PODS_IN = schedule(defaultVolumesToFsBackup=True)
 
+# --- what the schedule leaves out ---------------------------------------------------------------------------------
+fact = ts["Whether the schedule leaves pods out - then no volume is read at all"]["ansible.builtin.set_fact"]["_pods_out"]
+check("pods left out read from the schedule's template: pods excluded yes; none excluded, or others only, no",
+      [str(render(fact, _schedule=s)) for s in (PODS_OUT, PODS_IN, schedule(excludedResources=["events"]))],
+      ["True", "False", "False"])
 
-check("no resource policy (its read skipped): nothing skipped", run(POLICY, _policy_cm={"skipped": True})[:2], (0, "[]"))
-check("production's policy: the ephemeral types skipped", run(POLICY, _policy_cm=cm({"policy.yaml": PRODUCTION}))[:2],
-      (0, json.dumps(sorted(["emptyDir", "configMap", "secret", "projected", "downwardAPI"]))))
-# production's own: the ephemeral types, hostPath and local skipped, and an unbound PVC by its phase (read, not judged)
-WITH_PHASE = PRODUCTION.replace("emptyDir, configMap", "emptyDir, hostPath, local, configMap") + """  - conditions:
-      pvcPhase: [Pending, Lost]
-    action:
-      type: skip
-"""
-check("production's policy with its pvcPhase rule: the types skipped, the phase rule read",
-      run(POLICY, _policy_cm=cm({"policy.yaml": WITH_PHASE}))[:2],
-      (0, json.dumps(sorted(["emptyDir", "hostPath", "local", "configMap", "secret", "projected", "downwardAPI"]))))
-check("a quote in the ConfigMap (an annotation's): read, not run",
-      run(POLICY, _policy_cm=cm({"policy.yaml": PRODUCTION}, annotations={"note": "it's'; touch " + W + "/ran; '"}))[:2]
-      + (os.path.exists(f"{W}/ran"),),
-      (0, json.dumps(sorted(["emptyDir", "configMap", "secret", "projected", "downwardAPI"])), False))
-for what, data, says in (
-        ("two keys", {"a.yaml": PRODUCTION, "b.yaml": PRODUCTION}, "exactly one key"),
-        ("version v2", {"p.yaml": PRODUCTION.replace("v1", "v2")}, "not v1"),
-        ("a capacity condition", {"p.yaml": PRODUCTION.replace("volumeTypes: [emptyDir, configMap, secret, projected, downwardAPI]",
-                                                               "capacity: '0,1Gi'")}, "does not read"),
-        ("volumeTypes beside another condition", {"p.yaml": PRODUCTION.replace(
-            "      volumeTypes:", "      capacity: '0,1Gi'\n      volumeTypes:")}, "does not read"),
-        ("an fs-backup action", {"p.yaml": PRODUCTION.replace("type: skip", "type: fs-backup")}, "does not read"),
-        ("pvcPhase beside volumeTypes", {"p.yaml": PRODUCTION.replace(
-            "      volumeTypes:", "      pvcPhase: [Pending]\n      volumeTypes:")}, "does not read")):
-    rc, out, err = run(POLICY, _policy_cm=cm(data))
-    check(f"refused: {what}", (rc != 0, says in err, out), (True, True, ""))
+# --- the backup started -------------------------------------------------------------------------------------------
+start = ts["Start a backup from it"]["kubernetes.core.k8s"]["definition"]["spec"]
+sel = pv["backup_selector"]
+check("the backup: the schedule's template, 1 h to live; narrowed to one workload only where volumes are copied",
+      [render(start, _schedule=s, _pods_out=o, backup_selector=sel) for s, o in ((PODS_OUT, True), (PODS_IN, False))],
+      [{**json.loads(PODS_OUT["stdout"])["spec"]["template"], "ttl": "1h"},
+       {**json.loads(PODS_IN["stdout"])["spec"]["template"], "ttl": "1h", "labelSelector": {"matchLabels": sel}}])
 
-# --- the volumes the backup must hold -----------------------------------------------------------------------------
-VOLUMES = "The volumes the backup must hold, and those it must skip - the emptyDirs of the pods running now"
-SCHEDULE = {"stdout": json.dumps({"spec": {"template": {"includedNamespaces": ["schnappy-production"]}}})}
+# --- the volumes the backup must hold (pods backed up) ------------------------------------------------------------
+VOLUMES = "The volumes the backup must hold - the emptyDirs of the pods running now"
+check("the volumes not asked where pods are left out", [condition(ts[VOLUMES]["when"], _pods_out=o) for o in (True, False)],
+      [False, True])
 
 
 def pod(uid, name, volumes, excludes=None):
@@ -123,20 +104,14 @@ PODS = json.dumps({"items": [
                            {"name": "conf", "configMap": {"name": "c"}}, {"name": "pvc", "persistentVolumeClaim": {}}],
         excludes="tmp"),
     pod("u2", "valkey-1", [{"name": "data", "emptyDir": {}}])]})
-rc, out, err = run(VOLUMES, files={"PODS": PODS}, _schedule=SCHEDULE, _skipped_types={"stdout": "[]"})
-check("no emptyDir skipped: each running pod's emptyDirs expected, its excludes not, no other volume type",
+rc, out, err = run(VOLUMES, files={"PODS": PODS}, _schedule=PODS_IN)
+check("pods backed up: each running pod's emptyDirs expected, its excludes not, no other volume type",
       (rc, json.loads(out or "{}")), (0, {"expected": [
           {"uid": "u1", "pod": "schnappy-production/valkey-0", "volume": "data"},
-          {"uid": "u2", "pod": "schnappy-production/valkey-1", "volume": "data"}], "skipped": []}))
-rc, out, err = run(VOLUMES, files={"PODS": PODS}, _schedule=SCHEDULE,
-                   _skipped_types={"stdout": json.dumps(["configMap", "emptyDir"])})
-check("emptyDir skipped by the policy: the same volumes listed as skipped, none expected",
-      (rc, [v["volume"] for v in json.loads(out or "{}").get("expected", ["?"])],
-       [v["pod"] + ":" + v["volume"] for v in json.loads(out or "{}").get("skipped", [])]),
-      (0, [], ["schnappy-production/valkey-0:data", "schnappy-production/valkey-1:data"]))
+          {"uid": "u2", "pod": "schnappy-production/valkey-1", "volume": "data"}]}))
 
 # --- the verdict --------------------------------------------------------------------------------------------------
-VERDICT = "Every expected volume backed up and Completed, no skipped one copied, something exercised"
+VERDICT = "Every expected volume backed up and Completed - none at all where pods are left out - and something backed up"
 CREATED = {"result": {"metadata": {"name": "upgrade-check-1"}}}
 E1 = {"uid": "u1", "pod": "schnappy-production/valkey-0", "volume": "data"}
 E2 = {"uid": "u2", "pod": "schnappy-production/valkey-1", "volume": "data"}
@@ -147,31 +122,35 @@ def pvb(name, volume, phase):
             "status": {"phase": phase}}
 
 
-def verdict(expected, skipped, pvbs, alive="u1 u2"):
-    rc, out, err = run(VERDICT, files={"PVBS": json.dumps({"items": pvbs}), "UIDS": alive}, _created=CREATED,
-                       _expected_volumes={"stdout": json.dumps({"expected": expected, "skipped": skipped})})
+def verdict(pods_out, expected, pvbs, alive="u1 u2", items="120", skipped_task=False):
+    exp = {"skipped": True} if skipped_task else {"stdout": json.dumps({"expected": expected})}
+    rc, out, err = run(VERDICT, files={"PVBS": json.dumps({"items": pvbs}), "UIDS": alive, "ITEMS": items},
+                       _created=CREATED, _pods_out=pods_out, _expected_volumes=exp)
     return rc, out
 
 
 both = [pvb("valkey-0", "data", "Completed"), pvb("valkey-1", "data", "Completed")]
-check("every expected volume Completed: passed", verdict([E1, E2], [], both)[0], 0)
-rc, out = verdict([E1, E2], [], both[:1])
-check("one expected volume of a running pod not backed up: failed, named", (rc, "valkey-1:data" in out), (1, True))
-check("  its pod gone since: not counted", verdict([E1, E2], [], both[:1], alive="u1")[0], 0)
+check("pods left out (the volumes task skipped), no volume backup, items backed up: passed",
+      verdict(True, [], [], skipped_task=True)[0], 0)
+rc, out = verdict(True, [], [both[0]], skipped_task=True)
+check("  a volume backup though pods are left out: failed, named", (rc, "valkey-0:data" in out), (1, True))
+check("  nothing backed up (no item): failed", verdict(True, [], [], items="0", skipped_task=True)[0], 1)
+check("pods backed up, every expected volume Completed: passed", verdict(False, [E1, E2], both)[0], 0)
+rc, out = verdict(False, [E1, E2], both[:1])
+check("  one expected volume of a running pod not backed up: failed, named", (rc, "valkey-1:data" in out), (1, True))
+check("    its pod gone since: not counted", verdict(False, [E1, E2], both[:1], alive="u1")[0], 0)
 # not Completed, of a volume nothing expected (its pod gone since the list): failed on its own, not as a missing one
-rc, out = verdict([E1], [], [both[0], pvb("valkey-1", "data", "Failed")], alive="u1")
-check("a volume backup not Completed: failed, named", (rc, "data Failed" in out, "missing -" in out), (1, True, True))
-rc, out = verdict([], [E1, E2], [both[0]])
-check("a volume the policy skips copied all the same: failed, named", (rc, "copied though skipped" in out
-                                                                       and "valkey-0:data" in out), (1, True))
-check("every volume skipped, none copied: passed", verdict([], [E1, E2], [])[0], 0)
-check("nothing expected and nothing skipped (no emptyDir at all): failed - nothing exercised", verdict([], [], [])[0], 1)
+rc, out = verdict(False, [E1], [both[0], pvb("valkey-1", "data", "Failed")], alive="u1")
+check("  a volume backup not Completed: failed, named", (rc, "data Failed" in out, "missing -" in out), (1, True, True))
+check("  no emptyDir among the selected pods (nothing exercised): failed", verdict(False, [], [])[0], 1)
+check("  nothing backed up (no item): failed", verdict(False, [E1, E2], both, items="0")[0], 1)
 
 # --- the kopia epoch job: only when a volume was copied -----------------------------------------------------------
 EPOCH = ts["The test repository closes its index epochs hourly"]
-check("the epoch job runs when a volume is expected, not when every one is skipped",
-      [condition(EPOCH["when"], _expected_volumes={"stdout": json.dumps(v)})
-       for v in ({"expected": [E1], "skipped": []}, {"expected": [], "skipped": [E1]})], [True, False])
+check("the epoch job runs when a volume is expected - not when none is, nor where pods are left out (its task skipped)",
+      [condition(EPOCH["when"], _expected_volumes=v) for v in
+       ({"stdout": json.dumps({"expected": [E1]})}, {"stdout": json.dumps({"expected": []})}, {"skipped": True})],
+      [True, False, False])
 print("backup-check: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 PY_BACKUP_CHECK

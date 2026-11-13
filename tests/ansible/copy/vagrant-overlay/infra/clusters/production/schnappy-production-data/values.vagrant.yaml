@@ -4,7 +4,9 @@
 # to ~18 GiB in all (2026-11-13: production's growth left Scylla and OpenSearch Pending, the init-users hook unreached).
 postgres:
   resources:
-    requests: { memory: 384Mi }      # ten: 1Gi (per instance, 2 instances)
+    # not below shared_buffers (production's 512MB): CNPG's webhook refuses the Cluster, the data app's sync fails
+    # before its init-users hook and every app's login with it (2026-11-13, 384Mi)
+    requests: { memory: 512Mi }      # ten: 1Gi (per instance, 2 instances)
 kafka:
   resources:
     requests: { memory: 512Mi }      # ten: 1536Mi

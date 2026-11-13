@@ -74,9 +74,9 @@ harnesses.
 - **`argo-settled.yml` / `files/argo-settled.py`:** no `--step`/`restart_step`; `expect_apps` records the copy's apps
   after the build and a change may add or remove apps — its own (named in the output) are allowed.
 - **`restore-check.yml`:** the fresh-backup path only (no `restore_backup=wave0`, no `restore_server` undo).
-- **`backup-check.yml`:** the volumes it expects are the emptyDirs the schedule's resource policy does not skip; a
-  backup that copies none (every emptyDir skipped) passes when the policy says so; the kopia epoch job runs only when
-  a volume was copied.
+- **`backup-check.yml`:** reads what the schedule leaves out: pods left out (production's since 2026-11-13) - no
+  volume backup at all, the whole namespace's manifests backed up; pods backed up - every selected emptyDir Completed.
+  An empty backup fails either way; the kopia epoch job runs only when a volume was copied.
 - **`upgrade-step-checks.sh` → `copy-checks.sh`:** no step arguments.
 - **`vagrant-gitops-mirror.py`, `vagrant-preload-*.sh`, `vagrant-smoke.sh`:** wording; floating digests no longer
   written for a proof.
@@ -97,11 +97,11 @@ harnesses.
 1. `test:copy:inventory` and production's inventory captured (read-only).
 2. The tasks, the checks' rewiring, the deletions, the harnesses; `bash tests/ansible/unit/run.sh` green, ansible-lint
    green.
-3. `backup-check.yml` reads the schedule's resource policy (the first change it must prove).
+3. `backup-check.yml` reads what the schedule leaves out (the first change it must prove).
 4. Full review (architecture, test-quality).
 5. **Vagrant, at the end:** `test:copy:build` (from `main`) → `test:copy:check` green → `test:copy:change
-   INFRA_REF=fix/velero-skip-ephemeral PLATFORM_REF=fix/velero-runbooks` green (backup-check sees every emptyDir
-   skipped and the backup Completed; restore-check still restores a volume) → `vagrant:destroy`.
+   INFRA_REF=fix/velero-skip-ephemeral PLATFORM_REF=fix/velero-runbooks` green (backup-check: pods left out, no volume
+   backup, the backup Completed with its items; restore-check still restores a volume) → `vagrant:destroy`.
 6. Push ops; then the Velero change to infra/platform `main`, one on-demand backup on production must end Completed.
 
 ## Full review (2026-11-13) - what changed
@@ -162,9 +162,12 @@ Correctness, security, architecture, platform reliability, test-quality (~120 re
 
 - process-groups' harness under all-core CPU load: one of its five failing cases is fixed (above); the other four
   (-n task scans, a session's check) to measure again under load once the Vagrant run is done.
-- **Velero mechanism (operator's decision)**: the resource policy (as approved) or `defaultVolumesToFsBackup: false` on
-  both schedules - Velero then reads only the opted-in data volumes (all hostPath: skipped as ever), no policy, no PV
-  lookup per PVC (with a policy a PVC whose PV vanished mid-backup fails it: Woodpecker's CI PVCs in the weekly).
+- ~~Velero mechanism~~: decided 2026-11-13 (operator, "ok, go"): pods left out of both schedules
+  (`excludedResources: [pods]`, `defaultVolumesToFsBackup: false`) instead of the resource policy - the volume backup
+  runs only for a pod item, so none runs: no policy ConfigMap, no PV looked up per PVC (with a policy a PVC whose PV
+  vanished mid-backup failed it); the weekly leaves `woodpecker` and `schnappy-pr-*` out too. Velero first on the copy
+  (test:copy:change), production after. The charts' `backup.velero.io/backup-volumes` annotations (inert since) and
+  Velero's node agent can go later in a window (removing the annotations restarts the data stores).
 - **One-way changes to Kafka, ClickHouse, Grafana**: Wave 0 was their only pre-change backup; Velero holds no volume
   data. A one-way change to one of them needs its backup named in its own plan first.
 

@@ -1,16 +1,17 @@
 ---
 # Velero still backs up: one backup made from production's own daily schedule (namespace schnappy-production, its
-# template - the schedule's resource policy included), into the Vagrant backup store, must end Completed with no errors,
-# and its pod volume backups must be exactly what the schedule decides: a Completed one for every emptyDir of the pods
-# running whose type the policy does not skip, none for one it skips. The backup is deleted afterwards (its data too).
-# Its volumes are the pods' emptyDirs only, as in production: the data volumes are local-path hostPath PVs, which
-# Velero's file-system backup skips - Postgres, Kafka and ScyllaDB are proven by data-check.yml instead. A policy this
-# check does not read (a condition but volumeTypes or pvcPhase alone, an action but skip) is refused, never guessed; a
-# run that exercised nothing - no emptyDir copied and none skipped - fails.
+# template as it stands), into the Vagrant backup store, must end Completed with no errors and something backed up, and
+# its pod volume backups must be exactly what the schedule decides:
+#   - pods left out (excludedResources: pods - production since 2026-11-13): none at all, the whole namespace's
+#     manifests backed up - Velero reads no volume (a pod replaced while the daily run read its emptyDirs failed it -
+#     VeleroDailyBackupMissing);
+#   - pods backed up: a Completed one for every emptyDir of the selected pods running (Valkey's - the data volumes are
+#     local-path hostPath PVs, which Velero's file-system backup skips), a pod gone by the end not counted.
+# The backup is deleted afterwards (its data too). Postgres, Kafka and ScyllaDB are proven by data-check.yml; the
+# file-system path (node-agent, kopia, the Pi store) by restore-check.yml's own backup.
 #
 # Why: a Velero or plugin change can leave every pod green while backups fail - the plugin and the server are paired
-# versions - and nothing else on the copy writes to the backup store. Since 2026-11-13 production skips the ephemeral
-# types (a pod replaced while the daily run read its emptyDirs failed it - VeleroDailyBackupMissing).
+# versions - and nothing else on the copy writes to the backup store.
 #
 # Usage: ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/backup-check.yml
 - name: A Velero backup from production's daily schedule completes
@@ -20,9 +21,8 @@
   vars:
     kubeconfig: /etc/kubernetes/admin.conf
     schedule: velero-schnappy-daily
-    # one workload's pods, not the schedule's 79 volumes (8-13 min, one at a time). Under production's policy (emptyDir
-    # skipped) none is copied: this proves the schedule's backup completes and honours its policy; the file-system path
-    # (node-agent, kopia, the Pi store) is restore-check.yml's - its own backup, no policy, restored
+    # where the schedule copies volumes: one workload's pods, not its 79 volumes (8-13 min, one at a time); where it
+    # leaves pods out, nothing is copied - the whole namespace backed up (manifests, a minute)
     backup_selector: { app.kubernetes.io/component: valkey }
     # every resource fully qualified: `backup` alone is CNPG's Backup (postgresql.cnpg.io) - the first run of this
     # check polled CNPG for Velero's backup for 10 minutes (2026-10-03)
@@ -49,51 +49,13 @@
       register: _schedule
       changed_when: false
 
-    - name: The schedule's resource policy (its ConfigMap), when it names one
-      ansible.builtin.command: "{{ kubectl }} get configmap {{ _policy_ref.name }} -o json"
-      register: _policy_cm
-      changed_when: false
-      vars:
-        _policy_ref: "{{ (_schedule.stdout | from_json).spec.template.resourcePolicy }}"
-      when: (_schedule.stdout | from_json).spec.template.resourcePolicy is defined
+    - name: Whether the schedule leaves pods out - then no volume is read at all
+      ansible.builtin.set_fact:
+        _pods_out: "{{ 'pods' in ((_schedule.stdout | from_json).spec.template.excludedResources | default([])) }}"
 
-    # the volume types the policy skips - read as Velero reads it (one data key, version v1, volumePolicies); refused
-    # for anything this check cannot judge
-    - name: The volume types the policy skips
-      ansible.builtin.shell:
-        executable: /bin/bash
-        cmd: |
-          set -euo pipefail
-          python3 -c '
-          import json, os, sys
-          import yaml
-          cm = json.loads(os.environ["POLICY_CM"] or "null")
-          if cm is None:
-              print("[]"); sys.exit(0)
-          data = cm.get("data") or {}
-          if len(data) != 1:
-              sys.exit("the policy ConfigMap must hold exactly one key (Velero refuses it otherwise)")
-          pol = yaml.safe_load(next(iter(data.values())))
-          if pol.get("version") != "v1":
-              sys.exit("policy version %r: not v1" % pol.get("version"))
-          skipped = []
-          for vp in pol.get("volumePolicies") or []:
-              cond, action = vp.get("conditions") or {}, (vp.get("action") or {}).get("type")
-              # a skip by volume type, or of an unbound PVC by its phase (no emptyDir is a PVC: nothing to judge here)
-              if action != "skip" or set(cond) not in ({"volumeTypes"}, {"pvcPhase"}):
-                  sys.exit("a volume policy this check does not read: %s -> %s" % (json.dumps(cond), action))
-              skipped += cond.get("volumeTypes", [])
-          print(json.dumps(sorted(set(skipped))))
-          '
-      # the ConfigMap's JSON through the environment, never inside the script's quotes: a quote in it ended them
-      environment:
-        POLICY_CM: "{{ _policy_cm.stdout | default('') }}"
-      register: _skipped_types
-      changed_when: false
-
-    # every emptyDir of the pods running now that the policy does not skip must get a volume backup - "Completed" with
-    # fewer volume backups than that passed; a pod gone by the end is not counted. Those it skips are listed apart
-    - name: The volumes the backup must hold, and those it must skip - the emptyDirs of the pods running now
+    # pods backed up: every emptyDir of the selected pods running now must get a volume backup - "Completed" with fewer
+    # volume backups than that passed; a pod gone by the end is not counted
+    - name: The volumes the backup must hold - the emptyDirs of the pods running now
       ansible.builtin.shell:
         executable: /bin/bash
         cmd: |
@@ -103,8 +65,7 @@
               -l '{{ backup_selector.items() | map('join', '=') | join(',') }}'
           done | python3 -c '
           import json, sys
-          skip = "emptyDir" in json.loads(sys.argv[1])
-          dec = json.JSONDecoder(); text = sys.stdin.read().strip(); i = 0; out = {"expected": [], "skipped": []}
+          dec = json.JSONDecoder(); text = sys.stdin.read().strip(); i = 0; out = {"expected": []}
           while i < len(text):
               doc, i = dec.raw_decode(text, i)
               while i < len(text) and text[i].isspace():
@@ -112,12 +73,13 @@
               for p in doc["items"]:
                   m = p["metadata"]
                   excluded = set(filter(None, m.get("annotations", {}).get("backup.velero.io/backup-volumes-excludes", "").split(",")))
-                  out["skipped" if skip else "expected"] += [
+                  out["expected"] += [
                       {"uid": m["uid"], "pod": m["namespace"] + "/" + m["name"], "volume": v["name"]}
                       for v in p["spec"].get("volumes", []) if "emptyDir" in v and v["name"] not in excluded]
-          print(json.dumps(out))' '{{ _skipped_types.stdout }}'
+          print(json.dumps(out))'
       register: _expected_volumes
       changed_when: false
+      when: not _pods_out | bool
 
     - name: Start a backup from it
       kubernetes.core.k8s:
@@ -129,7 +91,8 @@
             name: "{{ backup }}"
             namespace: velero
             labels: { upgrade-test: backup-check }
-          spec: "{{ (_schedule.stdout | from_json).spec.template | combine({'ttl': '1h', 'labelSelector': {'matchLabels': backup_selector}}) }}"
+          spec: "{{ (_schedule.stdout | from_json).spec.template | combine({'ttl': '1h'})
+                   | combine({} if _pods_out | bool else {'labelSelector': {'matchLabels': backup_selector}}) }}"
       vars:
         backup: "upgrade-check-{{ lookup('pipe', 'date +%s') }}"
       register: _created
@@ -149,7 +112,7 @@
       until: _phase.stdout.split('/')[0] in ['Completed', 'PartiallyFailed', 'Failed', 'FailedValidation']
       failed_when: _phase.stdout.split('/')[0] != 'Completed' or _phase.stdout.split('/')[1] not in ['', '0']
 
-    - name: Every expected volume backed up and Completed, no skipped one copied, something exercised
+    - name: Every expected volume backed up and Completed - none at all where pods are left out - and something backed up
       ansible.builtin.shell:
         executable: /bin/bash
         cmd: |
@@ -157,12 +120,14 @@
           # files, not environment variables: 79 volume backups' JSON is over the kernel's limit for one variable
           d=$(mktemp -d); trap 'rm -rf "$d"' EXIT
           {{ kubectl }} get podvolumebackups.velero.io -l velero.io/backup-name={{ _created.result.metadata.name }} -o json > "$d/pvbs"
+          {{ kubectl }} get backups.velero.io {{ _created.result.metadata.name }} -o jsonpath='{.status.progress.itemsBackedUp}' > "$d/items"
           kubectl --kubeconfig {{ kubeconfig }} get pods -A -o jsonpath='{.items[*].metadata.uid}' > "$d/uids"
           python3 - "$d" <<'PY'
           import json, os, sys
           d = sys.argv[1]
-          vols = json.loads(os.environ["EXPECTED"])
-          expected, skipped = vols["expected"], vols["skipped"]
+          expected = json.loads(os.environ["EXPECTED"]).get("expected", [])
+          pods_out = os.environ["PODS_OUT"] == "True"
+          items = int(open(d + "/items").read().strip() or 0)
           alive = set(open(d + "/uids").read().split())
           pvbs = json.load(open(d + "/pvbs"))["items"]
           done = {(b["spec"]["pod"]["namespace"] + "/" + b["spec"]["pod"]["name"], b["spec"]["volume"])
@@ -170,15 +135,17 @@
           bad = [b["spec"]["volume"] + " " + b.get("status", {}).get("phase", "?") for b in pvbs
                  if b.get("status", {}).get("phase") != "Completed"]
           missing = [e["pod"] + ":" + e["volume"] for e in expected if e["uid"] in alive and (e["pod"], e["volume"]) not in done]
-          copied = {(b["spec"]["pod"]["namespace"] + "/" + b["spec"]["pod"]["name"], b["spec"]["volume"]) for b in pvbs}
-          leaked = [e["pod"] + ":" + e["volume"] for e in skipped if (e["pod"], e["volume"]) in copied]
-          print("%d volume backups, %d expected, %d skipped by the policy, missing %s, not completed %s, copied though "
-                "skipped %s" % (len(pvbs), len(expected), len(skipped), missing or "-", bad or "-", leaked or "-"))
-          # nothing exercised (no emptyDir at all on the selected pods) proves nothing either way
-          sys.exit(1 if missing or bad or leaked or not (expected or skipped) else 0)
+          # pods left out: any volume backup at all is one the schedule did not ask for
+          read = [b["spec"]["pod"]["namespace"] + "/" + b["spec"]["pod"]["name"] + ":" + b["spec"]["volume"] for b in pvbs] if pods_out else []
+          print("%d items backed up, pods %s, %d volume backups, %d expected, missing %s, not completed %s, read though "
+                "pods are left out %s" % (items, "left out" if pods_out else "backed up", len(pvbs), len(expected),
+                                          missing or "-", bad or "-", read or "-"))
+          # nothing backed up (no item), or pods backed up and no emptyDir among them, proves nothing either way
+          sys.exit(1 if missing or bad or read or items == 0 or not (pods_out or expected) else 0)
           PY
       environment:
-        EXPECTED: "{{ _expected_volumes.stdout }}"
+        EXPECTED: "{{ _expected_volumes.stdout | default('{}') }}"
+        PODS_OUT: "{{ _pods_out }}"
       register: _pvb
       changed_when: false
 
@@ -187,9 +154,9 @@
     # runs the repository reached 4237 index blobs and each backup took ~25 s longer than the one before (2026-10-03).
     # An hourly epoch (kopia's floor with its 20-minute refresh) lets Velero's hourly quick maintenance compact it. Set
     # once, after the backup that created the repository, with the kopia release Velero 1.18 builds on - only when this
-    # backup copied a volume: with every emptyDir skipped no repository of this namespace need exist.
+    # backup copied a volume: with pods left out no repository of this namespace need exist.
     - name: The test repository closes its index epochs hourly
-      when: (_expected_volumes.stdout | from_json).expected | length > 0
+      when: ((_expected_volumes.stdout | default('{}') | from_json).expected | default([])) | length > 0
       ansible.builtin.shell:
         executable: /bin/bash
         cmd: |
