@@ -85,8 +85,9 @@ simpler: no rungs, no turns; a holder renews while its reader gets samples (live
 
 - **Go.**
 - **SAT-REC switched on records continuously** on its band, like any other row.
-- **An unpinned former rotator listens to the first station**, as today: DDK2 (RTTY), DWD 7.88 MHz (WFAX), the first
-  HFDL cluster, TLL (VOR). The existing pin changes it.
+- **An unpinned former rotator listens to the first station**, as today: DDK2 (RTTY), DWD 3.855 MHz (WFAX - the
+  first in its list; "7.88 MHz" here was a mistake in the draft, corrected 2026-11-13), the first HFDL cluster
+  (8.9 MHz), TLL (VOR). The existing pin changes it.
 
 ## Done and learned
 
@@ -96,6 +97,18 @@ simpler: no rungs, no turns; a holder renews while its reader gets samples (live
   releases its claim (the registry kept every displaced session); UVB-76 times anchored to the air (a held capture
   drifted by every dropped sample); LORAN's rate over the last minute; a monotonic decision clock. The window keys of
   these rows went from the live config (backup radar scratchpad/m5/livecfg/).
-- **Owed to step 4:** the arbiter tells rows when a radio is freed or a capture displaced (now seen on the 10 s poll).
-- **Interim until step 2:** a rotating row (VOR, RTTY, WFAX, HFDL) that yields to a waiting row loses the radio to it.
+- **Owed to step 4:**
+  - the arbiter tells rows when a radio is freed or a capture displaced (now seen on the 10 s poll);
+  - the hold switch's dead machinery: ReceiverControl `holds`/`holdOn`/`HOLD` and the snapshot's `holds`/`hold`,
+    the controller's `hold` write, `ReceiverSettingStore` carrying it, the frontend switch and its test (a render for
+    the operator first), stored `hold` rows;
+  - `ReceiverControl.rotates`/`noRotation` and the "rotate all" label: no row rotates any more (outlets imply one
+    station since PR 2).
+- **PR 2 (radar, 2026-11-13).** VOR, RTTY, WFAX and HFDL on RowRunner, each on ONE station: the picked, else the first
+  (`OneStation`). RTTY's hold went (`midBulletin`), the window scheduler was deleted, VOR measures 55 s and WFAX 670 s
+  of air. Review found: a booking landing while a capture was built did not move it (the dial now names the station
+  being built); a booking's end left an unpicked row on the booking's outlet (it returns to its first); "rotate all"
+  had been the only way to clear a pick (the picker offers "none - the first" now).
+- **Open for the operator (PR 2):** VOR's cross-radial position fix needs radials from two stations within 6 h; on
+  one station it goes empty unless stations are picked by hand in turn. Keep it, or remove the fix and its card block?
 
