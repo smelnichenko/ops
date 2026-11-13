@@ -66,13 +66,16 @@ district, street, postal code - and by range from a point or an address. One add
   WGS84 in masi with a pinned transform) for settlements, municipalities and counties; GISCO's for NUTS.
 
 ### Official addresses (Estonia's house level)
-- `official_address(id, country, source, ref, place_id, street, house, postcode, full_text, lat, lon, source_date,
-  retired_on)` (as built in A3: `source` a key of `source(key)`, `ref` the register's id - Estonia's ADR_ID - `place_id`
-  the deepest place, `retired_on` as `place`'s), unique `(source, country, ref)` (led by the source: its foreign key's index); 1.37 million Estonian rows, read
-  monthly from `sihtnumbrid.zip` (148 MB of CSV), diff-only by `ref`, never deleted (an address gone from the file is
-  retired). Its components resolve to places by the join `places-feeds.md` section 3 describes (component 2 =
-  municipality, component 3 = settlement when EHAK has it there).
-- Settlements' postal codes come from it too (replacing GeoNames' for Estonia, which stays for former names).
+- `official_address(id, country, source, ref, street, house, postcode, full_text, lat, lon, source_date, retired_on)`
+  (as built in A3: `source` a key of `source(key)`, `ref` the register's id - Estonia's ADR_ID - `retired_on` as
+  `place`'s), unique `(source, country, ref)` (led by the source: its foreign key's index); 1.37 million Estonian rows,
+  read monthly from `sihtnumbrid.zip` (148 MB of CSV), diff-only by `ref`, never deleted (an address gone from the file
+  is retired). **No place is stored with it** (changeset 131, the operator 2026-11-13: "there should be no execution
+  order dependency"): the place an address lies in is found when it is read (`AddressResolver.Resolver.placeOfAddress`),
+  among the places current then, by the join `places-feeds.md` section 3 describes (component 2 = municipality,
+  component 3 = settlement when EHAK has it there). `addresses:ee` and `places:ee` run in either order.
+- Settlements' postal codes come from the same file, read by `places:ee` itself (`addressesUrl`, by the same join) -
+  independent of `addresses:ee`. GeoNames stays for Estonia's former names.
 
 ### Addresses and connections
 - `address(id, country, raw, source, place_id, official_address_id, street, house, postcode, lat, lon, precision,
@@ -134,6 +137,16 @@ resolution keeps method, score and resolver version, so a new version re-resolve
 
 ## Phases (one PR each, in order; failing test first in each)
 
+**Status 2026-11-13 06:30 UTC:**
+- **Live:** A2b `3b0ece2`, A3 `de9ba45`, A3b `8b7f892`, A4a `03923e4`, A4b `3a20548` (masi #242-#246). Production container
+  limit 6.5 GiB with the 3 GiB heap (5 GiB was killed by the kernel in the boot's picture pass, infra 04e3b8ff).
+- **`places:ee` run once more 2026-11-13 05:30 UTC** (run 17300, 37 s): 2,747 places took the Board's postal codes.
+  `addresses:ee` still off (the operator switches it on); `places:eu` on hold.
+- **No order between `addresses:ee` and `places:ee`** (the operator, 2026-11-13): masi #247 - changeset 131 drops
+  `official_address.place_id`; an address's place is found when it is read; gauge `masi_official_addresses_unplaced`
+  and alert `MasiAddressesUnplaced` (platform e6acffe).
+- **Next:** A5.
+
 **Status 2026-11-12 (evening, UTC):**
 - **A1 live:** masi #237 + #238, `c9da8e0` / `6fd7c90`. Estonia is one hierarchy, every path set.
 - **A2 live:** masi #239, `8a71b78`.
@@ -176,11 +189,17 @@ resolution keeps method, score and resolver version, so a new version re-resolve
   alerted (`MasiPlacesNotLinked`); masi still starts. So switch `places:eu` on only once rolling back below 27bdc3f is off the table.
 - **Later:**
   - A6: a place's change (a re-parent rewrites every place's flattened ancestors below it) must reach the indexes, by the
-    outbox or a rebuild.
+    outbox or a rebuild. The gazetteer's official-address documents carry ancestor place ids computed at index time
+    (nothing stored to diff against since 131): rebuild the gazetteer behind its alias whenever the address stamp
+    changes (monthly), or - if A6 wants diff-only reindexing - a derived placement column re-derived on every stamp
+    change, never at address load.
+  - Rollback limit (131): an image older than masi PR 247 fails every `addresses:ee` run ("column place_id does not
+    exist") until 131's rollback is applied; the source is off and nothing live reads official addresses, so it is
+    the source's runs only.
   - A8: where the site draws these boundaries, "© EuroGeographics for the administrative boundaries" in the map legend
     (GISCO's condition).
   - The guards plan: a NUTS code missing from one read is retired at once; retire it only after two misses, as there.
-| A3 | `official_address` from `sihtnumbrid.zip` (streamed, diff-only), its places joined; Estonia's postal codes from it | none |
+| A3 | `official_address` from `sihtnumbrid.zip` (streamed, diff-only), its places found when read (since 131); Estonia's postal codes from the same file (read by `places:ee`) | none |
 
 **A3 as built (2026-11-12, masi 119a0d8, after PR 242):**
 - **The file, measured whole** (masi `docs/places-feeds.md` §3): 1,369,879 addresses on 2026-11-05, every ADR_ID once,
@@ -190,12 +209,14 @@ resolution keeps method, score and resolver version, so a new version re-resolve
   1800 s. The zip is downloaded whole, then read a line at a time; each line is decoded strictly as UTF-8 and checked
   (6 fields, numeric ADR_ID, 5-digit postcode, a point inside Estonia in L-EST97): a file of another shape fails at its line.
 - **`official_address`:** `ref` (ADR_ID, varchar for other countries' ids), `place_id` (the deepest place: settlement or
-  district, else municipality - one column, its `path` gives the levels), `street`/`house` (an address without a number
+  district, else municipality - one column, its `path` gives the levels; **dropped by changeset 131**: found when read),
+  `street`/`house` (an address without a number
   has its name as the house), `postcode`, `full_text`, point (1e-6°), `source_date`, `retired_on` (not a `valid` flag:
   as `place`). The places' stamp and keep triggers. `address.official_address_id` added for A4.
 - **The join:** component 2 the municipality, component 3 the settlement or district when EHAK has one of that name
-  there, else the municipality; a name two current places share answers at the level above. On the real file every
-  address is placed (1,257,804 in a settlement or district).
+  there, else the municipality; a name two current places share answers at the level above. Measured on the real file
+  against the same month's places: every address has a place (1,257,804 in a settlement or district). Since 131 the
+  resolver applies it when an address is read.
 - **Writes:** batches of 1,000, each one transaction under the source's advisory lock, only what differs written. An
   address a complete read no longer holds is retired; a failed read retires nothing. No thresholds (the operator,
   2026-11-12): the deferred upkeep plan's missing-twice and retirement brake cover addresses too.
@@ -221,10 +242,11 @@ resolution keeps method, score and resolver version, so a new version re-resolve
   grid of the region - UTM 34N - passes the box line by line; written as it came, batches 170 km off would have
   stayed); an empty file is refused (an empty read never counts against an address); retiring goes a page at a time,
   stopped by the run's deadline; `source` references `source(key)`; the source runs on the **13th at 07:30**, after
-  the month's places (`places:ee` on the 12th, `places:eu` on the 13th at 06:40), so addresses are placed among the
-  same month's settlements. Gauges `masi_official_addresses{state}` and `..._checked_timestamp_seconds`; alerts
-  `MasiAddressesNotChecked` (35 days, once read) and `MasiAddressesDropped` (a twentieth fewer in a day) - platform
-  0f98c6b, visibility only.
+  the Board's refresh on the 5th (written as "after the month's places": no order remains since 131). Gauges
+  `masi_official_addresses{state}`, `..._checked_timestamp_seconds` and (since 131) `..._unplaced` (current addresses
+  naming no place held now, counted again when the stamp changes); alerts `MasiAddressesNotChecked` (35 days, once
+  read), `MasiAddressesDropped` (a twentieth fewer in a day) - platform 0f98c6b - and `MasiAddressesUnplaced` (some
+  for two days, platform e6acffe), visibility only.
 - **"A renumbered settlement" (a test named above):** moot for this file - the join is by name (`ONIMI`, `ANIMI`), never
   by EHAK code, so a renumbering changes nothing here; it matters to extract no. 9 (codes) if that is ever read.
 - **For the next plan's countries:** the run holds the refs it read in memory (Estonia: ~125 MB for 1.37 M). Austria's
@@ -319,9 +341,13 @@ resolution keeps method, score and resolver version, so a new version re-resolve
     `resolved_country` (the resolver's country when no country row is held, a foreign one); `address.country` stays the
     source's hint and part of the text's key, never the answer. `address.street/house` already widened to the official
     widths (changeset 130).
-  - A5 re-resolves after each monthly `addresses:ee` / `places:ee` run - the rows below house level and the rows on a
-    retired place - not only on a version bump. Resolve outside the write transactions; one resolver snapshot per pod,
-    refreshed on a place stamp, for ingest.
+  - A5 re-resolves on the **address stamp** - `AddressResolver.VERSION`, the country's places' last change and its
+    official addresses' last change (as `OfficialAddressMetrics` keys its unplaced count; extract it into one component
+    for A5 and A6) - **every stored row**, writing only what differs and putting the changed entities in the outbox.
+    Not only the rows below house level or on a retired place: since 131 a HOUSE resolution's `place_id` comes from the
+    join when it was resolved, so a village added after it would otherwise stay its municipality - the order dependency
+    again, one level up (13,906 distinct texts resolved in 2.2 s: a full pass is cheap). Resolve outside the write
+    transactions; one resolver snapshot per pod, refreshed on the stamp, for ingest.
   - The ADS id: the register's open data in masi's fixtures carries only the normalised full text - confirm the id is
     in the dump before A5 relies on step 1 (CODE). The resolver's `resolve` gains the code and the source's country hint.
   - A4b: the county-last form masi itself writes when the register gives no normalised text ("Uusküla, Narva linn,
@@ -344,8 +370,9 @@ place upkeep guards and self-healing (a later plan).
 ## Tests named now
 
 - the hierarchy: every Estonian place's path ends at EE; "anywhere in Harju" finds a Rae vald village's job;
-- official addresses: the Land Board's sample rows joined to their EHAK settlement; a renumbered settlement; a row whose
-  third component is no settlement ("raudteeharu") goes to the municipality;
+- official addresses: the Land Board's sample rows placed in their EHAK settlement when read, in either order of the
+  two sources (`AddressesPlacesOrderTest`); a renumbered settlement; a row whose third component is no settlement
+  ("raudteeharu") goes to the municipality;
 - the resolver: the register's address to its official address by ADS id; "Tallinn, Harjumaa" and "Tallinn, Estonia" one
   place; "Amsterdam, Netherlands; Remote - Europe" one address plus reach; a namesake village tie unresolved;
 - range: a house within 5 km found, one at 6 km not; a "Tallinn" job in range of a point 3 km outside the city's
