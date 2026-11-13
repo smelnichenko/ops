@@ -3,7 +3,7 @@
 # left-out components by name (` *`: any version - production upgrades them without the copy noticing); `? ` a line
 # production too has only for a while.
 #
-# left out of the Vagrant copy (operator 2026-10-02: the VM has 20 GB; or production-only by nature)
+# left out of the Vagrant copy (operator 2026-10-02: the VM had 20 GB - 18 since 2026-11-13; or production-only by nature)
 argo-chart kagent *
 argo-chart kagent-crds *
 crd-name agentharnesses.kagent.dev

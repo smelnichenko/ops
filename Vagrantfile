@@ -7,8 +7,8 @@
 #   pi2      192.168.56.21  — Pi services mirror (full HA stack)
 #   kubeadm  192.168.56.10  — kubeadm cluster node
 #
-# Host requirements (Intel Core Ultra 125H, 32GB RAM):
-#   pi1: 2 CPUs, 4GB — pi2: 2 CPUs, 4GB — kubeadm: 8 CPUs, 18GB
+# Host requirements (Intel Core Ultra 125H, 32GB RAM - the radar station runs on it too):
+#   pi1: 2 CPUs, 2GB — pi2: 2 CPUs, 2GB — kubeadm: 14 CPUs, 18GB; started only with that much available and 3 GB more
 #
 # VIP: 192.168.56.50 (Keepalived, floats between pi1/pi2)
 #
@@ -21,6 +21,17 @@
 #   vagrant destroy -f            # Destroy all
 
 VAGRANTFILE_API_VERSION = "2"
+
+# The workstation these VMs run on runs the radar station too, which they starved once (the host swapped, the radar
+# died - 2026-11-13). Every vagrant command's arguments go to the host guard: up, reload and resume start only with the
+# host's memory for the VMs they start and a reserve, and a watcher powers the biggest VM off if the host runs short
+# while they run (scripts/copy-host-guard.sh). Once per vagrant process - Vagrant may load this file more than once;
+# a guard that cannot run refuses the command too.
+unless $copy_host_guard_ran
+  $copy_host_guard_ran = true
+  guard = File.join(__dir__, "scripts", "copy-host-guard.sh")
+  system(guard, "vagrant", *ARGV) or abort("vagrant #{ARGV.join(" ")}: refused by #{guard}")
+end
 
 # Shared base provisioning for all VMs
 BASE_SCRIPT = <<-'BASESCRIPT'
@@ -151,8 +162,10 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
     pi1.vm.network "private_network", ip: "192.168.56.20"
     pi1.vm.provider "libvirt" do |v|
       # the Pi stack uses ~1.3 GB (measured 2026-10-06); 4 GB left qemu holding idle guest memory the host swapped -
-      # three VMs at 28 GB on the 30 GB workstation kept it in swap through every step
-      v.memory = 2560
+      # three VMs at 28 GB on the 30 GB workstation kept it in swap through every step. 2 GB since 2026-11-13: the
+      # workstation runs the radar station too, which the copy's 25 GB starved (it died 22:17) - the three VMs 22 GB,
+      # started only with the host's room for them and a reserve, watched while they run (scripts/copy-host-guard.sh)
+      v.memory = 2048
       v.cpus = 2
     end
     pi1.vm.provision "shell", inline: OS_UPGRADE_SCRIPT, reboot: true
@@ -166,8 +179,10 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
     pi2.vm.network "private_network", ip: "192.168.56.21"
     pi2.vm.provider "libvirt" do |v|
       # the Pi stack uses ~1.3 GB (measured 2026-10-06); 4 GB left qemu holding idle guest memory the host swapped -
-      # three VMs at 28 GB on the 30 GB workstation kept it in swap through every step
-      v.memory = 2560
+      # three VMs at 28 GB on the 30 GB workstation kept it in swap through every step. 2 GB since 2026-11-13: the
+      # workstation runs the radar station too, which the copy's 25 GB starved (it died 22:17) - the three VMs 22 GB,
+      # started only with the host's room for them and a reserve, watched while they run (scripts/copy-host-guard.sh)
+      v.memory = 2048
       v.cpus = 2
     end
     pi2.vm.provision "shell", inline: OS_UPGRADE_SCRIPT, reboot: true
@@ -180,7 +195,9 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
     k.vm.hostname = "ten"
     k.vm.network "private_network", ip: "192.168.56.10"
     k.vm.provider "libvirt" do |v|
-      v.memory = 20480
+      # 18 GB (2026-11-13; was 20): the workstation's radar station needs its room (pi1's comment) - the copy's requests
+      # sized to it (tests/ansible/copy/vagrant-overlay, ~15.8 GiB of ~17.4 allocatable)
+      v.memory = 18432
       # production's pods request ~8 CPUs (ten: 20, 44% requested). With 8 the copy sat at 98% and a new pod - the
       # k6 smoke, a rollout's surge pod - could not be scheduled (2026-10-03). vCPUs cost the host no memory.
       v.cpus = 14

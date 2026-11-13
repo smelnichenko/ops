@@ -12,7 +12,7 @@ to the Vagrant Forgejo (through the Pis' VIP) under the `schnappy` org:
   infra overlay
     - repo URLs https://git.pmon.dev/schnappy/<repo>.git -> the Vagrant Forgejo (application images still come from
       git.pmon.dev's registry);
-    - left out (operator 2026-10-02: the VM has 20 GB, ten's pods use ~30 GB): the schnappy-test environment,
+    - left out (operator 2026-10-02: the VM had 20 GB - 18 since 2026-11-13 -, ten's pods use ~30 GB): the schnappy-test environment,
       kagent, SonarQube; and what cannot run outside production: Woodpecker (OAuth against git.pmon.dev) and the
       PR-environment generator (git.pmon.dev's API);
     - after every `$values/<dir>/<name>.yaml` value file, `$values/<dir>/<name>.vagrant.yaml` with

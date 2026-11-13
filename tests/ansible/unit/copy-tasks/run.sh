@@ -172,6 +172,10 @@ for text, want in (("", ("main", "main")), ("fix/a@abc", ("abc", "main"))):
     check(f"  a record {text!r}: what is missing read as main", state()[:2], want)
 check("  usage refused (exit 2), the record unchanged", (refs("set", "a"), refs("playbook"), refs("bogus"), refs(),
       open(f).read().strip()), ("rc=2", "rc=2", "rc=2", "rc=2", "fix/a@abc"))
+# the host guard watches while a task works on the VMs (the radar station shares the workstation): right after the lock
+check("the copy tasks on running VMs (argo, change, playbook, check): the host guard's watcher right after the lock",
+      [[c for _, c, _ in cmds(n)][:2] for n in ("test:copy:argo", "test:copy:change", "test:copy:playbook", "test:copy:check")],
+      [["scripts/copy-lock.sh", "scripts/copy-host-guard.sh watch"]] * 4)
 # every copy task whole - each command, in order, and its vars - against expected.json beside this file: a seed dropped,
 # an env -i lost (production's .env into the copy), a default moved, an argument left off passes every check above that
 # reads one line. A Taskfile change to these tasks changes expected.json in the same commit (its diff is the review)

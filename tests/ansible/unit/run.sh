@@ -21,14 +21,14 @@ harnesses=("$H"/*/run.sh)
 run_one() {
   local i=$1 r=$2 name fence scratch rc=0
   name=$(basename "$(dirname "$r")")
-  # fenced: no harness reaches a real host - ssh, kubectl and vagrant here fail loudly (a harness's own stubs, earlier
+  # fenced: no harness reaches a real host - ssh, kubectl, vagrant and virsh here fail loudly (a harness's own stubs, earlier
   # on its PATH, answer instead); one did, reading ten's clock over ssh (2026-10-07/08). Each call leaves a hit, and a
   # harness that left one fails - also when it tolerated the call's failure (the exit 97 could pass a negative case, the
   # FENCED line unseen). A fence of its own per harness, so the one named is the one that called; FENCE exported: a
   # harness that rebuilds its PATH puts it first again
   fence="$ROOT/fence-$i"; scratch="$ROOT/tmp-$i"
   mkdir -p "$fence" "$scratch"
-  for tool in ssh kubectl vagrant; do
+  for tool in ssh kubectl vagrant virsh; do
     printf '#!/bin/sh\necho "FENCED: a unit harness ran %s $*" >&2\necho "%s $*" >> "%s/hits"\nexit 97\n' \
       "$tool" "$tool" "$fence" > "$fence/$tool"
     chmod +x "$fence/$tool"

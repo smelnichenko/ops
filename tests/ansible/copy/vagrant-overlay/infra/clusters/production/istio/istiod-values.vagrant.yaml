@@ -1,0 +1,12 @@
+# Vagrant only (the copy of production): memory REQUESTS shrunk so production fits the copy's 18 GB node (the apps'
+# overlay header). Every injected sidecar's request - 28 of them, 128 Mi each by the chart's default: 3.5 GiB of the
+# node for proxies using ~85 MiB each in production (kubectl top, 2026-11-13). Limits stay the chart's.
+global:
+  proxy:
+    resources:
+      requests:
+        memory: 96Mi                 # ten: 128Mi (the chart's)
+pilot:
+  resources:
+    requests:
+      memory: 256Mi                  # ten: 512Mi

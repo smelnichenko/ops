@@ -1,0 +1,6 @@
+# Vagrant only (the copy of production): memory REQUEST shrunk so production fits the copy's 18 GB node (the apps'
+# overlay header). Its limit stays production's.
+prometheus:
+  prometheusSpec:
+    resources:
+      requests: { memory: 256Mi }    # ten: 512Mi

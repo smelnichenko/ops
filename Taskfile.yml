@@ -451,6 +451,9 @@ tasks:
     cmds:
       # one copy run at a time (scripts/copy-lock.sh): another session's run refused, named
       - cmd: scripts/copy-lock.sh
+      # the host guard watching the VMs while the run works on them - the radar station shares the workstation
+      # (scripts/copy-host-guard.sh: one watcher at a time; every vagrant up starts it too, the Vagrantfile's hook)
+      - cmd: scripts/copy-host-guard.sh watch
       # run on its own too: the mirror clones the LOCAL repos, whose main must be origin's
       - cmd: scripts/copy-main-current.sh ../infra ../platform
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/vms-ready.yml
@@ -510,6 +513,9 @@ tasks:
     cmds:
       # one copy run at a time (scripts/copy-lock.sh): another session's run refused, named
       - cmd: scripts/copy-lock.sh
+      # the host guard watching the VMs while the run works on them - the radar station shares the workstation
+      # (scripts/copy-host-guard.sh: one watcher at a time; every vagrant up starts it too, the Vagrantfile's hook)
+      - cmd: scripts/copy-host-guard.sh watch
       # each ref holds production's main (origin/main), and the local main the mirror clones is it
       - cmd: scripts/copy-main-current.sh ../infra:{{.INFRA_REF}} ../platform:{{.PLATFORM_REF}}
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/vms-ready.yml
@@ -543,6 +549,9 @@ tasks:
     cmds:
       # one copy run at a time (scripts/copy-lock.sh): another session's run refused, named
       - cmd: scripts/copy-lock.sh
+      # the host guard watching the VMs while the run works on them - the radar station shares the workstation
+      # (scripts/copy-host-guard.sh: one watcher at a time; every vagrant up starts it too, the Vagrantfile's hook)
+      - cmd: scripts/copy-host-guard.sh watch
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/vms-ready.yml
       # the guard first in the same run: a host that is no Vagrant VM is dropped from the playbook's plays
       # marked first, before it runs (one that fails half-way still left a change on the copy): a later test:copy:check
@@ -579,6 +588,9 @@ tasks:
     cmds:
       # one copy run at a time (scripts/copy-lock.sh): another session's run refused, named
       - cmd: scripts/copy-lock.sh
+      # the host guard watching the VMs while the run works on them - the radar station shares the workstation
+      # (scripts/copy-host-guard.sh: one watcher at a time; every vagrant up starts it too, the Vagrantfile's hook)
+      - cmd: scripts/copy-host-guard.sh watch
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/argo-settled.yml -e expect_mirror=true -e expect_apps=true -e restart_stage=check-$(date +%Y%m%d%H%M%S) -e stable_polls=1 -e poll_seconds=3
       # the independent checks at the same time (scripts/copy-checks.sh says what each proves): the slowest, not the sum
       - cmd: COPY_SCRAPE_POOLS_GONE='{{.SCRAPE_POOLS_GONE}}' scripts/copy-checks.sh '{{.INFRA_REF}}' '{{.PLATFORM_REF}}'

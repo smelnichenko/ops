@@ -155,6 +155,25 @@ Correctness, security, architecture, platform reliability, test-quality (~120 re
 - process-groups: a process that ignored the TERM when it came (forked by a deaf job) and catches it later is sent it
   once - it was counted sent and KILLed at the grace with its handler never run.
 
+## The copy beside the radar station (2026-11-13 night, operator: "yes" to a smaller copy with a guard)
+
+The third build's VMs held 25 GB of the workstation's 30 while another session's work ran: the host swapped 14 GB, the
+Argo settle timed out, and the radar station on the same host died (22:17, restarted 22:17:30). Now:
+- **VMs 22 GB**: the node 18 GB (was 20), each Pi 2 GB (was 2.5; the Pi stack uses ~1.3).
+- **Requests sized to the 18 GB node** (~17.4 GiB allocatable): ~15.8 GiB in all, computed from production's running
+  pods with the overlay's values - the apps 384 Mi, masi-browser 256 Mi, Kafka 384 Mi, OpenSearch 512 Mi with a 1 GB heap
+  (its fixed heap the one real-memory saving: a derived index), every sidecar 96 Mi and istiod 256 Mi (new overlay:
+  `istio/istiod-values.vagrant.yaml`), Prometheus 256 Mi (`prometheus/values.vagrant.yaml`). Postgres stays 512 Mi
+  (CNPG's shared_buffers floor).
+- **`scripts/copy-host-guard.sh`**: the Vagrantfile hands every vagrant command's arguments to it - `up`/`reload`/
+  `resume` refused unless the host has the starting VMs' memory (the Vagrantfile's sizes, those not running already)
+  plus 3 GB available; a detached watcher (also started by every copy task working on the VMs) powers off the biggest
+  running VM when the host's available memory is under 2 GB on two polls 5 s apart - the run fails, said in
+  `.copy/host-guard.log`, the station keeps its memory. Every Vagrant suite here is guarded, not only the copy.
+- The unit runner fences `virsh` too; CI's image carries ruby (the hook is tested by loading the Vagrantfile).
+- Not known yet: the copy's real memory use inside 18 GB (production's same pods use ~30 GB, mostly its data) - measured
+  on the next build (`kubectl top`, the guest's `free`), recorded here.
+
 ## Open
 
 - ~~The ledger ConfigMap `kube-system/upgrade-ledger` on ten~~: deleted 2026-11-13 18:2x with the operator's OK, its

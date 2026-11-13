@@ -22,6 +22,7 @@
  "test:copy:argo": {
   "cmds": [
    "scripts/copy-lock.sh",
+   "scripts/copy-host-guard.sh watch",
    "scripts/copy-main-current.sh ../infra ../platform",
    "cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/vms-ready.yml",
    "env -i HOME=\"$HOME\" PATH=\"$PATH\" bash -c 'set -a && . tests/ansible/copy/vagrant-secrets.env && set +a && cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/seed-vault-secrets.yml'",
@@ -77,6 +78,7 @@
  "test:copy:change": {
   "cmds": [
    "scripts/copy-lock.sh",
+   "scripts/copy-host-guard.sh watch",
    "scripts/copy-main-current.sh ../infra:{{.INFRA_REF}} ../platform:{{.PLATFORM_REF}}",
    "cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/vms-ready.yml",
    "scripts/vagrant-preload-images.sh ../infra ../platform {{.INFRA_REF}} {{.PLATFORM_REF}}",
@@ -104,6 +106,7 @@
  "test:copy:check": {
   "cmds": [
    "scripts/copy-lock.sh",
+   "scripts/copy-host-guard.sh watch",
    "cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/argo-settled.yml -e expect_mirror=true -e expect_apps=true -e restart_stage=check-$(date +%Y%m%d%H%M%S) -e stable_polls=1 -e poll_seconds=3",
    "COPY_SCRAPE_POOLS_GONE='{{.SCRAPE_POOLS_GONE}}' scripts/copy-checks.sh '{{.INFRA_REF}}' '{{.PLATFORM_REF}}'",
    "cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/barman-check.yml",
@@ -135,6 +138,7 @@
  "test:copy:playbook": {
   "cmds": [
    "scripts/copy-lock.sh",
+   "scripts/copy-host-guard.sh watch",
    "cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/vms-ready.yml",
    "scripts/copy-refs.sh playbook '{{.PLAYBOOK}}'",
    "env -i HOME=\"$HOME\" PATH=\"$PATH\" bash -c 'cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/vagrant-only-play.yml playbooks/{{.PLAYBOOK}} {{.ARGS}}'",
