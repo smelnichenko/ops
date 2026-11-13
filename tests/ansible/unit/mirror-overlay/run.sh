@@ -92,6 +92,53 @@ check("a change to a dropped app: refused, the path named",
       (r is not None and "REFUSED" in r, "woodpecker.yaml" in (r or ""), "velero.yaml" in (r or "")), (True, True, False))
 check("a change outside the overlay: mirrored", refused("c-ok"), None)
 check("main: never refused", refused("main"), None)
+# main moved on after c-ok was cut, in a file the overlay drops: the change is c-ok's own diff (main...ref), not main's
+# moves since read backwards (main..ref) - accepted
+git("checkout", "-q", "main")
+open(os.path.join(g, "clusters/production/argocd/apps/woodpecker.yaml"), "a").write("# main moved\n")
+git("commit", "-q", "-am", "main moved")
+check("a change cut before main moved a dropped file: its own diff judged, accepted", refused("c-ok"), None)
+# the overlay's own files: a change to a path the overlay writes over is refused
+ov = os.path.join(work, "overlay")
+os.makedirs(os.path.join(ov, "infra/clusters/production/argocd/apps"))
+open(os.path.join(ov, "infra/clusters/production/argocd/apps/velero.yaml"), "w").write("x")
+real_overlay, m.OVERLAY = m.OVERLAY, ov
+r = refused("c-ok")
+m.OVERLAY = real_overlay
+check("a change to a file the overlay replaces (walked from the overlay directory): refused, named",
+      (r is not None and "REFUSED" in r, "velero.yaml" in (r or "")), (True, True))
+# main() refuses before anything is cloned or pushed - infra's drop list for infra, platform's for platform
+pg = os.path.join(work, "platform-git")
+os.makedirs(os.path.join(pg, "helm/schnappy-mesh/templates"))
+subprocess.run(["git", "-C", pg, "init", "-q", "-b", "main"], check=True)
+open(os.path.join(pg, "helm/schnappy-mesh/templates/certificates.yaml"), "w").write("a: 1\n")
+open(os.path.join(pg, "README"), "w").write("r\n")
+for args in (["add", "-A"], ["commit", "-q", "-m", "main"], ["checkout", "-q", "-b", "p-masked"]):
+    subprocess.run(["git", "-C", pg, "-c", "user.name=t", "-c", "user.email=t@t", *args], check=True, capture_output=True)
+open(os.path.join(pg, "helm/schnappy-mesh/templates/certificates.yaml"), "a").write("b: 2\n")
+subprocess.run(["git", "-C", pg, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-am", "masked"],
+               check=True, capture_output=True)
+calls = []
+real = (m.api, m.run)
+m.api = lambda *a, **k: calls.append(("api", a[3], a[4])) or 201
+m.run = lambda *a, **k: calls.append(("run",) + a[:2])
+def main_with(*argv):
+    sys.argv = ["vagrant-gitops-mirror.py", "--infra", g, "--platform", pg, "--forgejo", "192.168.56.50:3000", *argv]
+    try:
+        m.main()
+        return None
+    except SystemExit as e:
+        return str(e.code)
+    except Exception as e:  # it went on past the refusal (the stubs do not clone): not refused
+        return f"went on: {type(e).__name__}"
+r = main_with("--infra-ref", "c-masked")
+check("main(): an infra change to a dropped app refused before any API call or clone",
+      (r is not None and "REFUSED" in r, calls), (True, []))
+calls.clear()
+r = main_with("--platform-ref", "p-masked")
+check("main(): a platform change to its dropped file (platform's drop list) refused - before infra is touched",
+      (r is not None and "REFUSED" in r, "certificates.yaml" in (r or ""), calls), (True, True, []))
+m.api, m.run = real
 print("mirror-overlay: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 PY_MIRROR_OVERLAY

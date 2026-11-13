@@ -456,7 +456,7 @@ tasks:
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-vault-cleanup-policy.yml
       - cmd: env -i HOME="$HOME" PATH="$PATH" scripts/vagrant-gitops-mirror.py --infra-ref main --platform-ref main
       # the refs the copy runs, for a later test:copy:check run on its own
-      - cmd: echo "main main" > .copy/copy-refs
+      - cmd: scripts/copy-refs.sh set main main
       # Argo CD's Forgejo account on the copy, as production's (its token in the Vagrant Vault, from which setup-argocd
       # gives the repo-creds their credentials and the copy's ExternalSecret merges them): after the mirror (its repos),
       # before setup-argocd. Its infra the mirrored copy (no PR-env generator - the copy's committed list)
@@ -476,7 +476,7 @@ tasks:
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-argocd.yml
       # the Applications' names recorded: a change's waits want exactly these (unless it adds or removes apps). The
       # deciding settle's quiet (120 s, 2 polls 5 s apart): a fresh boot's pods restart while what they need comes up
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/argo-settled.yml -e record_apps=true -e restart_stage=build-$(date +%Y%m%d%H%M%S) {{.COPY_SETTLE}}
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/argo-settled.yml -e expect_mirror=true -e record_apps=true -e restart_stage=build-$(date +%Y%m%d%H%M%S) {{.COPY_SETTLE}}
       # data every change must keep (verified by test:copy:check)
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/data-check.yml -e mode=seed
       # the observability data a change must keep (ClickHouse rows, Grafana dashboards, a Tempo trace, Mimir's past)
@@ -507,7 +507,7 @@ tasks:
       - cmd: scripts/vagrant-inventory.sh && cp .copy/vagrant-inventory.txt .copy/vagrant-inventory-before-change.txt
       - cmd: env -i HOME="$HOME" PATH="$PATH" scripts/vagrant-gitops-mirror.py --infra-ref {{.INFRA_REF}} --platform-ref {{.PLATFORM_REF}}
       # the refs the copy runs now, for a later test:copy:check run on its own
-      - cmd: echo '{{.INFRA_REF}} {{.PLATFORM_REF}}' > .copy/copy-refs
+      - cmd: scripts/copy-refs.sh set '{{.INFRA_REF}}' '{{.PLATFORM_REF}}'
       # Argo on the pushed commits, every app green and every pod ready; the apps the build recorded - or, for a change
       # that adds or removes apps, recorded anew (their names printed)
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/argo-settled.yml -e expect_mirror=true {{if eq .APPS_CHANGED "true"}}-e record_apps=true{{else}}-e expect_apps=true{{end}} -e restart_stage=change-$(date +%Y%m%d%H%M%S) {{.COPY_SETTLE}}
@@ -534,7 +534,7 @@ tasks:
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/isolate-pis.yml
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/isolate-cluster.yml
       # the copy now runs a change: a later test:copy:check run on its own judges its inventory as a change's
-      - cmd: echo "$(cut -d' ' -f1,2 .copy/copy-refs 2> /dev/null || echo main main) playbook:{{.PLAYBOOK}}" > .copy/copy-refs.new && mv .copy/copy-refs.new .copy/copy-refs
+      - cmd: scripts/copy-refs.sh playbook '{{.PLAYBOOK}}'
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/argo-settled.yml -e expect_apps=true -e restart_stage=playbook-$(date +%Y%m%d%H%M%S) {{.COPY_SETTLE}}
       - task: test:copy:check
         vars:
@@ -545,11 +545,15 @@ tasks:
     deps: [deploy:install]
     vars:
       # the refs the copy runs (test:copy:argo or test:copy:change wrote them), unless given
-      COPY_REFS:
-        sh: cat .copy/copy-refs 2> /dev/null || echo "main main"
-      INFRA_REF: '{{.INFRA_REF | default (index (splitList " " .COPY_REFS) 0)}}'
-      PLATFORM_REF: '{{.PLATFORM_REF | default (index (splitList " " .COPY_REFS) 1)}}'
-      CHANGE: '{{.CHANGE | default (ternary "no" "yes" (eq .COPY_REFS "main main"))}}'
+      COPY_INFRA_REF:
+        sh: scripts/copy-refs.sh infra
+      COPY_PLATFORM_REF:
+        sh: scripts/copy-refs.sh platform
+      COPY_CHANGE:
+        sh: scripts/copy-refs.sh change
+      INFRA_REF: '{{.INFRA_REF | default .COPY_INFRA_REF}}'
+      PLATFORM_REF: '{{.PLATFORM_REF | default .COPY_PLATFORM_REF}}'
+      CHANGE: '{{.CHANGE | default .COPY_CHANGE}}'
       SCRAPE_POOLS_GONE: '{{.SCRAPE_POOLS_GONE | default ""}}'
       ALLOWED_MISSING: tests/ansible/copy/vagrant-allowed-missing.txt
     cmds:

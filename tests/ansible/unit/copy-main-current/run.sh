@@ -17,6 +17,7 @@ g clone -q "$W/origin" "$W/repo"
 g -C "$W/repo" branch old-change && g -C "$W/repo" checkout -q old-change && g -C "$W/repo" commit -q --allow-empty -m c0
 g -C "$W/repo" checkout -q main
 run() { out=$(bash "$S" "$@" 2>&1); echo "$?"; }
+said() { bash "$S" "$@" 2>&1 | tail -1; }  # the last repo's line
 check "main = origin/main: passes" "$(run "$W/repo")" 0
 g -C "$W/origin" commit -q --allow-empty -m two
 check "main behind origin/main: refused" "$(run "$W/repo")" 1
@@ -29,5 +30,13 @@ check "a change cut from origin/main: passes" "$(run "$W/repo:change")" 0
 check "a change cut from an older main: refused" "$(run "$W/repo:old-change")" 1
 check "a ref not there: refused" "$(run "$W/repo:nosuch")" 1
 check "two repos, one stale: the run fails" "$(run "$W/repo:change" "$W/repo:old-change")" 1
+check "no repo given: usage (exit 2)" "$(run)" 2
+check "each verdict said: a change containing origin/main" "$(said "$W/repo:change" | grep -c 'change contains origin/main')" 1
+check "  one cut from an older main" "$(said "$W/repo:old-change" | grep -c 'does not contain origin/main')" 1
+check "  a ref not there, or not a commit (a tree)" \
+  "$(said "$W/repo:nosuch" | grep -c 'no ref nosuch') $(said "$W/repo:change^{tree}" | grep -c 'no ref')" "1 1"
+check "  main ahead of origin/main" "$(said "$W/repo" | grep -c 'bring main to origin/main first')" 1
+g -C "$W/repo" remote set-url origin "$W/nowhere"
+check "origin unreachable: refused (not judged on a stale origin/main)" "$([ "$(run "$W/repo:change")" != 0 ] && echo refused)" refused
 echo "copy-main-current: $([ $fails = 0 ] && echo ALL-PASS || echo "$fails FAILED")"
 [ $fails = 0 ]

@@ -273,6 +273,9 @@ def main():
     user = os.environ.get("VAGRANT_FORGEJO_ADMIN_USER", copy["forgejo_admin_user"])
     password = os.environ.get("VAGRANT_FORGEJO_ADMIN_PASSWORD", copy["forgejo_admin_password"])
 
+    # both refs judged before anything is pushed: a refused platform change left infra's already mirrored
+    refuse_masked("infra", os.path.abspath(a.infra), a.infra_ref, INFRA_DROP)
+    refuse_masked("platform", os.path.abspath(a.platform), a.platform_ref, PLATFORM_DROP)
     api(a.forgejo, user, password, "POST", "/orgs", {"username": "schnappy", "visibility": "public"}, ok=(201, 422))
     os.makedirs(WORK, exist_ok=True)
     work = tempfile.mkdtemp(prefix="gitops-mirror-", dir=WORK)
@@ -281,7 +284,6 @@ def main():
         for name, src, ref in (("infra", a.infra, a.infra_ref), ("platform", a.platform, a.platform_ref)):
             api(a.forgejo, user, password, "POST", "/orgs/schnappy/repos",
                 {"name": name, "default_branch": "main", "private": False}, ok=(201, 409))
-            refuse_masked(name, os.path.abspath(src), ref, INFRA_DROP if name == "infra" else PLATFORM_DROP)
             repo = os.path.join(work, name)
             run("git", "clone", "-q", "--branch", ref, "--single-branch", os.path.abspath(src), repo)
             head = subprocess.run(["git", "-C", repo, "rev-parse", "--short", "HEAD"],

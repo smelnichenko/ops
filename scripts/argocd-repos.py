@@ -60,7 +60,8 @@ def repo_of(url, where):
     return m.group(2)
 
 
-API = re.compile(rf"^https?://{re.escape(host)}/*$")
+# the Forgejo host alone, whole (fullmatch: a trailing newline is no match, as with `$`)
+API = re.compile(rf"https?://{re.escape(host)}/*")
 
 
 def generators(gens, siblings, where):
@@ -96,7 +97,7 @@ def pull_request_generator(g, siblings, where):
     if not pr:
         return
     api = get(pr, "api", None)
-    if not API.match(str(api or "")) or get(pr, "owner", None) != org:
+    if not API.fullmatch(str(api or "")) or get(pr, "owner", None) != org:
         bad.append(f"{where}: a pullRequest generator on {api} / {get(pr, 'owner', None)} - not {host}/{org}")
         return
     m = TEMPLATE.match(str(get(pr, "repo", "")))

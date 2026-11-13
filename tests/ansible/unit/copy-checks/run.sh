@@ -36,7 +36,7 @@ cat > "$T/scripts/vagrant-smoke.sh" <<'STUB'
 #!/bin/bash
 [ -z "${GO:-}" ] || for _ in $(seq 2400); do [ -e "$GO" ] && break; sleep 0.05; done
 got=$(timeout 1 cat 2> /dev/null || true)
-echo "smoke read stdin: [$got]"
+echo "smoke $* read stdin: [$got]"
 STUB
 chmod +x "$T/bin/vagrant" "$T/deploy/ansible/venv/bin/ansible-playbook" "$T/scripts/vagrant-smoke.sh"
 # the platform ref the checks read ClickHouse's compatibility and users from: branch p (the script's second argument),
@@ -76,6 +76,15 @@ check() {
   echo "FAIL $1: got $2, want $3"; printf '%s\n' "$out" | sed 's/^/    /'; fails=$((fails + 1))
 }
 check "no check read the caller's stdin" "$(grep -c "THE CALLER'S INPUT" <<< "$out")" 0
+# each check's own command, exactly (the stubs echo their arguments): the data check VERIFIES (a seed there re-seeds
+# and passes), the isolation's proof alone, none in check mode, the smoke on the refs in their order
+for want in "check -i inventory/vagrant.yml ../../tests/ansible/copy/data-check.yml -e mode=verify read stdin: []" \
+    "check -i inventory/vagrant.yml ../../tests/ansible/copy/storage-check.yml read stdin: []" \
+    "check -i inventory/vagrant.yml playbooks/production-data-check.yml read stdin: []" \
+    "check -i inventory/vagrant.yml ../../tests/ansible/copy/isolate-cluster.yml --tags proof read stdin: []" \
+    "smoke i p read stdin: []"; do
+  check "the exact command: ${want% read stdin*}" "$(grep -cxF -- "$want" <<< "$out")" 1
+done
 check "the survival check is given ClickHouse's compatibility and users as the platform ref sets them" \
   "$(grep -c 'survival-check.yml -e mode=verify -e clickhouse_compat=25.8 -e clickhouse_users=schnappy read' <<< "$out")" 1
 check "seven checks judged" "$(grep -c '^===== check ' <<< "$out")" 7

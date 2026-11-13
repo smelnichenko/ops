@@ -587,7 +587,8 @@ if mine "$h"; then
 fi
 check "the job the KILL did not end left in stop_left" "$([[ " $left_ " == *" $h "* ]] && echo left || echo "[$left_]")" left
 check "every caller's wait after a stop skips stop_left's" \
-  "$(grep -c '\[\[ " \$stop_left " == \*" \$j "\* \]\] || wait "\$j"' scripts/copy-checks.sh)" 1
+  "$(grep -cxF '  for j in "${groups[@]}"; do [[ " $stop_left " == *" $j "* ]] || wait "$j" 2> /dev/null; done' \
+     scripts/copy-checks.sh)" 1
 mine "$h" && kill -KILL -- "-$h"
 wait "$h" 2> /dev/null
 # the TERM's time is later than every process started before it was sent: a process forked in the same hundredth

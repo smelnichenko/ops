@@ -408,6 +408,18 @@ infra_fixture(d, {"n.yaml": [appset("p", [{"pullRequest": {"gitea": {"owner": OR
 r = subprocess.run([sys.executable, REPOS, d, "git.pmon.dev", ORG], capture_output=True, text=True)
 check("argocd-repos: a pull-request generator whose api is null - refused as not on the host, no traceback",
       (r.returncode != 0, "a pullRequest generator on None" in r.stderr, "Traceback" in r.stderr), (True, True, False))
+# the api and owner each judged whole: the host's own (http or https, a trailing slash) - another host, a host that
+# only starts with it, a newline after it, another owner - refused
+for i, (api, owner, ok) in enumerate((("https://git.pmon.dev", ORG, True), ("http://git.pmon.dev", ORG, True),
+                                      ("https://git.pmon.dev/", ORG, True), ("https://evil.example", ORG, False),
+                                      ("https://git.pmon.dev.evil", ORG, False), ("https://git.pmon.dev\n", ORG, False),
+                                      ("git.pmon.dev", ORG, False), ("https://gitxpmon.dev", ORG, False),
+                                      ("https://git.pmon.dev", "someone-else", False))):
+    d = os.path.join(W, f"infra-api{i}")
+    infra_fixture(d, {"n.yaml": [appset("p", [{"pullRequest": {"gitea": {"owner": owner, "repo": "chat", "api": api}}}])]})
+    r = subprocess.run([sys.executable, REPOS, d, "git.pmon.dev", ORG], capture_output=True, text=True)
+    check(f"argocd-repos: a pull-request generator on {api!r} / {owner}: " + ("its pulls read" if ok else "refused"),
+          (r.returncode == 0, "chat" in (json.loads(r.stdout)["pulls"] if r.returncode == 0 else [])), (ok, ok))
 
 # ── first run, from production's state today ─────────────────────────────────────────────────────────────────────
 reset()
