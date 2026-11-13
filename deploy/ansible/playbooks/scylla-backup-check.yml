@@ -9,8 +9,7 @@
 # Why: every pod can be green while Scylla Manager cannot reach an agent or the store, and nothing after such a change
 # ran a backup until the next scheduled one.
 #
-# Usage: on the Vagrant copy, task test:copy:check; production: no task since plan 117 removed deploy:upgrade:* - make
-#        one with the change that needs it
+# Usage: task check:production:scylla-backup -- <-e vars>   (production; the copy: task test:copy:check runs it)
 - name: Scylla Manager backs up
   hosts: target
   become: true

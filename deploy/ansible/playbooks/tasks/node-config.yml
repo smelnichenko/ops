@@ -28,8 +28,7 @@
 
 # The kubelet's image GC: past imageGCHighThresholdPercent of the image store it deletes unused images, down to the low
 # one. Its defaults (85 / 80) let containerd's old images fill ten's / past the 80% disk alert first (2026-10-27: 433 GB
-# of them, 165 of masi's builds, freed to 33% by hand) - at 70 / 60 the GC runs below the alert. tasks/image-store-room.yml
-# reads the high one back (configz) to judge a prepull's room.
+# of them, 165 of masi's builds, freed to 33% by hand) - at 70 / 60 the GC runs below the alert.
 - name: The kubelet's image GC thresholds
   ansible.builtin.set_fact:
     _kubelet_image_gc:

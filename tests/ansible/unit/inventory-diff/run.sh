@@ -39,14 +39,24 @@ binary /usr/local/bin/runc 1.2.4" "" "+binary /usr/local/bin/runc 1.2.4"
 # left behind passed every check that reads only one of them (the test-quality review, 2026-10-12). And every line the
 # allow-list names is one production has: a left-out line production moved past leaves the copy unjudged there
 U=tests/ansible/copy
-for img in woodpeckerci/woodpecker-server woodpeckerci/woodpecker-agent; do
-  tags=$(for l in prod-inventory vagrant-allowed-missing; do
-    awk -v i="docker.io/$img" '$1 == "image" && $2 == i {print $3}' "$U/$l.txt"; done | sort -u | tr '\n' ' ')
-  if [ "$(echo $tags | wc -w)" = 1 ]; then echo "PASS $img: one tag in the two lists ($tags)"
-  else echo "FAIL $img: the two lists name tags '$tags' - one release, written in each"; fails=$((fails + 1)); fi
-done
-stale=$(grep -v '^#' "$U/vagrant-allowed-missing.txt" | grep . | grep -vxFf "$U/prod-inventory.txt" || true)
+# by name: a production bump of a left-out component passes; a different version of a line the copy HAS still fails;
+# `? ` read as the line
+case_ "a left-out allowed by name: production's at another version, missing - passes" 0 "$(grep -v redis <<< "$base")" "image docker.io/library/redis *"
+case_ "  allowed by name, but the copy runs another version: fails" 1 "$(sed 's/8.2.3/8.4.0/' <<< "$base")" "image docker.io/library/redis *" "+image docker.io/library/redis 8.4.0"
+case_ "  a name is the whole line but its version: redis-extra not covered by redis" 1 "$(grep -v redis <<< "$base")" "image docker.io/library/redis-extra *"
+case_ "a '? ' line read as the line" 0 "$(grep -v redis <<< "$base")" "? image docker.io/library/redis *"
+# every allow-list line is one production has (by name for ` *`) - but a `? ` line, production's own only for a while:
+# a left-out line production moved past leaves the copy unjudged there
+stale=$(grep -v -E '^\s*(#|$)' "$U/vagrant-allowed-missing.txt" | grep -v '^? ' | while read -r l; do
+  if [ "${l##* }" = "*" ]; then grep -q "^${l% \*} " "$U/prod-inventory.txt" || echo "$l"
+  else grep -qxF "$l" "$U/prod-inventory.txt" || echo "$l"; fi
+done)
 if [ -z "$stale" ]; then echo "PASS every allowed-missing line is one production has"
 else echo "FAIL allowed-missing lines production does not have: $stale"; fails=$((fails + 1)); fi
+# the left-outs production upgrades on its own (Woodpecker, kagent, SonarQube, Nexus) by name, never a restated version
+pinned=$(grep -E '^(image docker.io/woodpeckerci/|argo-chart (woodpecker|kagent)|image sonarqube|pi pi[12] nexus )' \
+  "$U/vagrant-allowed-missing.txt" | grep -v ' \*$' || true)
+if [ -z "$pinned" ]; then echo "PASS the left-out components allowed by name"
+else echo "FAIL left-outs at a version (a production bump fails the build): $pinned"; fails=$((fails + 1)); fi
 echo "inventory-diff: $([ $fails = 0 ] && echo ALL-PASS || echo "$fails FAILED")"
 [ $fails = 0 ]

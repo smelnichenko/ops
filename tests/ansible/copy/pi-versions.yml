@@ -1,5 +1,5 @@
-# The Pis' service versions as production runs them, where the playbooks' vars pin another (they install their own
-# where a service is missing): the Vagrant copy installs production's. Written by scripts/production-inventory.sh
+# The Pis' service versions as production runs them, where the playbooks pin another (they install their own where
+# a service is missing): the Vagrant copy installs production's. Written by scripts/production-inventory.sh
 # (task test:copy:inventory) from what the Pis run - not edited by hand. amd64 only (the Vagrant VMs). Extra vars,
 # after vars/vault.yml.
 forgejo_version: 15.0.3

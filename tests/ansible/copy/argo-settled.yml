@@ -21,13 +21,15 @@
 #
 # With -e record_apps=true (the build, or a change that adds or removes apps) the Applications' names go to
 # .copy/argo-apps.txt, printed; with -e expect_apps=true exactly those must exist - a child app gone would otherwise
-# settle by its absence. With -e restart_stage=<build|change> (a deciding wait) a pod whose containers restarted during
-# this stage and the one before fails it: a crash loop slower than the quiet window settles once between restarts (the
-# history in /var/lib/upgrade-test on the node).
+# settle by its absence. With -e restart_stage=<label> a pod whose containers restarted during this stage and the one
+# recorded before it fails it: a crash loop slower than the quiet window settles once between restarts (the history in
+# /var/lib/upgrade-test on the node). Each stage a label of its own (build-, change-, check-<time>): a label used again
+# compares with the stage before its first use, and records no new restart - with the same two labels every time no
+# crash loop was ever caught.
 #
 # Usage: ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/argo-settled.yml [-e settle_minutes=40]
 #        [-e expect_mirror=true] [-e allow_out_of_sync=<app>] [-e stable_polls=1] [-e restart_quiet=120]
-#        [-e record_apps=true | -e expect_apps=true] [-e restart_stage=<build|change>]
+#        [-e record_apps=true | -e expect_apps=true] [-e restart_stage=<label>]
 - name: Argo CD settled (all apps Synced + Healthy, all pods ready)
   hosts: target
   become: true

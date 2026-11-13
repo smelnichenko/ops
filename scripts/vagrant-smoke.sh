@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# vagrant-smoke.sh - run production's k6 smoke test against the Vagrant copy of production, on demand (after each
-# upgrade step).
+# vagrant-smoke.sh - run production's k6 smoke test against the Vagrant copy of production, on demand (after a
+# change).
 #
 # The chart's PostSync hook runs it on every sync of the apps, as in production; this runs the very same Job when the
 # test asks: rendered from platform's schnappy chart with production's values, changed only in what lets it run beside
@@ -142,6 +142,6 @@ if smoke "$name"; then exit 0; fi
 latency_only "$work/out" || exit 1
 # a second chance whatever the step restarted: the first requests after Tempo's or ClickHouse's step crossed it with no
 # production container restarted (2026-10-10); production's own Job retries any failure three times
-echo "SMOKE: its latency threshold alone crossed (the first requests after a step) - once more, that run decides"
+echo "SMOKE: its latency threshold alone crossed (the first requests after a change) - once more, that run decides"
 name=vagrant-k6-smoke-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')
 smoke "$name"

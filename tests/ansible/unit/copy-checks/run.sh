@@ -95,10 +95,12 @@ out=$(ALL_PASS=1 COPY_SCRAPE_POOLS_GONE=serviceMonitor/a/b/0,podMonitor/c/d/1 PA
   bash "$T/scripts/copy-checks.sh" i q < /dev/null 2>&1); rc=$?
 check "the pools a change removes given to the metrics check" \
   "$rc $(grep -c 'metrics-check.yml -e scrape_pools_gone=serviceMonitor/a/b/0,podMonitor/c/d/1 read' <<< "$out")" "0 1"
-out=$(ALL_PASS=1 COPY_SCRAPE_POOLS_GONE='a b' PATH="$T/bin:$PATH" timeout -k 5 60 \
-  bash "$T/scripts/copy-checks.sh" i q < /dev/null 2>&1); rc=$?
-check "pools gone with a space: refused before any check" \
-  "$rc $(grep -c 'scrape pool names, comma-separated' <<< "$out") $(grep -c '^===== check' <<< "$out")" "1 1 0"
+for bad in 'a b' ',a' 'a,' 'a,,b'; do
+  out=$(ALL_PASS=1 COPY_SCRAPE_POOLS_GONE="$bad" PATH="$T/bin:$PATH" timeout -k 5 60 \
+    bash "$T/scripts/copy-checks.sh" i q < /dev/null 2>&1); rc=$?
+  check "pools gone '$bad' (a space, an empty name): refused before any check" \
+    "$rc $(grep -c 'scrape pool names, comma-separated' <<< "$out") $(grep -c '^===== check' <<< "$out")" "1 1 0"
+done
 # a ref the platform repo does not have: refused before any check (no guessed pin)
 out=$(ALL_PASS=1 PATH="$T/bin:$PATH" timeout -k 5 60 bash "$T/scripts/copy-checks.sh" i nosuchref < /dev/null 2>&1); rc=$?
 check "a platform ref that is not there: refused before any check" \

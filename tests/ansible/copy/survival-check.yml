@@ -39,8 +39,8 @@
     span_id: 5eedc0de5eedc0de
     clickhouse_compat: ""
     # what the pin holds, beyond the session's setting: the MergeTree format settings whose defaults moved after the
-    # pinned version, at the pinned version's values - measured with the real images (2026-10-06, plan 100's tests/clickhouse-pin:
-    # 25.8 pinned to 24.8, 26.8 pinned to 25.8). Each one the server has must hold that value.
+    # pinned version, at the pinned version's values - measured with the real images (2026-10-06, the retired
+    # tests/clickhouse-pin: 25.8 pinned to 24.8, 26.8 pinned to 25.8). Each one the server has must hold that value.
     clickhouse_format_pins:
       "24.8":
         write_marks_for_substreams_in_compact_parts: "0"

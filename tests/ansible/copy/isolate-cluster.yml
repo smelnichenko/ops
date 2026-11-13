@@ -1,6 +1,6 @@
 ---
-# Isolate the Vagrant upgrade-test cluster from production, then connect it to the VAGRANT Pi Vault the way
-# bootstrap.sh connects ten to production's. Runs after the baseline, before Argo CD syncs the mirrored repos.
+# Isolate the Vagrant copy's cluster from production, then connect it to the VAGRANT Pi Vault the way
+# bootstrap.sh connects ten to production's. Runs after the node layer, before Argo CD syncs the mirrored repos.
 #
 # Why: the first Argo run (2026-10-02) synced production's own manifests, and ESO tried to log in to production
 # Vault. The mirror now rewrites every production address (scripts/vagrant-gitops-mirror.py); this playbook closes

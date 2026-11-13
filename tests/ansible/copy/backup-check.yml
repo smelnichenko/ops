@@ -5,8 +5,8 @@
 # running whose type the policy does not skip, none for one it skips. The backup is deleted afterwards (its data too).
 # Its volumes are the pods' emptyDirs only, as in production: the data volumes are local-path hostPath PVs, which
 # Velero's file-system backup skips - Postgres, Kafka and ScyllaDB are proven by data-check.yml instead. A policy this
-# check does not read (any condition but volumeTypes, any action but skip) is refused, never guessed; a run that
-# exercised nothing - no emptyDir copied and none skipped - fails.
+# check does not read (a condition but volumeTypes or pvcPhase alone, an action but skip) is refused, never guessed; a
+# run that exercised nothing - no emptyDir copied and none skipped - fails.
 #
 # Why: a Velero or plugin change can leave every pod green while backups fail - the plugin and the server are paired
 # versions - and nothing else on the copy writes to the backup store. Since 2026-11-13 production skips the ephemeral
@@ -20,8 +20,9 @@
   vars:
     kubeconfig: /etc/kubernetes/admin.conf
     schedule: velero-schnappy-daily
-    # one workload's pods, not the schedule's 79 volumes (8-13 min, one at a time): the same path - node-agent, kopia,
-    # the Pi store - for Valkey's data volume and its sidecar's
+    # one workload's pods, not the schedule's 79 volumes (8-13 min, one at a time). Under production's policy (emptyDir
+    # skipped) none is copied: this proves the schedule's backup completes and honours its policy; the file-system path
+    # (node-agent, kopia, the Pi store) is restore-check.yml's - its own backup, no policy, restored
     backup_selector: { app.kubernetes.io/component: valkey }
     # every resource fully qualified: `backup` alone is CNPG's Backup (postgresql.cnpg.io) - the first run of this
     # check polled CNPG for Velero's backup for 10 minutes (2026-10-03)
@@ -78,9 +79,10 @@
           skipped = []
           for vp in pol.get("volumePolicies") or []:
               cond, action = vp.get("conditions") or {}, (vp.get("action") or {}).get("type")
-              if set(cond) != {"volumeTypes"} or action != "skip":
+              # a skip by volume type, or of an unbound PVC by its phase (no emptyDir is a PVC: nothing to judge here)
+              if action != "skip" or set(cond) not in ({"volumeTypes"}, {"pvcPhase"}):
                   sys.exit("a volume policy this check does not read: %s -> %s" % (json.dumps(cond), action))
-              skipped += cond["volumeTypes"]
+              skipped += cond.get("volumeTypes", [])
           print(json.dumps(sorted(set(skipped))))
           '
       # the ConfigMap's JSON through the environment, never inside the script's quotes: a quote in it ended them

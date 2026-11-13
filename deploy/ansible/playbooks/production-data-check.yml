@@ -13,8 +13,8 @@
 # What an environment lacks by nature its inventory names: production_check_allowed_down (scrape pools) and
 # production_check_allowed_firing (alert names) - none on production.
 #
-# Usage: on the Vagrant copy, task test:copy:check (scripts/copy-checks.sh runs it); production: no task since plan 117
-#        removed deploy:upgrade:* - make one with the change that needs it
+# Usage: task check:production:data -- <-e vars>   (production; the copy: task test:copy:check runs it
+#        (scripts/copy-checks.sh))
 - name: Metrics, logs and the stores move
   hosts: target
   become: true

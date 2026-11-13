@@ -11,8 +11,8 @@
 # production's. None of them having a cluster fails, unless the inventory sets postgres_analyze_allow_none (the Vagrant
 # copy, which has no test environment): then it says so and does nothing.
 #
-# Usage: after a PostgreSQL major upgrade - on the Vagrant copy first (-i inventory/vagrant.yml); production: no task
-#        since plan 117 removed deploy:upgrade:* - make one with the change that needs it
+# Usage: task deploy:postgres:analyze -- <-e vars>   (production; the copy first: task test:copy:playbook
+#        PLAYBOOK=postgres-analyze.yml)
 - name: Planner statistics after a PostgreSQL major upgrade
   hosts: target
   become: true

@@ -1,5 +1,5 @@
 ---
-# A new volume can be provisioned after an upgrade step: a PVC on local-path (the StorageClass every production
+# A new volume can be provisioned on the copy, and after a change: a PVC on local-path (the StorageClass every production
 # volume uses), bound, written by a pod, read back by a second pod (from the volume, not the first one's cache), then
 # deleted - and its PersistentVolume and its directory on the node are gone.
 #

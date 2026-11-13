@@ -26,7 +26,7 @@ infra_ref=$1 platform_ref=$2
 cd "$ops" || exit 1
 pools_gone=${COPY_SCRAPE_POOLS_GONE:-}
 # one Ansible extra var: pool names (serviceMonitor/<ns>/<name>/<n>) and commas, nothing a key=value split would cut
-[[ $pools_gone =~ ^[A-Za-z0-9/._:-]*(,[A-Za-z0-9/._:-]+)*$ ]] \
+[[ $pools_gone =~ ^([A-Za-z0-9/._:-]+(,[A-Za-z0-9/._:-]+)*)?$ ]] \
   || { echo "COPY_SCRAPE_POOLS_GONE='$pools_gone': scrape pool names, comma-separated"; exit 1; }
 # ClickHouse's compatibility setting and users as the copy runs them: what the platform ref under test sets - a change
 # that moves the pin is held to its own value, never to a constant here. Users: the file's, plus the image's `default`

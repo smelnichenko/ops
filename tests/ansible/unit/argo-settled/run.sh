@@ -537,6 +537,33 @@ for given, want in (({}, defaults),
     check(f"the playbook's command line, {'the copy settle' if given else 'the defaults'}: quiet, polls, poll",
           got, want)
 
+# every settle of the copy that keeps the restart history labels its stage anew (build-, change-, check-<time>): one
+# label used again records no new restart and compares with the stage before its first use - the copy's fixed `build`
+# and `change` never caught a crash loop; test:copy:check's own settle is a stage too (a change's crash loop is caught
+# there, one stage after)
+tasks_ = yaml.safe_load(open("Taskfile.yml"))["tasks"]
+labels = {}
+for name, t in tasks_.items():
+    for c in (t or {}).get("cmds") or []:
+        c = str(c.get("cmd", c) if isinstance(c, dict) else c)
+        if "copy/argo-settled.yml" in c and "restart_stage=" in c:
+            labels[name] = _re.search(r"restart_stage=(\w+-\$\(date \+%Y%m%d%H%M%S\)|\S+)", c)[1]
+check("the copy's settles each label their stage anew", labels,
+      {"test:copy:argo": "build-$(date +%Y%m%d%H%M%S)", "test:copy:change": "change-$(date +%Y%m%d%H%M%S)",
+       "test:copy:check": "check-$(date +%Y%m%d%H%M%S)", "test:copy:playbook": "playbook-$(date +%Y%m%d%H%M%S)"})
+H4 = os.path.join(work, "h4.json")
+run(A, [pod("app", "a1", 0)], "--restart-history", H4, "--step", "build-1")
+run(A, [pod("app", "a1", 1)], "--restart-history", H4, "--step", "change-2")
+rc, out = run(A, [pod("app", "a1", 2)], "--restart-history", H4, "--step", "check-3")
+check("build, change, check labelled anew: a pod restarting in the change and in the check after it fails the check",
+      rc != 0, True, out)
+H5 = os.path.join(work, "h5.json")
+run(A, [pod("app", "a1", 0)], "--restart-history", H5, "--step", "build")
+run(A, [pod("app", "a1", 1)], "--restart-history", H5, "--step", "change")
+rc, out = run(A, [pod("app", "a1", 2)], "--restart-history", H5, "--step", "change")
+check("  the old fixed labels (build, change, change again): the same crash loop passed - why each is labelled anew",
+      rc, 0, out)
+
 print("argo-settled: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 PY

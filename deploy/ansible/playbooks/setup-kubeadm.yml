@@ -34,7 +34,7 @@
     # the CRI registry config_path; empty on ten, set by the Vagrant inventory for its plain-HTTP test registry
     containerd_registry_config_path: "{{ containerd_registry_config_path_override | default('') }}"
     # the container runtime: Debian's containerd (empty, as ten was built) or containerd.io at this version from
-    # Docker's apt repository - what ten runs since plan 100 (upgrade-containerd.yml); the no-downgrade check refuses a
+    # Docker's apt repository - what ten runs since its swap (upgrade-containerd.yml); the no-downgrade check refuses a
     # run on a containerd.io node without it
     containerd_io_version: "2.3.6"
     # On ten, Argo CD (infra clusters/production/argocd/apps) owns Istio, cert-manager, metrics-server, the Prometheus

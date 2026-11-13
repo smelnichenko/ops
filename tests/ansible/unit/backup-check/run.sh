@@ -80,6 +80,15 @@ def cm(data, **meta):
 check("no resource policy (its read skipped): nothing skipped", run(POLICY, _policy_cm={"skipped": True})[:2], (0, "[]"))
 check("production's policy: the ephemeral types skipped", run(POLICY, _policy_cm=cm({"policy.yaml": PRODUCTION}))[:2],
       (0, json.dumps(sorted(["emptyDir", "configMap", "secret", "projected", "downwardAPI"]))))
+# production's own: the ephemeral types, hostPath and local skipped, and an unbound PVC by its phase (read, not judged)
+WITH_PHASE = PRODUCTION.replace("emptyDir, configMap", "emptyDir, hostPath, local, configMap") + """  - conditions:
+      pvcPhase: [Pending, Lost]
+    action:
+      type: skip
+"""
+check("production's policy with its pvcPhase rule: the types skipped, the phase rule read",
+      run(POLICY, _policy_cm=cm({"policy.yaml": WITH_PHASE}))[:2],
+      (0, json.dumps(sorted(["emptyDir", "hostPath", "local", "configMap", "secret", "projected", "downwardAPI"]))))
 check("a quote in the ConfigMap (an annotation's): read, not run",
       run(POLICY, _policy_cm=cm({"policy.yaml": PRODUCTION}, annotations={"note": "it's'; touch " + W + "/ran; '"}))[:2]
       + (os.path.exists(f"{W}/ran"),),
@@ -91,7 +100,9 @@ for what, data, says in (
                                                                "capacity: '0,1Gi'")}, "does not read"),
         ("volumeTypes beside another condition", {"p.yaml": PRODUCTION.replace(
             "      volumeTypes:", "      capacity: '0,1Gi'\n      volumeTypes:")}, "does not read"),
-        ("an fs-backup action", {"p.yaml": PRODUCTION.replace("type: skip", "type: fs-backup")}, "does not read")):
+        ("an fs-backup action", {"p.yaml": PRODUCTION.replace("type: skip", "type: fs-backup")}, "does not read"),
+        ("pvcPhase beside volumeTypes", {"p.yaml": PRODUCTION.replace(
+            "      volumeTypes:", "      pvcPhase: [Pending]\n      volumeTypes:")}, "does not read")):
     rc, out, err = run(POLICY, _policy_cm=cm(data))
     check(f"refused: {what}", (rc != 0, says in err, out), (True, True, ""))
 

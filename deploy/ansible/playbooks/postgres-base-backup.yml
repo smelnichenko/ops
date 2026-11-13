@@ -5,9 +5,8 @@
 # first base backup the new major has: the old major's WAL cannot restore it, and the daily ScheduledBackup may be up
 # to a day away. The Backup object is removed afterwards; its data stays in the store.
 #
-# Usage: on the Vagrant copy, task test:copy:check (tests/ansible/copy/barman-check.yml imports it); production: no task
-#        since plan 117 removed deploy:upgrade:* - make one with the change that needs it
-#        (its variables: -e pg_namespace, -e cluster, -e pg_major)
+# Usage: task deploy:postgres:base-backup -- <-e vars>   (production; the copy: task test:copy:check runs it
+#        (barman-check.yml)) - its variables: -e pg_namespace, -e cluster, -e pg_major
 - name: CNPG backs Postgres up to its object store
   hosts: target
   become: true

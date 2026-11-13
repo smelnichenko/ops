@@ -60,35 +60,51 @@ def repo_of(url, where):
     return m.group(2)
 
 
+API = re.compile(rf"^https?://{re.escape(host)}/*$")
+
+
 def generators(gens, siblings, where):
     """Each git generator's repoURL (cloned: code) and each pullRequest.gitea generator's repositories (pulls), at the
     top or inside a matrix/merge; a matrix's list elements resolve a pull-request generator's templated repo."""
     for g in gens if isinstance(gens, list) else []:
-        if not isinstance(g, dict):
-            continue
-        if "matrix" in g or "merge" in g:
-            inner = get(get(g, "matrix", None) or get(g, "merge", None), "generators", [])
-            elements = [e for x in inner if isinstance(x, dict) for e in get(get(x, "list", {}), "elements", [])
-                        if isinstance(e, dict)]
-            generators(inner, elements, where)
-        git = get(g, "git", {})
-        if get(git, "repoURL", ""):
-            r = repo_of(str(git["repoURL"]), where)
-            if r:
-                code.add(r)
-        pr = get(get(g, "pullRequest", {}), "gitea", None)
-        if not pr:
-            continue
-        api = get(pr, "api", None)
-        if str(api or "").rstrip("/") not in (f"https://{host}", f"http://{host}") or get(pr, "owner", None) != org:
-            bad.append(f"{where}: a pullRequest generator on {api} / {get(pr, 'owner', None)} - not {host}/{org}")
-            continue
-        m = TEMPLATE.match(str(get(pr, "repo", "")))
-        names = [e.get(m.group(1)) for e in siblings] if m else [get(pr, "repo", None)]
-        if not names or not all(isinstance(n, str) and n for n in names):
-            bad.append(f"{where}: a pullRequest generator's repo {pr.get('repo')!r} not resolved")
-            continue
-        pulls.update(names)
+        if isinstance(g, dict):
+            nested(g, where)
+            git_generator(g, where)
+            pull_request_generator(g, siblings, where)
+
+
+def nested(g, where):
+    """A matrix's or merge's own generators, its list elements the siblings a pull-request generator resolves by."""
+    if "matrix" not in g and "merge" not in g:
+        return
+    inner = get(get(g, "matrix", None) or get(g, "merge", None), "generators", [])
+    elements = [e for x in inner if isinstance(x, dict) for e in get(get(x, "list", {}), "elements", [])
+                if isinstance(e, dict)]
+    generators(inner, elements, where)
+
+
+def git_generator(g, where):
+    git = get(g, "git", {})
+    if get(git, "repoURL", ""):
+        r = repo_of(str(git["repoURL"]), where)
+        if r:
+            code.add(r)
+
+
+def pull_request_generator(g, siblings, where):
+    pr = get(get(g, "pullRequest", {}), "gitea", None)
+    if not pr:
+        return
+    api = get(pr, "api", None)
+    if not API.match(str(api or "")) or get(pr, "owner", None) != org:
+        bad.append(f"{where}: a pullRequest generator on {api} / {get(pr, 'owner', None)} - not {host}/{org}")
+        return
+    m = TEMPLATE.match(str(get(pr, "repo", "")))
+    names = [e.get(m.group(1)) for e in siblings] if m else [get(pr, "repo", None)]
+    if not names or not all(isinstance(n, str) and n for n in names):
+        bad.append(f"{where}: a pullRequest generator's repo {pr.get('repo')!r} not resolved")
+        return
+    pulls.update(names)
 
 
 files = sorted(glob.glob(os.path.join(infra, "clusters", "**", "*.yaml"), recursive=True)

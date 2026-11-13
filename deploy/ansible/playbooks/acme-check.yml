@@ -8,7 +8,7 @@
 # cert-manager upgrade that broke the webhook would show only at the wildcard's next renewal - weeks later, with no
 # one watching. Run it on production after a change to cert-manager or its webhook.
 #
-# Usage: production: no task since plan 117 removed deploy:upgrade:* - make one with the change that needs it
+# Usage: task check:production:acme -- <-e vars>   (production; none on the copy (no public DNS there))
 - name: ACME issuance through production's DNS-01 solver (Let's Encrypt staging)
   hosts: target
   become: true

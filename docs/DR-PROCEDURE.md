@@ -6,8 +6,8 @@
 - Vault Pi (192.168.11.4) running with transit engine
 - `/home/sm/src/` has clones of: ops, infra, platform repos
 - The Pi backup store (versitygw on the Pi VIP, 192.168.11.5:9000): Velero's backups (bucket `velero`), CNPG's barman
-  archive and base backups (`postgres-backups`); nothing writes plan 100's Wave 0 bucket (`upgrade-backups`) since
-  plan 117 removed the upgrade tooling
+  archive and base backups (`postgres-backups`); nothing writes the retired upgrade tooling's Wave 0
+  bucket (`upgrade-backups`) any more
 
 ## Full Cluster Rebuild
 
@@ -88,7 +88,9 @@ kubectl get apps -n argocd
 
 ## Restore from Velero Backup
 
-If you have a Velero backup and want to restore data (PVCs, secrets):
+If you have a Velero backup and want to restore Kubernetes objects (secrets, config): Velero holds manifests only -
+no volume data (production's PVs are local-path hostPath, which its file-system backup never copies). The data comes
+back from its own backups: CNPG's object store, Scylla Manager, the Pis' tier-0 backup.
 
 ### After Step 5 (Argo CD has installed Velero):
 

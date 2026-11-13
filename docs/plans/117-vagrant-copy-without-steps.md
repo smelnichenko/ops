@@ -104,6 +104,36 @@ harnesses.
    skipped and the backup Completed; restore-check still restores a volume) → `vagrant:destroy`.
 6. Push ops; then the Velero change to infra/platform `main`, one on-demand backup on production must end Completed.
 
+## Full review (2026-11-13) - what changed
+
+Code review, architecture, platform reliability; every finding fixed but the ones named under Open.
+
+- **A change's inventory is judged:** `test:copy:change` (and `test:copy:playbook`) record the copy's inventory before
+  the change; after it `scripts/copy-change-inventory.sh` prints the change's own differences and fails on a
+  difference the copy had before it too (a stale copy, a leftover). Was: printed, never judged.
+- **`test:copy:check` on its own** checks the refs the copy runs (`.copy/copy-refs`), a change's as a change.
+- **Restart history:** every settle labels its stage anew (`build-`/`change-`/`check-`/`playbook-<time>`); with the
+  fixed `build`/`change` no crash loop was ever caught. `test:copy:check`'s settle is a stage.
+- **Ops changes on the copy:** `test:copy:playbook PLAYBOOK= ARGS=` - the playbook behind the Vagrant guard, both
+  isolations put back, settled, every check. **Production tasks** for the playbooks that lost `deploy:upgrade:*`:
+  `deploy:kubeadm:upgrade`, `deploy:containerd:upgrade`, `deploy:mesh:restart`, `deploy:postgres:analyze`,
+  `deploy:postgres:base-backup`, `check:production:data`, `check:production:acme`, `check:production:scylla-backup`.
+- **Pis:** Consul, Keycloak and versitygw pinned to production's too (`scripts/pi-versions.py`, its own harness);
+  `setup-consul` gets the pins.
+- **Mirror:** the fixed sync waves gone (infra main holds them; they undid a change that moved one); a change touching
+  what the overlay drops or replaces refused. The overlay read from `tests/ansible/upgrade` after the rename - fixed.
+- **Allow-list by name** (` *`) for the left-outs production upgrades (Woodpecker, kagent, SonarQube, Nexus); `? ` for
+  a Job's image production has only for a day.
+- **`defaults-follow-production`**: the node defaults against production's inventory (the step-era guard's purpose).
+- **Base guards:** a change's refs must contain `origin/main`; `test:copy:argo` checks main on its own run too.
+- **Velero (infra, platform):** hostPath/local and unbound PVCs (pvcPhase Pending/Lost) skipped too - with a policy
+  Velero resolves every PVC's PV and one it cannot find failed the backup; the comment and runbooks say Velero holds
+  manifests only; the server's logs, not a node-agent's; FailedValidation rows. `deploy:backup` from the schedule.
+- Sonar's open issues (argocd-repos.py: S3776, S5332) fixed.
+
 ## Open
+
+- process-groups' harness fails under all-core CPU load (11 of 24 runs, five timing cases; never at CI's 4 jobs in
+  the suite runs so far) - from before this plan, its own investigation next.
 
 - The ledger ConfigMap `kube-system/upgrade-ledger` on ten: delete it (a production write) once the operator OKs.

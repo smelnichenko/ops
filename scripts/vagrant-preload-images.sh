@@ -8,7 +8,7 @@
 #
 # Usage: scripts/vagrant-preload-images.sh [infra checkout, default ../infra] [platform checkout, default ../platform]
 #                                          [infra ref, default main] [platform ref, default main]
-# (the refs an upgrade step's mirror run used: scripts/vagrant-gitops-mirror.py --infra-ref/--platform-ref)
+# (the refs a change's mirror run uses: scripts/vagrant-gitops-mirror.py --infra-ref/--platform-ref)
 set -euo pipefail
 ops=$(cd "$(dirname "$0")/.." && pwd)
 infra=${1:-$ops/../infra}

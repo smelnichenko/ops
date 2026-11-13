@@ -84,26 +84,6 @@ ADDRESS_MAP = [
 PROD_LAN_PREFIX = ("192.168.11.", "192.168.56.")
 PROD_LAN = re.compile(r"192\.168\.11\.")
 
-# Changes to production's own files that are being proven in Vagrant before they go to infra (operator 2026-10-01:
-# nothing reaches production until the Vagrant tests pass and the operator approves). Each: file -> sync wave.
-# - the application sets wait for Istio (istiod wave 1, istio-cni wave 2): with argoproj.io/Application health in
-#   argocd-cm the root app waits for those, so no meshed pod starts before the sidecar injector exists
-# - once waves really wait (the health check above), the operators' own order matters: scylla-operator (wave -1) needs
-#   cert-manager's CRDs (no wave = 0), and scylla-manager (also -1) needs scylla-operator's ScyllaCluster CRD
-# - cluster-config (wave 0) holds ServiceMonitors, whose CRD comes with kube-prometheus-stack (was wave 3): Prometheus
-#   moves to -1 with the other operators (its pods are not meshed on ten, so they need not wait for Istio)
-INFRA_SYNC_WAVES = {
-    "clusters/production/argocd/apps/cert-manager.yaml": "-2",
-    "clusters/production/argocd/apps/prometheus.yaml": "-1",
-    "clusters/production/argocd/apps/scylla-manager.yaml": "0",
-    "clusters/production/argocd/apps/schnappy-mesh-envs.yaml": "4",
-    "clusters/production/argocd/apps/schnappy-data-envs.yaml": "4",
-    "clusters/production/argocd/apps/schnappy-realtime-envs.yaml": "4",
-    "clusters/production/argocd/apps/schnappy-apps-envs.yaml": "4",
-    # observability needs the infra data set's S3 secret and the mesh set's ServiceAccounts (both wave 4)
-    "clusters/production/argocd/apps/schnappy-observability.yaml": "5",
-}
-
 VALUE_FILE = re.compile(r"^(?P<indent>\s*)- (?P<q>['\"]?)(?P<path>\$values/.+?)\.yaml(?P=q)\s*$")
 HELM_KEY = re.compile(r"^(?P<indent>\s*)helm:\s*$")
 
@@ -166,43 +146,30 @@ def add_vagrant_value_files(text):
 
 def overlay_infra(repo, forgejo):
     drop(repo, "infra", INFRA_DROP)
-    for rel, wave in INFRA_SYNC_WAVES.items():
-        set_sync_wave(repo, rel, wave)
     point_apps_at_copy(repo, forgejo)
 
 
-def set_sync_wave(repo, rel, wave):
-    p = os.path.join(repo, rel)
-    text = open(p).read()
-    # infra main carries these (since plan 100's fresh-install step): nothing to do where git has the wave already
-    if f'argocd.argoproj.io/sync-wave: "{wave}"' in text:
+def masked(changed, drops, replaced):
+    """The paths a change touches that the copy's overlay drops (a path or anything under it) or replaces with its own
+    file: what the change does there never reaches the copy - mirrored, it would pass untested."""
+    def hit(path):
+        return path in replaced or any(path == d or path.startswith(d.rstrip("/") + "/") for d in drops)
+    return sorted(c for c in changed if hit(c))
+
+
+def refuse_masked(name, src, ref, drops):
+    """A change's ref (not main): refused when it touches what the overlay drops or replaces."""
+    if ref == "main":
         return
-    if "argocd.argoproj.io/sync-wave" in text:
-        new = re.sub(r'(argocd\.argoproj\.io/sync-wave: )"[-0-9]+"', rf'\g<1>"{wave}"', text, count=1)
-    else:
-        end = metadata_name_end(text)
-        new = text if end is None else (
-            text[:end] + f'  annotations:\n    argocd.argoproj.io/sync-wave: "{wave}"\n' + text[end:])
-    if new == text:
-        sys.exit(f"infra overlay: could not add the sync wave to {rel}")
-    open(p, "w").write(new)
-
-
-def metadata_name_end(text):
-    """Where the first `metadata:` block's own `  name: <value>` line ends (past its newline), None when no block has
-    one before a line outside it. A walk over the lines, not a regex: a lazy repeat of lines before the name
-    backtracks super-linearly on a long block without one. Lines are split on "\n" alone, a line without one ends
-    nothing (a CRLF file has no `metadata:` line), and a block is the lines starting with two spaces."""
-    end, block = 0, False
-    for line in text.split("\n")[:-1]:
-        end += len(line) + 1
-        if block and line.startswith("  name: ") and len(line) > len("  name: "):
-            return end
-        if line == "metadata:":
-            block = True
-        elif not line.startswith("  "):
-            block = False
-    return None
+    changed = subprocess.run(["git", "-C", src, "diff", "--name-only", f"main...{ref}"],
+                             capture_output=True, text=True, check=True).stdout.split()
+    over = os.path.join(OVERLAY, name)
+    # every overlay file is written over the repo's at its path, there or not
+    replaced = {os.path.relpath(os.path.join(r, f), over) for r, _, fs in os.walk(over) for f in fs}
+    hits = masked(changed, drops, replaced)
+    if hits:
+        sys.exit(f"REFUSED: {name} {ref} changes what the copy's overlay drops or replaces - it would pass untested:\n  "
+                 + "\n  ".join(hits))
 
 
 def point_apps_at_copy(repo, forgejo):
@@ -314,6 +281,7 @@ def main():
         for name, src, ref in (("infra", a.infra, a.infra_ref), ("platform", a.platform, a.platform_ref)):
             api(a.forgejo, user, password, "POST", "/orgs/schnappy/repos",
                 {"name": name, "default_branch": "main", "private": False}, ok=(201, 409))
+            refuse_masked(name, os.path.abspath(src), ref, INFRA_DROP if name == "infra" else PLATFORM_DROP)
             repo = os.path.join(work, name)
             run("git", "clone", "-q", "--branch", ref, "--single-branch", os.path.abspath(src), repo)
             head = subprocess.run(["git", "-C", repo, "rev-parse", "--short", "HEAD"],
