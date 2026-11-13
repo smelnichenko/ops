@@ -273,6 +273,37 @@ resolution keeps method, score and resolver version, so a new version re-resolve
     the 0-1 scale, a tie kept unresolved; a foreign city at its country's precision (no foreign gazetteer yet).
   - Measured on a hand-checked set: the 166 strings labelled (place or reach, at which level), precision and the
     review share reported in the PR.
+- **A4b as built (masi branch feat/free-text-locations, after its architecture review):**
+  - **The scoring is a simplification of plan 114's, on the 0-1 scale.** The level weights and the accept-at-6 rule are
+    dropped. A bare name's likelihood by kind is its score (town 1, alev .6, alevik .5, rural municipality .5, county .5,
+    city district .4, village .3). A form only one place answers is certain (1), and each level that agrees adds .1.
+  - **Decisions, against the plan's letter:**
+    - A town beats a namesake village (plan 114 literally gives a tie for 12 such stems - Jõhvi, Maardu, Paide...). A small
+      town beats a namesake village (46 stems - Kose, Loo, Kuusalu...). The margin (.15) equals no gap between two kinds'
+      likelihoods, so this is decided, not left to rounding.
+    - A contradicting level starts a place of its own ("Tallinn, Tartumaa" is two) rather than a penalty: never merged
+      away.
+    - A village by its bare name with nothing around it stays unresolved ("Pori" in a list of Finland's towns matched an
+      Estonian village). This replaces the threshold of 6.
+    - A tie returns what holds them all (their county, else the country), certain, and marked tied.
+  - Reach is typed: regions (EEA kept apart from the EU), countries said remote, and remote with no scope. Every region
+    word of masi's Estonia gate is among its forms (a test holds them; the gate itself untouched).
+  - `locate(raw, countryHint)`: another country's source names no Estonian place. Each place carries whether it is said
+    remote ("Tallinn (Remote)").
+  - **An address's text for free text is the part the place was named by**, its words as written (filler is taken out
+    only beside a remote or hybrid word), not the whole source text. A new resolver version must re-locate the source's
+    own text (`job_listing.location_raw`) and rewrite the LOCATION links, not re-resolve address rows in place. The
+    comment on changeset 124 now says so. A pin test holds the resolver's reading to its VERSION.
+  - Done here as well: the county-last form masi writes when the register gives no full text (turned round to the Board's
+    order).
+  - **Moved to a later step:** the Estonian case forms ("Tallinnas") and fuzzy matching of misspellings - neither occurs
+    in production's 166 job strings.
+  - **For A5:**
+    - Deduplicate identical place texts of one posting (the `address_link` key).
+    - Locate outside the write transactions (the register's form queries).
+    - Keep one resolver per pod, refreshed on a place stamp.
+    - The checked set's place-level answers for register-form lines would be house level in production once
+      `addresses:ee` is loaded; the PR's shares are the test database's.
 - **From A4a's review, for the steps after it:**
   - A5's changeset: a `tied` column (a text two candidates answered: never guessed, listed for review) and
     `resolved_country` (the resolver's country when no country row is held, a foreign one); `address.country` stays the
