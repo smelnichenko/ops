@@ -1,0 +1,265 @@
+argo-chart cert-manager cert-manager@v1.21.2
+argo-chart cnpg cloudnative-pg@0.29.1
+argo-chart external-secrets external-secrets@2.12.0
+argo-chart istio-base base@1.31.1
+argo-chart istio-cni cni@1.31.1
+argo-chart istiod istiod@1.31.1
+argo-chart kagent-crds kagent-crds@0.9.9
+argo-chart kagent kagent@0.9.9
+argo-chart metrics-server metrics-server@3.14.0
+argo-chart porkbun-webhook cert-manager-webhook-porkbun@1.0.0
+argo-chart prometheus kube-prometheus-stack@91.8.2
+argo-chart scylla-manager scylla-manager@v1.22.0
+argo-chart scylla-operator scylla-operator@v1.22.0
+argo-chart strimzi strimzi-kafka-operator@1.2.0
+argo-chart velero velero@12.2.0
+argo-chart woodpecker woodpecker@3.7.3
+containerd-unit /usr/lib/systemd/system/containerd.service
+crd gateway-api v1.5.1
+crd-name acraccesstokens.generators.external-secrets.io
+crd-name agentharnesses.kagent.dev
+crd-name agents.kagent.dev
+crd-name alertmanagerconfigs.monitoring.coreos.com
+crd-name alertmanagers.monitoring.coreos.com
+crd-name applications.argoproj.io
+crd-name applicationsets.argoproj.io
+crd-name appprojects.argoproj.io
+crd-name authorizationpolicies.security.istio.io
+crd-name backendtlspolicies.gateway.networking.k8s.io
+crd-name backuprepositories.velero.io
+crd-name backups.postgresql.cnpg.io
+crd-name backupstoragelocations.velero.io
+crd-name backups.velero.io
+crd-name beyondtrustworkloadcredentialsdynamicsecrets.generators.external-secrets.io
+crd-name certificaterequests.cert-manager.io
+crd-name certificates.cert-manager.io
+crd-name challenges.acme.cert-manager.io
+crd-name ciliumcidrgroups.cilium.io
+crd-name ciliumclusterwidenetworkpolicies.cilium.io
+crd-name ciliumendpoints.cilium.io
+crd-name ciliumidentities.cilium.io
+crd-name ciliuml2announcementpolicies.cilium.io
+crd-name ciliumloadbalancerippools.cilium.io
+crd-name ciliumnetworkpolicies.cilium.io
+crd-name ciliumnodeconfigs.cilium.io
+crd-name ciliumnodes.cilium.io
+crd-name ciliumpodippools.cilium.io
+crd-name cloudsmithaccesstokens.generators.external-secrets.io
+crd-name clusterexternalsecrets.external-secrets.io
+crd-name clustergenerators.generators.external-secrets.io
+crd-name clusterimagecatalogs.postgresql.cnpg.io
+crd-name clusterissuers.cert-manager.io
+crd-name clusterpushsecrets.external-secrets.io
+crd-name clustersecretstores.external-secrets.io
+crd-name clusters.postgresql.cnpg.io
+crd-name databaseroles.postgresql.cnpg.io
+crd-name databases.postgresql.cnpg.io
+crd-name datadownloads.velero.io
+crd-name datauploads.velero.io
+crd-name deletebackuprequests.velero.io
+crd-name destinationrules.networking.istio.io
+crd-name downloadrequests.velero.io
+crd-name ecrauthorizationtokens.generators.external-secrets.io
+crd-name envoyfilters.networking.istio.io
+crd-name externalsecrets.external-secrets.io
+crd-name failoverquorums.postgresql.cnpg.io
+crd-name fakes.generators.external-secrets.io
+crd-name gatewayclasses.gateway.networking.k8s.io
+crd-name gateways.gateway.networking.k8s.io
+crd-name gateways.networking.istio.io
+crd-name gcraccesstokens.generators.external-secrets.io
+crd-name generatorstates.generators.external-secrets.io
+crd-name githubaccesstokens.generators.external-secrets.io
+crd-name gitlabdeploytokens.generators.external-secrets.io
+crd-name grafanas.generators.external-secrets.io
+crd-name grpcroutes.gateway.networking.k8s.io
+crd-name httproutes.gateway.networking.k8s.io
+crd-name imagecatalogs.postgresql.cnpg.io
+crd-name issuers.cert-manager.io
+crd-name kafkabridges.kafka.strimzi.io
+crd-name kafkaconnectors.kafka.strimzi.io
+crd-name kafkaconnects.kafka.strimzi.io
+crd-name kafkamirrormaker2s.kafka.strimzi.io
+crd-name kafkanodepools.kafka.strimzi.io
+crd-name kafkarebalances.kafka.strimzi.io
+crd-name kafkas.kafka.strimzi.io
+crd-name kafkatopics.kafka.strimzi.io
+crd-name kafkausers.kafka.strimzi.io
+crd-name listenersets.gateway.networking.k8s.io
+crd-name mcpservers.kagent.dev
+crd-name memories.kagent.dev
+crd-name mfas.generators.external-secrets.io
+crd-name modelconfigs.kagent.dev
+crd-name modelproviderconfigs.kagent.dev
+crd-name nodeconfigs.scylla.scylladb.com
+crd-name orders.acme.cert-manager.io
+crd-name passwords.generators.external-secrets.io
+crd-name peerauthentications.security.istio.io
+crd-name podmonitors.monitoring.coreos.com
+crd-name podvolumebackups.velero.io
+crd-name podvolumerestores.velero.io
+crd-name poolers.postgresql.cnpg.io
+crd-name probes.monitoring.coreos.com
+crd-name prometheusagents.monitoring.coreos.com
+crd-name prometheuses.monitoring.coreos.com
+crd-name prometheusrules.monitoring.coreos.com
+crd-name proxyconfigs.networking.istio.io
+crd-name publications.postgresql.cnpg.io
+crd-name pushsecrets.external-secrets.io
+crd-name quayaccesstokens.generators.external-secrets.io
+crd-name referencegrants.gateway.networking.k8s.io
+crd-name remotekubernetesclusters.scylla.scylladb.com
+crd-name remotemcpservers.kagent.dev
+crd-name remoteowners.scylla.scylladb.com
+crd-name requestauthentications.security.istio.io
+crd-name restores.velero.io
+crd-name sandboxagents.kagent.dev
+crd-name scheduledbackups.postgresql.cnpg.io
+crd-name schedules.velero.io
+crd-name scrapeconfigs.monitoring.coreos.com
+crd-name scyllaclusters.scylla.scylladb.com
+crd-name scylladbclusters.scylla.scylladb.com
+crd-name scylladbdatacenternodesstatusreports.scylla.scylladb.com
+crd-name scylladbdatacenters.scylla.scylladb.com
+crd-name scylladbmanagerclusterregistrations.scylla.scylladb.com
+crd-name scylladbmanagertasks.scylla.scylladb.com
+crd-name scylladbmonitorings.scylla.scylladb.com
+crd-name scyllaoperatorconfigs.scylla.scylladb.com
+crd-name secretstores.external-secrets.io
+crd-name serverstatusrequests.velero.io
+crd-name serviceentries.networking.istio.io
+crd-name servicemonitors.monitoring.coreos.com
+crd-name sidecars.networking.istio.io
+crd-name sshkeys.generators.external-secrets.io
+crd-name strimzipodsets.core.strimzi.io
+crd-name stssessiontokens.generators.external-secrets.io
+crd-name subscriptions.postgresql.cnpg.io
+crd-name telemetries.telemetry.istio.io
+crd-name thanosrulers.monitoring.coreos.com
+crd-name tlsroutes.gateway.networking.k8s.io
+crd-name toolservers.kagent.dev
+crd-name trafficextensions.extensions.istio.io
+crd-name uuids.generators.external-secrets.io
+crd-name vaultdynamicsecrets.generators.external-secrets.io
+crd-name virtualservices.networking.istio.io
+crd-name volumesnapshotlocations.velero.io
+crd-name wasmplugins.extensions.istio.io
+crd-name webhooks.generators.external-secrets.io
+crd-name workloadentries.networking.istio.io
+crd-name workloadgroups.networking.istio.io
+crd prometheus-operator 0.94.1
+crd-protected external-secrets 25/25
+helm argocd/argocd argo-cd-10.9.7 v3.5.4
+helm kube-system/cilium cilium-1.20.2 1.20.2
+image alpine 3.20
+image alpine/k8s 1.35.9
+image amazon/aws-cli 2.37.1
+image bitnami/kubectl latest
+image busybox 1.37
+image centrifugo/centrifugo v6.9.7
+image clickhouse/clickhouse-server 26.8.15.10-alpine
+image cr.fluentbit.io/fluent/fluent-bit 5.1.3
+image curlimages/curl 8.10.1
+image curlimages/curl 8.12.1
+image docker.io/istio/install-cni 1.31.1
+image docker.io/istio/pilot 1.31.1
+image docker.io/istio/proxyv2 1.31.1
+image docker.io/library/postgres 18.3-alpine
+image docker.io/rancher/local-path-provisioner v0.0.37
+image docker.io/scylladb/scylla 2026.1.14
+image docker.io/scylladb/scylla-manager-agent 3.12.1
+image docker.io/velero/velero v1.18.4
+image docker.io/woodpeckerci/woodpecker-agent v3.20.1
+image docker.io/woodpeckerci/woodpecker-server v3.20.1
+image ecr-public.aws.com/docker/library/redis 8.6.4-alpine
+image ghcr.io/browserless/chromium latest
+image ghcr.io/cloudnative-pg/cloudnative-pg 1.30.1
+image ghcr.io/cloudnative-pg/postgresql 18.6-system-bullseye
+image ghcr.io/external-secrets/external-secrets v2.12.0
+image ghcr.io/versity/versitygw v1.8.0
+image git.pmon.dev/schnappy/admin d0eab4b
+image git.pmon.dev/schnappy/apt-cacher-ng 7b46aea
+image git.pmon.dev/schnappy/chat b744e8d
+image git.pmon.dev/schnappy/chess e5a1654
+image git.pmon.dev/schnappy/game-scp 216c611
+image git.pmon.dev/schnappy/hyperfoil latest
+image git.pmon.dev/schnappy/masi 6bb77f3
+image git.pmon.dev/schnappy/monitor 83018a8
+image git.pmon.dev/schnappy/site 3b10949
+image grafana/grafana 13.2.3
+image grafana/k6 1.7.1
+image grafana/mimir 3.2.1
+image grafana/tempo 3.1.0
+image nginx 1.27-alpine
+image opensearchproject/opensearch 3.9.0
+image postgres 17-alpine
+image prom/alertmanager v0.34.1
+image prom/blackbox-exporter v0.29.0
+image quay.io/argoproj/argocd v3.5.4
+image quay.io/cilium/cilium-envoy v1.37.6-1789133542-cbec91f666af0bf742da986d43832932dbb26b82
+image quay.io/cilium/cilium v1.20.2
+image quay.io/cilium/hubble-relay v1.20.2
+image quay.io/cilium/hubble-ui-backend v0.13.6
+image quay.io/cilium/hubble-ui v0.13.6
+image quay.io/cilium/operator-generic v1.20.2
+image quay.io/jetstack/cert-manager-cainjector v1.21.2
+image quay.io/jetstack/cert-manager-controller v1.21.2
+image quay.io/jetstack/cert-manager-webhook v1.21.2
+image quay.io/prometheus-operator/prometheus-config-reloader v0.94.1
+image quay.io/prometheus-operator/prometheus-operator v0.94.1
+image quay.io/prometheus/prometheus v3.15.0-distroless
+image quay.io/prometheus/pushgateway v1.11.3
+image quay.io/strimzi/kafka 1.2.0-kafka-4.3.1
+image quay.io/strimzi/operator 1.2.0
+image rclone/rclone 1.75.1
+image registry.k8s.io/coredns/coredns v1.14.2
+image registry.k8s.io/etcd 3.6.8-0
+image registry.k8s.io/kube-apiserver v1.36.5
+image registry.k8s.io/kube-controller-manager v1.36.5
+image registry.k8s.io/kube-scheduler v1.36.5
+image registry.k8s.io/kube-state-metrics/kube-state-metrics v2.20.0
+image registry.k8s.io/metrics-server/metrics-server v0.9.0
+image scylladb/scylla 2026.1.14
+image scylladb/scylla 2026.2.5
+image scylladb/scylla-manager 3.12.1
+image scylladb/scylla-manager-agent 3.12.1
+image scylladb/scylla-operator 1.22.0
+image sonarqube 26.9.0.129388-community
+image talinx/cert-manager-webhook-porkbun 1.0.0
+image valkey/valkey 9.1.2-alpine
+image velero/velero-plugin-for-aws v1.14.4
+k8s server v1.36.5
+kafka-metadata schnappy-production/schnappy-production 4.3-IV0
+os debian 13.7
+pi pi1 caddy 2.10.0
+pi pi1 consul 1.20.6
+pi pi1 forgejo 15.0.3
+pi pi1 glusterfs-server 11.1-6
+pi pi1 haproxy 3.0.11-1+deb13u3
+pi pi1 keepalived 1:2.3.3-1
+pi pi1 keycloak 26.5.7
+pi pi1 nexus 3.90.1-01
+pi pi1 patroni 4.1.0
+pi pi1 pgbouncer 1.24.1-1+deb13u2
+pi pi1 postgresql-17 17.11-0+deb13u1
+pi pi1 vault 1.21.3
+pi pi1 versitygw 1.8.0
+pi pi2 caddy 2.10.0
+pi pi2 consul 1.20.6
+pi pi2 forgejo 15.0.3
+pi pi2 glusterfs-server 11.1-6
+pi pi2 haproxy 3.0.11-1+deb13u3
+pi pi2 keepalived 1:2.3.3-1
+pi pi2 keycloak 26.5.7
+pi pi2 nexus 3.90.1-01
+pi pi2 patroni 4.1.0
+pi pi2 pgbouncer 1.24.1-1+deb13u2
+pi pi2 postgresql-17 17.11-0+deb13u1
+pi pi2 vault 1.21.3
+pi pi2 versitygw 1.8.0
+pkg containerd.io 2.3.6-1~debian.13~trixie (held)
+pkg cri-tools 1.36.0-1.1 (held)
+pkg kubeadm 1.36.5-1.1 (held)
+pkg kubectl 1.36.5-1.1 (held)
+pkg kubelet 1.36.5-1.1 (held)
+pkg kubernetes-cni 1.9.1-1.1 (held)

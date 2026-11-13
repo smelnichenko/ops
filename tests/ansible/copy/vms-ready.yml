@@ -1,0 +1,74 @@
+---
+# Wait until the Vagrant copy is usable after its VMs (re)start: the Pis isolated from production, Vault ACTIVE on the
+# Pi VIP and the kubeadm node Ready.
+# After a cold start of both Pis, Vault is unsealed but takes ~45 s to elect an active node (Consul lock); in between
+# every request bounces between standbys (health 474, "Exceeded 30 redirects") and the Vault seeding refuses to run
+# (seen 2026-10-02).
+#
+# Usage: ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/vms-ready.yml
+- name: The VMs answer SSH (a freshly started VM's private interface comes up a while after `vagrant up` returns)
+  hosts: target:pi1:pi2
+  gather_facts: false
+  tasks:
+    - name: Wait for SSH
+      ansible.builtin.wait_for_connection:
+        timeout: 300
+
+    - name: Vagrant VMs only (fails closed on any other host)
+      ansible.builtin.import_tasks: ../vagrant-only.yml
+
+# isolated from production before anything else runs
+- name: The Pi VMs are isolated from production
+  ansible.builtin.import_playbook: ../isolate-pis.yml
+
+# The Gluster volumes mount at boot by themselves (setup-gluster's gluster-volumes-ready) - checked
+# here, never mounted by the harness: a copy that needs a hand after a reboot hides the gap production has.
+- name: The Pis' Gluster volumes are mounted and their services up
+  hosts: pi1:pi2
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Vagrant VMs only (fails closed on any other host)
+      ansible.builtin.import_tasks: ../vagrant-only.yml
+
+    - name: Every Gluster volume in fstab mounted from it, Forgejo and versitygw active
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          awk '$1 !~ /^#/ && $3 == "glusterfs" {print $1, $2}' /etc/fstab | while read -r src mnt; do
+            now=$(findmnt -rn -o SOURCE --mountpoint "$mnt" || echo none)
+            if [ "$now" = "$src" ]; then echo "volume ok $mnt"; else echo "volume BAD $mnt: mounted $now, fstab $src"; fi
+          done
+          for s in forgejo versitygw; do echo "$s $(systemctl is-active "$s" || true)"; done
+      register: _gluster
+      changed_when: false
+      retries: 30
+      delay: 10
+      until: >-
+        _gluster.rc == 0
+        and (_gluster.stdout_lines | select('match', '^volume ok ') | list | length) > 0
+        and (_gluster.stdout_lines | select('match', '^volume BAD ') | list | length) == 0
+        and 'forgejo active' in _gluster.stdout_lines and 'versitygw active' in _gluster.stdout_lines
+
+- name: The Vagrant VMs are ready
+  hosts: target
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Vagrant VMs only (fails closed on any other host)
+      ansible.builtin.import_tasks: ../vagrant-only.yml
+
+    - name: Vault answers on the Pi VIP with an active node (standbyok - the VIP may sit on the standby, which forwards)
+      ansible.builtin.uri:
+        url: "https://{{ keepalived_vip }}:8200/v1/sys/health?standbyok=true"
+        validate_certs: false
+        timeout: 5
+        status_code: [200]
+      register: _vault
+      retries: 60
+      delay: 5
+      until: _vault.status == 200
+
+    - name: The node is Ready (the API server may still be starting)
+      ansible.builtin.import_tasks: tasks/node-ready.yml

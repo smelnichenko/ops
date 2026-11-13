@@ -1,8 +1,7 @@
 ---
-# The data paths work, read only - every step's check, production's (scripts/upgrade-production.py's check, in done)
-# and the full run's (one of the parallel step checks): Argo settled and the inventory as
-# expected say nothing of whether metrics, logs and the stores still move. Each read waits a while for the step's
-# restarts to settle:
+# The data paths work, read only - one of the Vagrant copy's parallel checks (scripts/copy-checks.sh): Argo settled
+# and the inventory as expected say nothing of whether metrics, logs and the stores still move. Each read waits a while
+# for a change's restarts to settle:
 #   - Prometheus: every active scrape target up;
 #   - Mimir: a sample remote-written in the last two minutes;
 #   - ClickHouse: container log rows of the last two minutes (Fluent Bit -> logs.podlogs);
@@ -14,7 +13,8 @@
 # What an environment lacks by nature its inventory names: production_check_allowed_down (scrape pools) and
 # production_check_allowed_firing (alert names) - none on production.
 #
-# Usage: task deploy:upgrade:done STEP=<step>   (every check of a step runs it)
+# Usage: on the Vagrant copy, task test:copy:check (scripts/copy-checks.sh runs it); production: no task since plan 117
+#        removed deploy:upgrade:* - make one with the change that needs it
 - name: Metrics, logs and the stores move
   hosts: target
   become: true

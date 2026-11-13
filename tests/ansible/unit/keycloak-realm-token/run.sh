@@ -1,5 +1,5 @@
 #!/bin/bash
-# tests/ansible/upgrade/keycloak-realm.yml's admin token: asked of a Keycloak that may still be starting (the seed
+# tests/ansible/copy/keycloak-realm.yml's admin token: asked of a Keycloak that may still be starting (the seed
 # runs right after the Pis' services - Caddy answers 502 until Keycloak listens), it waits for it - each answer judged
 # as Ansible judges its until - for as long as a Keycloak start takes (the restart's own wait, 240 s), not failed at
 # the first 502 with nothing said.
@@ -17,7 +17,7 @@ def check(name, got, want):
     global fails
     fails += got != want
     print(("PASS " if got == want else "FAIL ") + name + ("" if got == want else f": got {got}, want {want}"))
-play = next(p for p in yaml.safe_load(open("tests/ansible/upgrade/keycloak-realm.yml")) if p.get("hosts") == "pi1")
+play = next(p for p in yaml.safe_load(open("tests/ansible/copy/keycloak-realm.yml")) if p.get("hosts") == "pi1")
 t = next(t for t in play["tasks"] if t.get("name") == "Keycloak admin token")
 reg = t.get("register")
 ok = {"status": 200, "json": {"access_token": "x"}}

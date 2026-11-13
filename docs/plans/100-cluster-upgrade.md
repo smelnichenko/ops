@@ -1,6 +1,10 @@
 # Plan 100 — upgrade the cluster to current releases
 
-Status: **IN PROGRESS** (2026-10-11): step 02 in production since 2026-10-03, nothing since. Reviews 1-11 done; full
+Status: **DONE** - every step in production, the last 2026-10-16 01:27. Its step harness (the step files,
+`upgrade-production.py`, `task test:upgrade:*` / `deploy:upgrade:*`) was removed 2026-11-13 by plan 117: the Vagrant
+copy is now built from main, which is production; the paths below are the removed harness's.
+
+Status 2026-10-11 (history): **IN PROGRESS**: step 02 in production since 2026-10-03, nothing since. Reviews 1-11 done; full
 run 14 found eight defects across seven restarts (2026-10-10, below), every step then green on the copy; review 11's
 findings fixed, each with a failing test. Next: gate, push, one full run (its proof), then production step by step with
 the operator's go: `task deploy:vault-eso` first, a Wave 0 backup before every one-way step, every stateful step shown

@@ -6,10 +6,9 @@ vars:
   TARGET_HOST: '{{.TARGET_HOST | default "192.168.11.2"}}'
   TARGET_USER: '{{.TARGET_USER | default "sm"}}'
   SRC_DIR: '{{.SRC_DIR | default "../"}}'
-  # the full run's deciding settles after the build and each step: a 120 s quiet window, green held 2 polls 5 s apart -
-  # a step's restarts are judged again by the next step's settle (its proof recorded only then), the last step's by
-  # test:upgrade:final-settle at production's own values (scripts/upgrade-production.py settle-values)
-  STEP_SETTLE: -e restart_quiet=120 -e stable_polls=2 -e poll_seconds=5
+  # the Vagrant copy's deciding settles (after its build and after a change): a 120 s quiet window, green held 2 polls 5 s
+  # apart - a slower crash loop settles once and the restart history fails it at the next settle
+  COPY_SETTLE: -e restart_quiet=120 -e stable_polls=2 -e poll_seconds=5
 
 tasks:
   default:
@@ -356,7 +355,7 @@ tasks:
     internal: true
     deps: [deploy:install]
     vars:
-      # extra arguments for the Pi service playbooks (the upgrade copy pins the Pis' versions to production's)
+      # extra arguments for the Pi service playbooks (the Vagrant copy pins the Pis' versions to production's)
       PI_ARGS: '{{.PI_ARGS | default ""}}'
     cmds:
       # before anything is installed: the Pi VMs would otherwise resolve *.pmon.dev to production and route to its LAN
@@ -387,13 +386,20 @@ tasks:
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-kubeadm.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-host-hardening.yml
 
-  # ============== UPGRADE TEST (the Vagrant copy of production) ==============
-  _upgrade:base:
+  # ============== THE VAGRANT COPY OF PRODUCTION (plan 117) ==============
+  # Production as it runs now: the Pis and the node at production's versions (read from production), Argo CD on
+  # infra/platform main - production's git state. A change (branches of ../infra and/or ../platform) is applied to a
+  # built copy as production receives it - mirrored to the copy's Forgejo, Argo syncs it - and then every check runs:
+  # none is chosen per change. The checks live in tests/ansible/copy/, the run's working files in .copy/.
+
+  test:copy:inventory:
+    desc: "Read-only: production's version inventory now (ten and both Pis) into tests/ansible/copy/prod-inventory.txt, and the Pis' service versions the copy installs into tests/ansible/copy/pi-versions.yml"
+    cmds:
+      - cmd: scripts/production-inventory.sh
+
+  _copy:base:
     internal: true
     deps: [deploy:install]
-    vars:
-      # setup-kubeadm's extra arguments (a build at the targets: its target state, not ten's history)
-      BASE_ARGS: '{{.BASE_ARGS | default ""}}'
     cmds:
       # from nothing: every VM destroyed, and proven gone, before the build
       - cmd: vagrant destroy -f
@@ -402,452 +408,142 @@ tasks:
           left=$(vagrant status --machine-readable | awk -F, '$3 == "state" && $4 != "not_created" {print $2 "=" $4}')
           [ -z "$left" ] || { echo "VMs not destroyed: $left"; exit 1; }
       - cmd: vagrant up
-      # the Pis at production's versions (the setup playbooks install their patch targets where a service is missing)
+      # the Pis at production's versions (pi-versions.yml: what the Pis run, where the playbooks pin another)
       - task: _vagrant:pi-stack
         vars:
-          PI_ARGS: -e @../../tests/ansible/upgrade/pi-baseline.yml
+          PI_ARGS: -e @../../tests/ansible/copy/pi-versions.yml
       # the Pis' shared Gluster volumes, as in production - the backup store's data dir among them: without it each
-      # Pi kept its own store, and a VIP on pi2 found no velero bucket (full run 4, 2026-10-04)
+      # Pi kept its own store, and a VIP on pi2 found no velero bucket (2026-10-04)
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-gluster.yml
       # the store answers on the Gluster volume, on both Pis, with every bucket (its tasks again, idempotent)
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-pi-services.yml --tags versitygw
       # the Pi VIP, as in production (Vault, Git and the backup store are reached through it)
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-keepalived.yml
       # as on ten: Argo CD owns Istio, cert-manager, metrics-server, the Prometheus stack and the data operators
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-kubeadm.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml -e platform_by_argo_override=true {{.BASE_ARGS}}
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-host-hardening.yml
-
-  test:upgrade:baseline:
-    desc: Build the Vagrant stack at production's versions and diff its version inventory against production's (VMs stay up)
-    cmds:
-      - task: _upgrade:base
-      - task: _upgrade:baseline-diff
-
-  test:upgrade:baseline:resume:
-    desc: Re-run the kubeadm stack on the existing Vagrant VMs and diff the inventory again (after a fix; no rebuild)
-    deps: [deploy:install]
-    cmds:
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-kubeadm.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml -e platform_by_argo_override=true
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-host-hardening.yml
-      - task: _upgrade:baseline-diff
 
-  _upgrade:baseline-diff:
-    internal: true
+  test:copy:build:
+    desc: Build the Vagrant copy of production from nothing - production's inventory read first, the Pis and the node at its versions, every VM booted cold once, then the Argo layer on infra/platform main; ends with the copy's inventory against production's (VMs stay up)
     cmds:
-      # the packages setup-kubeadm holds and production does not, put back as on ten (its unhold alone)
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/production-state.yml --tags holds
-      - cmd: scripts/vagrant-inventory.sh
-      - cmd: scripts/inventory-diff.sh tests/ansible/upgrade/prod-inventory.txt .upgrade/vagrant-inventory.txt
+      # the mirror clones the LOCAL repos: their main must be origin's (production's) - refused otherwise
+      - cmd: scripts/copy-main-current.sh ../infra ../platform
+      - task: test:copy:inventory
+      - task: _copy:base
+      # every VM shut down and booted cold once, as a node and the Pis come back after an outage: the boot order of the
+      # Pi stack (Gluster mounts, Consul, Patroni, Vault's unseal) is part of what the build proves
+      - cmd: vagrant halt
+      - cmd: vagrant up --no-provision
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/vms-ready.yml
+      - task: test:copy:argo
 
-  test:upgrade:argo:
-    desc: On the baseline VMs, add the Argo layer as on ten - seed Vault, mirror infra/platform (main, or INFRA_REF/PLATFORM_REF), preload app images, install Argo CD - and wait until every app is green
+  test:copy:argo:
+    desc: On the built VMs, add the Argo layer as on ten - seed Vault, mirror infra/platform main, preload app images, install Argo CD - and wait until every app is green; seed the data the checks read, record the scrape pools; the copy's inventory against production's
     deps: [deploy:install]
     vars:
-      INFRA_REF: '{{.INFRA_REF | default "main"}}'
-      PLATFORM_REF: '{{.PLATFORM_REF | default "main"}}'
-      # the inventory the copy must show: production's (the baseline), or the one the last step leads to
-      EXPECTED: '{{.EXPECTED | default "tests/ansible/upgrade/prod-inventory.txt"}}'
-      ALLOWED_MISSING: '{{.ALLOWED_MISSING | default "tests/ansible/upgrade/vagrant-allowed-missing.txt"}}'
-      # ClickHouse's compatibility setting and users at that state (survival-check's defaults: the baseline's)
-      CLICKHOUSE_COMPAT: '{{.CLICKHOUSE_COMPAT | default ""}}'
-      CLICKHOUSE_USERS: '{{.CLICKHOUSE_USERS | default ""}}'
+      ALLOWED_MISSING: tests/ansible/copy/vagrant-allowed-missing.txt
     cmds:
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/vms-ready.yml
-      # production's own seeding playbook, with test-only values (tests/ansible/upgrade/vagrant-secrets.env), in an
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/vms-ready.yml
+      # production's own seeding playbook, with test-only values (tests/ansible/copy/vagrant-secrets.env), in an
       # EMPTY environment: this Taskfile loads ops/.env (production's secrets) into every task, and a variable the
       # Vagrant file lacked would otherwise reach the Vagrant Vault with production's value
-      - cmd: env -i HOME="$HOME" PATH="$PATH" bash -c 'set -a && . tests/ansible/upgrade/vagrant-secrets.env && set +a && cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/seed-vault-secrets.yml'
+      - cmd: env -i HOME="$HOME" PATH="$PATH" bash -c 'set -a && . tests/ansible/copy/vagrant-secrets.env && set +a && cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/seed-vault-secrets.yml'
       # production's scoped Vault token for the stale-PR-env sweeper (argocd/vault-cleanup-token), as on ten
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-vault-cleanup-policy.yml
-      - cmd: env -i HOME="$HOME" PATH="$PATH" scripts/vagrant-gitops-mirror.py --infra-ref {{.INFRA_REF}} --platform-ref {{.PLATFORM_REF}}
+      - cmd: env -i HOME="$HOME" PATH="$PATH" scripts/vagrant-gitops-mirror.py --infra-ref main --platform-ref main
       # Argo CD's Forgejo account on the copy, as production's (its token in the Vagrant Vault, from which setup-argocd
       # gives the repo-creds their credentials and the copy's ExternalSecret merges them): after the mirror (its repos),
       # before setup-argocd. Its infra the mirrored copy (no PR-env generator - the copy's committed list)
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-argocd-reader.yml -e reader_repos_file=../../../tests/ansible/upgrade/vagrant-argocd-reader-repos.yml
-      - cmd: scripts/vagrant-preload-images.sh ../infra ../platform {{.INFRA_REF}} {{.PLATFORM_REF}}
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-argocd-reader.yml -e reader_repos_file=../../../tests/ansible/copy/vagrant-argocd-reader-repos.yml
+      - cmd: scripts/vagrant-preload-images.sh ../infra ../platform main main
       # production's floating tags (postgresql:17, ...) as ten runs them, not today's builds of those tags
       - cmd: scripts/vagrant-preload-floating.sh
       # isolate the cluster from production (DNS, network - proven by a probe) and connect ESO to the Vagrant Vault
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/isolate-cluster.yml
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/isolate-cluster.yml
       # objects ten has that no git repo creates (each documented in the playbook), production's wildcard certificate too
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/production-state.yml{{if .UPGRADE_FROM}} -e upgrade_from={{.UPGRADE_FROM}}{{end}}
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/production-state.yml
       # as on the Pis: Caddy serves git/auth/nexus.pmon.dev on 443 with that wildcard
       - cmd: env -i HOME="$HOME" PATH="$PATH" bash -c 'cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-caddy.yml'
       # the schnappy realm, which production keeps only in its Keycloak database: from the auth chart's import + Vault.
       # Before Argo: istiod fetches the realm's keys when it starts
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/keycloak-realm.yml
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/keycloak-realm.yml
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-argocd.yml
-      # Argo CD as production's until step 31 runs setup-argocd on ten (no Application health check, no root retries;
-      # its Job health check below, once the build has settled)
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/production-argocd-state.yml --skip-tags job-health{{if .UPGRADE_FROM}} -e upgrade_from={{.UPGRADE_FROM}}{{end}}
-      # the Applications' names recorded: every step's waits want exactly these. The deciding settle's quiet (120 s,
-      # 2 polls 5 s apart): a fresh boot's pods restart while what they need comes up, and each restart began 300 s
-      # anew (15 of the build's 49 minutes); a crash loop slower than that is caught by the restart history once two
-      # steps have recorded it (step 00's settle records only)
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/argo-settled.yml -e record_apps=true {{.STEP_SETTLE}}
-      # data every upgrade step must keep (verified after each: test:upgrade:step)
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/data-check.yml -e mode=seed
-      # data of the one-way observability steps (ClickHouse rows, Grafana dashboards, a Tempo trace, Mimir's past)
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/survival-check.yml -e mode=seed{{if .CLICKHOUSE_COMPAT}} -e clickhouse_compat='{{.CLICKHOUSE_COMPAT}}'{{end}}{{if .CLICKHOUSE_USERS}} -e clickhouse_users='{{.CLICKHOUSE_USERS}}'{{end}}
-      # the scrape pools and their target counts, the record every step's metrics check compares with
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/metrics-check.yml -e record_scrape_pools=true
-      # production's k6 smoke once more, on demand (the chart's PostSync hook ran it already, as in production) - the
-      # Job of the refs mirrored (the targets build's are the last step's, not main's)
-      - cmd: scripts/vagrant-smoke.sh {{.INFRA_REF}} {{.PLATFORM_REF}}
-      # ten's Job health check on the copy until step 31, set only now: the cold build's k6 hook judged by it (a failed
-      # pod Degrades the Job, a latency miss before its retry) failed the build at random
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/production-argocd-state.yml --tags job-health{{if .UPGRADE_FROM}} -e upgrade_from={{.UPGRADE_FROM}}{{end}}
+      # the Applications' names recorded: a change's waits want exactly these (unless it adds or removes apps). The
+      # deciding settle's quiet (120 s, 2 polls 5 s apart): a fresh boot's pods restart while what they need comes up
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/argo-settled.yml -e record_apps=true -e restart_stage=build {{.COPY_SETTLE}}
+      # data every change must keep (verified by test:copy:check)
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/data-check.yml -e mode=seed
+      # the observability data a change must keep (ClickHouse rows, Grafana dashboards, a Tempo trace, Mimir's past)
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/survival-check.yml -e mode=seed
+      # the scrape pools and their target counts, the record the metrics check compares with
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/metrics-check.yml -e record_scrape_pools=true
+      # production's k6 smoke once more, on demand (the chart's PostSync hook ran it already, as in production)
+      - cmd: scripts/vagrant-smoke.sh main main
       # every version the Vagrant copy runs is production's (minus the documented left-outs)
       - cmd: scripts/vagrant-inventory.sh
-      - cmd: scripts/inventory-diff.sh {{.EXPECTED}} .upgrade/vagrant-inventory.txt {{.ALLOWED_MISSING}}
+      - cmd: scripts/inventory-diff.sh tests/ansible/copy/prod-inventory.txt .copy/vagrant-inventory.txt {{.ALLOWED_MISSING}}
 
-  test:upgrade:step:
-    desc: Apply one upgrade step (tests/ansible/upgrade/steps/<STEP>.txt, its upgrade/NN-* branches in ../infra and ../platform, its playbooks) to the running Vagrant copy and prove it - Argo synced to it, every pod ready, the seeded data, a Velero backup, a new volume, every scrape target up, production's k6 smoke, the step's expected inventory
+  test:copy:change:
+    desc: "Apply a change to the built copy as production receives it - INFRA_REF and/or PLATFORM_REF (branches of ../infra, ../platform; main where not given) mirrored to the copy's Forgejo, Argo settled on them - then every check (test:copy:check). APPS_CHANGED=true when the change adds or removes Argo apps; SCRAPE_POOLS_GONE=<pool>,<pool> for scrape pools it removes on purpose"
     deps: [deploy:install]
-    requires:
-      vars: [STEP]
     vars:
-      # each repo's highest upgrade/NN-* branch up to this step (else main), checked to stack on the previous one
-      INFRA_REF:
-        sh: set -o pipefail; scripts/upgrade-expected-inventory.py --refs {{.STEP}} | cut -d' ' -f1
-      PLATFORM_REF:
-        sh: set -o pipefail; scripts/upgrade-expected-inventory.py --refs {{.STEP}} | cut -d' ' -f2
-      # apps the step leaves OutOfSync on purpose (its argo-out-of-sync lines), allowed only after its playbooks
-      OUT_OF_SYNC:
-        sh: scripts/upgrade-expected-inventory.py --out-of-sync {{.STEP}}
-      BACKUP_CHECK:
-        sh: scripts/upgrade-expected-inventory.py --backup-check {{.STEP}}
-      SCYLLA_BACKUP_CHECK:
-        sh: scripts/upgrade-expected-inventory.py --scylla-backup-check {{.STEP}}
-      BARMAN_CHECK:
-        sh: scripts/upgrade-expected-inventory.py --barman-check {{.STEP}}
-      # the PostgreSQL major the step moves to (its base backup taken on it), empty for none
-      PG_MAJOR:
-        sh: scripts/upgrade-expected-inventory.py --pg-major {{.STEP}}
-      # with a settle before the playbooks (playbook or out-of-sync lines) the base backup is taken right after it
-      BARMAN_EARLY:
-        sh: |
-          [ "$(scripts/upgrade-expected-inventory.py --barman-after-merge {{.STEP}})" = yes ] \
-            && [ -n "$(scripts/upgrade-expected-inventory.py --playbooks {{.STEP}})$(scripts/upgrade-expected-inventory.py --out-of-sync {{.STEP}})" ] \
-            && echo yes || echo no
-      RESTORE_CHECK:
-        sh: scripts/upgrade-expected-inventory.py --restore-check {{.STEP}}
-      SWEEPER_CHECK:
-        sh: scripts/upgrade-expected-inventory.py --sweeper-check {{.STEP}}
-      CLICKHOUSE_COMPAT:
-        sh: scripts/upgrade-expected-inventory.py --clickhouse-compat {{.STEP}}
-      CLICKHOUSE_USERS:
-        sh: scripts/upgrade-expected-inventory.py --clickhouse-users {{.STEP}}
-      # the scrape pools the steps up to this one removed on purpose (their scrape-pool-gone lines)
-      SCRAPE_POOLS_GONE:
-        sh: scripts/upgrade-expected-inventory.py --scrape-pools-gone {{.STEP}}
-      CERT_RENEW:
-        sh: scripts/upgrade-expected-inventory.py --cert-renew {{.STEP}}
-      RESTARTS_CONTROL_PLANE:
-        sh: scripts/upgrade-expected-inventory.py --restarts-control-plane {{.STEP}}
-      TEMPO_FLUSH:
-        sh: scripts/upgrade-expected-inventory.py --tempo-flush {{.STEP}}
-      RESTORE_UNDO:
-        sh: scripts/upgrade-expected-inventory.py --restore-undo {{.STEP}}
-      WAVE0:
-        sh: scripts/upgrade-expected-inventory.py --wave0 {{.STEP}}
-      # host-side changes (playbook lines): only then a settle before them is needed - without, the deciding settle
-      # below waits for the same sync on its own
-      HAS_PLAYBOOKS:
-        sh: p=$(scripts/upgrade-expected-inventory.py --playbooks {{.STEP}}) || exit 1; if [ -n "$p" ]; then echo yes; else echo no; fi
-      # the VMs' readiness checked again unless the step before it, green in this same run (PREV_STEP, the full run's),
-      # changed nothing on a host (no playbook lines): its checks proved them as they are. A step run alone checks all
-      HOST_RECHECK:
-        sh: |
-          if [ -z "{{.PREV_STEP}}" ]; then echo yes; exit 0; fi
-          p=$(scripts/upgrade-expected-inventory.py --playbooks '{{.PREV_STEP}}') || exit 1
-          if [ -n "$p" ]; then echo yes; else echo no; fi
+      INFRA_REF: '{{.INFRA_REF | default "main"}}'
+      PLATFORM_REF: '{{.PLATFORM_REF | default "main"}}'
+      APPS_CHANGED: '{{.APPS_CHANGED | default "false"}}'
+      SCRAPE_POOLS_GONE: '{{.SCRAPE_POOLS_GONE | default ""}}'
     cmds:
-      - cmd: |
-          if [ "{{.HOST_RECHECK}}" = yes ]; then
-            cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/vms-ready.yml
-          else
-            echo "VMS READY: as {{.PREV_STEP}} left them (green, no host changed since)"
-          fi
-      # Wave 0 first, as production takes it before a one-way step changes anything: each of the step's wave0 stores
-      # backed up into the Pi store and its restore rehearsed - at the versions the step starts from, not only at the
-      # baseline
-      - cmd: |
-          set -euo pipefail
-          for store in {{.WAVE0}}; do
-            echo "=== WAVE 0 $store"
-            task test:upgrade:wave0 STORES="$store"
-          done
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/vms-ready.yml
+      # the change's images on the node before Argo sees it - a pull after the push raced Argo's own poll
       - cmd: scripts/vagrant-preload-images.sh ../infra ../platform {{.INFRA_REF}} {{.PLATFORM_REF}}
-      # production's pre-pull (playbooks/upgrade-prepull.yml, at the step's merges) on the copy's node, with the images
-      # it would pull: the preload's found there, anything else pulled, the image store's room read - the playbook run on
-      # a node before production runs it
-      - cmd: |
-          set -euo pipefail
-          imgs=$(scripts/upgrade-production.py prepull-images {{.STEP}})
-          if [ -n "$imgs" ]; then
-            cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/upgrade-prepull.yml -e "images=$imgs"
-          fi
-      # a step that replaces Tempo's major (tempo-flush line): a trace pushed and Tempo flushed right before the push, as
-      # production's merge flushes after its pre-pull - the trace wanted back after the step (below)
-      - cmd: |
-          if [ -n "{{.TEMPO_FLUSH}}" ]; then
-            cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/tempo-flush.yml -e mode=flush
-          fi
-      # then the step's commits to Argo (production's merge): the images are on the node by now - a pre-pull after the push
-      # raced Argo's own poll
       - cmd: env -i HOME="$HOME" PATH="$PATH" scripts/vagrant-gitops-mirror.py --infra-ref {{.INFRA_REF}} --platform-ref {{.PLATFORM_REF}}
-      # Argo fetches the pushed commits within its 3-minute poll; the wait holds until every app is synced to them -
-      # before a step's playbooks only (the cluster side first); a step without them is waited for once, below
-      - cmd: |
-          if [ "{{.HAS_PLAYBOOKS}}" = yes ] || [ -n "{{.OUT_OF_SYNC}}" ]; then
-            cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/argo-settled.yml -e expect_mirror=true -e stable_polls=1 -e poll_seconds=3 -e expect_apps=true
-          else
-            echo "SETTLE BEFORE PLAYBOOKS: none (no playbook or out-of-sync lines)"
-          fi
-      # a barman-after-merge step (PostgreSQL 18): its base backup where production's merge takes it, as soon as the
-      # cluster side settled - before the preview and the playbooks (below otherwise, after the step's checks)
-      - cmd: |
-          if [ "{{.BARMAN_EARLY}}" = yes ]; then
-            cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/barman-check.yml -e pg_major={{.PG_MAJOR}}
-          fi
-      # the step's preview, as production takes it after the merge: its playbook lines in check mode (each probe reads the
-      # real state, nothing changes) - so the production preview is proven to pass
-      - cmd: |
-          if [ "{{.HAS_PLAYBOOKS}}" = yes ]; then scripts/upgrade-step-playbooks.sh --check {{.STEP}}; fi
-      # host-side changes (this step's playbook lines), after the cluster side
-      - cmd: scripts/upgrade-step-playbooks.sh {{.STEP}}
-      # still isolated from production, proven every step: a Kubernetes upgrade rewrites CoreDNS - after a step's
-      # playbook lines the isolation is applied again, the Pis' too (a playbook on a Pi may rewrite what isolates it -
-      # otherwise applied again only at the next step's start, the step's checks run in between); the cluster's proof is
-      # one of the step's parallel checks, every step
-      - cmd: |
-          set -euo pipefail
-          if [ "{{.HAS_PLAYBOOKS}}" = yes ]; then
-            cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/isolate-pis.yml
-            venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/isolate-cluster.yml
-          fi
-      # settled again after the host-side changes: an Argo CD upgrade left the root app stuck (2026-10-03, Argo CD 3.3.14),
-      # which only the next step's first wait saw
-      # its quiet window 120 s, held green for 2 polls of 5 s (production's own settle keeps 300 s and 4 polls of 10 s):
-      # it took 2.3 of a step's 5.4 minutes (full run 2026-10-06), mostly waiting out 300 s after a restart; a crash
-      # loop slower than 120 s settles here once, and the restart history fails the next step on it
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/argo-settled.yml -e expect_mirror=true -e allow_out_of_sync={{.OUT_OF_SYNC}} -e expect_apps=true -e restart_step={{.STEP}} -e restarts_expected={{.RESTARTS_CONTROL_PLANE}} {{.STEP_SETTLE}}
-      # the step's independent checks at the same time - data, survival, storage, metrics, the k6 smoke
-      # (scripts/upgrade-step-checks.sh says what each proves): a step pays the slowest, not their sum
-      - cmd: scripts/upgrade-step-checks.sh '{{.INFRA_REF}}' '{{.PLATFORM_REF}}' '{{.CLICKHOUSE_COMPAT}}' '{{.CLICKHOUSE_USERS}}' '{{.SCRAPE_POOLS_GONE}}'
-      - cmd: |
-          if [ -n "{{.TEMPO_FLUSH}}" ]; then
-            cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/tempo-flush.yml -e mode=verify
-          fi
-      # CNPG's WAL archiving and a fresh barman base backup - only after a step that changes CNPG or Postgres (the step
-      # file's barman-check line): the backup production's data depends on
-      - cmd: |
-          if [ "{{.BARMAN_CHECK}}" != yes ]; then
-            echo "BARMAN CHECK: not after this step (no barman-check line)"
-          elif [ "{{.BARMAN_EARLY}}" = yes ]; then
-            echo "BARMAN CHECK: taken after the merges settled (barman-after-merge)"
-          else
-            cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/barman-check.yml -e pg_major={{.PG_MAJOR}}
-          fi
-      # every Certificate renewed and Ready again - only after a step that changes cert-manager (cert-renew line)
-      - cmd: |
-          if [ "{{.CERT_RENEW}}" = yes ]; then
-            cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/cert-check.yml
-          else
-            echo "CERT RENEW: not after this step (no cert-renew line)"
-          fi
-      # a copy of Postgres recovered from a fresh backup and its WAL (a marker written after the backup must come
-      # back) - only after a step that changes CNPG, Postgres or their store (the step file's restore-check line)
-      - cmd: |
-          if [ "{{.RESTORE_CHECK}}" = yes ]; then
-            cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/restore-check.yml --tags postgres
-          else
-            echo "RESTORE CHECK: not after this step (no restore-check line)"
-          fi
-      # the step's undo: the previous major's backup recovered with its image (restore-undo line)
-      - cmd: |
-          if [ -n "{{.RESTORE_UNDO}}" ]; then
-            set -- {{.RESTORE_UNDO}}
-            cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/restore-check.yml --tags postgres -e restore_server="$1" -e restore_image="$2"
-          else
-            echo "RESTORE UNDO: none for this step (no restore-undo line)"
-          fi
-      # a Velero backup from production's daily schedule, volumes included, into the Pi backup store - only after a
-      # step that changes Velero or its store (the step file's backup-check line): ~8 min, and it holds no data
-      - cmd: |
-          if [ "{{.BACKUP_CHECK}}" = yes ]; then
-            cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/backup-check.yml
-          else
-            echo "BACKUP CHECK: not after this step (no backup-check line)"
-          fi
-      # a Scylla Manager backup of each production cluster, DONE with a fresh snapshot, no failed backup or repair
-      # task - only after a step that changes Scylla Manager, ScyllaDB or the agents (its scylla-backup-check line):
-      # the playbook production's done runs
-      - cmd: |
-          if [ "{{.SCYLLA_BACKUP_CHECK}}" = yes ]; then
-            cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/scylla-backup-check.yml
-          else
-            echo "SCYLLA BACKUP CHECK: not after this step (no scylla-backup-check line)"
-          fi
-      # the stale PR env sweeper against the copy's Vault: a dead token fails it, the replaced one is renewed and
-      # purges a preview prefix, a wrong CA fails it - only after a step that changes it (its sweeper-check line)
-      - cmd: |
-          if [ "{{.SWEEPER_CHECK}}" = yes ]; then
-            cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/sweeper-check.yml
-          else
-            echo "SWEEPER CHECK: not after this step (no sweeper-check line)"
-          fi
-      # the inventory last, after every check of the step (a check's leftovers show in its own step)
-      - cmd: scripts/vagrant-inventory.sh
-      - cmd: scripts/upgrade-expected-inventory.py {{.STEP}} > .upgrade/expected-inventory.txt
-      - cmd: scripts/inventory-diff.sh .upgrade/expected-inventory.txt .upgrade/vagrant-inventory.txt tests/ansible/upgrade/vagrant-allowed-missing.txt
-
-  # A rebuild after the rollout lands at the targets in one go: run with ops checked out on the branch whose playbook
-  # defaults are the targets (the change the rollout makes, step by step) - setup-kubeadm, setup-argocd and the Pis'
-  # services install those, Argo syncs infra and platform at the last step's branches - and its inventory must be the
-  # one the steps lead to.
-  test:upgrade:build-targets:
-    desc: Build the Vagrant copy straight at the upgrade's targets (ops on its defaults-at-targets branch; infra and platform at the last step's branches) and compare its inventory with the one the steps lead to
-    vars:
-      LAST_STEP:
-        sh: ls tests/ansible/upgrade/steps | sed -n 's/\.txt$//p' | sort -V | tail -1
-      INFRA_REF:
-        sh: set -o pipefail; scripts/upgrade-expected-inventory.py --refs {{.LAST_STEP}} | cut -d' ' -f1
-      PLATFORM_REF:
-        sh: set -o pipefail; scripts/upgrade-expected-inventory.py --refs {{.LAST_STEP}} | cut -d' ' -f2
-      CLICKHOUSE_COMPAT:
-        sh: scripts/upgrade-expected-inventory.py --clickhouse-compat {{.LAST_STEP}}
-      CLICKHOUSE_USERS:
-        sh: scripts/upgrade-expected-inventory.py --clickhouse-users {{.LAST_STEP}}
-      # what the steps changed on ten that the playbook defaults do not install (their base lines)
-      BASE_ARGS:
-        sh: scripts/upgrade-expected-inventory.py --base-args {{.LAST_STEP}}
-    cmds:
-      - cmd: mkdir -p .upgrade && scripts/upgrade-expected-inventory.py {{.LAST_STEP}} > .upgrade/expected-targets.txt
-      - task: _upgrade:base
-        vars:
-          BASE_ARGS: '{{.BASE_ARGS}}'
-      # the Argo stage's own inventory check, against the targets' expected inventory instead of production's
-      - task: test:upgrade:argo
+      # Argo on the pushed commits, every app green and every pod ready; the apps the build recorded - or, for a change
+      # that adds or removes apps, recorded anew (their names printed)
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/argo-settled.yml -e expect_mirror=true {{if eq .APPS_CHANGED "true"}}-e record_apps=true{{else}}-e expect_apps=true{{end}} -e restart_stage=change {{.COPY_SETTLE}}
+      - task: test:copy:check
         vars:
           INFRA_REF: '{{.INFRA_REF}}'
           PLATFORM_REF: '{{.PLATFORM_REF}}'
-          EXPECTED: .upgrade/expected-targets.txt
-          ALLOWED_MISSING: tests/ansible/upgrade/targets-allowed-missing.txt
-          CLICKHOUSE_COMPAT: '{{.CLICKHOUSE_COMPAT}}'
-          CLICKHOUSE_USERS: '{{.CLICKHOUSE_USERS}}'
+          CHANGE: 'yes'
+          SCRAPE_POOLS_GONE: '{{.SCRAPE_POOLS_GONE}}'
 
-  test:upgrade:build:
-    desc: Build the whole Vagrant copy of production from scratch - the baseline (or production as the steps before UPGRADE_FROM left it), a cold boot of every VM, then the Argo layer (VMs stay up)
-    vars:
-      # the step the copy is built after: the one before the run's start (UPGRADE_FROM, a full run from production's
-      # first step not done) - none for the first: production's baseline. At it: the base arguments, the refs, the
-      # inventory and ClickHouse's settings of every step up to it, production's own state as it left it
-      AT:
-        sh: 'if [ -n "{{.UPGRADE_FROM}}" ]; then scripts/upgrade-expected-inventory.py --before {{.UPGRADE_FROM}}; fi'
-      BASE_ARGS:
-        sh: 'if [ -n "{{.AT}}" ]; then scripts/upgrade-expected-inventory.py --base-args {{.AT}}; fi'
-      REFS:
-        sh: 'if [ -n "{{.AT}}" ]; then scripts/upgrade-expected-inventory.py --refs {{.AT}}; else echo main main; fi'
-      CLICKHOUSE_COMPAT:
-        sh: 'if [ -n "{{.AT}}" ]; then scripts/upgrade-expected-inventory.py --clickhouse-compat {{.AT}}; fi'
-      CLICKHOUSE_USERS:
-        sh: 'if [ -n "{{.AT}}" ]; then scripts/upgrade-expected-inventory.py --clickhouse-users {{.AT}}; fi'
-    cmds:
-      - cmd: 'mkdir -p .upgrade && if [ -n "{{.AT}}" ]; then scripts/upgrade-expected-inventory.py {{.AT}} > .upgrade/expected-build.txt; fi'
-      - task: _upgrade:base
-        vars:
-          BASE_ARGS: '{{.BASE_ARGS}}'
-      # every VM shut down and booted cold once, as a node and the Pis come back after an outage: the boot order of the
-      # Pi stack (Gluster mounts, Consul, Patroni, Vault's unseal) is part of what the run proves (defect 22 was found
-      # this way)
-      - cmd: vagrant halt
-      - cmd: vagrant up --no-provision
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/vms-ready.yml
-      - task: test:upgrade:argo
-        vars:
-          INFRA_REF: '{{index (splitList " " .REFS) 0}}'
-          PLATFORM_REF: '{{index (splitList " " .REFS) 1}}'
-          EXPECTED: '{{if .AT}}.upgrade/expected-build.txt{{else}}tests/ansible/upgrade/prod-inventory.txt{{end}}'
-          CLICKHOUSE_COMPAT: '{{.CLICKHOUSE_COMPAT}}'
-          CLICKHOUSE_USERS: '{{.CLICKHOUSE_USERS}}'
-          UPGRADE_FROM: '{{.UPGRADE_FROM}}'
-
-  # The gate before the production rollout (operator, 2026-10-03): steps fixed and re-run one at a time prove each
-  # step, not the chain; this proves the chain, unattended, from nothing.
-  test:upgrade:full:
-    desc: The whole upgrade from scratch, unattended - build the Vagrant copy of production, then every step in tests/ansible/upgrade/steps in order (stops at the first that fails); each green step's proof recorded for production's merge (.upgrade/proven). From production's first step not done (the ledger on ten, read-only), or FROM=<step>
-    vars:
-      # where the run starts: production's first step not done - its copy built as the steps before it left production,
-      # those counting by production's ledger (proof-start records it) - or the step given (FROM: a rehearsal; its
-      # proofs hold only once production stands there)
-      START:
-        sh: scripts/upgrade-production.py resume-from {{.FROM}}
-    cmds:
-      # before anything boots: the ops tree committed (the run proves a commit - production's phases compare with it),
-      # every step's state between its two merges one the run proves, and an Argo CD upgrade's new Helm rendering every
-      # application as its old one did (helm-diff lines)
-      - cmd: echo "=== BOOT proof-start $(date +%T)"
-      - cmd: scripts/upgrade-production.py proof-start {{.START}}
-      - cmd: echo "=== BOOT merge-order $(date +%T)"
-      - cmd: scripts/upgrade-merge-order.py --from {{.START}}
-      # every step preview (check mode) reads no result check mode skips - step 37's crashed three hours in once
-      - cmd: echo "=== BOOT check-mode-lint $(date +%T)"
-      - cmd: scripts/check-mode-lint.py
-      - cmd: echo "=== BOOT helm-diff $(date +%T)"
-      - cmd: scripts/argo-helm-diff.py --from {{.START}}
-      # the build, and beside it (no wall time) the ClickHouse rollback pin of steps 59 and 61 with the real images -
-      # every line of it stamped with its time (where the boot's minutes go stays measurable)
-      - cmd: echo "=== BOOT build $(date +%T)"
-      - cmd: UPGRADE_FROM={{.START}} scripts/upgrade-build-with-pin.sh
-      - cmd: echo "=== BOOT done $(date +%T)"
-      # every step in order, each its own task test:upgrade:step, its lines stamped; stops at the first that fails - a
-      # script of its own: go-task swallows a Ctrl-C or a TERM, and ran a step's remaining commands after one its
-      # running command survived
-      - cmd: UPGRADE_FROM={{.START}} scripts/upgrade-full-steps.sh
-      # the backups restore on the upgraded copy: Postgres from its barman backup, Velero a volume's data
-      - task: test:upgrade:restore-check
-      # the run's proofs count only now: a run that failed at its end, or stopped at a step, leaves them unmarked
-      - cmd: scripts/upgrade-production.py proof-complete
-
-  # the full run's last step judged as production will judge it: its quiet window 300 s, held 4 polls 10 s apart, and
-  # its restarts against the step's own (a restart-history entry of its own) - no step after it does
-  test:upgrade:final-settle:
-    desc: "The full run's last step settled at production's own values, its restarts judged against the step's (STEP=<the last step>)"
-    deps: [deploy:install]
-    requires:
-      vars: [STEP]
-    vars:
-      OUT_OF_SYNC:
-        sh: scripts/upgrade-expected-inventory.py --out-of-sync {{.STEP}}
-      # production's own values, from where its settle reads them
-      SETTLE:
-        sh: scripts/upgrade-production.py settle-values
-    cmds:
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/argo-settled.yml -e expect_mirror=true -e allow_out_of_sync={{.OUT_OF_SYNC}} -e expect_apps=true -e restart_step=final {{.SETTLE}}
-
-  test:clickhouse-pin:
-    desc: "The ClickHouse rollback pin with the real images, in docker here: steps 59 and 61's newer image pinned to the older version writes and merges parts, the older reads every row back; unpinned it must not"
-    cmds:
-      - cmd: tests/clickhouse-pin/run.sh
-
-  test:upgrade:wave0:
-    desc: On the Vagrant copy, the Wave 0 backups as production takes them, each restored from the Pi store and its seeded canaries checked (STORES limits the list)
+  test:copy:check:
+    desc: "Every check on the built copy: Argo settled; data, survival, storage, metrics, k6 smoke, production's data paths and isolation at once (scripts/copy-checks.sh); a barman base backup; every certificate renewed; Postgres recovered and a Velero volume restored (restore-check); a Velero backup from production's daily schedule; a Scylla Manager backup; the PR-env sweeper; the inventory against production's (a change's differences printed, not judged)"
     deps: [deploy:install]
     vars:
-      STORES: '{{.STORES | default "postgres clickhouse grafana kafka scylla gateway etcd"}}'
+      INFRA_REF: '{{.INFRA_REF | default "main"}}'
+      PLATFORM_REF: '{{.PLATFORM_REF | default "main"}}'
+      CHANGE: '{{.CHANGE | default "no"}}'
+      SCRAPE_POOLS_GONE: '{{.SCRAPE_POOLS_GONE | default ""}}'
+      ALLOWED_MISSING: tests/ansible/copy/vagrant-allowed-missing.txt
     cmds:
-      - for: { var: STORES, split: ' ' }
-        cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/upgrade-backup.yml -e store={{.ITEM}} && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/wave0-rehearsal.yml -e store={{.ITEM}}{{if eq .ITEM "postgres"}} && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/restore-check.yml --tags postgres -e restore_backup=wave0{{end}}
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/argo-settled.yml -e expect_mirror=true -e expect_apps=true -e stable_polls=1 -e poll_seconds=3
+      # the independent checks at the same time (scripts/copy-checks.sh says what each proves): the slowest, not the sum
+      - cmd: COPY_SCRAPE_POOLS_GONE='{{.SCRAPE_POOLS_GONE}}' scripts/copy-checks.sh '{{.INFRA_REF}}' '{{.PLATFORM_REF}}'
+      # CNPG's WAL archiving and a fresh barman base backup: the backup production's data depends on
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/barman-check.yml
+      # every Certificate renewed and Ready again at a higher revision
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/cert-check.yml
+      # Postgres recovered from a fresh backup and its WAL (a marker written after it must come back) into a side
+      # cluster, and a Velero file-system backup of a test namespace restored with its volume's data
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/restore-check.yml
+      # a Velero backup from production's daily schedule into the Pi backup store, its volumes as the schedule decides
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/backup-check.yml
+      # a Scylla Manager backup of each production cluster, DONE with a fresh snapshot, no failed backup or repair task
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/scylla-backup-check.yml
+      # the stale PR env sweeper against the copy's Vault: a dead token fails it, the replaced one is renewed and purges
+      # a preview prefix, a wrong CA fails it
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/sweeper-check.yml
+      # the inventory last, after every check (a check's leftovers show): production's, minus the documented left-outs;
+      # after a change its differences are what it changes - printed, not judged
+      - cmd: scripts/vagrant-inventory.sh
+      - cmd: |
+          if [ "{{.CHANGE}}" = yes ]; then
+            scripts/inventory-diff.sh tests/ansible/copy/prod-inventory.txt .copy/vagrant-inventory.txt {{.ALLOWED_MISSING}} \
+              || echo "INVENTORY: the change's differences from production (above) - not judged"
+          else
+            scripts/inventory-diff.sh tests/ansible/copy/prod-inventory.txt .copy/vagrant-inventory.txt {{.ALLOWED_MISSING}}
+          fi
 
-  test:upgrade:restore-check:
-    desc: On the Vagrant copy (upgraded or not), prove the backups restore - Postgres recovered from its barman backup into a side cluster with every seeded row, and a Velero file-system backup of a test namespace restored with its volume's data; production's namespace is not touched
-    deps: [deploy:install]
-    cmds:
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/restore-check.yml
-
-  # the baseline before Argo, so the Argo stage can be re-run on a cluster that has never seen Argo, in minutes
   test:eso:
     desc: Test ESO ↔ Pi Vault secret sync (ClusterSecretStore + ExternalSecret)
     deps: [deploy:install]
@@ -967,11 +663,11 @@ tasks:
       - defer: vagrant halt
       - task: _vagrant:k8s-stack
       - cmd: ssh -o StrictHostKeyChecking=no -i .vagrant/machines/kubeadm/libvirt/private_key vagrant@192.168.56.10 'for i in $(seq 1 30); do curl -sf http://192.168.56.50:3000/ > /dev/null && echo "Forgejo reachable" && exit 0; echo "Waiting for Forgejo ($i/30)..."; sleep 5; done; echo "FAIL"; exit 1'
-      # as test:upgrade:argo builds the copy: infra and platform mirrored to the Vagrant Forgejo, then Argo CD's Forgejo
+      # as test:copy:argo builds the copy: infra and platform mirrored to the Vagrant Forgejo, then Argo CD's Forgejo
       # account (its token in the Vagrant Vault, from which setup-argocd gives the repo-creds their credentials), judged
       # by the copy's committed list (no PR-env generator there) - setup-argocd on a fresh cluster needs both
       - cmd: env -i HOME="$HOME" PATH="$PATH" scripts/vagrant-gitops-mirror.py
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-argocd-reader.yml -e reader_repos_file=../../../tests/ansible/upgrade/vagrant-argocd-reader-repos.yml
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-argocd-reader.yml -e reader_repos_file=../../../tests/ansible/copy/vagrant-argocd-reader-repos.yml
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-argocd.yml -e @vars/vault-vagrant.yml
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-multi-env.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml
 
@@ -1254,7 +950,7 @@ tasks:
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/upgrade-patroni.yml
 
   test:containerd-takeup:
-    desc: "Vagrant (after the containerd step): the kubelet stopped by hand, upgrade-containerd.yml run again - it checks the containers the first run kept against the runtime and starts the kubelet (it used to end 'already there' with the node NotReady)"
+    desc: "Vagrant (containerd.io installed, as on ten): the kubelet stopped by hand, upgrade-containerd.yml run again - it checks the containers the first run kept against the runtime and starts the kubelet (it used to end 'already there' with the node NotReady)"
     deps: [deploy:install]
     cmds:
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-containerd-takeup.yml {{.CLI_ARGS}}
@@ -1360,101 +1056,6 @@ tasks:
     deps: [deploy:install]
     cmds:
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-kubeadm.yml
-
-  # ── the upgrade steps in production: one at a time, in order, each phase after the ones it needs - the ledger on ten
-  # (scripts/upgrade-production.py) refuses anything else; deploy:upgrade:status names the next phase. A step's phases:
-  # begin, backup (its wave0 lines), merge (its branch lines, in the file's order), preview and playbooks (its playbook
-  # lines), defaults (its default lines), done (twice: the soak between).
-  deploy:upgrade:ledger-init:
-    desc: "PRODUCTION: the upgrade ledger on ten (ConfigMap kube-system/upgrade-ledger), once - step 02 recorded done (in production since 2026-10-03)"
-    prompt: "Create the upgrade ledger on PRODUCTION (ten, kube-system/upgrade-ledger)?"
-    cmds:
-      - cmd: scripts/upgrade-production.py init
-
-  deploy:upgrade:status:
-    desc: "Read-only: the upgrade ledger's events and the next phase of the next step, with what stands before it"
-    cmds:
-      - cmd: scripts/upgrade-production.py status
-
-  deploy:upgrade:release:
-    desc: "The upgrade ledger: step STEP's open phase start closed - only when its run was killed and nothing runs it (every phase claims the step first; a second one refuses while a start is open)"
-    requires:
-      vars: [STEP]
-    cmds:
-      - cmd: scripts/upgrade-production.py release {{.STEP}}
-
-  deploy:upgrade:abort:
-    desc: "PRODUCTION (the ledger): step STEP undone by its abort line - its merges reverted on main (checked), its defaults commit reverted, its host-side changes undone - recorded aborted (asked first); it starts again from its begin"
-    requires:
-      vars: [STEP]
-    cmds:
-      - cmd: scripts/upgrade-production.py abort {{.STEP}}
-
-  deploy:upgrade:check:
-    desc: "Read-only: ten's and the Pis' version inventory against what the done steps and STEP leave (the test environment listed apart), Argo CD settled on main's commits, and the data paths (production-data-check.yml), judged on ten - nothing recorded"
-    deps: [deploy:install]
-    requires:
-      vars: [STEP]
-    cmds:
-      - cmd: scripts/upgrade-production.py check {{.STEP}}
-
-  deploy:upgrade:begin:
-    desc: "Upgrade step STEP's first phase (records it in the ledger; read-only otherwise): every earlier step done, the full run's proof for it, production as the done steps leave it"
-    requires:
-      vars: [STEP]
-    cmds:
-      - cmd: scripts/upgrade-production.py begin {{.STEP}}
-
-  deploy:upgrade:backup:
-    desc: "PRODUCTION: Wave 0 - store STORE (one of step STEP's wave0 lines) backed up into the Pi store right before the step's one-way change (kafka stops the broker for the copy)"
-    deps: [deploy:install]
-    requires:
-      vars: [STEP, STORE]
-    prompt: "Back up {{.STORE}} on PRODUCTION into the Pi store for step {{.STEP}}{{if eq .STORE \"kafka\"}} (Kafka is down while its volume is copied){{end}}?"
-    cmds:
-      - cmd: scripts/upgrade-production.py backup {{.STEP}} {{.STORE}}
-
-  deploy:upgrade:preview:
-    desc: "What step STEP's playbook lines would change on ten and the Pis, after the step's merges settled - ansible's check mode with diffs (read-only probes run; waits on changes the preview does not make are skipped; proven by the full run at every step). Records it in the ledger; writes only root's Helm chart index on ten (refreshed first)"
-    deps: [deploy:install]
-    requires:
-      vars: [STEP]
-    cmds:
-      - cmd: scripts/upgrade-production.py preview {{.STEP}}
-
-  deploy:upgrade:merge:
-    desc: "PRODUCTION: the GitOps half of step STEP in REPO (infra or platform) - its branch, the change the full run proved, shown and asked about, then fast-forwarded onto main and pushed; then Argo settled on the pushed commits"
-    # its pre-pull and base backup run Ansible (the venv and the collections)
-    deps: [deploy:install]
-    requires:
-      vars: [STEP, REPO]
-    cmds:
-      - cmd: scripts/upgrade-production.py merge {{.STEP}} {{.REPO}}
-
-  deploy:upgrade:playbooks:
-    desc: "PRODUCTION: the host-side half of step STEP - its playbook lines against ten and the Pis"
-    deps: [deploy:install]
-    requires:
-      vars: [STEP]
-    prompt: "Run the playbook lines of upgrade step {{.STEP}} against PRODUCTION (ten, the Pis)?"
-    cmds:
-      - cmd: scripts/upgrade-production.py playbooks {{.STEP}}
-
-  deploy:upgrade:defaults:
-    desc: "PRODUCTION (ops main): step STEP's default lines committed and pushed - from now on a playbook run without the step's -e installs what production runs"
-    requires:
-      vars: [STEP]
-    prompt: "Commit and push step {{.STEP}}'s playbook defaults to ops main?"
-    cmds:
-      - cmd: scripts/upgrade-production.py defaults {{.STEP}}
-
-  deploy:upgrade:done:
-    desc: "Step STEP's last phase (records it in the ledger): production as the step leaves it - the first green call starts the soak, a green call after it with no container restarted since ends the step. Read-only, but a cert-renew or barman-check step's first call issues a throwaway certificate / takes a Postgres base backup: it asks first"
-    deps: [deploy:install]
-    requires:
-      vars: [STEP]
-    cmds:
-      - cmd: scripts/upgrade-production.py done {{.STEP}}
 
   deploy:node-config:
     desc: Apply node/kubelet tuning to the live node (idempotent; safe to re-run, no bootstrap)
@@ -1585,7 +1186,7 @@ tasks:
     cmds:
       # an empty environment with the copy's test values: ops/.env (loaded into every task) holds production's API and
       # mail keys, which create-environment.yml would otherwise write into the Vagrant Vault
-      - cmd: env -i HOME="$HOME" PATH="$PATH" bash -c 'set -a && . tests/ansible/upgrade/vagrant-secrets.env && set +a && cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-ephemeral-env.yml'
+      - cmd: env -i HOME="$HOME" PATH="$PATH" bash -c 'set -a && . tests/ansible/copy/vagrant-secrets.env && set +a && cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-ephemeral-env.yml'
 
   test:ephemeral-env-clean:
     desc: Full clean ephemeral env test (destroy + up + full stack + test)
@@ -1601,14 +1202,14 @@ tasks:
       - defer: vagrant halt
       - task: _vagrant:k8s-stack
       - cmd: ssh -o StrictHostKeyChecking=no -i .vagrant/machines/kubeadm/libvirt/private_key vagrant@192.168.56.10 'for i in $(seq 1 30); do curl -sf http://192.168.56.50:3000/ > /dev/null && echo "Forgejo reachable" && exit 0; echo "Waiting for Forgejo ($i/30)..."; sleep 5; done; echo "FAIL"; exit 1'
-      # as test:upgrade:argo builds the copy: infra and platform mirrored to the Vagrant Forgejo, then Argo CD's Forgejo
+      # as test:copy:argo builds the copy: infra and platform mirrored to the Vagrant Forgejo, then Argo CD's Forgejo
       # account (its token in the Vagrant Vault, from which setup-argocd gives the repo-creds their credentials), judged
       # by the copy's committed list (no PR-env generator there) - setup-argocd on a fresh cluster needs both
       - cmd: env -i HOME="$HOME" PATH="$PATH" scripts/vagrant-gitops-mirror.py
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-argocd-reader.yml -e reader_repos_file=../../../tests/ansible/upgrade/vagrant-argocd-reader-repos.yml
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-argocd-reader.yml -e reader_repos_file=../../../tests/ansible/copy/vagrant-argocd-reader-repos.yml
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-argocd.yml -e @vars/vault-vagrant.yml
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-multi-env.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml
-      - cmd: env -i HOME="$HOME" PATH="$PATH" bash -c 'set -a && . tests/ansible/upgrade/vagrant-secrets.env && set +a && cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-ephemeral-env.yml -e @vars/vault-vagrant.yml'
+      - cmd: env -i HOME="$HOME" PATH="$PATH" bash -c 'set -a && . tests/ansible/copy/vagrant-secrets.env && set +a && cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-ephemeral-env.yml -e @vars/vault-vagrant.yml'
 
   # ============== DUAL-PI HA TEST ==============
   # Clean two-phase chain: deploy each service (idempotent, final-state) then

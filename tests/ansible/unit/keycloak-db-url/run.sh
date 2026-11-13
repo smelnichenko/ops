@@ -43,66 +43,7 @@ for f, found in sorted(urls.items()):
         q = u.split("?", 1)[1] if "?" in u else ""
         check(f"{f}: {u} - the driver takes any server, no other server type",
               re.findall(r"(?:^|&)targetServerType=([^&\"']*)", q), ["any"])
-# the copy given production's whole unit (tests/ansible/upgrade/production-state.yml), as read on both Pis
-# 2026-10-08: its URL without a server type, its passwords inline, no EnvironmentFile, no /etc/keycloak, no restart
-# stamp - its masked text (each password's value ***MASKED***) md5 80d478b8... on both; step 00 moves it. A copy
-# given the URL alone ran step 00 green on a unit production does not have (the secrets file it needs was not there)
-import hashlib  # noqa: E402
-PROD_MASKED_MD5 = "80d478b881e8f4a768f6b58200eacaae"
-ps = list(tasks(load("tests/ansible/upgrade/production-state.yml")))
-unit = next((v.get("content") for t in ps for m, v in actions(t) if isinstance(v, dict)
-             and v.get("dest") == "/etc/systemd/system/keycloak.service"), None)
-masked = re.sub(r"(?m)^(Environment=KC_[A-Z_]*PASSWORD=).*$", r"\1***MASKED***", unit or "")
-check("the copy's Keycloak unit is production's, masked md5 as read on both Pis",
-      hashlib.md5(masked.encode()).hexdigest(), PROD_MASKED_MD5)
-# (the Keycloak play's own: production-state's other plays remove what is theirs)
-kc_ps = [t for q in load("tests/ansible/upgrade/production-state.yml") if "Keycloak" in str(q.get("name"))
-         for t in tasks([q])]
-gone = sorted(str(x) for t in kc_ps for m, v in actions(t) if isinstance(v, dict) and v.get("state") == "absent"
-              for x in (t.get("loop") if v.get("path") == "{{ item }}" else [v.get("path")]))
-check("the copy without /etc/keycloak and Keycloak's restart stamp, as production",
-      gone, ["/etc/keycloak", "/var/lib/config-loaded/keycloak.sha256"])
-# and systemd reads it so (daemon-reload, no restart): kept in memory, the playbook's unit named the removed file - a
-# crash restart before step 00 failed "Failed to load environment files"
-reload_ = [i for i, t in enumerate(ps) if (t.get("ansible.builtin.systemd") or t.get("ansible.builtin.systemd_service")
-                                           or {}).get("daemon_reload") is True]
-removal = max((i for i, t in enumerate(ps) if "/etc/keycloak" in str((t.get("ansible.builtin.file") or {}).get("path", ""))
-               + str(t.get("loop", ""))), default=None)
-check("the copy's systemd reloads production's unit after it and the removal",
-      bool(reload_) and removal is not None and reload_[-1] > removal, True)
-# and the copy's Keycloak then runs it, as production's does: PgBouncer restarted first (its startup parameters fresh,
-# as production's working ones), Keycloak restarted under production's unit, waited for until it serves - step 00's
-# guard then reads the password of a process booted from production's inline unit, not the playbook's secrets file
-# (with that, its comparison could not fail on the copy)
-kc_tasks = kc_ps
-svc = [(v.get("name"), v.get("state")) for t in kc_tasks for m, v in actions(t) if m.endswith("systemd")
-       and isinstance(v, dict) and v.get("state")]
-waits = [t for t in kc_tasks if (t.get("ansible.builtin.uri") or {}).get("url") == "http://127.0.0.1:8080/realms/master"
-         and t.get("until")]
-unit_i = next((i for i, t in enumerate(kc_tasks) for _, v in actions(t) if isinstance(v, dict)
-               and v.get("dest") == "/etc/systemd/system/keycloak.service"), None)
-restart_i = next((i for i, t in enumerate(kc_tasks) for m, v in actions(t) if isinstance(v, dict)
-                  and v.get("name") == "keycloak" and v.get("state") == "restarted"), None)
-check("the copy's Keycloak restarted under production's unit, PgBouncer first, waited for",
-      (svc, len(waits), unit_i is not None and restart_i is not None and restart_i > unit_i),
-      ([("pgbouncer", "restarted"), ("keycloak", "restarted")], 1, True))
-# production's unit only until step 00 is done: a full run from a later step (its copy built as the steps before it
-# left production) gets the playbook's unit, as production has then - the play ends before writing it, after its guard
-import os  # noqa: E402
-kc_play = next((q for q in load("tests/ansible/upgrade/production-state.yml") if "Keycloak" in str(q.get("name"))), {})
-kc_tasks = kc_play.get("tasks") or []
-ends = [i for i, t in enumerate(kc_tasks) if (t.get("ansible.builtin.meta") or t.get("meta")) == "end_play"]
-unit_at = next((i for i, t in enumerate(kc_tasks) for _, v in actions(t) if isinstance(v, dict)
-                and v.get("dest") == "/etc/systemd/system/keycloak.service"), None)
-end_when = kc_tasks[ends[0]].get("when", "false") if ends else "false"
-step00 = sorted(f[:-4] for f in os.listdir("tests/ansible/upgrade/steps") if f.endswith(".txt"))[0]
-check("production's Keycloak unit only until step 00 is done: ended for a run from a later step, before the unit",
-      (len(ends), ends[0] < unit_at if ends and unit_at is not None else None,
-       [condition(end_when, **({"upgrade_from": f} if f else {})) for f in (None, step00, "01-argocd-root-retry")]),
-      (1, True, [False, False, True]))
-check("step 00 runs the tagged playbook", any("playbook setup-pi-services.yml --tags keycloak-db-url" == l.strip()
-                                              for l in open("tests/ansible/upgrade/steps/00-gluster-boot.txt")), True)
-# step 00's tagged run (--tags keycloak-db-url) reaches everything the unit needs: the facts its URL is made of, the
+# a tagged run (--tags keycloak-db-url) reaches everything the unit needs: the facts its URL is made of, the
 # credentials' check, every file it names by EnvironmentFile=, the unit, its start and its restart - one left out is
 # undefined there, or the unit names a file the run never wrote (production's Keycloak failed to start)
 doc = load("deploy/ansible/playbooks/setup-pi-services.yml")
@@ -356,11 +297,6 @@ if same:
     check("the same password: on; another (systemd read the file's quotes away): refused; Keycloak not running: on; "
           "the password itself never said",
           [compare("pw", "pw"), compare("pw", '"pw2"'), compare(None, "pw")], [(False, False), (True, False), (False, False)])
-# step 00 says what it costs and how it is undone
-text = open("tests/ansible/upgrade/steps/00-gluster-boot.txt").read()
-check("step 00's outage names logins down while the VIP's Keycloak restarts; its abort puts the old URL back, "
-      "PgBouncer restarted first", ("auth.pmon.dev" in text and "VIP" in text,
-                                    bool(re.search(r"abort:.*\n(#.*\n)*?#.*pgbouncer", text, re.I))), (True, True))
 # one URL's query on every writer: two that differ restart Keycloak on each other's every run
 check("the same query from every writer", len({u.split("?", 1)[-1] for found in urls.values() for u in found}), 1)
 print("keycloak-db-url: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))

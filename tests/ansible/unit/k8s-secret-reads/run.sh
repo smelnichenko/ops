@@ -28,7 +28,7 @@ def reads(x):
     """The lines of a script that read a Secret as the lint reads one (CLI, below): every spelling, not one."""
     return [line for line in norm(x).splitlines() if CLI.search(line)]
 PUBLIC = {
-    ("tests/ansible/upgrade/production-state.yml",
+    ("tests/ansible/copy/production-state.yml",
      "The Vagrant wildcard is production's Let's Encrypt certificate, valid for at least another day"):
         ("the certificate (tls.crt) alone",
          lambda x, t: bool(reads(x)) and all(re.findall(r"jsonpath='([^']*)'", line) == [r"{.data.tls\.crt}"]

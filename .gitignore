@@ -11,4 +11,6 @@ deploy/ansible/collections
 .dr/
 .cnpg-stats/
 __pycache__/
+.copy/
+# the retired upgrade test's working files (plan 117) - a checkout that ran it still has them
 .upgrade/

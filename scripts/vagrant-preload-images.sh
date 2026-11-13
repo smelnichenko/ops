@@ -18,7 +18,7 @@ platform_ref=${4:-main}
 
 # production's values - with the Vagrant overlay's own values on top, as Argo there merges them (the copy may run
 # candidate images ahead of production) - plus the chart default they rely on (schnappy-data's apt-cacher-ng image)
-overlay=$ops/tests/ansible/upgrade/vagrant-overlay/infra/clusters/production
+overlay=$ops/tests/ansible/copy/vagrant-overlay/infra/clusters/production
 mapfile -t images < <({ for f in schnappy-production-apps schnappy-infra-data; do
                           git -C "$infra" show "$infra_ref:clusters/production/$f/values.yaml"
                           if [ -f "$overlay/$f/values.vagrant.yaml" ]; then
@@ -78,7 +78,7 @@ for img in "${images[@]}"; do
     echo "WARNING: $img is not in the registry - copying it from ten's image cache"
     # through a file, never a pipe into vagrant ssh: ssh's output read late lost its tail (2026-10-16, a busybox archive
     # 2560 bytes short); each step's failure said
-    mkdir -p "$ops/.upgrade"; tar=$(mktemp "$ops/.upgrade/preload.XXXXXX.tar")
+    mkdir -p "$ops/.copy"; tar=$(mktemp "$ops/.copy/preload.XXXXXX.tar")
     # shellcheck disable=SC2029  # $img is meant to expand here, into the remote command
     ssh "${TEN_SSH:-sm@192.168.11.2}" "sudo -n ctr -n k8s.io images export --platform linux/amd64 - '$img'" > "$tar" \
       || { rm -f "$tar"; echo "$img: ten's export failed"; exit 1; }

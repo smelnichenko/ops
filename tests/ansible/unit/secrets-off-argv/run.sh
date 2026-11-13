@@ -263,13 +263,13 @@ reads = [f"{f}: {n}: {line[:120]}" for f in files("deploy/ansible") for n, sc in
          for line in argv_reads(sc)]
 reads += [f"{f}: {line[:120]}" for f in sorted(glob.glob("deploy/ansible/playbooks/scripts/*") + glob.glob("scripts/*.sh")
                                                + ["bootstrap.sh"]) for line in argv_reads(open(f, errors="replace").read())]
-# the full run's own playbooks (tests/ansible/upgrade: every step runs them, on a copy holding production's secrets)
+# the full run's own playbooks (tests/ansible/copy: every step runs them, on a copy holding production's secrets)
 # too, the same rule: a pod's own shell (kubectl exec ... sh) passes its env var to its client's argv no more - the
 # ClickHouse client reads CLICKHOUSE_PASSWORD from its environment (24.8, 25.8, 26.8 measured 2026-10-09), Grafana's
 # curl its credentials on its stdin (-K-). None excepted.
 POD_READS = set()
 pod_seen = set()
-for f in files("tests/ansible/upgrade"):
+for f in files("tests/ansible/copy"):
     for n, sc in scripts(load(f)):
         for line in argv_reads(sc):
             if (f, n) in POD_READS:
@@ -300,7 +300,7 @@ check("the mirror's push: the copy's Forgejo given the user and password exactly
       (fill("192.168.56.50:3000"), fill("other.example.org")[1], "http.followRedirects=false" in cfg),
       ((0, True), False, True))
 # the realm seed's two Vault answers read one after the other from stdin - its parse on two documents as vault prints them
-seed = next(t for p in load("tests/ansible/upgrade/keycloak-realm.yml") if isinstance(p, dict)
+seed = next(t for p in load("tests/ansible/copy/keycloak-realm.yml") if isinstance(p, dict)
             for t in p.get("tasks") or [] if t.get("name") == "Read the Keycloak and Grafana secrets from the Vagrant Vault")
 code = str(seed["ansible.builtin.shell"]).split("python3 -c '", 1)[1].rsplit("'", 1)[0]
 doc = lambda d: json.dumps({"request_id": "x", "data": {"data": d, "metadata": {}}}, indent=2) + "\n"
@@ -323,7 +323,7 @@ check("no Taskfile command hands ansible-playbook a secret on its command line; 
       "a non-secret -e not", (tf_hits, bool(TF_SECRET.search('x -e "DB_PASSWORD=$P"')),
                               bool(TF_SECRET.search("x -e external_secrets_by_helm_override=false"))), ([], True, False))
 bad, used = [], set()
-for f in files("deploy/ansible", "tests/ansible/upgrade"):
+for f in files("deploy/ansible", "tests/ansible/copy"):
     for t, scope in judged(load(f)):
         for n in named(t, scope):
             if (f, t.get("name")) in ALLOWED:

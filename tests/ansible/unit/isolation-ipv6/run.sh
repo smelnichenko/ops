@@ -28,7 +28,7 @@ import os, subprocess, sys
 import yaml
 W = os.environ["W"]
 fails = 0
-for book in ("tests/ansible/isolate-pis.yml", "tests/ansible/upgrade/isolate-cluster.yml"):
+for book in ("tests/ansible/isolate-pis.yml", "tests/ansible/copy/isolate-cluster.yml"):
     tasks = [t for p in yaml.safe_load(open(book)) for t in p.get("tasks") or []]
     found = [t for t in tasks if "ip -6 route show" in str(t.get("ansible.builtin.shell", ""))]
     ok = len(found) == 1

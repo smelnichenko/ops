@@ -1,6 +1,6 @@
 #!/bin/bash
-# deploy/ansible/playbooks/production-data-check.yml - every step's check reads that the data paths work, production's
-# (upgrade-production.py's check) and the full run's: green when every source answers well; red on a target down, a
+# deploy/ansible/playbooks/production-data-check.yml - the Vagrant copy's checks read that the data paths work, as
+# production's own would (copy-checks.sh's prod check): green when every source answers well; red on a target down, a
 # stale Mimir, no log rows, a datasource not OK, an unhealthy CNPG cluster or a replica not streaming, WAL archiving
 # failing, a Kafka not Ready, a ScyllaDB node not UN, a critical alert firing - unless the inventory names what the
 # environment lacks by nature (the copy's smartctl target, its PublicEndpointDown). Read only: no kubectl verb that
@@ -92,15 +92,14 @@ check "a critical alert firing: red" "$(run ALERT=PostgreSQLDown)" "rc=2"
 check "a warning firing: green" "$(run ALERT=VeleroWeeklyBackupMissing SEVERITY=warning)" "rc=0"
 check "  one the inventory names: green" \
   "$(run ALERT=PublicEndpointDown -- -e '{"production_check_allowed_firing": ["PublicEndpointDown"]}')" "rc=0"
-# its wiring: production's check runs it; the full run's step task runs it on the copy; the copy names its own
-check "production's check runs it" \
-  "$(sed -n '/^def check(step/,/^def done/p' scripts/upgrade-production.py | grep -c 'production-data-check.yml')" 1
-# on the copy: one of the step's parallel checks (no time of its own), not a command after them
-check "the full run runs it on the copy among the step's parallel checks, not after them" "$("$PY" -c '
+# its wiring: test:copy:check runs it as one of copy-checks.sh's parallel checks (no time of its own), not as a command
+# after them; the copy names its own
+check "test:copy:check runs it among copy-checks.sh's parallel checks, not after them" "$("$PY" -c '
 import yaml
-c = [str(x.get("cmd", x) if isinstance(x, dict) else x) for x in yaml.safe_load(open("Taskfile.yml"))["tasks"]["test:upgrade:step"]["cmds"]]
-print(any("production-data-check.yml" in x for x in c))') \
-$(grep -cx 'start prod play playbooks/production-data-check.yml' scripts/upgrade-step-checks.sh)" "False 1"
+t = yaml.safe_load(open("Taskfile.yml"))["tasks"]["test:copy:check"]["cmds"]
+c = [str(x.get("cmd", x) if isinstance(x, dict) else x) for x in t]
+print(any("production-data-check.yml" in x for x in c), any("scripts/copy-checks.sh" in x for x in c))') \
+$(grep -cx 'start prod play playbooks/production-data-check.yml' scripts/copy-checks.sh)" "False True 1"
 check "the copy's inventory names its smartctl target, PublicEndpointDown and VeleroDailyBackupMissing (a failed backup, VeleroScheduledBackupFailed, never); production's names none" "$("$PY" -c '
 import yaml
 v = yaml.safe_load(open("deploy/ansible/inventory/vagrant.yml"))["all"]["vars"]

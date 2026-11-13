@@ -269,7 +269,7 @@
           "$PY" "$SCRIPT" "$d/tree" "$HOST" "$ORG" "$(git -C "$d/git" rev-parse --short FETCH_HEAD)"
         executable: /bin/bash
       environment:
-        WORK_ROOT: "{{ playbook_dir }}/../../../.upgrade"
+        WORK_ROOT: "{{ playbook_dir }}/../../../.copy"
         REMOTE: "{{ reader_infra_remote }}"
         PY: "{{ ansible_playbook_python }}"
         SCRIPT: "{{ playbook_dir }}/../../../scripts/argocd-repos.py"

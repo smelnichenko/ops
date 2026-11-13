@@ -13,7 +13,7 @@
 # login on it proven again. None Ready before (a rebuilt cluster, DR step 5: Vault's config names the old cluster's CA,
 # every ExternalSecret fails): nothing logs in to lose - switched all the same, proven by any ExternalSecret, nothing
 # put back (the old config did not work either). Every read checked: a failed one is never "nothing there".
-# tests/ansible/upgrade/isolate-cluster.yml writes the same configuration to the Vagrant Vault.
+# tests/ansible/copy/isolate-cluster.yml writes the same configuration to the Vagrant Vault.
 set -u
 cd "$(dirname "$0")/../../../.." || exit 1
 W=$(mktemp -d)
@@ -304,7 +304,7 @@ check "the role's write refused: the step fails, said so - the config never writ
 $(grep -c '^vault write auth/kubernetes/config' "$W/vault-argv")" "1 1 1 0"
 # the Vagrant Vault configured as ten's: the same keys in the same write, the same account bound, no token Secret
 keys() { grep -oE '(kubernetes_host|kubernetes_ca_cert|token_reviewer_jwt|disable_local_ca_jwt|issuer|pem_keys)=' | sort -u | tr -d '\n'; }
-iso=tests/ansible/upgrade/isolate-cluster.yml
+iso=tests/ansible/copy/isolate-cluster.yml
 check "isolate-cluster.yml writes Vault's Kubernetes auth with bootstrap.sh's keys" \
   "$(sed -n '/vault write auth\/kubernetes\/config/,/> \/dev\/null/p' "$iso" | keys)" \
   "$(sed -n '/^vault write auth\/kubernetes\/config/,/> \/dev\/null/p' bootstrap.sh | keys)"
@@ -346,18 +346,18 @@ check "vault-eso: Vault's CA applied in external-secrets and in argocd, the same
 $(sed -n '/namespace: argocd/,/^---$/p' "$W/applied" | grep -c "ca.crt: $(base64 -w0 < "$W/pi/etc/vault.d/tls/ca-cert.pem")")" "1 1"
 check "isolate-cluster.yml: the copy's Vault CA in argocd too" "$(python3 -c '
 import yaml
-t = [x for p in yaml.safe_load(open("tests/ansible/upgrade/isolate-cluster.yml")) for x in p.get("tasks") or []]
+t = [x for p in yaml.safe_load(open("tests/ansible/copy/isolate-cluster.yml")) for x in p.get("tasks") or []]
 print(sorted(((x.get("kubernetes.core.k8s") or {}).get("definition") or {}).get("metadata", {}).get("namespace", "")
              for x in t if "vault-pi-ca" in str(x.get("kubernetes.core.k8s", ""))))')" "['argocd', 'external-secrets']"
-# the build runs isolate-cluster before setup-argocd (test:upgrade:argo): Argo CD's namespace is made first, bare
+# the build runs isolate-cluster before setup-argocd (test:copy:argo): Argo CD's namespace is made first, bare
 check "isolate-cluster.yml: argocd's namespace made before its CA (a first build has none yet), as setup-argocd runs after" \
   "$(python3 -c '
 import yaml
-t = [x for p in yaml.safe_load(open("tests/ansible/upgrade/isolate-cluster.yml")) for x in p.get("tasks") or []]
+t = [x for p in yaml.safe_load(open("tests/ansible/copy/isolate-cluster.yml")) for x in p.get("tasks") or []]
 d = lambda x: ((x.get("kubernetes.core.k8s") or {}).get("definition") or {})
 ns = next((i for i, x in enumerate(t) if d(x).get("kind") == "Namespace" and d(x).get("metadata", {}).get("name") == "argocd"), None)
 ca = next((i for i, x in enumerate(t) if d(x).get("kind") == "Secret" and d(x).get("metadata", {}).get("namespace") == "argocd"), None)
-cmds = [str(c) for c in yaml.safe_load(open("Taskfile.yml"))["tasks"]["test:upgrade:argo"]["cmds"]]
+cmds = [str(c) for c in yaml.safe_load(open("Taskfile.yml"))["tasks"]["test:copy:argo"]["cmds"]]
 iso = next(i for i, c in enumerate(cmds) if "isolate-cluster.yml" in c)
 argo = next(i for i, c in enumerate(cmds) if "setup-argocd.yml" in c)
 print(ns is not None and ca is not None and ns < ca, iso < argo)')" "True True"

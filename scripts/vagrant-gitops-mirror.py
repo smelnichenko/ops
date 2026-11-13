@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """vagrant-gitops-mirror.py — build the Vagrant copy of production's GitOps repos and push it to the Vagrant Forgejo.
 
-The Vagrant upgrade test runs Argo CD against copies of infra and platform, so every upgrade step is the same git
-change production gets. This script takes a committed ref of each repo (`main`, or an upgrade step's branch; never
-the working tree), adds ONE overlay commit on top, and force-pushes it as `main` (the branch every Argo app tracks)
+The Vagrant copy runs Argo CD against copies of infra and platform, so a change tested there is the same git change
+production gets. This script takes a committed ref of each repo (`main`, or a change's branch; never the working
+tree), adds ONE overlay commit on top, and force-pushes it as `main` (the branch every Argo app tracks)
 to the Vagrant Forgejo (through the Pis' VIP) under the `schnappy` org:
 
   both repos
@@ -16,16 +16,16 @@ to the Vagrant Forgejo (through the Pis' VIP) under the `schnappy` org:
       kagent, SonarQube; and what cannot run outside production: Woodpecker (OAuth against git.pmon.dev) and the
       PR-environment generator (git.pmon.dev's API);
     - after every `$values/<dir>/<name>.yaml` value file, `$values/<dir>/<name>.vagrant.yaml` with
-      ignoreMissingValueFiles: true; those files come from tests/ansible/upgrade/vagrant-overlay/infra/.
+      ignoreMissingValueFiles: true; those files come from tests/ansible/copy/vagrant-overlay/infra/.
   platform overlay
     - left out: the *.pmon.dev wildcard's Certificate (schnappy-mesh). The Vagrant copy serves production's own
-      certificate (tests/ansible/upgrade/production-state.yml, operator 2026-10-03), and a Certificate for that Secret
+      certificate (tests/ansible/copy/production-state.yml, operator 2026-10-03), and a Certificate for that Secret
       makes cert-manager replace it at once ("Secret contains a private key that does not match the current
       CertificateRequest", 2026-10-03);
-    - files from tests/ansible/upgrade/vagrant-overlay/platform/, if any.
+    - files from tests/ansible/copy/vagrant-overlay/platform/, if any.
 
-An upgrade step is a branch of infra and/or platform changing the same files production's change would; mirrored
-with --infra-ref/--platform-ref, Argo in Vagrant syncs it exactly as Argo on ten would sync it once merged.
+A change is a branch of infra and/or platform (task test:copy:change); mirrored with --infra-ref/--platform-ref,
+Argo in Vagrant syncs it exactly as Argo on ten would sync it once merged.
 
 Usage: scripts/vagrant-gitops-mirror.py [--infra ../infra] [--platform ../platform] [--forgejo 192.168.56.50:3000]
                                         [--infra-ref main] [--platform-ref main]
@@ -48,8 +48,8 @@ import urllib.request
 import yaml
 
 OPS = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-WORK = os.path.join(OPS, ".upgrade")
-OVERLAY = os.path.join(OPS, "tests", "ansible", "upgrade", "vagrant-overlay")
+WORK = os.path.join(OPS, ".copy")
+OVERLAY = os.path.join(OPS, "tests", "ansible", "copy", "vagrant-overlay")
 PROD_GIT = "https://git.pmon.dev/schnappy/"
 
 # infra paths the Vagrant copy leaves out (relative to the repo root)
@@ -174,7 +174,7 @@ def overlay_infra(repo, forgejo):
 def set_sync_wave(repo, rel, wave):
     p = os.path.join(repo, rel)
     text = open(p).read()
-    # infra carries these from the fresh-install step on: nothing to do where git has the wave already
+    # infra main carries these (since plan 100's fresh-install step): nothing to do where git has the wave already
     if f'argocd.argoproj.io/sync-wave: "{wave}"' in text:
         return
     if "argocd.argoproj.io/sync-wave" in text:
@@ -292,8 +292,8 @@ def main():
     ap.add_argument("--platform", default=os.path.join(OPS, "..", "platform"))
     # the Pis' VIP: pi1 down, pi2 serves it
     ap.add_argument("--forgejo", default=f"{copy['keepalived_vip']}:3000")
-    ap.add_argument("--infra-ref", default="main", help="infra branch to mirror (an upgrade step's)")
-    ap.add_argument("--platform-ref", default="main", help="platform branch to mirror (an upgrade step's)")
+    ap.add_argument("--infra-ref", default="main", help="infra branch to mirror (a change's)")
+    ap.add_argument("--platform-ref", default="main", help="platform branch to mirror (a change's)")
     a = ap.parse_args()
     # the mirror pushes and rewrites repos: only ever into the Vagrant Forgejo (192.168.56.0/24), never production's
     host = a.forgejo.rsplit(":", 1)[0]
@@ -337,7 +337,7 @@ def main():
             print(f"{name}: {ref} {head} + vagrant overlay pushed as main to http://{a.forgejo}/schnappy/{name}.git")
     finally:
         shutil.rmtree(work, ignore_errors=True)
-    # the commits Argo must sync to before the copy counts as settled (tests/ansible/upgrade/argo-settled.yml)
+    # the commits Argo must sync to before the copy counts as settled (tests/ansible/copy/argo-settled.yml)
     with open(os.path.join(WORK, "mirror-revisions.json"), "w") as f:
         json.dump(pushed, f, indent=2)
 

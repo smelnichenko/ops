@@ -33,8 +33,8 @@
 # setup-kubeadm.yml installs Debian's containerd: it must install containerd.io at this version for a rebuild to match
 # - at the production rollout, in the same change (until then its no-downgrade check refuses a full run here).
 #
-# Usage: only through the upgrade step whose playbook line names it - task deploy:upgrade:playbooks STEP=<step> in
-# production (after its preview), task test:upgrade:step STEP=<step> on the Vagrant copy
+# Usage: on the Vagrant copy first (-i inventory/vagrant.yml; task test:containerd-takeup after it); production: no task
+#        since plan 117 removed deploy:upgrade:* - make one with the change that needs it
 - name: Replace containerd with containerd.io
   hosts: target
   become: true

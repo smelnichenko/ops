@@ -1,5 +1,12 @@
 # Plan 101 - the Pis' tier-0 services: safe to re-run, backed up, then upgraded
 
+Plan 117 (2026-11-13): plan 100's step harness is gone. The Vagrant copy is built to the versions production's Pis
+run (`tests/ansible/copy/pi-versions.yml`, written by `task test:copy:inventory`). A Pi upgrade below is tested on
+that copy first: after `task test:copy:build`, its playbook (`upgrade-forgejo.yml`, `upgrade-patroni.yml`,
+`upgrade-vault.yml`) with `-i inventory/vagrant.yml`, then `task test:copy:check`; then its own PRODUCTION
+`deploy:*:upgrade` task. Phase 2's "step file ... plan 100's production procedure" means that now.
+`pi-baseline.yml` below is today's `pi-versions.yml`.
+
 Status: phases 0-1 built and reviewed (2026-10-05/06); nothing on production's Pis changes before plan 100's full run
 and the full review of plans 100 and 101 are done, and then each step only with the operator's go (below).
 

@@ -1,0 +1,143 @@
+---
+# Objects that exist on ten but in no git repo, recreated in the Vagrant copy so it starts from production's state.
+# Each entry says why it is not in git and what fixes that for good.
+#
+#   schnappy-production-postgres-app (an ExternalSecret from Vault's postgres-monitor, see the task) - the CNPG
+#     Cluster's initdb names this Secret (platform helm/schnappy-data,
+#     cnpg-cluster.yaml), and nothing creates it: on ten CNPG generated it when the cluster was first bootstrapped
+#     (2026-04-10, owner=Cluster, kubernetes.io/basic-auth) through a path that named no secret. A fresh bootstrap
+#     waits for it forever (Vagrant, 2026-10-02: "secret schnappy-production-postgres-app not found"), so a DR
+#     rebuild that bootstraps with initdb would too. Its password only matters during initdb: the init-users job
+#     then sets every role's password, the owner's included, from that service's own Secret.
+#
+#   ServiceAccounts schnappy-alertmanager, -grafana, -mimir, -reports (schnappy-infra) - the observability chart
+#     (release "schnappy") runs its pods as schnappy-<name>, but the mesh chart creates schnappy-infra-<name>; on ten
+#     the four were created by hand on 2026-04-10 14:58:43 (no Argo, Helm or kubectl-apply trace). Without them
+#     Alertmanager, Grafana and Mimir never get a pod.
+#
+#   pmon-dev-wildcard-tls (schnappy-infra) - production's own *.pmon.dev certificate (operator 2026-10-03, see the
+#     task). Production's is a public Let's Encrypt certificate that every in-cluster client of https://auth.pmon.dev
+#     verifies against public CAs; the Vagrant copy cannot get one of its own.
+#
+# Usage: ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/production-state.yml
+- name: Production state that is in no git repo
+  hosts: target
+  become: true
+  gather_facts: false
+  vars_files:
+    - ../../../deploy/ansible/vars/production-lan.yml
+  vars:
+    kubeconfig: /etc/kubernetes/admin.conf
+    production_ssh: "sm@{{ production_ten_ip }}"   # ten
+  tasks:
+    - name: Vagrant VMs only (fails closed on any other host)
+      ansible.builtin.import_tasks: ../vagrant-only.yml
+      tags: [always]
+
+    # ten's injection label from the start, as ten has it: made bare, a pod Argo started before its cluster-config
+    # labelled the namespace ran without a sidecar, and the STRICT-mTLS Postgres reset it (2026-10-10: four apps
+    # crash-looped; cluster-config added the label 36 s after their pods)
+    - name: Namespaces the objects below live in (this runs before Argo; its cluster-config applies the other labels)
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig }}"
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: "{{ item }}"
+            labels:
+              istio.io/rev: default
+      loop: [schnappy-production, schnappy-infra]
+
+    # The CNPG owner secret as ten has it - CNPG's own (an earlier bootstrap path generated it), username "app" - not a
+    # fix of it: a change to CNPG must meet production's state. CNPG's instance manager then fails to sync the owner's
+    # password from it, as on ten ("wrong username 'app' in secret, expected 'monitor'", about 6 an hour, read
+    # 2026-10-04), and only that failure keeps monitor's password (the apps' own, from Vault). Its password is none of
+    # monitor's; it is made once, when the Secret is absent.
+    - name: Is the CNPG owner secret there already
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ kubeconfig }}"
+        kind: Secret
+        namespace: schnappy-production
+        name: schnappy-production-postgres-app
+      register: _app_secret
+      no_log: true
+
+    - name: CNPG owner secret schnappy-production-postgres-app as ten has it (username app)
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig }}"
+        definition:
+          apiVersion: v1
+          kind: Secret
+          type: kubernetes.io/basic-auth
+          metadata:
+            name: schnappy-production-postgres-app
+            namespace: schnappy-production
+            labels:
+              cnpg.io/cluster: schnappy-production-postgres
+              cnpg.io/reload: "true"
+              cnpg.io/userType: app
+          stringData:
+            username: app
+            password: "{{ lookup('ansible.builtin.password', '/dev/null', length=32, chars=['ascii_letters', 'digits']) }}"
+            dbname: app
+      when: _app_secret.resources | length == 0
+      no_log: true
+
+    - name: ServiceAccounts the observability chart runs as, made by hand on ten (2026-04-10)
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig }}"
+        definition:
+          apiVersion: v1
+          kind: ServiceAccount
+          metadata:
+            name: "schnappy-{{ item }}"
+            namespace: schnappy-infra
+      loop: [alertmanager, grafana, mimir, reports]
+
+    - name: Read production's *.pmon.dev wildcard Secret on ten (read-only; held in memory, never written here)
+      ansible.builtin.command:
+        argv: [ssh, "{{ production_ssh }}", sudo, kubectl, -n, schnappy-infra, get, secret, pmon-dev-wildcard-tls, -o, json]
+      delegate_to: localhost
+      become: false
+      register: _prod_wildcard
+      changed_when: false
+      no_log: true
+
+    - name: Production's wildcard as the Vagrant cluster's (operator 2026-10-03)
+      # Every in-cluster client of https://auth.pmon.dev - the apps' JWKS fetch, admin's Keycloak Admin API, Centrifugo,
+      # the gateway's route to Keycloak, istiod - verifies it against public CAs; a Vagrant-issued certificate fails all
+      # of them (2026-10-02: the smoke's token was refused everywhere). The Vagrant copy has no Certificate for this
+      # Secret (the mirror leaves the mesh chart's out): with one, cert-manager replaced the copy at once ("Secret
+      # contains a private key that does not match the current CertificateRequest", 2026-10-03). Production renews its
+      # certificate 30 days before expiry; a re-run copies the new one. Caddy on the Vagrant Pis serves the same Secret
+      # (setup-caddy.yml).
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig }}"
+        force: true
+        definition:
+          apiVersion: v1
+          kind: Secret
+          type: kubernetes.io/tls
+          metadata:
+            name: pmon-dev-wildcard-tls
+            namespace: schnappy-infra
+            annotations: "{{ w.metadata.annotations }}"
+            labels: "{{ w.metadata.labels | default({}) }}"
+          data: "{{ w.data }}"
+      vars:
+        w: "{{ _prod_wildcard.stdout | from_json }}"
+      no_log: true
+
+    - name: The Vagrant wildcard is production's Let's Encrypt certificate, valid for at least another day
+      ansible.builtin.shell: |
+        set -euo pipefail
+        kubectl --kubeconfig {{ kubeconfig }} -n schnappy-infra get secret pmon-dev-wildcard-tls -o jsonpath='{.data.tls\.crt}' \
+          | base64 -d | openssl x509 -noout -issuer -ext subjectAltName -checkend 86400
+      args:
+        executable: /bin/bash
+      register: _wildcard_check
+      changed_when: false
+      failed_when: >-
+        _wildcard_check.rc != 0 or "Let's Encrypt" not in _wildcard_check.stdout
+        or 'DNS:*.pmon.dev' not in _wildcard_check.stdout

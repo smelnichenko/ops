@@ -10,7 +10,7 @@ PY=python3
 PYTHONDONTWRITEBYTECODE=1 "$PY" - <<'PY'
 import os, sys
 import yaml
-p = "tests/ansible/upgrade/vagrant-overlay/infra/clusters/production/velero/values.vagrant.yaml"
+p = "tests/ansible/copy/vagrant-overlay/infra/clusters/production/velero/values.vagrant.yaml"
 v = yaml.safe_load(open(p)) if os.path.exists(p) else {}
 got = {n: (s or {}).get("paused") for n, s in ((v or {}).get("schedules") or {}).items()}
 want = {"schnappy-daily": True, "full-weekly": True}

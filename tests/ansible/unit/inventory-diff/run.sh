@@ -35,14 +35,18 @@ binary /usr/local/bin/buildkitd 3637d1b"
 case_ "a runc outside the packages fails (it runs instead of the package's)" 1 "$base
 binary /usr/local/bin/nerdctl 2.0.3
 binary /usr/local/bin/runc 1.2.4" "" "+binary /usr/local/bin/runc 1.2.4"
-# a tag restated by hand in the three lists (production's inventory and the two allow-lists): Woodpecker's, outside
-# the steps - one list left behind passed every check that reads only one of them (the test-quality review, 2026-10-12)
-U=tests/ansible/upgrade
+# a tag restated by hand in the two lists (production's inventory and the copy's allow-list): Woodpecker's - one list
+# left behind passed every check that reads only one of them (the test-quality review, 2026-10-12). And every line the
+# allow-list names is one production has: a left-out line production moved past leaves the copy unjudged there
+U=tests/ansible/copy
 for img in woodpeckerci/woodpecker-server woodpeckerci/woodpecker-agent; do
-  tags=$(for l in prod-inventory vagrant-allowed-missing targets-allowed-missing; do
+  tags=$(for l in prod-inventory vagrant-allowed-missing; do
     awk -v i="docker.io/$img" '$1 == "image" && $2 == i {print $3}' "$U/$l.txt"; done | sort -u | tr '\n' ' ')
-  if [ "$(echo $tags | wc -w)" = 1 ]; then echo "PASS $img: one tag in the three lists ($tags)"
-  else echo "FAIL $img: the three lists name tags '$tags' - one release, written in each"; fails=$((fails + 1)); fi
+  if [ "$(echo $tags | wc -w)" = 1 ]; then echo "PASS $img: one tag in the two lists ($tags)"
+  else echo "FAIL $img: the two lists name tags '$tags' - one release, written in each"; fails=$((fails + 1)); fi
 done
+stale=$(grep -v '^#' "$U/vagrant-allowed-missing.txt" | grep . | grep -vxFf "$U/prod-inventory.txt" || true)
+if [ -z "$stale" ]; then echo "PASS every allowed-missing line is one production has"
+else echo "FAIL allowed-missing lines production does not have: $stale"; fails=$((fails + 1)); fi
 echo "inventory-diff: $([ $fails = 0 ] && echo ALL-PASS || echo "$fails FAILED")"
 [ $fails = 0 ]

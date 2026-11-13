@@ -9,8 +9,8 @@ PY=python3
 "$PY" -c 'import ansible, yaml' || { echo "storage-check-gone: no python3 with ansible and yaml (PATH, repo venv)"; exit 2; }
 # the playbook as Ansible loads it first: a free-form shell block it cannot split (a quote in a comment) never runs
 AP=$(command -v ansible-playbook || echo deploy/ansible/venv/bin/ansible-playbook)
-"$AP" --syntax-check -i localhost, tests/ansible/upgrade/storage-check.yml > /dev/null 2>&1 \
-  || { echo "FAIL tests/ansible/upgrade/storage-check.yml does not load:"; "$AP" --syntax-check -i localhost, tests/ansible/upgrade/storage-check.yml 2>&1 | grep -A2 ERROR; exit 1; }
+"$AP" --syntax-check -i localhost, tests/ansible/copy/storage-check.yml > /dev/null 2>&1 \
+  || { echo "FAIL tests/ansible/copy/storage-check.yml does not load:"; "$AP" --syntax-check -i localhost, tests/ansible/copy/storage-check.yml 2>&1 | grep -A2 ERROR; exit 1; }
 W=$(mktemp -d)
 trap 'rm -rf "$W"' EXIT
 mkdir "$W/bin"
@@ -30,7 +30,7 @@ import yaml
 sys.path.insert(0, "tests/ansible/unit")
 from templar import render
 W = os.environ["W"]
-tasks = {t["name"]: t for t in yaml.safe_load(open("tests/ansible/upgrade/storage-check.yml"))[0]["tasks"]}
+tasks = {t["name"]: t for t in yaml.safe_load(open("tests/ansible/copy/storage-check.yml"))[0]["tasks"]}
 ctx = {"kubectl": os.path.join(W, "bin", "kubectl"), "kubeconfig": "/k", "check_name": "c",
        "_read": {"stdout_lines": ["Succeeded", "x pvc-1"]}, "_pv_path": {"stdout": os.path.join(W, "gone")}}
 fails = 0

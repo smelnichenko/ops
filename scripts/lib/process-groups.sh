@@ -1,7 +1,7 @@
 # process-groups.sh - a script's own jobs stopped, whole and bounded: each job's process group, and the session it leads
 # when it leads one (setsid) - every group of it: a check its script started in a group of its own (set -m) among them
-# (sourced by upgrade-full-steps.sh, upgrade-build-with-pin.sh and upgrade-step-checks.sh; each passes only jobs it
-# started itself). A process that leaves the session (Ansible's workers call setsid) is stopped only by its own parent.
+# (sourced by copy-checks.sh, which passes only jobs it started itself). A process that leaves the session (Ansible's
+# workers call setsid) is stopped only by its own parent.
 
 # hundredths of a second since boot into the variable named: a clock no wall-clock step moves (bash's SECONDS follows
 # the wall clock - a step back held a deadline for the step's length, one forward ended a grace at once), finer than a
@@ -173,10 +173,10 @@ wait_stopped() {  # wait_stopped <variable: " <pid> ... "> <pid>...
 
 # the stop's TERM sent again where it was lost: a process of the job's there when it was sent (started before it) still
 # running with TERM at its default never got it - a job just forked loses one (its signals still its parent's
-# handlers until it resets them; the step's checks' stop waited out their bound) - and with it what it started since:
+# handlers until it resets them; the checks' stop waited out their bound) - and with it what it started since:
 # at its default, or catching it and not there when it was sent (it never got one - sent once, then counted sent).
 # With a name, every process of the job of that name KILLed (go-task: one a command started during the grace swallowed
-# the TERM and ran the step's next command), what it started since the TERM a lost process's. Never again to one that
+# the TERM and ran the task's next command), what it started since the TERM a lost process's. Never again to one that
 # catches the TERM (its handler runs once), nor to what a handler started (a cleanup's own commands)
 resend_term() {  # resend_term <pgid> <the TERM's time, uptime_cs> <sent variable: " <pid> ... "> [<command name>]
   local g=$1 term_at=$2 name=${4:-} procs x p comm st lost=" " changed=1 stopped=" " killed=" "
@@ -231,7 +231,7 @@ resend_term() {  # resend_term <pgid> <the TERM's time, uptime_cs> <sent variabl
 }
 
 # every process of the session the job leads with that command name KILLed at once - no other of the session, none
-# outside it (go-task: it ran the step's next command once the running one ended, the stop's grace still running)
+# outside it (go-task: it ran the task's next command once the running one ended, the stop's grace still running)
 kill_named() {  # kill_named <sid> <name>
   local sid=$1 name=$2 f st p comm
   for f in /proc/[0-9]*/stat; do

@@ -1,6 +1,6 @@
 #!/bin/bash
-# The cleanups of a Postgres side cluster - restore-check.yml's (the recovering block's always:) and the Wave 0 dump's
-# (tasks/wave0-pg-dump.yml) - as the files hold them, run by ansible-playbook on localhost, their steps stubbed and
+# The cleanup of a Postgres side cluster - restore-check.yml's (the recovering block's always:) - as the file holds it,
+# run by ansible-playbook on localhost, its steps stubbed and
 # logged: the side cluster removed, then its policies, and restore-check's Backup object - also when removing the side
 # cluster fails (it outlived its bound), or the Backup's removal does: a failed task in always: ended the cleanup
 # there, the rest left behind.
@@ -52,8 +52,7 @@ def cleanup(items):
 
 
 tasks = [{"name": "the work as the case says", "ansible.builtin.command": "{{ 'false' if work_fails else 'true' }}"}]
-for name, path in (("restore-check", "tests/ansible/upgrade/restore-check.yml"),
-                   ("wave0-pg-dump", "tests/ansible/upgrade/tasks/wave0-pg-dump.yml")):
+for name, path in (("restore-check", "tests/ansible/copy/restore-check.yml"),):
     doc = yaml.safe_load(open(path))
     found = cleanup(doc[0]["tasks"] if "hosts" in doc[0] else doc)
     if not found:
@@ -73,14 +72,12 @@ case_() {  # case_ <name> <play> <work_fails> <side_fails> <want rc 0|1> <want l
   echo "FAIL $2: $1 (rc $rc)"; echo "    got:  $got"; echo "    want: $6"; grep -E "ERROR|fatal" <<< "$out" | head -3
   fails=$((fails + 1))
 }
-R="backup;side-cluster;policies-absent" D="side-cluster;policies-absent"
+R="backup;side-cluster;policies-absent"
 case_ "done: the Backup, the side cluster, then its policies removed" restore-check false false 0 "$R"
 case_ "failed: all three removed, the run fails" restore-check true false 1 "$R"
 case_ "the side cluster outliving its bound: the Backup and the policies removed all the same" restore-check \
   false true 1 "$R"
 case_ "the Backup's removal failing: the side cluster and its policies removed all the same" restore-check \
   false false 1 "$R" true
-case_ "done: the side cluster, then its policies removed" wave0-pg-dump false false 0 "$D"
-case_ "the side cluster outliving its bound: its policies removed all the same" wave0-pg-dump false true 1 "$D"
 echo "restore-check-cleanup: $([ $fails = 0 ] && echo ALL-PASS || echo "$fails FAILED")"
 [ $fails = 0 ]

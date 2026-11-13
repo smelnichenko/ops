@@ -1,0 +1,10 @@
+---
+# CNPG still backs Postgres up on the copy, and after a change (test:copy:check runs this every time) - production's own
+# playbook (postgres-base-backup.yml) behind the Vagrant guard: a host that fails it is dropped from the plays after.
+#
+# Usage: ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/barman-check.yml
+- name: Vagrant VMs only
+  ansible.builtin.import_playbook: ../vagrant-only-play.yml
+
+- name: Production's base backup playbook
+  ansible.builtin.import_playbook: ../../../deploy/ansible/playbooks/postgres-base-backup.yml

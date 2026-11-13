@@ -58,13 +58,5 @@ check "a cluster not yet on the major: waits, never analysed" "$(run 18 VERSION=
 # a cluster on 17 (the stub says so): refused before anything is read, not analysed with a recipe 17 lacks
 check "17 refused (its vacuumdb has no --missing-stats-only)" \
   "$(run 17 VERSION=170005) $(grep -c . "$W/calls")" "rc=2  0"
-# the steps that move a cluster's major (their statistics line): their abort starts with CNPG's own rollback - the
-# upgrade Job failed, the image reverted, the operator deletes the Job and starts the old major on its data, which the
-# upgrade never changed (pg_upgrade --link into new directories, swapped in only on success; CNPG's major-upgrade docs)
-for f in $(grep -l '^playbook postgres-analyze\.yml' tests/ansible/upgrade/steps/*.txt); do
-  check "$(basename "$f" .txt): its abort starts with the failed upgrade Job's revert" \
-    "$(grep -m1 '^# abort:' "$f" | grep -c 'upgrade Job failed.*revert')" 1
-done
-check "  the steps found" "$(grep -l '^playbook postgres-analyze\.yml' tests/ansible/upgrade/steps/*.txt | wc -l)" 2
 echo "postgres-analyze: $([ $fails = 0 ] && echo ALL-PASS || echo "$fails FAILED")"
 [ $fails = 0 ]

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """public-addresses.py <name> - the name's public IPv4 addresses, as a public resolver (1.1.1.1) answers: every A
 record, space-separated. The Vagrant isolation drops them and proves them unreachable (isolate-pis.yml,
-upgrade/isolate-cluster.yml). Refuses (exit 1) when nothing answers or any answer is not a global address: a resolver
+copy/isolate-cluster.yml). Refuses (exit 1) when nothing answers or any answer is not a global address: a resolver
 that answers the LAN's address (a router intercepting DNS) made the proof drop an address dropped already and probe it
 - "blocked", with the public one still reachable."""
 import ipaddress

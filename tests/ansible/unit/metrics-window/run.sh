@@ -1,11 +1,11 @@
 #!/bin/bash
-# tests/ansible/upgrade/metrics-check.yml's scrape-target check as the playbook holds it (rendered by Ansible's templar,
+# tests/ansible/copy/metrics-check.yml's scrape-target check as the playbook holds it (rendered by Ansible's templar,
 # its conditions as Ansible evaluates them), kubectl a stub answering Prometheus: first every active target up now -
-# retried, a target the step replaced coming up - the moment they all are recorded (t0); then each target active now
+# retried, a target a change replaced coming up - the moment they all are recorded (t0); then each target active now
 # up for 2 minutes, read from the last sample it was down and from its first (subqueries over t0 - 120 s .. now, among
 # the targets active now - a replaced pod's last failed scrape is no flap; sample times, not the subquery's steps): none
 # - up 2 minutes already - passes at once (most steps: a fixed 2-minute wait was 2 hours over a full run); one before t0
-# (the step's own recovery) waits until 2 minutes after it; one after t0 of a target there at t0 is a flap and fails at
+# (the change's own recovery) waits until 2 minutes after it; one after t0 of a target there at t0 is a flap and fails at
 # once, never waited out (a window sliding with each retry let a flap age out); a target first seen after t0 (a pod the
 # settle replaced) waits its 2 minutes from its first sample, its early downs no flap. No active target fails.
 set -u
@@ -56,7 +56,7 @@ def check(name, got, want):
     global fails
     fails += got != want
     print(("PASS " if got == want else "FAIL ") + name + ("" if got == want else f": got {got}, want {want}"))
-tasks = yaml.safe_load(open("tests/ansible/upgrade/metrics-check.yml"))[0]["tasks"]
+tasks = yaml.safe_load(open("tests/ansible/copy/metrics-check.yml"))[0]["tasks"]
 cmd = lambda t: t["ansible.builtin.shell"] if isinstance(t["ansible.builtin.shell"], str) else t["ansible.builtin.shell"]["cmd"]
 shells = [t for t in tasks if "ansible.builtin.shell" in t]
 up_now = next((t for t in shells if "targets?state=active" in cmd(t) and "UP AT" in cmd(t)), None)
@@ -67,7 +67,7 @@ if up_now is None or stayed is None:
     print("metrics-window: " + f"{fails} FAILED")
     sys.exit(1)
 env = lambda **k: dict(os.environ, PATH=os.path.join(W, "bin") + ":" + os.environ["PATH"], W=W, **k)
-play_vars = yaml.safe_load(open("tests/ansible/upgrade/metrics-check.yml"))[0]["vars"]
+play_vars = yaml.safe_load(open("tests/ansible/copy/metrics-check.yml"))[0]["vars"]
 v = dict(play_vars, kubeconfig="k", proxy="/p", allowed_down=["scrapeConfig/ns/smart"])
 # up now: retried until every active target is; the moment recorded
 check("up now: retried", (up_now.get("retries", 0) > 0, str(up_now.get("until", ""))), (True, f"{up_now['register']}.rc == 0"))
@@ -109,7 +109,7 @@ check("the samples' own times (timestamp() of an expression gives the subquery's
 r, _, rng, _ = stayed_run(30)
 check("t0 30 s ago: the window reaches U before it", rng, U + 30)
 r, _, _, _ = stayed_run(10, last_down_ago=U * 2 // 3)
-check("down 40 s ago, before t0 (the step's own recovery): not yet", (r.returncode, "NOT YET" in r.stdout), (2, True))
+check("down 40 s ago, before t0 (the change's own recovery): not yet", (r.returncode, "NOT YET" in r.stdout), (2, True))
 r, _, _, _ = stayed_run(U + 30, last_down_ago=U + 50)
 check("down U + 50 s ago, before t0: up U since - passes", (r.returncode, "stayed up" in r.stdout), (0, True))
 r, _, _, _ = stayed_run(60, last_down_ago=20)

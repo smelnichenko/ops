@@ -1,5 +1,5 @@
 #!/bin/bash
-# tests/ansible/upgrade/tasks/side-cluster-delete.yml's shell as the task file holds it (rendered by Ansible's templar,
+# tests/ansible/copy/tasks/side-cluster-delete.yml's shell as the task file holds it (rendered by Ansible's templar,
 # its poll cut to 0.1 s), kubectl a stub: a side cluster's pods and volumes gone after its delete pass - at once, or
 # after a while (a pod still terminating when the foreground delete returned failed the run once, read a single time);
 # its delete call failing (the API server a moment away) asked again until one reaches the cluster, never after;
@@ -64,7 +64,7 @@ import yaml
 sys.path.insert(0, "tests/ansible/unit")
 from templar import render
 W = os.environ["W"]
-task = yaml.safe_load(open("tests/ansible/upgrade/tasks/side-cluster-delete.yml"))[0]
+task = yaml.safe_load(open("tests/ansible/copy/tasks/side-cluster-delete.yml"))[0]
 script = render(task["ansible.builtin.shell"],
                 side_kubectl="kubectl -n ns", side_cluster="side", side_gone_seconds=1, side_delete_seconds=1,
                 side_poll=0.1)
@@ -174,11 +174,11 @@ def _walk(ts):
 # the includes as Ansible runs them (a comment naming the file counts for nothing)
 users = {f: sum(1 for t in _walk(yaml.safe_load(open(f)))
                 if str(t.get("ansible.builtin.include_tasks", "")).endswith("side-cluster-delete.yml"))
-         for f in ("tests/ansible/upgrade/tasks/wave0-pg-dump.yml", "tests/ansible/upgrade/restore-check.yml")}
+         for f in ("tests/ansible/copy/restore-check.yml",)}
 left = {f: open(f).read().count("outlived its delete") for f in users}
 ok = users == dict.fromkeys(users, 2) and left == dict.fromkeys(left, 0)
 fails += not ok
-print(f"{'PASS' if ok else 'FAIL'} the restore check and the Wave 0 dump remove their side clusters with it"
+print(f"{'PASS' if ok else 'FAIL'} the restore check removes its side cluster with it"
       + ("" if ok else f" ({users}, own checks left {left})"))
 print("side-cluster-delete: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)

@@ -1,4 +1,4 @@
-# tests/ansible/upgrade/metrics-check.yml's two queries (its down_query and first_query, RANGE named here) as Prometheus
+# tests/ansible/copy/metrics-check.yml's two queries (its down_query and first_query, RANGE named here) as Prometheus
 # evaluates them - promtool test rules, the version production runs (CI's promql step):
 #   docker run --rm --network none -v "$PWD/tests/promql:/t:ro" --entrypoint promtool \
 #     quay.io/prometheus/prometheus:v3.10.0 test rules /t/metrics-check.test.yml

@@ -1,10 +1,10 @@
 ---
 # upgrade-containerd.yml run again after a swap that left the kubelet stopped (a run cut short, or one that failed on
-# lost containers and was then fixed): on the Vagrant copy after its containerd step - the kubelet stopped by hand and
-# the containers running then listed as the swap lists them (the step's own list is gone: removed once the kubelet ran
-# again), the playbook run as the step runs it. It must check the listed containers against the runtime, start the
+# lost containers and was then fixed): on the Vagrant copy, which runs containerd.io as ten does - the kubelet stopped
+# by hand and the containers running then listed as the swap lists them (a swap's own list is removed once the kubelet
+# runs again), the playbook run as a swap runs it. It must check the listed containers against the runtime, start the
 # kubelet (it ended "already there" with the kubelet down, the node NotReady) and remove the list.
-# Vagrant only, after step 14. Usage: task test:containerd-takeup
+# Vagrant only. Usage: task test:containerd-takeup
 - name: Vagrant VMs only
   ansible.builtin.import_playbook: vagrant-only-play.yml
 
@@ -50,7 +50,7 @@
       failed_when: _kubelet.status.ActiveState != 'active'
 
     - name: The node is Ready (the API server may still be starting)
-      ansible.builtin.import_tasks: upgrade/tasks/node-ready.yml
+      ansible.builtin.import_tasks: copy/tasks/node-ready.yml
 
     - name: The list removed with the kubelet running
       ansible.builtin.stat:

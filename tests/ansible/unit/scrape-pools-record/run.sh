@@ -12,7 +12,7 @@ import sys
 import yaml
 sys.path.insert(0, "tests/ansible/unit")
 from templar import render, condition
-tasks = yaml.safe_load(open("tests/ansible/upgrade/metrics-check.yml"))[0]["tasks"]
+tasks = yaml.safe_load(open("tests/ansible/copy/metrics-check.yml"))[0]["tasks"]
 record = next(t for t in tasks if "scrape_pools_file" in str(t.get("ansible.builtin.copy", {}).get("dest", "")))
 whens = record.get("when", [])
 whens = whens if isinstance(whens, list) else [whens]

@@ -131,6 +131,11 @@ check("overlay_infra: the app's repo URL the copy's Forgejo, none of production'
 check("overlay_infra: the Vagrant value file after the app's, missing ones ignored",
       ("- $values/clusters/production/cert-manager/values.vagrant.yaml" in got,
        "ignoreMissingValueFiles: true" in got), (True, True))
+# the overlay the mirror copies over infra is the repo's own: a path left at the directory's old name (tests/ansible/
+# upgrade, plan 117's rename) copied nothing, every case above passing on its fixture
+check("the overlay it copies is the repo's (its Vagrant values among it)",
+      os.path.isfile(os.path.join(m.OVERLAY, "infra/clusters/production/schnappy-production-apps/values.vagrant.yaml")),
+      True)
 print("mirror-overlay: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 PY_MIRROR_OVERLAY

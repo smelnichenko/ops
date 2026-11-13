@@ -7,7 +7,7 @@
 # the hook without touching Argo's objects - its own Job and script ConfigMap names (this run's: a run left behind by
 # a stopped check never deletes another's), no hook annotations, no retries.
 # It reads the client secret the chart's ExternalSecret already made. TLS is verified as in production: the Vagrant
-# copy serves production's own *.pmon.dev certificate (tests/ansible/upgrade/production-state.yml). Prints k6's checks;
+# copy serves production's own *.pmon.dev certificate (tests/ansible/copy/production-state.yml). Prints k6's checks;
 # exit 0 only if k6 passed (set -e + pipefail carry the remote shell's exit 1 out). One failure alone runs it once more:
 # its latency threshold crossed with every check passed and no request failed - the first requests after a step
 # (Istio's sidecar steps restarting every pod: p95 2.9 and 3.1 s over 12 requests; Tempo's and ClickHouse's restarting
@@ -23,8 +23,8 @@ set -euo pipefail
 ops=$(cd "$(dirname "$0")/.." && pwd)
 infra_ref=${1:-main}
 platform_ref=${2:-main}
-mkdir -p "$ops/.upgrade"
-work=$(mktemp -d "$ops/.upgrade/smoke.XXXX")
+mkdir -p "$ops/.copy"
+work=$(mktemp -d "$ops/.copy/smoke.XXXX")
 trap 'rm -rf "$work"' EXIT
 name=vagrant-k6-smoke-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')
 # the run's bound (15 minutes) and its poll, given to the remote shell as its arguments - ssh forwards no environment and
@@ -61,7 +61,7 @@ print(yaml.safe_dump_all([cm, job], sort_keys=False))
 EOF
 
 cd "$ops"
-# plain ssh with the VMs' config when the caller has it (VAGRANT_SSH_CONFIG, scripts/upgrade-step-checks.sh): Vagrant
+# plain ssh with the VMs' config when the caller has it (VAGRANT_SSH_CONFIG, scripts/copy-checks.sh): Vagrant
 # runs one action per machine at a time, so a `vagrant ssh` beside another one fails - and each costs its start-up
 # (vagrant ssh's own "Connection ... closed." noise dropped; any other error is kept)
 vssh() {

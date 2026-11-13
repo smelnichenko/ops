@@ -214,7 +214,7 @@
               args:
                 - |
                   while true; do
-                    psql "host={{ cluster }}-rw user=postgres dbname=monitor connect_timeout=2" -qAt \
+                    psql -w "host={{ cluster }}-rw user=postgres dbname=monitor connect_timeout=2" -qAt \
                       -c "insert into pgstats_writes default values" >/dev/null 2>&1 || true
                     sleep 0.5
                   done
@@ -299,10 +299,10 @@
       ansible.builtin.shell: |
         set -euo pipefail
         p=$({{ kc }} get cluster {{ cluster }} -o jsonpath='{.status.currentPrimary}')
-        {{ kc }} exec "$p" -c postgres -- env PGPASSWORD={{ test_pw }} psql -v ON_ERROR_STOP=1 -At \
-          "host=localhost user=masi dbname=masi" -c "select g from generate_series(1, 1234) g" >/dev/null
-        {{ kc }} exec "$p" -c postgres -- env PGPASSWORD={{ test_pw }} psql -v ON_ERROR_STOP=1 -At \
-          "host=localhost user=masi dbname=masi" -c \
+        {{ kc }} exec "$p" -c postgres -- psql -w -v ON_ERROR_STOP=1 -At \
+          "host=localhost user=masi dbname=masi password={{ test_pw }}" -c "select g from generate_series(1, 1234) g" >/dev/null
+        {{ kc }} exec "$p" -c postgres -- psql -w -v ON_ERROR_STOP=1 -At \
+          "host=localhost user=masi dbname=masi password={{ test_pw }}" -c \
           "select rows, calls from pg_stat_statements where query like 'select g from generate_series%'"
       args:
         executable: /bin/bash

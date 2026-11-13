@@ -1,5 +1,5 @@
 #!/bin/bash
-# tests/ansible/upgrade/files/argo-settled.py on saved apps and pods (its --apps-json/--pods-json mode): green on a
+# tests/ansible/copy/files/argo-settled.py on saved apps and pods (its --apps-json/--pods-json mode): green on a
 # settled set; the app floor (--expect-apps: a missing or an unexpected app is not green, an allowed extra is); an app
 # compared against an older spec is not green, one whose spec only gained fields Go's omitempty drops is (false, 0,
 # a map left empty); the restart history (--restart-history: a pod restarting in two steps running fails, one step's
@@ -17,7 +17,7 @@ import subprocess
 import sys
 import tempfile
 
-S = "tests/ansible/upgrade/files/argo-settled.py"
+S = "tests/ansible/copy/files/argo-settled.py"
 NOW = "2026-10-06T12:00:00Z"
 fails = 0
 work = tempfile.mkdtemp()
@@ -513,30 +513,28 @@ check("the earlier file's last restart step counts", (rc, "(30, 31)" in out), (1
 import yaml
 sys.path.insert(0, "tests/ansible/unit")
 from templar import render
-play = yaml.safe_load(open("tests/ansible/upgrade/argo-settled.yml"))[0]
+play = yaml.safe_load(open("tests/ansible/copy/argo-settled.yml"))[0]
 script = next(t for t in play["tasks"] if "ansible.builtin.script" in t)["ansible.builtin.script"]["cmd"]
 base = {k: v for k, v in play["vars"].items() if k != "mirror_revisions"}
-for step, asked, want in (("20", "no", (True, False)), ("20", "yes", (True, True)), ("", "no", (False, False))):
-    argv = render(script, **{**base, "restart_step": step, "restarts_expected": asked}).split()
-    check(f"the playbook's command line, step {step or 'none'}, restarts expected {asked}: history, expected",
-          ("--restart-history" in argv, "--restarts-expected" in argv), want)
-    check(f"  the copy's settle syncs a stalled app (--sync-stalled), step {step or 'none'}", "--sync-stalled" in argv, True)
+for stage, want in (("build", True), ("change", True), ("", False)):
+    argv = render(script, **{**base, "restart_stage": stage}).split()
+    check(f"the playbook's command line, stage {stage or 'none'}: the restart history", "--restart-history" in argv, want)
+    check(f"  labelled by its stage, stage {stage or 'none'}",
+          argv[argv.index("--step") + 1] if "--step" in argv else None, stage or None)
+    check(f"  the copy's settle syncs a stalled app (--sync-stalled), stage {stage or 'none'}", "--sync-stalled" in argv, True)
 
-# the settle's values reach the script as given (the full run's step settles: the Taskfile's STEP_SETTLE) and are
-# production's by default (upgrade-production.py's SETTLE_*) - a wiring that dropped one ran every settle at the
-# script's; both read from where they are set, never restated here
-import importlib.machinery, importlib.util, re as _re
-_l = importlib.machinery.SourceFileLoader("up", "scripts/upgrade-production.py")
-up = importlib.util.module_from_spec(importlib.util.spec_from_loader("up", _l))
-_l.exec_module(up)
-production = [str(up.SETTLE_QUIET), str(up.SETTLE_STABLE), str(up.SETTLE_POLL)]
-step_settle = dict(_re.findall(r"-e (\w+)=(\d+)", yaml.safe_load(open("Taskfile.yml"))["vars"]["STEP_SETTLE"]))
-check("the full run's step settle sets all three", sorted(step_settle), ["poll_seconds", "restart_quiet", "stable_polls"])
-for given, want in (({}, production),
-                    (step_settle, [step_settle["restart_quiet"], step_settle["stable_polls"], step_settle["poll_seconds"]])):
-    argv = render(script, **{**base, "restart_step": "", "restarts_expected": "no", **given}).split()
+# the settle's values reach the script as given (the copy's deciding settles: the Taskfile's COPY_SETTLE) and are the
+# playbook's own by default - a wiring that dropped one ran every settle at the script's; both read from where they are
+# set, never restated here
+import re as _re
+copy_settle = dict(_re.findall(r"-e (\w+)=(\d+)", yaml.safe_load(open("Taskfile.yml"))["vars"]["COPY_SETTLE"]))
+check("the copy's deciding settle sets all three", sorted(copy_settle), ["poll_seconds", "restart_quiet", "stable_polls"])
+defaults = [str(play["vars"]["restart_quiet"]), str(play["vars"]["stable_polls"]), str(play["vars"]["poll_seconds"])]
+for given, want in (({}, defaults),
+                    (copy_settle, [copy_settle["restart_quiet"], copy_settle["stable_polls"], copy_settle["poll_seconds"]])):
+    argv = render(script, **{**base, "restart_stage": "", **given}).split()
     got = [argv[argv.index(f) + 1] if f in argv else None for f in ("--restart-quiet", "--stable-polls", "--poll")]
-    check(f"the playbook's command line, {'the full run step settle' if given else 'the defaults'}: quiet, polls, poll",
+    check(f"the playbook's command line, {'the copy settle' if given else 'the defaults'}: quiet, polls, poll",
           got, want)
 
 print("argo-settled: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))

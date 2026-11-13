@@ -25,7 +25,7 @@ all:
     keepalived_vip: "192.168.56.50"
     # deploy/ansible/playbooks/production-data-check.yml: what the copy lacks by nature - the smartctl exporter (the VM's
     # virtio disk reports no SMART: nothing listens on 9633), the public endpoints (no internet from the copy) and a
-    # daily backup in the last 30 h (a copy hours old never ran its daily schedule; tests/ansible/upgrade/backup-check.yml
+    # daily backup in the last 30 h (a copy hours old never ran its daily schedule; tests/ansible/copy/backup-check.yml
     # proves Velero's backups instead) - a failed scheduled backup (VeleroScheduledBackupFailed) is never allowed
     production_check_allowed_down:
       - scrapeConfig/schnappy-infra/schnappy-smartctl-exporter
@@ -39,20 +39,14 @@ all:
     containerd_registry_config_path_override: "/etc/containerd/certs.d"
     # the tests' PVCs leave storageClassName empty; ten's name local-path
     local_path_default_class_override: true
-    # setup-kubeadm: External Secrets by Helm as ten had it (2026-04-05, CRDs included) - with platform_by_argo the
-    # default is off, as on ten today
-    external_secrets_by_helm_override: true
-    # tasks/node-config.yml: the kubelet's shutdown grace only in its file, not in the kubelet-config ConfigMap - as ten
-    # is until the upgrade step that sets it there (it runs configure-node.yml with this set true)
-    kubelet_grace_in_kubelet_config_map: false
-    # upgrade-kubeadm.yml: the isolation's CoreDNS `template` blocks (tests/ansible/upgrade/isolate-cluster.yml) are
+    # upgrade-kubeadm.yml: the isolation's CoreDNS `template` blocks (tests/ansible/copy/isolate-cluster.yml) are
     # unknown to kubeadm's Corefile migration, which refuses a CoreDNS bump over them; ten's Corefile has none
     k8s_upgrade_ignore_preflight_errors_override: CoreDNSUnsupportedPlugins
     # Argo CD's egress to Forgejo (setup-argocd.yml): the Pi VMs and their VIP
     forgejo_cidrs: ["192.168.56.20/32", "192.168.56.21/32", "{{ keepalived_vip }}/32"]
     # The pmon.dev names production resolves to the Pi VIP (from ten and the Pis, 2026-10-02; every other one is ten's
     # gateway). The Vagrant copy answers them with its own VIP: the Pis in /etc/hosts (tests/ansible/isolate-pis.yml),
-    # the cluster in CoreDNS (tests/ansible/upgrade/isolate-cluster.yml).
+    # the cluster in CoreDNS (tests/ansible/copy/isolate-cluster.yml).
     pi_served_names: [auth, git, vault, nexus, nexus-docker]
 
     # ── Test-only credential fixtures ──────────────────────────────────────
@@ -73,25 +67,20 @@ all:
     # in: down, Forgejo (Argo, Woodpecker, the registry) was gone while pi2 served the VIP
     forgejo_domain: "{{ keepalived_vip }}"
     # setup-argocd: the Vagrant Forgejo (its port, plain http), no certificate check, no ingress - the Vagrant copy's
-    # own, never a step's argument (production's run would carry them to ten). Single sign-on configured and checked as
-    # production's (argocd_keycloak_enabled: its default) - steps 31 and 33 rehearsed with production's checks
+    # own, never a playbook's argument (a production run would carry them to ten). Single sign-on configured and checked
+    # as production's (argocd_keycloak_enabled: its default)
     argocd_forgejo_host: "{{ keepalived_vip }}:3000"
     forgejo_scheme: http
     argocd_validate_certs: false
     argocd_ingress_enabled: false
     forgejo_root_url: "http://{{ keepalived_vip }}:3000/"
-    # Wave 0 files go to the Pi store in parts this small here, so the rehearsal puts them together from several
-    # (production's default: 4 GiB)
-    upgrade_backup_part_bytes: 4194304
-    # the PostgreSQL 18 test step analyses schnappy-test's clusters - the Vagrant copy has no test environment
+    # postgres-analyze.yml -e pg_namespaces=schnappy-test finds no cluster - the Vagrant copy has no test environment
     postgres_analyze_allow_none: true
     keycloak_admin_password: "vagrant-keycloak-pw"
     postgres_admin_password: "vagrant-pg-pw"
     postgres_replication_password: "vagrant-pg-repl-pw"
     backup_root_user: "velero-admin"
     backup_root_password: "vagrant-minio-pw"
-    # SonarQube is not in the Vagrant copy: the Wave 0 postgres backup has no SonarQube database to dump here
-    upgrade_backup_sonarqube: false
     nexus_admin_password: "vagrant-nexus-pw"
     keepalived_vrrp_password: "k33p4l1v"
     argocd_keycloak_client_secret: "vagrant-argocd-oidc-secret"

@@ -4,11 +4,11 @@
 # solvers as letsencrypt-dns (the porkbun webhook: a TXT record at Porkbun, removed by cert-manager after). Ready within
 # 10 minutes, or the run fails with the order's and challenge's state. Everything it made is deleted whatever happens.
 #
-# Why: the Vagrant copy renews only self-signed and CA certificates (tests/ansible/upgrade/cert-check.yml); a
+# Why: the Vagrant copy renews only self-signed and CA certificates (tests/ansible/copy/cert-check.yml); a
 # cert-manager upgrade that broke the webhook would show only at the wildcard's next renewal - weeks later, with no
-# one watching. Production's done phase runs it after a step that changes cert-manager (its cert-renew line).
+# one watching. Run it on production after a change to cert-manager or its webhook.
 #
-# Usage: task deploy:upgrade:done STEP=<a cert-renew step>   (its first check runs it, asked first)
+# Usage: production: no task since plan 117 removed deploy:upgrade:* - make one with the change that needs it
 - name: ACME issuance through production's DNS-01 solver (Let's Encrypt staging)
   hosts: target
   become: true

@@ -488,20 +488,17 @@ red "tier0: psql could not run pg-globals.sql: red" TIER0 PSQL_FAIL=1
 # the playbook's wiring
 PY=python3
 "$PY" -c 'import yaml' 2> /dev/null || PY=deploy/ansible/venv/bin/python3
-check "the playbook names production's images (Postgres 17 as it ran; after every step: its Postgres 18 and etcd, digested)" "$(PYTHONDONTWRITEBYTECODE=1 "$PY" - <<'PY_WIRING'
-import importlib.machinery, importlib.util, os, re, yaml
+check "the playbook names production's images (its Postgres and etcd now, digested; 17's for the backups made before 18)" "$(PYTHONDONTWRITEBYTECODE=1 "$PY" - <<'PY_WIRING'
+import re, yaml
 v = yaml.safe_load(open("deploy/ansible/playbooks/setup-pi-restore-check.yml"))[0]["vars"]
-L = importlib.machinery.SourceFileLoader("e", "scripts/upgrade-expected-inventory.py")
-e = importlib.util.module_from_spec(importlib.util.spec_from_loader("e", L))
-L.exec_module(e)
-before = open("tests/ansible/upgrade/prod-inventory.txt").read().splitlines()
-after = e.expected(sorted(f[:-4] for f in os.listdir(e.STEPS) if f.endswith(".txt")))
+now = open("tests/ansible/copy/prod-inventory.txt").read().splitlines()
 img = lambda inv, name: [l.split()[2] for l in inv if l.startswith("image " + name + " ")]
 pg, etcd = "ghcr.io/cloudnative-pg/postgresql", "registry.k8s.io/etcd"
 digested = lambda ref, name, tags: [re.fullmatch(re.escape(name) + r":(\S+)@sha256:[0-9a-f]{64}", ref)[1]] == tags
-print(v["pi_restore_check_pg_images"]["17"] == pg + ":" + img(before, pg)[0],
-      digested(v["pi_restore_check_pg_images"]["18"], pg, img(after, pg)),
-      digested(v["pi_restore_check_etcd_image"], etcd, img(after, etcd)), sorted(v["pi_restore_check_pg_images"]))
+major = img(now, pg)[0].split(".")[0] if img(now, pg) else None
+print(v["pi_restore_check_pg_images"].get("17") == pg + ":17",
+      digested(v["pi_restore_check_pg_images"].get(major, ""), pg, img(now, pg)),
+      digested(v["pi_restore_check_etcd_image"], etcd, img(now, etcd)), sorted(v["pi_restore_check_pg_images"]))
 PY_WIRING
 )" "True True True ['17', '18']"
 check "the two Pis on opposite days (pi1 even, pi2 odd), the store through the VIP" "$("$PY" - <<'PY_PARITY'

@@ -429,8 +429,8 @@ check("first run: proven - infra's and platform's branches read, chat's and moni
       ["chat/pulls", "chat/pulls/6", "infra/branches", "monitor/pulls", "monitor/pulls/5", "platform/branches"])
 check("first run: derived from infra's main as fetched (its commit said), equal to the committed list; the scratch "
       "copy gone", (f"infra {INFRA_COMMIT}" in flat(out),
-                    [x for x in os.listdir(os.path.join(ROOT, ".upgrade")) if x.startswith("argocd-repos.")]
-                    if os.path.isdir(os.path.join(ROOT, ".upgrade")) else []), (True, []))
+                    [x for x in os.listdir(os.path.join(ROOT, ".copy")) if x.startswith("argocd-repos.")]
+                    if os.path.isdir(os.path.join(ROOT, ".copy")) else []), (True, []))
 check("first run: Vault argocd/forgejo-readonly holds the token and username (its other property kept), what ten "
       "held recorded for retire "
       "(retire_last_eight: the readonly token's, both repo-creds passwords'), one write with the version read (cas 2), "
@@ -852,16 +852,16 @@ check("setup-argocd runs the repo-creds tasks once, right after it writes the Se
        SA_TASKS[inc[0]].get("when") if inc else None), (1, 1, "not ansible_check_mode"))
 
 # ── the Vagrant copy: the reader after the mirror, before setup-argocd, with the copy's committed list ─────────────
-TF = yaml.safe_load(open(os.path.join(ROOT, "Taskfile.yml")))["tasks"]["test:upgrade:argo"]["cmds"]
+TF = yaml.safe_load(open(os.path.join(ROOT, "Taskfile.yml")))["tasks"]["test:copy:argo"]["cmds"]
 tf = [c["cmd"] if isinstance(c, dict) and "cmd" in c else str(c) for c in TF]
 at = lambda pat: next((i for i, c in enumerate(tf) if pat in c), -1)  # noqa: E731
 mirror, reader, argocd = at("vagrant-gitops-mirror.py"), at("playbooks/setup-argocd-reader.yml"), at(
     "playbooks/setup-argocd.yml")
-VAG = yaml.safe_load(open(os.path.join(ROOT, "tests/ansible/upgrade/vagrant-argocd-reader-repos.yml")))
-check("the Vagrant copy's build (test:upgrade:argo): the reader on the copy's inventory after the mirror and before "
+VAG = yaml.safe_load(open(os.path.join(ROOT, "tests/ansible/copy/vagrant-argocd-reader-repos.yml")))
+check("the Vagrant copy's build (test:copy:argo): the reader on the copy's inventory after the mirror and before "
       "setup-argocd, judged by the copy's committed list (infra, platform - no PR-env generator there)",
       (0 <= mirror < reader < argocd, "-i inventory/vagrant.yml" in tf[reader] if reader >= 0 else None,
-       "reader_repos_file=../../../tests/ansible/upgrade/vagrant-argocd-reader-repos.yml" in tf[reader]
+       "reader_repos_file=../../../tests/ansible/copy/vagrant-argocd-reader-repos.yml" in tf[reader]
        if reader >= 0 else None, VAG),
       (True, True, True, {"argocd_reader_code": ["infra", "platform"], "argocd_reader_pulls": []}))
 # every build of a cluster from nothing runs setup-argocd only after the reader (its repo-creds credentials come from
@@ -874,7 +874,7 @@ for name in ("test:multi-env", "test:ephemeral-env-clean"):
     check(f"{name}: the mirror, then the reader on the copy's inventory with the copy's committed list, then "
           "setup-argocd",
           (0 <= mirror < reader < argocd, "-i inventory/vagrant.yml" in tf[reader] if reader >= 0 else None,
-           "reader_repos_file=../../../tests/ansible/upgrade/vagrant-argocd-reader-repos.yml" in tf[reader]
+           "reader_repos_file=../../../tests/ansible/copy/vagrant-argocd-reader-repos.yml" in tf[reader]
            if reader >= 0 else None), (True, True, True))
 tf = [c["cmd"] if isinstance(c, dict) and "cmd" in c else str(c) for c in TASKS["deploy:full"]["cmds"]]
 seed, reader, argocd = at("playbooks/seed-vault-secrets.yml"), at("playbooks/setup-argocd-reader.yml"), at(

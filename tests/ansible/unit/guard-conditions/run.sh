@@ -96,18 +96,18 @@ def acme(ready):
                           capture_output=True).returncode
 check("K01 the certificate not Ready: the task fails; Ready: passes", (acme(False) != 0, acme(True)), (True, 0))
 # G04: the storage check's second pod reading something else than the marker fails it
-rr = next(t for t in tasks("tests/ansible/upgrade/storage-check.yml") if t.get("register") == "_reread")
+rr = next(t for t in tasks("tests/ansible/copy/storage-check.yml") if t.get("register") == "_reread")
 check("G04 the volume read back as written: on; another content or a pod not Succeeded: failed",
       (condition(rr["failed_when"], _reread={"stdout_lines": ["Succeeded", "m1"]}, marker="m1"),
        condition(rr["failed_when"], _reread={"stdout_lines": ["Succeeded", "other"]}, marker="m1"),
        condition(rr["failed_when"], _reread={"stdout_lines": ["Failed", "m1"]}, marker="m1")), (False, True, True))
 # G05: the restore never recovers into the cluster it reads from
-rc_ = task("tests/ansible/upgrade/restore-check.yml", "Its names are the fixed ones")["ansible.builtin.assert"]["that"]
+rc_ = task("tests/ansible/copy/restore-check.yml", "Its names are the fixed ones")["ansible.builtin.assert"]["that"]
 ok_names = dict(recovered="upgrade-restore-check", _backup="upgrade-restore-check-1", cluster="schnappy-production-postgres")
 check("G05 a side cluster of its own: on; recovering into the cluster itself: refused",
       (condition(rc_, **ok_names), condition(rc_, **dict(ok_names, cluster="upgrade-restore-check"))), (True, False))
 # L01: every Postgres instance holding exactly the seeded rows
-rows_t = next(t for t in tasks("tests/ansible/upgrade/data-check.yml") if t.get("register") == "_rows")
+rows_t = next(t for t in tasks("tests/ansible/copy/data-check.yml") if t.get("register") == "_rows")
 seeded = dict(rows=1000, expected_md5="abc")
 check("L01 the seeded rows: done, on; another count or checksum: not done, failed",
       (condition(rows_t["until"], _rows={"stdout": "1000 abc\n"}, **seeded),
@@ -115,7 +115,7 @@ check("L01 the seeded rows: done, on; another count or checksum: not done, faile
        condition(rows_t["until"], _rows={"stdout": "999 abc"}, **seeded),
        condition(rows_t["failed_when"], _rows={"stdout": "1000 abd"}, **seeded)), (True, False, False, True))
 # L02: ClickHouse's canary rows, compatibility and users as seeded
-ch = next(t for t in tasks("tests/ansible/upgrade/survival-check.yml") if t.get("register") == "_ch")
+ch = next(t for t in tasks("tests/ansible/copy/survival-check.yml") if t.get("register") == "_ch")
 def survival(lines):
     v = dict(rows=50, expected_md5="def", clickhouse_compat="", clickhouse_users="default,schnappy",
              clickhouse_format_pins={}, _ch={"rc": 0, "stdout_lines": lines})

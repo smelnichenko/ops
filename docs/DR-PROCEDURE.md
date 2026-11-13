@@ -6,7 +6,8 @@
 - Vault Pi (192.168.11.4) running with transit engine
 - `/home/sm/src/` has clones of: ops, infra, platform repos
 - The Pi backup store (versitygw on the Pi VIP, 192.168.11.5:9000): Velero's backups (bucket `velero`), CNPG's barman
-  archive and base backups (`postgres-backups`), the upgrade's Wave 0 backups (`upgrade-backups`)
+  archive and base backups (`postgres-backups`); nothing writes plan 100's Wave 0 bucket (`upgrade-backups`) since
+  plan 117 removed the upgrade tooling
 
 ## Full Cluster Rebuild
 

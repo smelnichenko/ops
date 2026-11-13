@@ -8,7 +8,7 @@ PY=python3
 PYTHONDONTWRITEBYTECODE=1 "$PY" - <<'PY'
 import sys
 import yaml
-ps = yaml.safe_load(open("tests/ansible/upgrade/production-state.yml"))
+ps = yaml.safe_load(open("tests/ansible/copy/production-state.yml"))
 tasks = next(p for p in ps if p.get("hosts") == "target")["tasks"]
 t = next(t for t in tasks if (t.get("kubernetes.core.k8s") or {}).get("definition", {}).get("kind") == "Namespace")
 labels = t["kubernetes.core.k8s"]["definition"]["metadata"].get("labels") or {}

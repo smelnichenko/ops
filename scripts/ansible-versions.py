@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """ansible-versions.py - the Ansible a run uses: ansible-core and the ansible package in the project's venv
 (deploy/ansible/venv), each collection requirements.yml names in the project's own collections path
-(deploy/ansible/collections - ansible.cfg's collections_path), printed as JSON. A full run's proof records them
-(scripts/upgrade-production.py proof-start), production's phases refuse others.
+(deploy/ansible/collections - ansible.cfg's collections_path), printed as JSON.
 
   --check   each as requirements.txt and requirements.yml pin it: the differences named, exit 1 (deploy:install's status:
             it installs again on any)

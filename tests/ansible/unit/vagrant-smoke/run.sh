@@ -125,7 +125,7 @@ check "no background process in the remote shell (a lone &, not && or a redirect
   "$(grep -cE '(^|[^&<>])&([[:space:]]|$)' "$W/remote.sh")" 0
 # the whole script, its smoke failing on the VM: it exits non-zero - its remote shell's output goes through `tr`, and
 # without pipefail the pipeline's exit was tr's (0): a failed smoke passed
-E=$W/e2e; mkdir -p "$E/ops/scripts" "$E/ops/.upgrade" "$E/bin"
+E=$W/e2e; mkdir -p "$E/ops/scripts" "$E/ops/.copy" "$E/bin"
 cp "$S" "$E/ops/scripts/"
 for r in platform infra; do git init -q -b main "$E/$r"; done
 mkdir -p "$E/platform/helm/schnappy" "$E/infra/clusters/production/schnappy-production-apps"

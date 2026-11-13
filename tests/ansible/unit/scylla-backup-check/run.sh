@@ -1,11 +1,10 @@
 #!/bin/bash
-# Scylla Manager still backs up after a step that moves it, ScyllaDB or the agents (the step's scylla-backup-check
-# line: 17, 18, 20, 21): deploy/ansible/playbooks/scylla-backup-check.yml refuses a backup or repair task whose last
+# Scylla Manager still backs up on the Vagrant copy, and after a change that moves it, ScyllaDB or the agents
+# (test:copy:check): deploy/ansible/playbooks/scylla-backup-check.yml refuses a backup or repair task whose last
 # run failed, a production cluster without a backup task; starts each production cluster's backup task (the test
 # environment's has none: skipped by name) and wants it DONE with a snapshot this run took - its tag no older than the
 # node's clock at the start (right after the start `sctool progress` may still show the last run, DONE). A preview
-# reads only. The playbook on localhost, kubectl and date stubs playing Scylla Manager; then the step lines and their
-# wiring: the full run's step task, production's done.
+# reads only. The playbook on localhost, kubectl and date stubs playing Scylla Manager; then its wiring.
 set -u
 cd "$(dirname "$0")/../../../.." || exit 1
 AP=$(command -v ansible-playbook || echo deploy/ansible/venv/bin/ansible-playbook)
@@ -86,22 +85,10 @@ check "the backup ends in ERROR: failed" "$(run PROGRESS=ERROR | cut -c1-4)" "rc
 check "DONE with the last run's snapshot (older than the start): failed" \
   "$(run TAG=sm_20261008030049UTC | cut -c1-4)" "rc=2"
 check "the healthchecks' errors are not the backup's" "$(run NO_TEST=1)" "rc=0 started=a8548f9c"
-# the steps that move Scylla Manager, ScyllaDB or the agents declare it; the full run and production run it
-for s in 17-scylladb-2025.1 18-scylla-operator-1.21 20-scylladb-2026.1 21-scylla-operator-1.22; do
-  check "$s: its scylla-backup-check line, read as such" \
-    "$(grep -c '^scylla-backup-check$' "tests/ansible/upgrade/steps/$s.txt") \
-$(scripts/upgrade-expected-inventory.py --scylla-backup-check "$s" 2> /dev/null)" "1 yes"
-done
-check "  a step without one: no" "$(scripts/upgrade-expected-inventory.py --scylla-backup-check 19-scylladb-2026.1-test 2> /dev/null)" "no"
-check "the full run's step task runs it on the copy when the step says so" "$("$PY" -c '
+# every check of the copy runs it on the copy (a change's too)
+check "test:copy:check runs it on the copy" "$("$PY" -c '
 import yaml
-t = yaml.safe_load(open("Taskfile.yml"))["tasks"]["test:upgrade:step"]
-v = str((t.get("vars") or {}).get("SCYLLA_BACKUP_CHECK"))
-c = [str(x.get("cmd", x) if isinstance(x, dict) else x) for x in t["cmds"]]
-print("--scylla-backup-check {{.STEP}}" in v, any("SCYLLA_BACKUP_CHECK" in x and "playbooks/scylla-backup-check.yml" in x
-                                                   and "inventory/vagrant.yml" in x for x in c))')" "True True"
-check "production's done runs it at the step's first check (asked first)" \
-  "$(grep -c 'playbooks/scylla-backup-check.yml' scripts/upgrade-production.py) \
-$(grep -c '"scylla_backup": "scylla-backup-check" in flags' scripts/upgrade-production.py)" "1 1"
+c = [str(x.get("cmd", x) if isinstance(x, dict) else x) for x in yaml.safe_load(open("Taskfile.yml"))["tasks"]["test:copy:check"]["cmds"]]
+print(sum("playbooks/scylla-backup-check.yml" in x and "inventory/vagrant.yml" in x for x in c))')" "1"
 echo "scylla-backup-check: $([ $fails = 0 ] && echo ALL-PASS || echo "$fails FAILED")"
 [ $fails = 0 ]

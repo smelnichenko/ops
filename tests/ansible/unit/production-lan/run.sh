@@ -23,7 +23,7 @@ users = {"deploy/ansible/playbooks/setup-nexus.yml": "Install Nexus on pi1 + pi2
          "deploy/ansible/playbooks/setup-vault-pi.yml": "Install Vault on pi1 + pi2",
          "deploy/ansible/playbooks/setup-keepalived.yml": "Setup Keepalived",
          "tests/ansible/isolate-pis.yml": "Isolate the Vagrant Pis from production",
-         "tests/ansible/upgrade/isolate-cluster.yml": "Isolate the Vagrant cluster from production"}
+         "tests/ansible/copy/isolate-cluster.yml": "Isolate the Vagrant cluster from production"}
 for f, name in users.items():
     play = next((p for p in yaml.safe_load(open(f)) if p.get("name") == name), {})
     files = [os.path.normpath(os.path.join(os.path.dirname(f), v)) for v in play.get("vars_files") or []]
@@ -36,7 +36,7 @@ values = [re.compile(r"(?<![\w.:])" + re.escape(str(lan.get(k, "-"))) + r"(?![\w
 # the Vagrant guard decides on the host's own addresses and no variable, by design (vagrant-only.yml): its own literal
 GUARD = {"tests/ansible/vagrant-only.yml"}
 said = [f"{f}:{n}" for f in sorted(glob.glob("deploy/ansible/playbooks/**/*.yml", recursive=True)
-                                   + glob.glob("tests/ansible/*.yml") + glob.glob("tests/ansible/upgrade/**/*.yml",
+                                   + glob.glob("tests/ansible/*.yml") + glob.glob("tests/ansible/copy/**/*.yml",
                                                                                  recursive=True)) if f not in GUARD
         for n, line in enumerate(open(f), 1) if not line.lstrip().startswith("#") and any(v.search(line) for v in values)]
 check("no playbook restates them", said, [])

@@ -2,14 +2,14 @@
 # The Pis' versitygw package (deploy/ansible/playbooks/tasks/versitygw.yml), installed as root on both: downloaded
 # from GitHub with its sha256 checked (vgw_checksums, per version and arch; the release's checksums.txt, its assets'
 # digests and the files' own sums agreed 2026-10-09), then installed from that file - apt took the URL with no check.
-# A version with no checksum is refused before anything is fetched; every version a step or the default installs has
-# both arches'. The task file read as Ansible reads it, its conditions and the checksum rendered by Ansible's templar.
+# A version with no checksum is refused before anything is fetched; the default and the version production's Pis run
+# (tests/ansible/copy/prod-inventory.txt) have both arches'. The task file read as Ansible reads it, its conditions and the checksum rendered by Ansible's templar.
 set -u
 cd "$(dirname "$0")/../../../.." || exit 1
 PY=python3
 "$PY" -c 'import ansible, yaml' 2> /dev/null || PY=deploy/ansible/venv/bin/python3
 PYTHONDONTWRITEBYTECODE=1 "$PY" - <<'PY'
-import glob, re, sys
+import re, sys
 from ansible.errors import AnsibleError
 sys.path.insert(0, "tests/ansible/unit")
 from plays import actions, load, tasks  # noqa: E402
@@ -34,14 +34,13 @@ check("  the file get_url fetched, before the install", (get is not None and apt
                                                         and get[2].get("dest") == apt[2]["deb"] and get[0] < apt[0]),
       True)
 table = sums[2]["vgw_checksums"] if sums else {}
-# the versions installed: the default (before and after its step's default line) and each step's -e vgw_version
+# the versions installed: the default, and production's (the Vagrant copy is built to what the Pis run)
 text = open(F).read()
 versions = set(re.findall(r"vgw_version \| default\('([0-9.]+)'\)", text))
-for s in glob.glob("tests/ansible/upgrade/steps/*.txt"):
-    st = open(s).read()
-    versions |= set(re.findall(r"-e vgw_version=([0-9.]+)", st))
-    versions |= set(re.findall(r"vgw_version \| default\('([0-9.]+)'\)", st))
-check("the versions installed found", sorted(versions), ["1.6.0", "1.8.0"])
+production = set(re.findall(r"(?m)^pi \S+ versitygw (\S+)$", open("tests/ansible/copy/prod-inventory.txt").read()))
+check("production's versitygw read from its inventory", len(production), 1)
+versions |= production
+check("the versions installed found", sorted(versions), ["1.8.0"])
 
 
 def rendered(key, **variables):

@@ -7,11 +7,12 @@
 # vacuumdb has no --missing-stats-only. Waits first until each cluster is healthy with every instance on the major
 # asked for; read-mostly (ANALYZE writes statistics only).
 #
-# With -e pg_namespaces=<ns>[,<ns>] only the clusters in those namespaces - the test environment's step, before
+# With -e pg_namespaces=<ns>[,<ns>] only the clusters in those namespaces - the test environment's first, before
 # production's. None of them having a cluster fails, unless the inventory sets postgres_analyze_allow_none (the Vagrant
 # copy, which has no test environment): then it says so and does nothing.
 #
-# Usage: task deploy:upgrade:playbooks STEP=<a PostgreSQL 18 step>   (its playbook line)
+# Usage: after a PostgreSQL major upgrade - on the Vagrant copy first (-i inventory/vagrant.yml); production: no task
+#        since plan 117 removed deploy:upgrade:* - make one with the change that needs it
 - name: Planner statistics after a PostgreSQL major upgrade
   hosts: target
   become: true

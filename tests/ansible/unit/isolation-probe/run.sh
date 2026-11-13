@@ -12,7 +12,7 @@ PY=python3
 "$PY" -c 'import ansible, yaml' 2> /dev/null || PY=deploy/ansible/venv/bin/python3
 "$PY" -c 'import ansible, yaml' || { echo "isolation-probe: no python3 with ansible and yaml (PATH, repo venv)"; exit 2; }
 AP=$(command -v ansible-playbook || echo deploy/ansible/venv/bin/ansible-playbook)
-"$AP" --syntax-check -i localhost, tests/ansible/upgrade/isolate-cluster.yml > /dev/null 2>&1 \
+"$AP" --syntax-check -i localhost, tests/ansible/copy/isolate-cluster.yml > /dev/null 2>&1 \
   || { echo "FAIL isolate-cluster.yml does not load"; exit 1; }
 W=$(mktemp -d)
 trap 'rm -rf "$W"' EXIT
@@ -55,7 +55,7 @@ import yaml
 sys.path.insert(0, "tests/ansible/unit")
 from templar import render, condition
 W = os.environ["W"]
-tasks = {t.get("name"): t for p in yaml.safe_load(open("tests/ansible/upgrade/isolate-cluster.yml"))
+tasks = {t.get("name"): t for p in yaml.safe_load(open("tests/ansible/copy/isolate-cluster.yml"))
          for t in p.get("tasks", [])}
 ctx = {"kubectl": os.path.join(W, "bin", "kubectl"), "production_vip": "192.168.11.5", "vagrant_vip": "192.168.56.5",
        "production_public": ["84.52.11.130"]}
@@ -116,7 +116,7 @@ for what, curl, env, want_fail in (("blocked, its names on the Vagrant VIP, the 
 # the guards' boot units: in place before any interface is up (nftables.service's own ordering) - After= alone let the
 # network come up first, the copy reaching production until the rules loaded
 import configparser
-for book in ("tests/ansible/isolate-pis.yml", "tests/ansible/upgrade/isolate-cluster.yml"):
+for book in ("tests/ansible/isolate-pis.yml", "tests/ansible/copy/isolate-cluster.yml"):
     unit = next(t["ansible.builtin.copy"]["content"] for pl in yaml.safe_load(open(book)) for t in pl.get("tasks") or []
                 if str((t.get("ansible.builtin.copy") or {}).get("dest", "")).endswith("vagrant-isolate-production.service"))
     c = configparser.ConfigParser(strict=False)

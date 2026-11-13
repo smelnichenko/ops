@@ -1,11 +1,9 @@
 #!/bin/bash
-# The stale PR environment sweeper proven against the copy's Vault after the step that moves it (step 01: its Vault
-# read verified, its token renewed, its own NetworkPolicy to Vault - infra): the step's sweeper-check line, read as
-# such; the full run's step task running tests/ansible/upgrade/sweeper-check.yml on the copy; the step's playbook line
-# replacing production's dead cleanup token (setup-vault-cleanup-policy.yml), the playbook that check runs again; that
-# playbook replacing a stored token Vault calls dead, a preview minting none; the check guarded to the Vagrant VMs in
-# every play. What the check proves on the copy is its own run (the full run); the sweeper's script is infra's
-# tests/stale-pr-envs-sweeper.
+# The stale PR environment sweeper proven against the Vagrant copy's Vault (its Vault read verified, its token renewed,
+# its own NetworkPolicy to Vault - infra): test:copy:check running tests/ansible/copy/sweeper-check.yml on the copy;
+# the playbook that check runs again, setup-vault-cleanup-policy.yml, replacing a stored token Vault calls dead, a
+# preview minting none; the check guarded to the Vagrant VMs in every play. What the check proves on the copy is its
+# own run (test:copy:check); the sweeper's script is infra's tests/stale-pr-envs-sweeper.
 set -u
 cd "$(dirname "$0")/../../../.." || exit 1
 AP=$(command -v ansible-playbook || echo deploy/ansible/venv/bin/ansible-playbook)
@@ -15,23 +13,13 @@ fails=0
 check() {  # check <name> <got> <want>
   if [ "$2" = "$3" ]; then echo "PASS $1"; else echo "FAIL $1"; echo "    got:  $2"; echo "    want: $3"; fails=$((fails + 1)); fi
 }
-s=01-argocd-root-retry
-check "$s: its sweeper-check line, read as such; a step without one: no" \
-  "$(grep -c '^sweeper-check$' "tests/ansible/upgrade/steps/$s.txt") \
-$(scripts/upgrade-expected-inventory.py --sweeper-check "$s" 2> /dev/null) \
-$(scripts/upgrade-expected-inventory.py --sweeper-check 02-istio-chart-repo 2> /dev/null)" "1 yes no"
-check "$s: its playbook line replaces production's dead cleanup token" \
-  "$(scripts/upgrade-expected-inventory.py --playbooks "$s" 2> /dev/null | grep -cx 'setup-vault-cleanup-policy.yml')" 1
-check "the full run's step task runs the check on the copy when the step says so" "$("$PY" -c '
+check "test:copy:check runs the check on the copy" "$("$PY" -c '
 import yaml
-t = yaml.safe_load(open("Taskfile.yml"))["tasks"]["test:upgrade:step"]
-v = str((t.get("vars") or {}).get("SWEEPER_CHECK"))
-c = [str(x.get("cmd", x) if isinstance(x, dict) else x) for x in t["cmds"]]
-print("--sweeper-check {{.STEP}}" in v, any("SWEEPER_CHECK" in x and "tests/ansible/upgrade/sweeper-check.yml" in x
-                                             and "inventory/vagrant.yml" in x for x in c))')" "True True"
-check "the check: every play guarded to the Vagrant VMs first; the step's playbook run again between its plays" "$("$PY" -c '
+c = [str(x.get("cmd", x) if isinstance(x, dict) else x) for x in yaml.safe_load(open("Taskfile.yml"))["tasks"]["test:copy:check"]["cmds"]]
+print(sum("tests/ansible/copy/sweeper-check.yml" in x and "inventory/vagrant.yml" in x for x in c))')" "1"
+check "the check: every play guarded to the Vagrant VMs first; the cleanup policy's playbook run again between its plays" "$("$PY" -c '
 import yaml
-plays = yaml.safe_load(open("tests/ansible/upgrade/sweeper-check.yml"))
+plays = yaml.safe_load(open("tests/ansible/copy/sweeper-check.yml"))
 guarded = [p["tasks"][0].get("ansible.builtin.import_tasks") == "../vagrant-only.yml" for p in plays if "hosts" in p]
 imports = [p["ansible.builtin.import_playbook"] for p in plays if "ansible.builtin.import_playbook" in p]
 print(len(guarded) > 0 and all(guarded), imports, "hosts" in plays[0])')" \

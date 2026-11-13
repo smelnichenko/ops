@@ -1,14 +1,14 @@
 #!/bin/bash
-# The places that wait for a Job's Complete and Failed side by side and stop the other wait - strimzi-v1-conversion,
-# backup-check (vagrant-smoke polls instead) - their lines as the files hold them, kubectl a stub (one condition at once, the other
+# The place that waits for a Job's Complete and Failed side by side and stops the other wait - backup-check
+# (vagrant-smoke polls instead) - its lines as the file holds them, kubectl a stub (one condition at once, the other
 # sleeping - both orders), `kill` recorded (passed on to the running wait alone): only the wait still running is
-# signalled - the one wait -n reaped is no process of theirs any more (its PID free for another) - and it stops.
+# signalled - the one wait -n reaped is no process of the check's any more (its PID free for another) - and it stops.
 set -u
 cd "$(dirname "$0")/../../../.." || exit 1
 # the playbook as Ansible loads it first: a quote in a free-form shell block's comment fails its argument splitting
 AP=$(command -v ansible-playbook || echo deploy/ansible/venv/bin/ansible-playbook)
-"$AP" --syntax-check -i localhost, deploy/ansible/playbooks/strimzi-v1-conversion.yml > /dev/null 2>&1 \
-  || { echo "FAIL deploy/ansible/playbooks/strimzi-v1-conversion.yml does not load"; exit 1; }
+"$AP" --syntax-check -i localhost, tests/ansible/copy/backup-check.yml > /dev/null 2>&1 \
+  || { echo "FAIL tests/ansible/copy/backup-check.yml does not load"; exit 1; }
 W=$(mktemp -d)
 trap 'rm -rf "$W"' EXIT
 # FIRST: the condition that comes at once; the other wait sleeps until signalled
@@ -18,7 +18,7 @@ case "$*" in *"condition=$FIRST"*) exit 0 ;; *condition=*) exec sleep 30 ;; esac
 STUB
 chmod +x "$W/kubectl"
 fails=0
-for f in deploy/ansible/playbooks/strimzi-v1-conversion.yml tests/ansible/upgrade/backup-check.yml
+for f in tests/ansible/copy/backup-check.yml
 do
   for first in Complete Failed; do
     # from the Complete waiter through the kill (its first line not a comment that names kill): the file's own lines,
@@ -50,7 +50,7 @@ cat > "$W/kubectl" <<'STUB'
 #!/bin/bash
 exit 0
 STUB
-for f in deploy/ansible/playbooks/strimzi-v1-conversion.yml tests/ansible/upgrade/backup-check.yml; do
+for f in tests/ansible/copy/backup-check.yml; do
   block=$(sed -n '/--for=condition=Complete/,/^[^#]*kill /p' "$f" | sed 's/^ *//' | sed '/^wait -n /a sleep 0.5')
   {
     echo 'kill() { echo "$*" >> "$W/killed"; }'

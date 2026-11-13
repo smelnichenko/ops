@@ -1,5 +1,5 @@
 #!/bin/bash
-# The node-Ready wait (tests/ansible/upgrade/tasks/node-ready.yml): its shell as Ansible renders it, against a stub
+# The node-Ready wait (tests/ansible/copy/tasks/node-ready.yml): its shell as Ansible renders it, against a stub
 # kubectl and systemctl - an API server refusing its first connections (kubectl fails on them at once), a Node still
 # showing the Ready it had before the kubelet restarted (its heartbeat older than the kubelet's start), a node that
 # never becomes Ready (the deadline, by time, not a count of tries); and the two playbooks that wait on it use it.
@@ -34,7 +34,7 @@ import yaml
 sys.path.insert(0, "tests/ansible/unit")
 from templar import render
 W = os.environ["W"]
-task = yaml.safe_load(open("tests/ansible/upgrade/tasks/node-ready.yml"))[0]
+task = yaml.safe_load(open("tests/ansible/copy/tasks/node-ready.yml"))[0]
 shell = task["ansible.builtin.shell"]
 fails = 0
 def run(env, seconds=3, delay=0.1):
@@ -72,8 +72,8 @@ check("each read bounded (--request-timeout)", "--request-timeout=" in args, arg
 check("the shipped deadline and delay", "node_ready_seconds | default(600)" in shell and "node_ready_delay | default(5)" in shell
       and "/proc/uptime" in shell)
 # the two playbooks that wait on a restarted node use it, and nothing waits on its own
-for book, inc in (("tests/ansible/upgrade/vms-ready.yml", "tasks/node-ready.yml"),
-                  ("tests/ansible/test-containerd-takeup.yml", "upgrade/tasks/node-ready.yml")):
+for book, inc in (("tests/ansible/copy/vms-ready.yml", "tasks/node-ready.yml"),
+                  ("tests/ansible/test-containerd-takeup.yml", "copy/tasks/node-ready.yml")):
     text = open(book).read()
     docs = yaml.safe_load(text)
     imports = [t.get("ansible.builtin.import_tasks") for p in docs for t in p.get("tasks", [])]

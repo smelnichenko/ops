@@ -1,0 +1,246 @@
+---
+# Monitoring still works on the copy, and after a change: Prometheus reconciled by its operator and available, every
+# scrape target up (bar the ones that cannot be up in a VM, listed below with the reason), Mimir holding samples
+# Prometheus remote-wrote less than two minutes ago, and container logs reaching ClickHouse (Fluent Bit, ClickHouse).
+#
+# Why: an operator or Prometheus upgrade, or a CNI/runtime one, can leave every pod ready while
+# targets go down or remote write stops - the alerts that would say so run on this very Prometheus.
+#
+# Targets that vanish are not "down": a ServiceMonitor whose selector stops matching drops its targets, and the rest
+# stay up. So the scrape pools and their target counts are kept in .copy/scrape-pools.json - recorded on a green
+# copy (-e record_scrape_pools=true, the build's Argo stage), then at every check no pool may be gone or smaller than
+# that baseline (a new pool is fine; one a change removes on purpose: -e scrape_pools_gone). A check's counts do not
+# become the record: with the k6 smoke running beside this check, a transient extra target became a minimum and the
+# next check failed "smaller".
+#
+# Usage: ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/metrics-check.yml
+#        [-e record_scrape_pools=true]
+- name: Prometheus scrapes everything and writes to Mimir
+  hosts: target
+  become: true
+  gather_facts: false
+  vars:
+    kubeconfig: /etc/kubernetes/admin.conf
+    proxy: /api/v1/namespaces/schnappy-infra/services
+    record_scrape_pools: false
+    scrape_pools_file: "{{ playbook_dir }}/../../../.copy/scrape-pools.json"
+    # how long each target must have been up after a change: from its last sample down, or its first - four 15 s scrapes
+    # (120 s waited out after most changes' restarts was the checks' slowest part; a flap later still fails the check)
+    up_for_seconds: 60
+    # how long after t0 a target not yet up that long is waited for: a target first seen late (a pod the settle
+    # replaced, a Job's) gets its own 2 minutes - a count of tries from the first poll cut one seen 40 s in; past it,
+    # one that never stays up is given up on
+    up_wait_seconds: 360
+    # each active target's last sample down, and its first, over RANGE - sample times: timestamp() of an expression
+    # (up == 0) gives the subquery's step times instead (a down sample at 90 s read 100; promtool 3.10). The first over a
+    # window up_for_seconds longer: an old target's first sample in it is the window's start, a scrape interval either
+    # way - never within up_for_seconds of now. tests/promql/metrics-check.test.yml evaluates both (CI's promql step)
+    down_query: max_over_time((timestamp(up) and up == 0)[RANGE:5s]) and on(job, instance) up
+    first_query: min_over_time(timestamp(up)[RANGE:5s]) and on(job, instance) up
+    # scrape pools that are down in the Vagrant copy by nature
+    allowed_down:
+      # setup-host-hardening.yml sets the exporter up only where a disk reports SMART (ten's NVMe); the VM's virtio
+      # disk does not, so 192.168.56.10:9633 has nothing listening
+      - scrapeConfig/schnappy-infra/schnappy-smartctl-exporter
+  tasks:
+    - name: Vagrant VMs only (fails closed on any other host)
+      ansible.builtin.import_tasks: ../vagrant-only.yml
+
+    - name: Prometheus is reconciled by the operator and available
+      # shell, quoted: the command module's word splitting strips the quotes inside the jsonpath filter
+      ansible.builtin.shell: >-
+        kubectl --kubeconfig {{ kubeconfig }} -n schnappy-infra get prometheus schnappy-prometheus
+        -o jsonpath='{.status.conditions[?(@.type=="Reconciled")].status}/{.status.conditions[?(@.type=="Available")].status}'
+      register: _prom
+      changed_when: false
+      retries: 20
+      delay: 15
+      until: _prom.stdout == 'True/True'
+
+    # every active target up now - waited for: a target a change replaced (a new pod's sidecar, a not-ready address)
+    # comes up after the settle; the moment they all are is where the next check's window starts (one fixed before it
+    # judged that recovery a flap, and its retries could never pass)
+    - name: Every scrape target is up now (a target a change replaced coming up)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        P='{{ proxy }}/schnappy-prometheus:9090/proxy/api/v1'
+        d=$(mktemp -d); trap 'rm -rf "$d"' EXIT
+        kubectl --kubeconfig {{ kubeconfig }} get --raw "$P/targets?state=active" > "$d/targets"
+        ALLOWED='{{ allowed_down | to_json }}' python3 - "$d" <<'PY'
+        import json, os, sys
+        d = sys.argv[1]
+        targets = json.load(open(d + "/targets"))["data"]["activeTargets"]
+        allowed = set(json.loads(os.environ["ALLOWED"]))
+        down = ["%s %s: %s" % (t["scrapePool"], t["scrapeUrl"], t["lastError"][:100]) for t in targets
+                if t["health"] != "up" and t["scrapePool"] not in allowed]
+        print("%d targets, %d down" % (len(targets), len(down)))
+        for x in down:
+            print("  DOWN", x)
+        sys.exit(1 if down or not targets else 0)
+        PY
+        echo "UP AT $(date +%s)"
+      args:
+        executable: /bin/bash
+      register: _targets_up
+      changed_when: false
+      retries: 20
+      delay: 15
+      until: _targets_up.rc == 0
+
+    # and each up for 2 minutes, read from the last sample it was down and its first - over 2 minutes before that
+    # moment (t0) to now, among the targets active now (a replaced pod's last failed scrape is no flap): none - each up 2
+    # minutes already - passes at once (a fixed 2-minute wait after t0 cost 2 hours over a full run); one before t0 (the
+    # change's own recovery) waits until 2 minutes after it; one after t0, of a target there at t0, is a flap - one lucky
+    # poll does not pass a target that flaps without restarting (scrape timeouts, an intermittent 503 through the mesh)
+    # - and fails at once, never waited out (a window sliding with each retry let a flap age out); a target first seen
+    # after t0 (a pod the settle replaced) waits 2 minutes from its first sample, its first scrapes' downs no flap - up
+    # to up_wait_seconds after t0: then given up on, said
+    - name: Every scrape target up for 2 minutes, none down since they all were
+      ansible.builtin.shell: |
+        set -euo pipefail
+        P='{{ proxy }}/schnappy-prometheus:9090/proxy/api/v1'
+        d=$(mktemp -d); trap 'rm -rf "$d"' EXIT
+        t0=$(sed -n 's/^UP AT \([0-9][0-9]*\)$/\1/p' <<< "$UP_OUT")
+        now=$(date +%s)
+        range=$(( now - t0 + UP_FOR ))
+        enc() { python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "${1//RANGE/$2s}"; }
+        kubectl --kubeconfig {{ kubeconfig }} get --raw "$P/query?query=$(enc "$DOWN_Q" "$range")" > "$d/down"
+        kubectl --kubeconfig {{ kubeconfig }} get --raw "$P/query?query=$(enc "$FIRST_Q" $(( range + UP_FOR )))" > "$d/first"
+        kubectl --kubeconfig {{ kubeconfig }} get --raw "$P/targets?state=active" > "$d/targets"
+        ALLOWED='{{ allowed_down | to_json }}' T0="$t0" NOW="$now" python3 - "$d" <<'PY'
+        import json, os, sys
+        d = sys.argv[1]
+        allowed = set(json.loads(os.environ["ALLOWED"]))
+        # allowed by scrape pool, a series named by its job label - another name (the smartctl exporter, for one)
+        allowed_jobs = {t["labels"].get("job") for t in json.load(open(d + "/targets"))["data"]["activeTargets"]
+                        if t["scrapePool"] in allowed}
+        t0, now, up_for = int(os.environ["T0"]), int(os.environ["NOW"]), int(os.environ["UP_FOR"])
+        def series(f):
+            return {"%s %s" % (r["metric"].get("job"), r["metric"].get("instance")): float(r["value"][1])
+                    for r in json.load(open(d + "/" + f))["data"]["result"] if r["metric"].get("job") not in allowed_jobs}
+        down, first = series("down"), series("first")
+        # down after t0 (a scrape in flight at t0 aside), and there at t0: a flap
+        flapped = [n for n, at in down.items() if at > t0 + 2 and first.get(n, t0) <= t0]
+        for n in flapped:
+            print("FLAPPED", n)
+        if flapped:
+            sys.exit(1)
+        since = {n: max(down.get(n, 0), first.get(n, 0)) for n in down.keys() | first.keys()}
+        young = ["%s (%d s up of %d)" % (n, now - at, up_for) for n, at in sorted(since.items()) if now - at < up_for]
+        for n in young:
+            print("NOT YET", n)
+        if young and now - t0 > int(os.environ["UP_WAIT"]):
+            print("GIVE UP: %d s after every target was up, these not up %d s yet" % (now - t0, up_for))
+            sys.exit(1)
+        if young:
+            sys.exit(2)
+        print("stayed up: every target up for %d s, none down since %d" % (up_for, t0))
+        PY
+      args:
+        executable: /bin/bash
+      environment:
+        UP_OUT: "{{ _targets_up.stdout }}"
+        UP_FOR: "{{ up_for_seconds }}"
+        UP_WAIT: "{{ up_wait_seconds }}"
+        DOWN_Q: "{{ down_query }}"
+        FIRST_Q: "{{ first_query }}"
+      register: _targets
+      changed_when: false
+      # the whole wait after t0, and two polls more
+      retries: "{{ (up_wait_seconds | int) // 15 + 2 }}"
+      delay: 15
+      until: _targets.rc == 0 or 'FLAPPED' in _targets.stdout or 'GIVE UP' in _targets.stdout
+      failed_when: _targets.rc != 0
+
+    - name: The recorded scrape pools (taken on a green copy - -e record_scrape_pools=true)
+      ansible.builtin.stat:
+        path: "{{ scrape_pools_file }}"
+      delegate_to: localhost
+      become: false
+      register: _pools_file
+
+    - name: A record to compare with
+      ansible.builtin.assert:
+        that: record_scrape_pools | bool or _pools_file.stat.exists
+        fail_msg: "no {{ scrape_pools_file }}: record it on a green copy with -e record_scrape_pools=true"
+        quiet: true
+
+    - name: No scrape pool gone or smaller than recorded (a selector that stops matching drops targets unseen)
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          kubectl --kubeconfig {{ kubeconfig }} get --raw '{{ proxy }}/schnappy-prometheus:9090/proxy/api/v1/targets?state=active' \
+            | python3 -c '
+          import collections, json, os, sys
+          now = collections.Counter(t["scrapePool"] for t in json.load(sys.stdin)["data"]["activeTargets"])
+          before = json.loads(os.environ["BEFORE"])
+          # a pool the change removed on purpose (test:copy:change SCRAPE_POOLS_GONE)
+          gone = set(filter(None, os.environ.get("GONE", "").split(",")))
+          lost = ["%s: %d -> %d" % (p, n, now.get(p, 0)) for p, n in sorted(before.items())
+                  if now.get(p, 0) < n and p not in gone]
+          for l in lost:
+              print("  GONE OR SMALLER", l)
+          print(json.dumps(dict(sorted(now.items()))))
+          sys.exit(1 if lost or not now else 0)'
+      environment:
+        BEFORE: "{{ lookup('ansible.builtin.file', scrape_pools_file) if _pools_file.stat.exists and not record_scrape_pools | bool else '{}' }}"
+        GONE: "{{ scrape_pools_gone | default('') }}"
+      register: _pools
+      changed_when: false
+      retries: 12
+      delay: 15
+      until: _pools.rc == 0
+
+    - name: The baseline recorded (the build's Argo stage only)
+      ansible.builtin.copy:
+        content: "{{ _pools.stdout_lines[-1] | from_json | to_nice_json }}\n"
+        dest: "{{ scrape_pools_file }}"
+        mode: '0644'
+      delegate_to: localhost
+      become: false
+      when: record_scrape_pools | bool
+
+    - name: Mimir holds samples remote-written in the last two minutes
+      ansible.builtin.shell: |
+        set -euo pipefail
+        kubectl --kubeconfig {{ kubeconfig }} get --raw \
+          '{{ proxy }}/schnappy-mimir:9009/proxy/prometheus/api/v1/query?query=max(timestamp(up))' \
+          | python3 -c '
+        import json, sys, time
+        r = json.load(sys.stdin)["data"]["result"]
+        age = time.time() - float(r[0]["value"][1]) if r else None
+        print("newest sample", "none" if age is None else "%.0f s old" % age)
+        sys.exit(0 if age is not None and age < 120 else 1)'
+      args:
+        executable: /bin/bash
+      register: _mimir
+      changed_when: false
+      retries: 8
+      delay: 15
+      until: _mimir.rc == 0
+
+    - name: Container logs reach ClickHouse (Fluent Bit -> logs.podlogs, rows of the last two minutes)
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          K="kubectl --kubeconfig {{ kubeconfig }} -n schnappy-infra"
+          p=$($K get pods -l app.kubernetes.io/component=clickhouse -o jsonpath='{.items[0].metadata.name}')
+          # as schnappy, the one user ClickHouse is meant to have (platform's clickhouse-users.xml replaces the image's `default`)
+          # its password from the pod's environment (clickhouse-client 24.8, 25.8, 26.8 read CLICKHOUSE_PASSWORD)
+          $K exec "$p" -c clickhouse -- sh -c 'clickhouse-client --user schnappy -q "$1"' _ \
+            "SELECT count() FROM logs.podlogs WHERE timestamp > now() - 120{{ logs_filter }}"
+      vars:
+        logs_filter: ""
+      register: _logs
+      changed_when: false
+      retries: 8
+      delay: 15
+      until: _logs.rc == 0 and (_logs.stdout | int) > 0
+
+    - name: Monitoring works
+      ansible.builtin.debug:
+        msg: >-
+          METRICS OK: {{ _targets_up.stdout_lines[0] }}, {{ _targets.stdout_lines[-1] }} (allowed down: {{ allowed_down | length }}), Mimir {{ _mimir.stdout }},
+          {{ _logs.stdout }} log rows in the last 2 min

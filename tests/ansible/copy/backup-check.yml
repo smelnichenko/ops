@@ -1,0 +1,265 @@
+---
+# Velero still backs up: one backup made from production's own daily schedule (namespace schnappy-production, its
+# template - the schedule's resource policy included), into the Vagrant backup store, must end Completed with no errors,
+# and its pod volume backups must be exactly what the schedule decides: a Completed one for every emptyDir of the pods
+# running whose type the policy does not skip, none for one it skips. The backup is deleted afterwards (its data too).
+# Its volumes are the pods' emptyDirs only, as in production: the data volumes are local-path hostPath PVs, which
+# Velero's file-system backup skips - Postgres, Kafka and ScyllaDB are proven by data-check.yml instead. A policy this
+# check does not read (any condition but volumeTypes, any action but skip) is refused, never guessed; a run that
+# exercised nothing - no emptyDir copied and none skipped - fails.
+#
+# Why: a Velero or plugin change can leave every pod green while backups fail - the plugin and the server are paired
+# versions - and nothing else on the copy writes to the backup store. Since 2026-11-13 production skips the ephemeral
+# types (a pod replaced while the daily run read its emptyDirs failed it - VeleroDailyBackupMissing).
+#
+# Usage: ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/backup-check.yml
+- name: A Velero backup from production's daily schedule completes
+  hosts: target
+  become: true
+  gather_facts: false
+  vars:
+    kubeconfig: /etc/kubernetes/admin.conf
+    schedule: velero-schnappy-daily
+    # one workload's pods, not the schedule's 79 volumes (8-13 min, one at a time): the same path - node-agent, kopia,
+    # the Pi store - for Valkey's data volume and its sidecar's
+    backup_selector: { app.kubernetes.io/component: valkey }
+    # every resource fully qualified: `backup` alone is CNPG's Backup (postgresql.cnpg.io) - the first run of this
+    # check polled CNPG for Velero's backup for 10 minutes (2026-10-03)
+    kubectl: "kubectl --kubeconfig {{ kubeconfig }} -n velero"
+  tasks:
+    - name: Vagrant VMs only (fails closed on any other host)
+      ansible.builtin.import_tasks: ../vagrant-only.yml
+
+    - name: The backup storage location is Available
+      ansible.builtin.command: "{{ kubectl }} get backupstoragelocations.velero.io default -o jsonpath={.status.phase}"
+      register: _bsl
+      changed_when: false
+      retries: 20
+      delay: 15
+      until: _bsl.stdout == 'Available'
+
+    - name: The backup storage location (where the kopia repository lives)
+      ansible.builtin.command: "{{ kubectl }} get backupstoragelocations.velero.io default -o json"
+      register: _bsl_json
+      changed_when: false
+
+    - name: The schedule's backup template
+      ansible.builtin.command: "{{ kubectl }} get schedules.velero.io {{ schedule }} -o json"
+      register: _schedule
+      changed_when: false
+
+    - name: The schedule's resource policy (its ConfigMap), when it names one
+      ansible.builtin.command: "{{ kubectl }} get configmap {{ _policy_ref.name }} -o json"
+      register: _policy_cm
+      changed_when: false
+      vars:
+        _policy_ref: "{{ (_schedule.stdout | from_json).spec.template.resourcePolicy }}"
+      when: (_schedule.stdout | from_json).spec.template.resourcePolicy is defined
+
+    # the volume types the policy skips - read as Velero reads it (one data key, version v1, volumePolicies); refused
+    # for anything this check cannot judge
+    - name: The volume types the policy skips
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          python3 -c '
+          import json, os, sys
+          import yaml
+          cm = json.loads(os.environ["POLICY_CM"] or "null")
+          if cm is None:
+              print("[]"); sys.exit(0)
+          data = cm.get("data") or {}
+          if len(data) != 1:
+              sys.exit("the policy ConfigMap must hold exactly one key (Velero refuses it otherwise)")
+          pol = yaml.safe_load(next(iter(data.values())))
+          if pol.get("version") != "v1":
+              sys.exit("policy version %r: not v1" % pol.get("version"))
+          skipped = []
+          for vp in pol.get("volumePolicies") or []:
+              cond, action = vp.get("conditions") or {}, (vp.get("action") or {}).get("type")
+              if set(cond) != {"volumeTypes"} or action != "skip":
+                  sys.exit("a volume policy this check does not read: %s -> %s" % (json.dumps(cond), action))
+              skipped += cond["volumeTypes"]
+          print(json.dumps(sorted(set(skipped))))
+          '
+      # the ConfigMap's JSON through the environment, never inside the script's quotes: a quote in it ended them
+      environment:
+        POLICY_CM: "{{ _policy_cm.stdout | default('') }}"
+      register: _skipped_types
+      changed_when: false
+
+    # every emptyDir of the pods running now that the policy does not skip must get a volume backup - "Completed" with
+    # fewer volume backups than that passed; a pod gone by the end is not counted. Those it skips are listed apart
+    - name: The volumes the backup must hold, and those it must skip - the emptyDirs of the pods running now
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          for ns in {{ (_schedule.stdout | from_json).spec.template.includedNamespaces | join(' ') }}; do
+            kubectl --kubeconfig {{ kubeconfig }} -n "$ns" get pods --field-selector=status.phase=Running -o json \
+              -l '{{ backup_selector.items() | map('join', '=') | join(',') }}'
+          done | python3 -c '
+          import json, sys
+          skip = "emptyDir" in json.loads(sys.argv[1])
+          dec = json.JSONDecoder(); text = sys.stdin.read().strip(); i = 0; out = {"expected": [], "skipped": []}
+          while i < len(text):
+              doc, i = dec.raw_decode(text, i)
+              while i < len(text) and text[i].isspace():
+                  i += 1
+              for p in doc["items"]:
+                  m = p["metadata"]
+                  excluded = set(filter(None, m.get("annotations", {}).get("backup.velero.io/backup-volumes-excludes", "").split(",")))
+                  out["skipped" if skip else "expected"] += [
+                      {"uid": m["uid"], "pod": m["namespace"] + "/" + m["name"], "volume": v["name"]}
+                      for v in p["spec"].get("volumes", []) if "emptyDir" in v and v["name"] not in excluded]
+          print(json.dumps(out))' '{{ _skipped_types.stdout }}'
+      register: _expected_volumes
+      changed_when: false
+
+    - name: Start a backup from it
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig }}"
+        definition:
+          apiVersion: velero.io/v1
+          kind: Backup
+          metadata:
+            name: "{{ backup }}"
+            namespace: velero
+            labels: { upgrade-test: backup-check }
+          spec: "{{ (_schedule.stdout | from_json).spec.template | combine({'ttl': '1h', 'labelSelector': {'matchLabels': backup_selector}}) }}"
+      vars:
+        backup: "upgrade-check-{{ lookup('pipe', 'date +%s') }}"
+      register: _created
+
+    # Up to 30 minutes, as long as production's own daily backup takes (20-29 min, 2026-09-30..10-03). The Vagrant
+    # copy's takes 8-11 and grew with every run: each check added 79 snapshots to the kopia repository and deleted them,
+    # faster than Velero's hourly quick maintenance compacts the index ("too many index blobs" - a repository open then
+    # takes 30 s). A 10-minute bound failed the Cilium 1.20 step on a backup that completed in 11.
+    - name: It ends Completed
+      ansible.builtin.command: >-
+        {{ kubectl }} get backups.velero.io {{ _created.result.metadata.name }}
+        -o jsonpath={.status.phase}/{.status.errors}/{.status.warnings}/{.status.startTimestamp}/{.status.completionTimestamp}
+      register: _phase
+      changed_when: false
+      retries: 180
+      delay: 10
+      until: _phase.stdout.split('/')[0] in ['Completed', 'PartiallyFailed', 'Failed', 'FailedValidation']
+      failed_when: _phase.stdout.split('/')[0] != 'Completed' or _phase.stdout.split('/')[1] not in ['', '0']
+
+    - name: Every expected volume backed up and Completed, no skipped one copied, something exercised
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          # files, not environment variables: 79 volume backups' JSON is over the kernel's limit for one variable
+          d=$(mktemp -d); trap 'rm -rf "$d"' EXIT
+          {{ kubectl }} get podvolumebackups.velero.io -l velero.io/backup-name={{ _created.result.metadata.name }} -o json > "$d/pvbs"
+          kubectl --kubeconfig {{ kubeconfig }} get pods -A -o jsonpath='{.items[*].metadata.uid}' > "$d/uids"
+          python3 - "$d" <<'PY'
+          import json, os, sys
+          d = sys.argv[1]
+          vols = json.loads(os.environ["EXPECTED"])
+          expected, skipped = vols["expected"], vols["skipped"]
+          alive = set(open(d + "/uids").read().split())
+          pvbs = json.load(open(d + "/pvbs"))["items"]
+          done = {(b["spec"]["pod"]["namespace"] + "/" + b["spec"]["pod"]["name"], b["spec"]["volume"])
+                  for b in pvbs if b.get("status", {}).get("phase") == "Completed"}
+          bad = [b["spec"]["volume"] + " " + b.get("status", {}).get("phase", "?") for b in pvbs
+                 if b.get("status", {}).get("phase") != "Completed"]
+          missing = [e["pod"] + ":" + e["volume"] for e in expected if e["uid"] in alive and (e["pod"], e["volume"]) not in done]
+          copied = {(b["spec"]["pod"]["namespace"] + "/" + b["spec"]["pod"]["name"], b["spec"]["volume"]) for b in pvbs}
+          leaked = [e["pod"] + ":" + e["volume"] for e in skipped if (e["pod"], e["volume"]) in copied]
+          print("%d volume backups, %d expected, %d skipped by the policy, missing %s, not completed %s, copied though "
+                "skipped %s" % (len(pvbs), len(expected), len(skipped), missing or "-", bad or "-", leaked or "-"))
+          # nothing exercised (no emptyDir at all on the selected pods) proves nothing either way
+          sys.exit(1 if missing or bad or leaked or not (expected or skipped) else 0)
+          PY
+      environment:
+        EXPECTED: "{{ _expected_volumes.stdout }}"
+      register: _pvb
+      changed_when: false
+
+    # Vagrant only, as this whole file. Kopia closes an index epoch after 24 h at the earliest: production backs up
+    # once a day, so its index stays small, while this check backs up volumes at every run - in the upgrade test's
+    # runs the repository reached 4237 index blobs and each backup took ~25 s longer than the one before (2026-10-03).
+    # An hourly epoch (kopia's floor with its 20-minute refresh) lets Velero's hourly quick maintenance compact it. Set
+    # once, after the backup that created the repository, with the kopia release Velero 1.18 builds on - only when this
+    # backup copied a volume: with every emptyDir skipped no repository of this namespace need exist.
+    - name: The test repository closes its index epochs hourly
+      when: (_expected_volumes.stdout | from_json).expected | length > 0
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          K="{{ kubectl }}"
+          $K delete job kopia-epoch-hourly --ignore-not-found --wait=true > /dev/null
+          cat <<EOF | $K apply -f - > /dev/null
+          apiVersion: batch/v1
+          kind: Job
+          metadata: { name: kopia-epoch-hourly }
+          spec:
+            backoffLimit: 0
+            template:
+              spec:
+                restartPolicy: Never
+                containers:
+                  - name: kopia
+                    image: kopia/kopia:0.16.0
+                    env:
+                      - { name: KOPIA_PASSWORD, valueFrom: { secretKeyRef: { name: velero-repo-credentials, key: repository-password } } }
+                      - { name: CLOUD, valueFrom: { secretKeyRef: { name: velero-credentials, key: cloud } } }
+                    command: [/bin/sh, -ec]
+                    args:
+                      - |
+                        export AWS_ACCESS_KEY_ID=\$(echo "\$CLOUD" | sed -n 's/^aws_access_key_id *= *//p')
+                        export AWS_SECRET_ACCESS_KEY=\$(echo "\$CLOUD" | sed -n 's/^aws_secret_access_key *= *//p')
+                        kopia repository connect s3 --bucket={{ _bsl_spec.objectStorage.bucket }} \
+                          --prefix={{ _bsl_spec.objectStorage.prefix | default('', true) | regex_replace('([^/])$', '\\1/') }}kopia/{{ namespace_backed_up }}/ \
+                          --endpoint={{ _bsl_spec.config.s3Url | regex_replace('^https?://', '') }} \
+                          {{ '--disable-tls' if _bsl_spec.config.s3Url.startswith('http://') else '' }} \
+                          --config-file=/tmp/kopia.config --cache-directory=/tmp/kopia-cache
+                        if kopia repository status --config-file=/tmp/kopia.config | grep 'minimum 1h0m0s' > /dev/null; then
+                          echo "EPOCH ALREADY HOURLY"
+                        else
+                          kopia repository set-parameters --epoch-min-duration=1h --config-file=/tmp/kopia.config
+                          echo "EPOCH SET HOURLY"
+                        fi
+                        kopia repository status --config-file=/tmp/kopia.config | grep -i -E '^Epoch|advance on'
+          EOF
+          $K wait job/kopia-epoch-hourly --for=condition=Complete --timeout=300s > /dev/null & ok=$!
+          $K wait job/kopia-epoch-hourly --for=condition=Failed --timeout=300s > /dev/null & failed=$!
+          wait -n -p ended "$ok" "$failed" || true
+          # the other wait, if it still runs - a job this shell has running (jobs -r): one that ended, the one wait -n
+          # reaped or one bash collected meanwhile, is no process of it any more (its PID free for another)
+          for p in $(jobs -rp); do kill "$p" 2> /dev/null || true; done
+          $K logs job/kopia-epoch-hourly --tail=20
+          succeeded=$($K get job kopia-epoch-hourly -o jsonpath='{.status.succeeded}')
+          # gone again: the version inventory lists every Job's image
+          $K delete job kopia-epoch-hourly --wait=true > /dev/null
+          [ "$succeeded" = 1 ]
+      vars:
+        _bsl_spec: "{{ (_bsl_json.stdout | from_json).spec }}"
+        namespace_backed_up: "{{ (_schedule.stdout | from_json).spec.template.includedNamespaces[0] }}"
+      register: _epoch
+      changed_when: "'EPOCH SET HOURLY' in _epoch.stdout"
+      failed_when: _epoch.rc != 0 or 'minimum 1h0m0s' not in _epoch.stdout
+
+    - name: Delete the test backup (and its data in the store)
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig }}"
+        definition:
+          apiVersion: velero.io/v1
+          kind: DeleteBackupRequest
+          metadata:
+            generateName: "{{ _created.result.metadata.name }}-"
+            namespace: velero
+          spec:
+            backupName: "{{ _created.result.metadata.name }}"
+
+    - name: Backup works
+      ansible.builtin.debug:
+        msg: >-
+          BACKUP OK: {{ _created.result.metadata.name }} Completed ({{ _pvb.stdout }}), in
+          {{ ((_phase.stdout.split('/')[4] | to_datetime('%Y-%m-%dT%H:%M:%SZ'))
+              - (_phase.stdout.split('/')[3] | to_datetime('%Y-%m-%dT%H:%M:%SZ'))).total_seconds() | int }} s

@@ -1,0 +1,29 @@
+# Vagrant only (the copy of production): memory REQUESTS shrunk so production fits the 20 GB VM (ten's pods use
+# ~30 GB; operator 2026-10-02). Requests only decide scheduling - limits, and so the JVMs' sizing, stay production's.
+# The images are production's own (its values' tags).
+app:
+  resources:
+    requests: { memory: 1Gi }        # ten: 3Gi
+chatService:
+  resources:
+    requests: { memory: 768Mi }      # ten: 1536Mi
+chessService:
+  resources:
+    requests: { memory: 768Mi }      # ten: 1536Mi
+
+# The nightly Hyperfoil load test's image is a floating git.pmon.dev/schnappy/hyperfoil:latest, which the kubelet
+# pulls on every run (pull policy Always) from production's registry - unreachable here by design. Its 03:00 pod sat
+# in ImagePullBackOff holding 550m CPU (2026-10-03).
+hyperfoil:
+  enabled: false
+
+# masi's Send (plan 103) mails REAL recruiters from production. This copy restores production's database, so a package
+# production has already sent can still be REVIEWED here - one press would mail the same recruiter twice (review of
+# masi #123, 2026-10-19). The copy never sends: Send off, and any masi mail (the digest on request) to a sink that
+# cannot be delivered.
+masiService:
+  apply:
+    enabled: false
+    production: false
+  mail:
+    deliverAllTo: "nobody@vagrant.invalid"
