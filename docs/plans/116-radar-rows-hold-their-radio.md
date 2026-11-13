@@ -1,6 +1,7 @@
 # Plan 116 — radar: a row holds its radio while it is on (the window scheduler goes)
 
-**Status:** approved 2026-11-12; PR 1 next. Decisions below are the operator's of 2026-11-12.
+**Status:** approved 2026-11-12. PR 1 LIVE 2026-11-13 06:19 (radar #1262, c7e8f20d): ADS-B and UVB-76 opened once and
+held. PR 2 next. Decisions below are the operator's of 2026-11-12.
 
 ## Why
 
@@ -86,3 +87,15 @@ simpler: no rungs, no turns; a holder renews while its reader gets samples (live
 - **SAT-REC switched on records continuously** on its band, like any other row.
 - **An unpinned former rotator listens to the first station**, as today: DDK2 (RTTY), DWD 7.88 MHz (WFAX), the first
   HFDL cluster, TLL (VOR). The existing pin changes it.
+
+## Done and learned
+
+- **PR 1 (radar #1262, live 2026-11-13 06:19).** RowRunner runs the 13 single-station rows. Review found that a holder
+  letting go to re-tune lost its radio to a waiting row's turn, for good: a holder's own claim now REPLACES its capture
+  in place (RadioLeaseBook), for re-tunes, off-and-on and the reopen after a dead reader. Also: a displaced capture
+  releases its claim (the registry kept every displaced session); UVB-76 times anchored to the air (a held capture
+  drifted by every dropped sample); LORAN's rate over the last minute; a monotonic decision clock. The window keys of
+  these rows went from the live config (backup radar scratchpad/m5/livecfg/).
+- **Owed to step 4:** the arbiter tells rows when a radio is freed or a capture displaced (now seen on the 10 s poll).
+- **Interim until step 2:** a rotating row (VOR, RTTY, WFAX, HFDL) that yields to a waiting row loses the radio to it.
+
