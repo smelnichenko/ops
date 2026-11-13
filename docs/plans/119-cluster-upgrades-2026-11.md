@@ -36,7 +36,6 @@ its branch: breaking changes, order between components, the one-way ones named.
 |---|---|---|
 | cert-manager | v1.21.2 → v1.21.3 | infra `argocd/apps/cert-manager.yaml`; ops `setup-kubeadm.yml` `cert_manager_version` (defaults-follow-production) |
 | Velero chart | 12.2.0 → 12.2.5 (Velero 1.18.4, pinned in values) | infra `argocd/apps/velero.yaml` |
-| Postgres (CNPG) | 18.6 → 18.7 | infra `schnappy-production-data/values.yaml`, `woodpecker/manifests/postgres.yaml`; platform `schnappy-data/values.yaml` (with digest) |
 | ClickHouse (LTS line) | 26.8.15 → 26.8.34 | infra + platform `schnappy-observability/values.yaml` |
 | ScyllaDB (2026.1 line) | 2026.1.14 → 2026.1.15 | infra `schnappy-production-data/values.yaml` (image and `version`) |
 | Mimir / Tempo | 3.2.1 → 3.2.5 / 3.1.0 → 3.1.1 | infra `schnappy-observability/values.yaml` |
@@ -48,7 +47,6 @@ its branch: breaking changes, order between components, the one-way ones named.
 | Component | From → to | How |
 |---|---|---|
 | Kubernetes | 1.36.5 → 1.36.6 | `upgrade-kubeadm.yml` (`RESTARTS_EXPECTED=true`), then `deploy:kubeadm:upgrade`; `k8s_package_version` follows |
-| containerd.io | 2.3.6 → 2.3.7 | `upgrade-containerd.yml`, then `deploy:containerd:upgrade`; `containerd_io_version` follows |
 | Cilium | 1.20.2 → 1.20.4 | `setup-kubeadm.yml` `cilium_version` (Helm on ten, not Argo) - its upgrade path read first |
 
 **1c. Pis (playbooks on the copy's Pis, then production's tasks, one Pi service at a time)**
@@ -58,9 +56,37 @@ its branch: breaking changes, order between components, the one-way ones named.
 | Debian security updates | pi1 46, pi2 20 packages | an apt upgrade playbook (one Pi at a time, the VIP's last) - made with this wave if none exists |
 | Forgejo | 15.0.3 → 15.0.11 (the 15 line) | `upgrade-forgejo.yml` / `deploy:forgejo:upgrade` (vars pin moved to 15.0.11) |
 | Patroni | 4.1.0 → 4.1.5 | `upgrade-patroni.yml` / `deploy:patroni:upgrade` |
-| Vault | 1.21.3 → 1.21.4 (or the 1.21 line's latest) | `upgrade-vault.yml` / `deploy:vault:upgrade` |
+| Vault | 1.21.3 → 1.21.4 (the last free 1.21: 1.21.5+ are Enterprise only) | `upgrade-vault.yml` / `deploy:vault:upgrade` |
 
 Then `task test:copy:inventory` (production read again) - the copy is built to the new versions from then on.
+
+**Wave 1 release notes (read 2026-11-13; the full notes with sources in this plan's research record):**
+- Order: pushgateway/blackbox → Tempo → cert-manager → Valkey → Velero chart (its 12.2.3 adds an env var: the Velero
+  pod restarts - outside the backup windows) → Mimir → ClickHouse → ScyllaDB; node: Kubernetes 1.36.6, then Cilium
+  1.20.4 (straight past 1.20.3: its BackendTLSPolicy regression; the pre-flight image pull first); Pis one at a time,
+  the one without the VIP first: Debian updates + reboot → Patroni → Vault → Forgejo.
+- cert-manager 1.21.3: a CRD field added in a patch (`status.acme.ari.certID`) - CRDs with the controller (the chart's).
+- ClickHouse 26.8.34: outbound TLS hostname verification is OFF by default again (26.8.26) - set
+  `openSSL.client.extendedVerification=true` to keep today's; privilege tightenings (CREATE TABLE AS, MODIFY QUERY,
+  CREATE OR REPLACE needs DROP) - the copy's checks exercise ours.
+- Mimir 3.2.5: stored tenant Alertmanager configs validated on load - ours is the separate Prometheus Alertmanager.
+- Kubernetes 1.36.6: `kubeadm upgrade apply` re-applies addons - upgrade-kubeadm.yml skips kube-proxy from its config
+  file (an old kubeadm bug ignored `skipPhases` there: the copy run checks no kube-proxy appears); certificates renewed;
+  no downgrade - an etcd snapshot first.
+- Cilium 1.20.4: CIDR groups with 0.0.0.0/0 now select (none here), a CNP with nodeSelector marked invalid.
+- Forgejo 15.0.11: a ONE-WAY migration (15.0.7 - a 15.0.3 binary refuses the database after it): its pg_dump first
+  (upgrade-forgejo.yml takes one), `forgejo doctor check --all` after; REVERSE_PROXY_TRUSTED_PROXIES advisory checked.
+- Patroni 4.1.5: fixes `systemctl reload` hanging on trixie's systemd; `patroni_postgres_timeline` becomes a gauge
+  (alerts using rate() on it to check).
+- Vault 1.21.4: restarts sealed - each Pi's own unseal brings it back; a Consul snapshot first.
+- Debian: openssl/haproxy restart their users (haproxy's restart may move the VIP), a kernel update needs a reboot;
+  postgresql-17 17.11 on the Pis carries the same reindex notes as 17.12/18.7 - checked with the Pis' wave.
+
+**Out of wave 1** (found in the notes): PostgreSQL 18.7 - CNPG publishes no bullseye image for it; moving means the
+trixie (or bookworm) image, a glibc change (collations: reindex, `REFRESH COLLATION VERSION`) and 18.7's own reindex
+steps (unbounded `bpchar` btree, pg_trgm GiST) - its own step, on its own run. containerd 2.3.7 - Docker publishes
+none for trixie (2.3.6, then 2.4.x): containerd.io stays held at 2.3.6 (it is: `apt-mark` hold), 2.4 with wave 3.
+Vault: 1.21 gets no more free fixes - Vault 2.x moves up in wave 3.
 
 ## Wave 2 — minors (one or two per copy run)
 
