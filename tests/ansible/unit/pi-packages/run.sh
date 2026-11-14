@@ -712,6 +712,11 @@ check("the room asked for before the upgrade", render(script(every[I["boot1"]]),
       ["P", "boot", "--min-free", "100"])
 check("its Vault not the active one before the reboot (standby or sealed)",
       every[I["vaultnot"]]["ansible.builtin.uri"]["status_code"], [429, 503])
+# reads of what the handover and the reboot did are kept out of a preview, which did neither (the copy's preview
+# failed on "the VIP still on the other Pi" in the holder's turn, 2026-11-14)
+check("the handover's results not read in a preview: the VIP on the other Pi, keepalived's services idle here",
+      [condition(every[I[k]].get("when", "true"), ansible_check_mode=c) for k in ("there", "idle") for c in (False, True)],
+      [True, False, True, False])
 check("the reboot waits for the Pi long enough (900 s)", every[I["reboot"]]["ansible.builtin.reboot"]["reboot_timeout"], 900)
 # every wait: its until on its own result, enough tries
 WAITS = {"led": ("_led", 24), "db": ("_db_both", 12), "uidle": ("_stopped_here", 24), "took": ("_took_vip", 72),

@@ -368,7 +368,7 @@
       until: _vip_there.rc == 0
       changed_when: false
       delegate_to: "{{ _other_pi }}"
-      check_mode: false  # a read
+      when: not ansible_check_mode  # it reads the handover's result: a preview handed nothing over
 
     # Nexus is enabled at boot: keepalived's backup notify (or its converge pass, 3 min) stops it here
     - name: Keepalived's own services not running here, beside the VIP's
@@ -380,7 +380,7 @@
       delay: 5
       until: _idle_here.rc == 0
       changed_when: false
-      check_mode: false  # a read
+      when: not ansible_check_mode  # it reads the handover's result: in a preview the holder's Nexus runs, as it should
   always:
     # running again on the Pi that held the VIP (nopreempt: the VIP stays where it went) - after the reboot it started
     # itself, and where the run failed before the stop it never stopped: a no-op then
