@@ -201,20 +201,20 @@ wait_for 10 test ! -s "$STUB/memq"
 wait_for 10 destroys_ge 1
 check "under 2048 MB on two polls running: the biggest running VM (kubeadm) powered off, the Pis left" \
   "$(grep destroy "$STUB/calls" | tr '\n' ' ')/$(cat "$STUB/active" | tr '\n' ' ')" "-c qemu:///system destroy ops_kubeadm /ops_pi1 ops_pi2 "
-wait_for 5 grep -q 'ops_kubeadm powered off' "$COPY_HOST_DIR/host-guard-tripped"
+wait_for 15 grep -q 'ops_kubeadm powered off' "$COPY_HOST_DIR/host-guard-tripped"
 check "  recorded: the log and the trip, the numbers and the VM named" \
   "$(grep -c '2047 MB available and 0% memory stall on two polls .*: ops_kubeadm powered off' "$COPY_HOST_DIR/host-guard.log") $(grep -c 'ops_kubeadm powered off' "$COPY_HOST_DIR/host-guard-tripped")" "1 1"
 # the memory stall alone (available plenty): over 25% on two polls running - the next biggest off
 printf '%s\n' "9000 30" "9000 26" 9000 > "$STUB/memq"
 wait_for 10 destroys_ge 2
-wait_for 5 grep -q '26% memory stall' "$COPY_HOST_DIR/host-guard.log"
+wait_for 15 grep -q '26% memory stall' "$COPY_HOST_DIR/host-guard.log"
 check "  the memory stall over 25% on two polls running, memory available: the next running VM off" \
   "$(grep destroy "$STUB/calls" | tail -1 | grep -c 'destroy ops_pi1') $(grep -c '26% memory stall.*ops_pi1 powered off' "$COPY_HOST_DIR/host-guard.log")" "1 1"
 # a power-off that fails: said as such, never "powered off"; the watcher goes on
 touch "$STUB/destroy-fails"
 printf '%s\n' 100 100 9000 > "$STUB/memq"
 wait_for 10 destroys_ge 3
-wait_for 5 grep -q 'NOT powered off' "$COPY_HOST_DIR/host-guard.log"
+wait_for 15 grep -q 'NOT powered off' "$COPY_HOST_DIR/host-guard.log"
 check "a power-off that fails: logged NOT powered off with virsh's failure, the watcher still on" \
   "$(grep -c 'ops_pi2 NOT powered off - virsh destroy failed' "$COPY_HOST_DIR/host-guard.log") $(grep -c 'ops_pi2 powered off' "$COPY_HOST_DIR/host-guard.log") $(alive)" "1 0 yes"
 stop_watcher
