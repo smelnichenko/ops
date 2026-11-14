@@ -86,7 +86,8 @@ Each step reviewed before the next.
 
 ## The operator's review (answered 2026-11-14)
 
-1. **Notifications: e-mail** to the operator (the platform's own SMTP sender, Alertmanager's). Sent only for what is
+1. **Notifications: e-mail to one address - the single admin's** (operator: "just to single admin email"; the address
+   Alertmanager mails, `alertEmailTo`, by the platform's own SMTP sender) - never a list, a user, a channel. Sent only for what is
    acted on or was asked for: a major's veto notice (24 h), a unit blocked (red after its fix) or a one-way change's
    failure (page, with its backup and restore steps), and - asked 2026-11-13 - each patch/minor applied. A night with
    no unit sends nothing (the no-unattended-mail rule: no scheduled noise).
