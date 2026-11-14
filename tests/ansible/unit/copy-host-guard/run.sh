@@ -98,42 +98,42 @@ wait_for() {  # wait_for <seconds> <command...>: until it succeeds; 1 when the t
 
 # --- vagrant up: the room it needs ---------------------------------------------------------------------------------
 ALL=$((2048 + 2048 + 18432))
-fresh $((ALL + 3072 - 1))
+fresh $((ALL + 2560 - 1))
 guard vagrant up; rc=$?
-check "up, nothing running: the Vagrantfile's three VMs (pi1, pi2 2048 MB, kubeadm 18432 MB) + 3 GB - 1 MB short: refused, named" \
-  "$rc $(grep -c "REFUSED vagrant up: the host has $((ALL + 3071)) MB available; the VMs it starts (pi1 2048 MB, pi2 2048 MB, kubeadm 18432 MB) need $ALL MB, the running VMs may still take 0 MB, and 3072 MB stay" <<< "$out") $(alive)" "1 1 no"
-fresh $((ALL + 3072))
+check "up, nothing running: the Vagrantfile's three VMs (pi1, pi2 2048 MB, kubeadm 18432 MB) + 2560 MB - 1 MB short: refused, named" \
+  "$rc $(grep -c "REFUSED vagrant up: the host has $((ALL + 2559)) MB available; the VMs it starts (pi1 2048 MB, pi2 2048 MB, kubeadm 18432 MB) need $ALL MB, the running VMs may still take 0 MB, and 2560 MB stay" <<< "$out") $(alive)" "1 1 no"
+fresh $((ALL + 2560))
 guard vagrant up; rc=$?
 check "  exactly that: started, and the watcher with it" "$rc $(alive)" "0 yes"
 stop_watcher
 # kubeadm running, its guest has touched 4 GB of its 18: the other 14 GB are promised, still counted as available
-fresh $((4096 + 14336 + 3072 - 1)) ops_kubeadm
+fresh $((4096 + 14336 + 2560 - 1)) ops_kubeadm
 echo $((4096 * 1024)) > "$STUB/rss.ops_kubeadm"
 guard vagrant up; rc=$?
 check "up with kubeadm running: the Pis' memory and what kubeadm has not touched yet (14336 MB) needed - 1 MB short refused" \
   "$rc $(grep -c 'need 4096 MB, the running VMs may still take 14336 MB' <<< "$out")" "1 1"
-fresh $((4096 + 14336 + 3072)) ops_kubeadm
+fresh $((4096 + 14336 + 2560)) ops_kubeadm
 echo $((4096 * 1024)) > "$STUB/rss.ops_kubeadm"
 guard vagrant up; rc=$?
 check "  exactly that: started" "$rc" 0
 stop_watcher
-fresh 5119
+fresh 4607
 guard vagrant up --no-provision pi1; rc=$?
 check "up pi1 --no-provision: the named VM only (2048 MB), the option skipped - 1 MB short refused" "$rc $(grep -c '(pi1 2048 MB) need 2048 MB' <<< "$out")" "1 1"
-fresh 5120
+fresh 4608
 guard vagrant --debug up pi1; rc=$?
-check "--debug up pi1 (vagrant's own option first): judged as up pi1 - its 2048 MB + 3072, started and watched" \
+check "--debug up pi1 (vagrant's own option first): judged as up pi1 - its 2048 MB + 2560, started and watched" \
   "$rc $(grep -c '2048 MB for the VMs vagrant up starts (pi1 2048 MB)' <<< "$out") $(alive)" "0 1 yes"
 stop_watcher
-fresh 5119
+fresh 4607
 guard vagrant --debug up pi1; rc=$?
 check "  1 MB short: refused" "$rc" 1
-fresh 5120
+fresh 4608
 guard vagrant up pi1 --provider libvirt; rc=$?
 check "up pi1 --provider libvirt: the option's value is no machine name - pi1 alone counted, started" \
   "$rc $(grep -c '(pi1 2048 MB)' <<< "$out")" "0 1"
 stop_watcher
-fresh 5120
+fresh 4608
 guard vagrant up '/pi.*/'; rc=$?
 check "a name that is no machine (a regex): all of them counted - refused" "$rc $(grep -c "need $ALL MB" <<< "$out")" "1 1"
 for cmd in reload resume; do
@@ -159,7 +159,7 @@ fresh 99999
 mkdir -p "$W/odd"
 printf 'config.vm.define "a" do |a|\n  # v.memory = 99999\n  v.memory = 1024\nend\n' > "$W/odd/Vagrantfile"
 COPY_VAGRANTFILE="$W/odd/Vagrantfile" guard vagrant up; rc=$?
-check "a commented v.memory not read" "$rc $(grep -c '(a 1024 MB) + 0 MB the running ones may still take + 3072 MB kept' <<< "$out")" "0 1"
+check "a commented v.memory not read" "$rc $(grep -c '(a 1024 MB) + 0 MB the running ones may still take + 2560 MB kept' <<< "$out")" "0 1"
 stop_watcher
 printf 'config.vm.define "a" do |a|\n  v.memory = 1024\nend\nconfig.vm.define "b" do |b|\nend\n' > "$W/odd/Vagrantfile"
 COPY_VAGRANTFILE="$W/odd/Vagrantfile" guard vagrant up; rc=$?
@@ -167,7 +167,7 @@ check "a VM without a v.memory: refused (it could not be counted nor powered off
 printf 'config.vm.box = "x"\n' > "$W/odd/Vagrantfile"
 COPY_VAGRANTFILE="$W/odd/Vagrantfile" guard vagrant up; rc=$?
 check "  a Vagrantfile with none at all: refused" "$rc $(grep -c 'without a v.memory' <<< "$out")" "1 1"
-for set in COPY_HOST_TRIP_MB=2G COPY_HOST_RESERVE_GB=2.5 COPY_HOST_PSI_FULL=x COPY_HOST_GRACE=-1 COPY_HOST_POLL=fast; do
+for set in COPY_HOST_TRIP_MB=2G COPY_HOST_RESERVE_MB=2.5 COPY_HOST_PSI_FULL=x COPY_HOST_GRACE=-1 COPY_HOST_POLL=fast; do
   fresh 99999
   out=$(env "$set" bash scripts/copy-host-guard.sh vagrant up 2>&1); rc1=$?
   out2=$(env "$set" bash scripts/copy-host-guard.sh watch 2>&1); rc2=$?
@@ -176,7 +176,7 @@ for set in COPY_HOST_TRIP_MB=2G COPY_HOST_RESERVE_GB=2.5 COPY_HOST_PSI_FULL=x CO
 done
 
 # another domain on the host (another project's, one renamed, one of a similar name) is none of ours
-fresh $((ALL + 3072 - 1)) other_kubeadm kubeadm ops_kubeadm-old ops_pi10
+fresh $((ALL + 2560 - 1)) other_kubeadm kubeadm ops_kubeadm-old ops_pi10
 guard vagrant up; rc=$?
 check "domains not ours (other_kubeadm, kubeadm, ops_kubeadm-old, ops_pi10): none counted running - all three VMs needed" \
   "$rc $(grep -c "need $ALL MB, the running VMs may still take 0 MB" <<< "$out")" "1 1"

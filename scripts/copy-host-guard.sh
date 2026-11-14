@@ -18,7 +18,7 @@
 #                   .env (the Taskfile loads it into every task) never lives in it.
 #
 # Usage: scripts/copy-host-guard.sh vagrant <vagrant's arguments> | watch | running
-# Env:   COPY_HOST_RESERVE_GB (3), COPY_HOST_TRIP_MB (2048), COPY_HOST_PSI_FULL (25: % of 10 s), COPY_HOST_POLL (5 s),
+# Env:   COPY_HOST_RESERVE_MB (2560), COPY_HOST_TRIP_MB (2048), COPY_HOST_PSI_FULL (25: % of 10 s), COPY_HOST_POLL (5 s),
 #        COPY_HOST_GRACE (1800 s); tests: COPY_VAGRANTFILE, COPY_HOST_MEMINFO, COPY_HOST_PSI, COPY_HOST_UPTIME,
 #        COPY_HOST_DIR, COPY_HOST_VIRSH (a stub's path: a test's watcher whose stub is gone never reaches libvirt)
 set -euo pipefail
@@ -29,17 +29,19 @@ meminfo=${COPY_HOST_MEMINFO:-/proc/meminfo}
 psi=${COPY_HOST_PSI:-/proc/pressure/memory}
 uptime=${COPY_HOST_UPTIME:-/proc/uptime}
 dir=${COPY_HOST_DIR:-$ops/.copy}
-reserve_gb=${COPY_HOST_RESERVE_GB:-3}
+# the start's reserve: with every VM resident the host keeps ~this much, above the watcher's trip (2048): the green
+# builds of 2026-11-14 ran at ~4 GB available fully resident; 3 GB of reserve refused every start once the desktop and
+# the radar held ~4.5 GB (25.4-25.6 of 25.6 GB needed, 08:27-09:00)
+reserve_mb=${COPY_HOST_RESERVE_MB:-2560}
 trip_mb=${COPY_HOST_TRIP_MB:-2048}
 psi_full=${COPY_HOST_PSI_FULL:-25}
 poll=${COPY_HOST_POLL:-5}
 grace=${COPY_HOST_GRACE:-1800}
 # a setting that is no number fails closed: compared as one it would read as false - a guard that never trips
-for v in reserve_gb trip_mb psi_full grace; do
+for v in reserve_mb trip_mb psi_full grace; do
   [[ ${!v} =~ ^[0-9]+$ ]] || { echo "REFUSED: copy-host-guard's $v is '${!v}' - a whole number"; exit 2; }
 done
 [[ $poll =~ ^[0-9]+(\.[0-9]+)?$ ]] || { echo "REFUSED: copy-host-guard's poll is '$poll' - seconds"; exit 2; }
-reserve_mb=$((reserve_gb * 1024))
 # vagrant-libvirt names a machine's domain <the Vagrantfile's directory>_<machine>
 prefix="$(basename "$(dirname "$vagrantfile")")_"
 virsh_bin=${COPY_HOST_VIRSH:-virsh}
@@ -132,7 +134,7 @@ case "${1:-}" in
     # its own session, nothing of the caller's held (the lock's fd closed in it), no environment but its settings: no
     # run's Ctrl-C or end stops it (VMs outlive runs), and production's secrets do not live in it for days
     env -i PATH="$PATH" HOME="$HOME" COPY_VAGRANTFILE="$vagrantfile" COPY_HOST_MEMINFO="$meminfo" COPY_HOST_PSI="$psi" \
-      COPY_HOST_UPTIME="$uptime" COPY_HOST_DIR="$dir" COPY_HOST_RESERVE_GB="$reserve_gb" COPY_HOST_TRIP_MB="$trip_mb" \
+      COPY_HOST_UPTIME="$uptime" COPY_HOST_DIR="$dir" COPY_HOST_RESERVE_MB="$reserve_mb" COPY_HOST_TRIP_MB="$trip_mb" \
       COPY_HOST_PSI_FULL="$psi_full" COPY_HOST_POLL="$poll" COPY_HOST_GRACE="$grace" COPY_HOST_VIRSH="$virsh_bin" \
       setsid "$0" _loop 8>&- > /dev/null 2>> "$dir/host-guard.log" < /dev/null &
     child=$!
