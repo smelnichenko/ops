@@ -9,11 +9,14 @@ taken for a yes.
                  its own (a preview's - the Pi's own lists, and apt's caches, stay as they are). Refused: dpkg's audit
                  not clean (a package half-installed), a removal planned, apt's summary not read, or its packages not
                  the number it says
-  services       the services a reboot must bring back: running now and enabled (an instance - foo@bar - by its
-                 template's enablement) - keepalived's own aside (they follow the VIP: its notify_lib.sh's SERVICES) -
-                 one a line, then "SERVICES <n>"
-  back UNIT...   each running again - or skipped by its own start condition at this boot (a first-boot unit): "BACK
-                 <n>", or "NOT YET <unit> <state>, ..." (one not tried yet is not yet)
+  services       the services a reboot must bring back: running now, enabled (an instance - foo@bar - by its
+                 template's enablement) and pulled in by the boot (default.target's dependencies, all the way down - one
+                 enabled for a unit the Pi lacks, netavark-firewalld-reload for firewalld, runs only when started by
+                 hand) - keepalived's own aside (they follow the VIP: its notify_lib.sh's SERVICES) - one a line, then
+                 "SERVICES <n>" (and the ones left out as outside the boot, named on that line)
+  back UNIT...   each running again - or, inactive, skipped by its own start condition at this boot (a first-boot
+                 unit) or not pulled in by this boot (a mark written before the boot was asked): "BACK <n>" (those
+                 named), or "NOT YET <unit> <state>, ..." (one not tried yet is not yet)
   gluster        every Gluster volume of fstab mounted from itself, every volume's bricks connected with nothing to
                  heal: "HEALED <volumes>", or what is not
   patroni [--leader NAME]
@@ -165,6 +168,16 @@ def unit_names(*args):
     return {line.split()[0] for line in out.splitlines() if line.split()}
 
 
+def boot_units():
+    """The units this boot pulls in: default.target's dependencies, all the way down - one a line, indented under the
+    one that pulls it in, default.target itself first."""
+    out = run(["systemctl", "list-dependencies", "--plain", "--all", "--no-pager", "default.target"], timeout=60)
+    units = {line.strip() for line in out.splitlines() if line.strip()}
+    if len(units) < 2:
+        raise NotRead("default.target's dependencies not read - none listed")
+    return units
+
+
 def services(_args):
     running = unit_names("list-units", "--state=active")
     enabled = unit_names("list-unit-files", "--state=enabled")
@@ -173,9 +186,18 @@ def services(_args):
     found = [u for u in found if u not in {unit for unit, _ in keepalived_services()}]
     if not found:
         raise NotRead("no service running and enabled - systemd's lists not read as such")
+    # enabled is not started by the boot: enabled for a unit the Pi lacks (netavark-firewalld-reload's WantedBy is
+    # firewalld), nothing starts it - one running now was started by hand, and a reboot leaves it stopped
+    boot = boot_units()
+    outside = [u for u in found if u not in boot]
+    found = [u for u in found if u in boot]
+    if not found:
+        raise NotRead("no service running and enabled is pulled in by the boot - default.target's dependencies not read "
+                      "as such")
     for unit in found:
         print(unit)
-    print(f"SERVICES {len(found)}")
+    print(f"SERVICES {len(found)}" + (f" ({', '.join(outside)} running but not pulled in by the boot - left out)"
+                                      if outside else ""))
     return 0
 
 
@@ -187,18 +209,28 @@ def back(units):
     states = r.stdout.split()
     if len(states) != len(units):
         raise NotRead(f"systemctl is-active: {len(states)} states for {len(units)} units ({r.stderr.strip()[-200:]})")
-    skipped, not_yet = [], []
+    skipped, outside, not_yet = [], [], []
+    boot = None
     for u, s in zip(units, states):
         if s == "active":
             continue
         if condition_failed(u):
             skipped.append(u)
-        else:
-            not_yet.append(f"{u} {s}")
+            continue
+        # inactive and nothing in the boot pulls it in: nothing will start it (a mark written before services asked
+        # the boot) - failed or activating, something did start it, and it is not back
+        if s == "inactive":
+            boot = boot_units() if boot is None else boot
+            if u not in boot:
+                outside.append(u)
+                continue
+        not_yet.append(f"{u} {s}")
     if not_yet:
         print("NOT YET " + ", ".join(not_yet))
         return 1
-    print(f"BACK {len(units)}" + (f" ({', '.join(skipped)} skipped by its start condition)" if skipped else ""))
+    said = ([f"{', '.join(skipped)} skipped by its start condition"] if skipped else []) + \
+        ([f"{', '.join(outside)} not pulled in by this boot"] if outside else [])
+    print(f"BACK {len(units)}" + (f" ({'; '.join(said)})" if said else ""))
     return 0
 
 

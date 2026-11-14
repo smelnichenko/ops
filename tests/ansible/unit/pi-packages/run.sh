@@ -35,14 +35,18 @@ cat > "$W/bin/dpkg" <<'STUB'
 [ "$*" = "--audit" ] || exit 2
 cat "$W/dpkg-audit.out" 2> /dev/null; exit 0
 STUB
-# systemctl: the running and the enabled lists from files; is-active a state a unit (state/<unit>, else inactive),
-# non-zero while any is not active - as systemd's
+# systemctl: the running and the enabled lists from files; default.target's dependencies from a file (only as the
+# script asks: --plain --all); is-active a state a unit (state/<unit>, else inactive), non-zero while any is not
+# active - as systemd's
 cat > "$W/bin/systemctl" <<'STUB'
 #!/bin/bash
 [ ! -e "$W/systemctl.fail" ] || { echo "Failed to connect to bus" >&2; exit 1; }
 case "$1" in
   list-units) cat "$W/active" ;;
   list-unit-files) cat "$W/enabled" ;;
+  list-dependencies) [ "$*" = "list-dependencies --plain --all --no-pager default.target" ] || exit 1
+    [ ! -e "$W/bootdeps.fail" ] || { echo "Failed to list" >&2; exit 1; }
+    cat "$W/bootdeps" ;;
   show) u=${*: -1}
     case " $* " in
       *" --value "*) if [ -e "$W/notfound/$u" ]; then echo not-found; else echo loaded; fi ;;
@@ -218,6 +222,10 @@ gone("apt-update.rc")
 check("plan: an argument it does not take - not read", run("plan", "--stale")[1].startswith("NOT READ"), True)
 
 # ── services ──
+# default.target's dependencies as systemd 257 lists them: itself first, each unit indented under the one pulling it in
+BOOT = ("default.target\n  cloud-final.service\n  consul.service\n  nexus.service\n  multi-user.target\n"
+        "    getty@tty1.service\n    vault.service\n    haproxy.service\n")
+put("bootdeps", BOOT)
 put("active", "consul.service loaded active running Consul\nnexus.service loaded active running Nexus\n"
     "user@1000.service loaded active running User\nvault.service loaded active running Vault\n"
     "cloud-final.service loaded active exited Cloud\n")
@@ -248,6 +256,34 @@ put("active", "getty@tty1.service loaded active running Getty\nfoo@bar.service l
 put("enabled", "getty@.service enabled enabled\nconsul.service enabled enabled\n")
 check("services: an instance by its template's enablement (getty@tty1 by getty@.service) - one of a template not enabled "
       "aside", run("services")[1].splitlines(), ["consul.service", "getty@tty1.service", "SERVICES 2"])
+# netavark-firewalld-reload: enabled for firewalld (WantedBy=firewalld.service), firewalld not installed - running only
+# because someone started it; a reboot leaves it stopped (pi1's production run waited 30 min on it, 2026-11-14)
+put("active", "consul.service loaded active running Consul\n"
+    "netavark-firewalld-reload.service loaded active exited Reload netavark firewall rules on firewalld reload\n")
+put("enabled", "consul.service enabled enabled\nnetavark-firewalld-reload.service enabled enabled\n")
+check("services: one running and enabled but nothing in the boot pulls it in - left out, named on the count's line",
+      run("services"), (0, "consul.service\nSERVICES 1 (netavark-firewalld-reload.service running but not pulled in by "
+                           "the boot - left out)"))
+put("bootdeps", BOOT.replace("  consul.service\n", "  consul.servicex\n"))
+check("services: a unit the boot lists by another name is not it (whole names, not prefixes)",
+      run("services")[1].startswith("NOT READ"), True)
+put("bootdeps", "  consul.service\n  vault.service\n")
+check("services: the list without default.target's own line still read (its units, indented)",
+      run("services")[1].splitlines()[0], "consul.service")
+put("bootdeps", "default.target\n")
+check("services: default.target with nothing under it - not read as such (never 'the boot starts nothing')",
+      run("services"), (1, "NOT READ: default.target's dependencies not read - none listed"))
+put("bootdeps", "")
+check("services: default.target's dependencies empty - not read as such", run("services"),
+      (1, "NOT READ: default.target's dependencies not read - none listed"))
+put("bootdeps", BOOT)
+put("bootdeps.fail", "")
+check("services: default.target's dependencies unread - not read", run("services")[1].startswith("NOT READ"), True)
+gone("bootdeps.fail")
+put("active", "netavark-firewalld-reload.service loaded active exited Reload\n")
+put("enabled", "netavark-firewalld-reload.service enabled enabled\n")
+check("services: only ones outside the boot - not read (never 'nothing to bring back')",
+      run("services")[1].startswith("NOT READ"), True)
 
 # ── back ──
 for u in ("consul.service", "vault.service"):
@@ -268,6 +304,30 @@ put("cond/vault.service", "ConditionResult=no\nConditionTimestampMonotonic=0\n")
 check("back: one not tried yet (no condition checked) - not yet", run("back", "consul.service", "vault.service"),
       (1, "NOT YET vault.service inactive"))
 gone("cond/vault.service"); put("state/vault.service", "active")
+# a mark written before services asked the boot (pi1's of 2026-11-14 names netavark-firewalld-reload)
+check("back: one inactive that nothing in this boot pulls in - back, said",
+      run("back", "consul.service", "netavark-firewalld-reload.service"),
+      (0, "BACK 2 (netavark-firewalld-reload.service not pulled in by this boot)"))
+put("state/netavark-firewalld-reload.service", "failed")
+check("back: one outside the boot that failed - something started it: not yet",
+      run("back", "consul.service", "netavark-firewalld-reload.service"),
+      (1, "NOT YET netavark-firewalld-reload.service failed"))
+put("state/netavark-firewalld-reload.service", "activating")
+check("back: one outside the boot still starting - not yet", run("back", "netavark-firewalld-reload.service"),
+      (1, "NOT YET netavark-firewalld-reload.service activating"))
+gone("state/netavark-firewalld-reload.service")
+put("cond/consul.service", "ConditionResult=no\nConditionTimestampMonotonic=4242\n"); put("state/consul.service", "inactive")
+check("back: one skipped by its condition and one outside the boot - both said",
+      run("back", "consul.service", "netavark-firewalld-reload.service"),
+      (0, "BACK 2 (consul.service skipped by its start condition; netavark-firewalld-reload.service not pulled in by "
+          "this boot)"))
+gone("cond/consul.service"); put("state/consul.service", "active")
+put("bootdeps.fail", "")
+check("back: every one running - the boot not asked (its list failing changes nothing)",
+      run("back", "consul.service", "vault.service"), (0, "BACK 2"))
+check("back: one inactive and the boot's list unread - not read, never back",
+      run("back", "consul.service", "netavark-firewalld-reload.service")[1].startswith("NOT READ"), True)
+gone("bootdeps.fail")
 
 # ── gluster ──
 BRICK = "Brick {b}\nStatus: {s}\nTotal Number of entries: {n}\nNumber of entries in heal pending: {n}\n\n"
