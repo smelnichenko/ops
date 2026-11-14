@@ -119,6 +119,13 @@
       "enabled": false
     },
     {
+      "description": "The plain Kafka StatefulSet's image: off in production and the test environment (Strimzi runs Kafka - its version is strimzi.kafkaVersion), no pod runs it",
+      "matchDepNames": [
+        "apache/kafka"
+      ],
+      "enabled": false
+    },
+    {
       "description": "Every patch, every repo: one unit",
       "matchUpdateTypes": [
         "patch"
