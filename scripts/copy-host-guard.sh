@@ -18,7 +18,7 @@
 #                   .env (the Taskfile loads it into every task) never lives in it.
 #
 # Usage: scripts/copy-host-guard.sh vagrant <vagrant's arguments> | watch | running
-# Env:   COPY_HOST_RESERVE_MB (2560), COPY_HOST_TRIP_MB (2048), COPY_HOST_PSI_FULL (25: % of 10 s), COPY_HOST_POLL (5 s),
+# Env:   COPY_HOST_RESERVE_MB (2048), COPY_HOST_TRIP_MB (2048), COPY_HOST_PSI_FULL (25: % of 10 s), COPY_HOST_POLL (5 s),
 #        COPY_HOST_GRACE (1800 s); tests: COPY_VAGRANTFILE, COPY_HOST_MEMINFO, COPY_HOST_PSI, COPY_HOST_UPTIME,
 #        COPY_HOST_DIR, COPY_HOST_VIRSH (a stub's path: a test's watcher whose stub is gone never reaches libvirt)
 set -euo pipefail
@@ -32,7 +32,7 @@ dir=${COPY_HOST_DIR:-$ops/.copy}
 # the start's reserve: with every VM resident the host keeps ~this much, above the watcher's trip (2048): the green
 # builds of 2026-11-14 ran at ~4 GB available fully resident; 3 GB of reserve refused every start once the desktop and
 # the radar held ~4.5 GB (25.4-25.6 of 25.6 GB needed, 08:27-09:00)
-reserve_mb=${COPY_HOST_RESERVE_MB:-2560}
+reserve_mb=${COPY_HOST_RESERVE_MB:-2048}
 trip_mb=${COPY_HOST_TRIP_MB:-2048}
 psi_full=${COPY_HOST_PSI_FULL:-25}
 poll=${COPY_HOST_POLL:-5}

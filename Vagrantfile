@@ -8,7 +8,7 @@
 #   kubeadm  192.168.56.10  — kubeadm cluster node
 #
 # Host requirements (Intel Core Ultra 125H, 32GB RAM - the radar station runs on it too):
-#   pi1: 2 CPUs, 2GB — pi2: 2 CPUs, 2GB — kubeadm: 14 CPUs, 18GB; started only with that much available and 2.5 GB more
+#   pi1: 2 CPUs, 2GB — pi2: 2 CPUs, 2GB — kubeadm: 14 CPUs, 18GB; started only with that much available and 2 GB more
 #
 # VIP: 192.168.56.50 (Keepalived, floats between pi1/pi2)
 #

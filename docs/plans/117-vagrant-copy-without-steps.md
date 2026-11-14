@@ -167,7 +167,8 @@ Argo settle timed out, and the radar station on the same host died (22:17, resta
   (CNPG's shared_buffers floor).
 - **`scripts/copy-host-guard.sh`**: the Vagrantfile hands every vagrant command's arguments to it - `up`/`reload`/
   `resume` refused unless the host has the starting VMs' memory (the Vagrantfile's sizes, those not running already)
-  plus 2.5 GB available (3 GB at first: it refused every start once the desktop and the radar held ~4.5 GB - 25.4-25.6
+  plus 2 GB available since 2026-11-14 17:00 (operator: "lower vagrant copy requirements by little"; the trip at
+  2 GB available unchanged - the kubeadm guest itself used 16.95 of its 17.99 GB, no VM shrinks); 2.5 GB before (3 GB at first: it refused every start once the desktop and the radar held ~4.5 GB - 25.4-25.6
   of 25.6 GB needed, 2026-11-14 08:27-09:00; fully resident the green builds ran at ~4 GB available); a detached watcher (also started by every copy task working on the VMs) powers off the biggest
   running VM when the host's available memory is under 2 GB on two polls 5 s apart - the run fails, said in
   `.copy/host-guard.log`, the station keeps its memory. Every Vagrant suite here is guarded, not only the copy.
