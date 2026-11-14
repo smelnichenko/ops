@@ -258,6 +258,42 @@ Vault: 1.21 gets no more free fixes - Vault 2.x moves up in wave 3.
 | Keycloak / versitygw / Caddy / Nexus (Pis) | 26.5.7 → 26.8.2 / 1.8.0 → 1.11.0 / 2.10.0 → 2.11.9 / 3.90.1 → 3.98.1 | Pi playbooks |
 | SonarQube | 26.9 → 26.11 | not in the copy (left out): its own care |
 
+### ten's Debian packages (operator 2026-11-14: "119")
+
+Nothing upgrades ten's own system: the Pis' playbook covers the Pis, and wave 1 moved ten's Kubernetes and Cilium
+only. ten is the single control-plane node, Consul's third voter (its raft leader since the Pis' turns moved the
+leadership off them) and the arbiter brick of all five Gluster volumes. Read 2026-11-14 (read-only):
+- 15 upgradable: the kernel 6.12.117 (security; running 6.12.115), libcares2, zlib, ruby3.3, vim, linux-perf and
+  cpupower (security), the Docker buildx and compose plugins. containerd.io 2.4.2 is listed but held (2.3.6 - wave 3);
+  kubeadm, kubelet, kubectl, cri-tools and kubernetes-cni held. Three older kernels installed (107, 111, 115), / at 52%.
+- What its reboot must bring back (pi-packages.py `services`, 28): consul, glusterd, containerd, kubelet, hostapd,
+  node_exporter, smartctl_exporter, ssh, tuned, ... No VM (virsh: none) and no Docker container runs there.
+- What the reboot costs: the cluster's API and every app down until the stack recovers (~9-10 min, docs/NodeReboot.md;
+  no drain - one node; kubelet's graceful shutdown 180 s / 30 s critical). Consul keeps its quorum on the Pis (2 of 3),
+  Gluster serves from its two data bricks, the Pis' services (Forgejo, Keycloak, Vault, Patroni) keep running.
+
+The step - a playbook of its own, `upgrade-node-packages.yml`, reusing pi-packages.py's reads where they fit (plan,
+services, back, kernel, gluster, consul), and a production task `deploy:node-packages:upgrade`:
+1. Refused, nothing changed: a backup window (UTC 01:50-04:00, 05:20-05:50); a Pi not ready to carry the quorums alone
+   (Consul's three voters healthy with one loss to spare, every Gluster volume healed, Patroni healthy); anything not
+   settled (every Argo app Synced/Healthy, every running pod ready); apt's plan removing a package or with dpkg's audit
+   not clean (pi-packages.py `plan`).
+2. A preview first: `-- --check`, from freshly read package lists.
+3. Before: a fresh etcd snapshot (a Job from the etcd-backup CronJob, its completion waited for); Consul's leadership
+   off ten (tasks/consul-leader-off.yml); the services recorded and the reboot owed marked (a failed run's next run
+   takes the reboot it owes).
+4. `apt-get upgrade --with-new-pkgs` (the holds stay, nothing removed), `sync`, the reboot.
+5. After: the newest kernel booted; every recorded service back (pi-packages.py `back`, the boot's own); the node
+   Ready, the control-plane pods ready; Consul's quorum with ten again; ten's arbiter bricks healed; ESO's store Ready;
+   every Argo app settled and every pod ready (scripts/upgrade-verify.sh); the mark removed.
+6. Way back: none for the packages - the older kernels stay installed (one booted by hand at the console).
+
+Proven on the Vagrant copy first (`task test:copy:playbook PLAYBOOK=upgrade-node-packages.yml`: its target VM is the
+same Debian trixie on amd64 - the reboot and every check; its package set is its box's, so the proof is the playbook's).
+Production on the operator's go (a write on ten and a reboot of the control plane), at a quiet hour, never beside a Pi
+turn or an infra merge. Afterwards, plan 120 runs the same playbook as a recurring unit (Renovate tracks no apt
+package: the runner schedules it, after the Pis' Debian unit).
+
 ## Wave 3 — majors and one-way changes (each its own plan)
 
 Kubernetes 1.37 (one minor; Cilium's and Istio's support first), containerd 2.4, Vault 2.x, Consul 2.x (plan 101
@@ -275,4 +311,5 @@ metrics-server 0.9.0 (0.9.1 out, no chart release yet). kagent: disabled, left a
 1. ~~Plan 117's proof and its Velero change green, pushed, production's Velero backup proven.~~ Done 2026-11-14.
 2. Wave 1: release notes; 1a branches → `test:copy:change` → merge; 1b playbooks → `test:copy:playbook` → production
    tasks; 1c the same, one Pi service at a time; inventory read again.
-3. Wave 2, then wave 3's plans - each the same way.
+3. Wave 2, then wave 3's plans - each the same way. ten's Debian packages in wave 2: the playbook built and proven on
+   the copy, then production on the operator's go, alone.
