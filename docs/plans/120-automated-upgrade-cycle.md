@@ -1,7 +1,8 @@
 # Plan 120 — the automated upgrade cycle
 
 Status: **BUILDING** (operator 2026-11-14: "start building plan 120 meanwhile", "ensure renovate works with
-vagrant") - the review answered 2026-11-14 (below); plan 119's wave 1 steps 1-3 live by hand, its last steps proving.
+vagrant") - the review answered 2026-11-14 (below); plan 119's wave 1 done by hand (2026-11-14); rollout step 1 (the
+lookup) run - its findings fixed below, three questions open.
 
 **Built 2026-11-14 (ops upgrade/wave-1 branch, each with its harness):**
 - Renovate: `renovate/upgrade-cycle.json` (the shared preset - units, groups, one minor at a time for Kubernetes/
@@ -14,10 +15,44 @@ vagrant") - the review answered 2026-11-14 (below); plan 119's wave 1 steps 1-3 
   `upgrade-label.py` (labels, comments, merges - whole or not at all), `upgrade-verify.sh`, `upgrade-record.sh`,
   `upgrade-notice.sh` (platform's `upgrade-cycle/notices` branch routes the UpgradeCycle alert), the agent's
   `.claude/skills/upgrade-fix`.
-**Not yet:** the renovate-bot's credentials (its password and PAT in ops/.env are both invalid - an admin's reset
-needed), the bot's write access to infra/platform/ops, Renovate's lookup run against plan 119's tables (its `local`
-platform: no token needed), the systemd user timer, the agent's headless permissions, a one-way change's store backups
-beyond etcd (Postgres, ScyllaDB, ...: blocked until then).
+**Done since:** the renovate-bot reset (operator: "reset renovate-bot with forgejo_admin yourself"), its PAT in
+ops/.env RENOVATE_TOKEN, write access to infra/platform/ops (operator: "grant it").
+**Not yet:** a valid GitHub read token (RENOVATE_GITHUB_TOKEN in ops/.env answers 401), the systemd user timer and its
+start time, the agent's headless permissions, `deploy:seed-secrets` for the bot's token (the operator's OK), Argo CD's
+chart default annotated (setup-argocd.yml's `argocd_version | default(...)` is no plain value), Strimzi's Kafka
+`version:` and Nexus annotated, a one-way change's store backups beyond etcd (Postgres, ScyllaDB, ...: blocked).
+
+**Rollout step 1 - the lookup, 2026-11-14** (Renovate 44.198.3, `local` platform, `RENOVATE_DRY_RUN=lookup`, each
+repo's branch exported to a scratch git directory under ops/.copy with the preset as its renovate.json - a `local>`
+preset does not resolve on the local platform; read-only: the repos untouched, the registries read). Its units
+reproduce plan 119's wave 2 table - Istio 1.32 (with its cni chart), External Secrets 2.15, kube-prometheus-stack
+92/93 (two majors, one at a time), Strimzi 1.3.1 + the Scylla operator and Manager 1.23 (data-operators), Grafana
+13.3.1 / k6 1.8.2 / kube-prometheus-stack 91.9 (observability), Fluent Bit 5.2, Centrifugo 6.10.3,
+versitygw 1.11, SonarQube 26.10 - and the patch wave (Istio 1.31.4, ClickHouse 26.8.37, Grafana 13.2.6, etcd 3.6.16,
+Kafka 4.2.2, ...). What it found, fixed in the preset and the runner (harness cases, each mechanism broken and caught):
+- The unit names were not the runner's: Renovate prefixes a group's slug (`renovate/patch-wave-patches`,
+  `renovate/minor-1.32-istio`), and its own monorepo group took Istio's cni (`renovate/istio-monorepo`). Now each
+  group's branch topic is set whole: `wave-patches`, `istio-<X.Y>`, `kubernetes-<X.Y>`, `cilium-<X.Y>`,
+  `scylladb-<X.Y>`; Renovate's groupings off (`group:monorepos`, `group:recommended`). upgrade-units.py orders a
+  family's minors by number (istio-1.9 before istio-1.10), kubernetes and cilium families after istio.
+- One-way units would have gone through: the runner judged them by names Renovate does not give (its Postgres major is
+  `postgres-18.x`, Grafana's `grafana-grafana-13.x`; ScyllaDB 2026.1 -> 2026.3, one-way, sat in data-operators as a
+  minor). Now the preset labels them `one-way` (Postgres, ScyllaDB release lines, Kafka, Strimzi, ClickHouse, Grafana,
+  Vault, Consul majors) and the runner blocks on the label - the names a second net, its labels unread: nothing applied.
+- Releases without a release time (Docker Hub, quay.io, ghcr.io, registry.k8s.io) stayed pending for good under the
+  3 days' age (`timestamp-required`): Postgres 18, Grafana 13, Keycloak 26.8 and most of the patches never got a
+  branch. `minimumReleaseAgeBehaviour: timestamp-optional` - the age holds where a time is given; the copy's proof and
+  the review are the gate.
+- Left out: kagent (disabled in production), the retired in-cluster Vault's values (no Argo app reads them), the etcd
+  image's minors and majors (etcdctl follows kubeadm's etcd); kubectl images (alpine/k8s) move with the kubernetes
+  family. `registryUrlTemplate` gone (an empty URL for each annotation without one: a warning each).
+- Open, for the operator: (1) a GitHub read token - six deps (Caddy, Consul, Vault, Keycloak on the Pis, Kubernetes,
+  Gateway API) are skipped without one; or their annotations move to registries (Docker Hub/quay/registry.k8s.io,
+  no token) where one publishes the same versions. (2) platform's chart defaults that infra overrides are behind
+  production (Grafana 12.4.2, Mimir 2.17.8, Tempo 2.7.2, Keycloak 26.5.6): Renovate opens units for them (a Grafana,
+  Mimir and Tempo major among them) - align the defaults with production, or leave platform's overridden values out.
+  (3) the labels themselves are seen only on the first real run (the local platform opens no PRs): the shadow week
+  checks them.
 
 ## Decisions (operator, 2026-11-13)
 

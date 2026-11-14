@@ -28,7 +28,13 @@ def stub(path, body):
     open(path, "w").write("#!/bin/bash\n" + body + "\n")
     os.chmod(path, 0o755)
 LOG = 'echo "$(basename "$0") $*" >> "$ST/calls"'
-stub(os.path.join(OPS, "scripts/upgrade-units.py"), LOG + '\ncat "$ST/pick"; exit "$(cat "$ST/pick.rc" 2>/dev/null || echo 0)"')
+# list: the open units with their labels (default: the picked one, labelled upgrade-cycle alone); pick: the pick
+stub(os.path.join(OPS, "scripts/upgrade-units.py"), LOG + '''
+case "$1" in
+  list) [ ! -e "$ST/list.fail" ] || exit 1
+    if [ -e "$ST/list" ]; then cat "$ST/list"; else read -r _ u k < "$ST/pick"; echo "$u $k schnappy/infra upgrade-cycle"; fi ;;
+  *) cat "$ST/pick"; exit "$(cat "$ST/pick.rc" 2>/dev/null || echo 0)" ;;
+esac''')
 stub(os.path.join(OPS, "scripts/upgrade-label.py"), LOG + '\n[ "$2" != --merge ] || exit "$(cat "$ST/merge.rc" 2>/dev/null || echo 0)"')
 stub(os.path.join(OPS, "scripts/upgrade-notice.sh"), LOG)
 stub(os.path.join(OPS, "scripts/upgrade-verify.sh"), LOG + '\nexit "$(cat "$ST/verify.rc" 2>/dev/null || echo 0)"')
@@ -116,6 +122,32 @@ check("a major's first night: proven, reviewed, its notice comment and mail - no
 rc, calls = night("apply postgresql-19.x major", plan="test:copy:change INFRA_REF=renovate/postgresql-19.x PLATFORM_REF=main\n")
 check("a one-way unit with no backup path: blocked, never merged",
       (rc, has(calls, "upgrade-label.py")), (1, ["upgrade-label.py postgresql-19.x upgrade-blocked"]))
+# Renovate's label marks a one-way unit (renovate/upgrade-cycle.json) - ScyllaDB's release line is a minor by number
+rc, calls = night("prove data-operators minor", files={"list": "data-operators minor schnappy/infra one-way,upgrade-cycle\n"})
+check("a unit labelled one-way: blocked, never merged, whatever its name (data-operators: no name the net knows)",
+      (rc, has(calls, "upgrade-label.py"), [words(c, 3) for c in has(calls, "upgrade-notice.sh")]),
+      (1, ["upgrade-label.py data-operators upgrade-blocked"], ["upgrade-notice.sh blocked data-operators"]))
+rc, calls = night("prove scylladb-2026.3 minor", files={"list": "scylladb-2026.3 minor schnappy/infra upgrade-cycle\n"})
+check("a ScyllaDB release line as the preset names it, its label missing: the names' net blocks it",
+      (rc, has(calls, "upgrade-label.py")), (1, ["upgrade-label.py scylladb-2026.3 upgrade-blocked"]))
+rc, calls = night("apply postgres-18.x major", files={"list": "postgres-18.x major schnappy/infra major,upgrade-cycle\n"})
+check("Renovate's own name for a Postgres major, its label missing: the names' net blocks it",
+      (rc, has(calls, "upgrade-label.py")), (1, ["upgrade-label.py postgres-18.x upgrade-blocked"]))
+rc, calls = night("apply grafana-grafana-13.x major", files={"list": "grafana-grafana-13.x major schnappy/platform major\n"})
+check("a Grafana major as Renovate names it (grafana-grafana-13.x): blocked by the names' net",
+      (rc, has(calls, "upgrade-label.py")), (1, ["upgrade-label.py grafana-grafana-13.x upgrade-blocked"]))
+rc, calls = night("prove centrifugo-6.x minor", plan=PLAN,
+                  files={"list": "centrifugo-6.x minor schnappy/infra not-one-way,upgrade-cycle\n"})
+check("a label only containing the word (not-one-way) is not one-way: merged",
+      (rc, has(calls, "upgrade-label.py centrifugo-6.x --merge")), (0, ["upgrade-label.py centrifugo-6.x --merge"]))
+rc, calls = night("prove centrifugo-6.x minor", files={"list.fail": ""})
+check("the labels not read: nothing merged, said so (fails closed)",
+      (rc, has(calls, "upgrade-label.py"), [words(c, 3) for c in has(calls, "upgrade-notice.sh")],
+       any("labels not read" in c for c in has(calls, "upgrade-notice.sh"))),
+      (1, [], ["upgrade-notice.sh blocked centrifugo-6.x"], True))
+rc, calls = night("prove centrifugo-6.x minor", files={"list": "other-1.x minor schnappy/infra upgrade-cycle\n"})
+check("the unit gone from the open ones since its pick: nothing merged",
+      (rc, has(calls, "upgrade-label.py")), (1, []))
 rc, calls = night("prove wave-patches patch", plan=PLAN, files={"merge.rc": "1"})
 check("a failed merge: no production task, reported", (rc, has(calls, "task --yes"), [words(c, 3) for c in has(calls, "upgrade-notice.sh")]),
       (1, [], ["upgrade-notice.sh blocked wave-patches"]))

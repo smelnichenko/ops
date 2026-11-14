@@ -131,7 +131,12 @@ plan=$(task test:copy:unit UNIT="$unit" PLAN=true 2> /dev/null | grep -E '^test:
 if grep -q 'upgrade-kubeadm.yml' <<< "$plan"; then
   run ssh ten "kubectl -n kube-system create job --from=cronjob/etcd-backup etcd-backup-before-$unit && kubectl -n kube-system wait --for=condition=complete job/etcd-backup-before-$unit --timeout=300s"
 fi
-if grep -qE '(postgresql|scylla|kafka|clickhouse|strimzi|grafana|consul|vault)-[0-9]+\.x' <<< "$unit"; then
+# one-way with no backup path: Renovate's label (renovate/upgrade-cycle.json's rules) - the names a second net, failing
+# closed; the labels not read, nothing is applied
+labels=$(scripts/upgrade-units.py list) || { notice blocked "$unit" "its labels not read from Forgejo - nothing applied" "$log"; exit 1; }
+labels=$(awk -v u="$unit" '$1 == u {print $4}' <<< "$labels")
+[ -n "$labels" ] || { notice blocked "$unit" "not in the open units any more - nothing applied" "$log"; exit 1; }
+if [[ ,$labels, == *,one-way,* ]] || grep -qE '(postgres|postgresql|scylla|scylladb|kafka|clickhouse|strimzi|grafana|consul|vault)-[0-9]+\.(x|[0-9]+)$' <<< "$unit"; then
   run scripts/upgrade-label.py "$unit" upgrade-blocked
   notice blocked "$unit" "a one-way change with no backup path in the cycle yet - left for the operator" "$log"
   exit 1

@@ -3,9 +3,11 @@
   "description": [
     "The upgrade cycle's shared preset (ops docs/plans/120-automated-upgrade-cycle.md): Renovate finds the upgrades and",
     "opens one branch per unit, the same name in infra, platform and ops; the cycle proves a unit on the Vagrant copy",
-    "(task test:copy:unit UNIT=<it>) and applies it - Renovate never merges. Units: renovate/wave-patches (every patch),",
-    "renovate/<family> for a family's minors (istio, observability, data-operators, argocd, pi-services), each other minor",
-    "and every major on a branch of its own; Kubernetes, Cilium and Istio one minor at a time."
+    "(task test:copy:unit UNIT=<it>) and applies it - Renovate never merges. Units (scripts/upgrade-units.py reads these",
+    "names): renovate/wave-patches (every patch); renovate/<family>-<X.Y> for the families moved one minor at a time",
+    "(istio, kubernetes, cilium); renovate/<family> for the other families' minors (observability, data-operators, argocd,",
+    "pi-services); each other minor and every major on a branch of its own (Renovate's own name). Label one-way: a change",
+    "whose stores have no backup path in the cycle yet - the runner leaves it for the operator."
   ],
   "extends": [
     "config:recommended",
@@ -15,6 +17,7 @@
   "automerge": false,
   "dependencyDashboardApproval": false,
   "minimumReleaseAge": "3 days",
+  "minimumReleaseAgeBehaviour": "timestamp-optional",
   "internalChecksFilter": "strict",
   "separateMinorPatch": true,
   "separateMajorMinor": true,
@@ -54,7 +57,6 @@
         "#\\s*renovate:\\s*datasource=(?<datasource>\\S+)\\s+depName=(?<depName>\\S+)(?:\\s+registryUrl=(?<registryUrl>\\S+))?(?:\\s+versioning=(?<versioning>\\S+))?\\s*\\n\\s*[a-z0-9_]+:\\s*\"?v?(?<currentValue>\\d[^\"\\s-]*)"
       ],
       "versioningTemplate": "{{#if versioning}}{{{versioning}}}{{else}}semver-coerced{{/if}}",
-      "registryUrlTemplate": "{{#if registryUrl}}{{{registryUrl}}}{{/if}}",
       "extractVersionTemplate": "^v?(?<version>.+)$"
     },
     {
@@ -90,28 +92,95 @@
       "enabled": false
     },
     {
+      "description": "kagent is disabled in production and left alone - nothing upgrades it",
+      "matchFileNames": [
+        "clusters/production/argocd/apps/kagent.yaml",
+        "clusters/production/kagent/**"
+      ],
+      "enabled": false
+    },
+    {
+      "description": "The retired in-cluster Vault's values: no Argo app reads them (Vault runs on the Pis - deploy/ansible/vars/vault.yml)",
+      "matchFileNames": [
+        "clusters/production/vault/**"
+      ],
+      "enabled": false
+    },
+    {
+      "description": "etcdctl for the backups follows the cluster's etcd, which kubeadm moves with Kubernetes: its patches only",
+      "matchPackageNames": [
+        "registry.k8s.io/etcd"
+      ],
+      "matchUpdateTypes": [
+        "minor",
+        "major"
+      ],
+      "enabled": false
+    },
+    {
       "description": "Every patch, every repo: one unit",
       "matchUpdateTypes": [
         "patch"
       ],
       "groupName": "wave patches",
-      "groupSlug": "wave-patches"
+      "groupSlug": "wave-patches",
+      "group": {
+        "branchTopic": "wave-patches"
+      }
     },
     {
-      "description": "Istio and its Gateway API: their minors together (one minor at a time: the rule below)",
+      "description": "Istio and its Gateway API: their minors together, one minor at a time - renovate/istio-<X.Y>",
       "matchUpdateTypes": [
         "minor"
       ],
       "matchPackageNames": [
         "base",
         "istiod",
+        "cni",
+        "ztunnel",
         "gateway",
         "/^istio\\//",
         "/^docker\\.io\\/istio\\//",
         "kubernetes-sigs/gateway-api"
       ],
       "groupName": "istio",
-      "groupSlug": "istio"
+      "groupSlug": "istio",
+      "group": {
+        "branchTopic": "istio-{{{newMajor}}}.{{{newMinor}}}"
+      }
+    },
+    {
+      "description": "Kubernetes and the kubectl images beside it, one minor at a time - renovate/kubernetes-<X.Y> (its packages' apt repository moves with the minor)",
+      "matchUpdateTypes": [
+        "minor"
+      ],
+      "matchPackageNames": [
+        "kubernetes/kubernetes",
+        "alpine/k8s",
+        "bitnami/kubectl",
+        "docker.io/bitnami/kubectl"
+      ],
+      "groupName": "kubernetes",
+      "groupSlug": "kubernetes",
+      "group": {
+        "branchTopic": "kubernetes-{{{newMajor}}}.{{{newMinor}}}"
+      }
+    },
+    {
+      "description": "Cilium, one minor at a time - renovate/cilium-<X.Y>",
+      "matchUpdateTypes": [
+        "minor"
+      ],
+      "matchPackageNames": [
+        "cilium",
+        "cilium/cilium",
+        "/^quay\\.io\\/cilium\\//"
+      ],
+      "groupName": "cilium",
+      "groupSlug": "cilium",
+      "group": {
+        "branchTopic": "cilium-{{{newMajor}}}.{{{newMinor}}}"
+      }
     },
     {
       "description": "Observability's minors",
@@ -148,6 +217,23 @@
       "groupSlug": "data-operators"
     },
     {
+      "description": "ScyllaDB's release lines (2026.1 -> 2026.3: a minor by number, one-way by format) - renovate/scylladb-<X.Y>, one at a time, out of the data operators' unit",
+      "matchUpdateTypes": [
+        "minor"
+      ],
+      "matchPackageNames": [
+        "/^(docker\\.io\\/)?scylladb\\/scylla$/"
+      ],
+      "groupName": "scylladb",
+      "groupSlug": "scylladb",
+      "group": {
+        "branchTopic": "scylladb-{{{newMajor}}}.{{{newMinor}}}"
+      },
+      "addLabels": [
+        "one-way"
+      ]
+    },
+    {
       "description": "Argo CD alone",
       "matchUpdateTypes": [
         "minor"
@@ -178,16 +264,24 @@
       "groupSlug": "pi-services"
     },
     {
-      "description": "Kubernetes, Cilium and Istio: one minor at a time (Kubernetes: its packages' apt repository moves with the minor - the cycle's agent fixes k8s_version too)",
+      "description": "Kubernetes, Cilium, Istio and ScyllaDB's release lines: one minor at a time (each minor its own branch - the families above name it)",
       "matchPackageNames": [
         "kubernetes/kubernetes",
+        "alpine/k8s",
+        "bitnami/kubectl",
+        "docker.io/bitnami/kubectl",
         "cilium",
         "cilium/cilium",
+        "/^quay\\.io\\/cilium\\//",
         "base",
         "istiod",
+        "cni",
+        "ztunnel",
         "gateway",
         "/^istio\\//",
-        "/^docker\\.io\\/istio\\//"
+        "/^docker\\.io\\/istio\\//",
+        "kubernetes-sigs/gateway-api",
+        "/^(docker\\.io\\/)?scylladb\\/scylla$/"
       ],
       "separateMultipleMinor": true
     },
@@ -213,6 +307,33 @@
       "addLabels": [
         "major"
       ]
+    },
+    {
+      "description": "One-way majors whose stores have no backup path in the cycle yet (Postgres, ScyllaDB, Kafka and Strimzi, ClickHouse, Grafana, Vault, Consul): label one-way - the runner leaves them for the operator",
+      "matchUpdateTypes": [
+        "major"
+      ],
+      "matchPackageNames": [
+        "postgres",
+        "/(^|\\/)postgres$/",
+        "/(^|\\/)postgresql$/",
+        "/scylladb\\/scylla$/",
+        "/(^|\\/)kafka$/",
+        "strimzi-kafka-operator",
+        "/^quay\\.io\\/strimzi\\//",
+        "/clickhouse-server$/",
+        "grafana",
+        "grafana/grafana",
+        "/(^|\\/)vault$/",
+        "/(^|\\/)consul$/"
+      ],
+      "addLabels": [
+        "one-way"
+      ]
     }
+  ],
+  "ignorePresets": [
+    "group:monorepos",
+    "group:recommended"
   ]
 }

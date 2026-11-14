@@ -7,8 +7,10 @@ its open pull requests on infra, platform and ops, grouped by branch (renovate/<
                    prove   a patch or minor unit (proven, then applied the same night)
                    notice  a major with no veto notice yet (proven, then its 24 h notice posted - applied a later night)
                    apply   a major whose notice has run out, unvetoed (proven again, then applied)
-                 The order: renovate/wave-patches, then the family minors (istio, observability, data-operators, argocd,
-                 pi-services), then any other minor, then majors - a waiting major's notice before a new one's. Left out:
+                 The order: renovate/wave-patches, then the family minors (istio, kubernetes, cilium, observability,
+                 data-operators, argocd, pi-services - the first three one minor at a time, named <family>-<X.Y>, the
+                 lowest first), then any other minor (a <name>-<X.Y> one by its version), then majors - a waiting
+                 major's notice before a new one's. Left out:
                  a unit labelled upgrade-blocked (red after its fix) or veto, a major in its 24 h; everything while the
                  dashboard issue carries upgrades-paused (the kill switch).
   noticed UNIT   when the unit's veto notice was posted (the runner's "UPGRADE NOTICE <iso>" comment), or "NONE"
@@ -28,7 +30,9 @@ import urllib.request
 API = os.environ.get("UPGRADE_FORGEJO_URL", "https://git.pmon.dev/api/v1").rstrip("/")
 TOKEN = os.environ.get("UPGRADE_FORGEJO_TOKEN", "")
 REPOS = ("schnappy/infra", "schnappy/platform", "schnappy/ops")
-FAMILIES = ("istio", "observability", "data-operators", "argocd", "pi-services")
+FAMILIES = ("istio", "kubernetes", "cilium", "observability", "data-operators", "argocd", "pi-services")
+# a unit moved one minor at a time is named for its minor (renovate/upgrade-cycle.json: istio-1.32, scylladb-2026.3)
+VERSIONED = re.compile(r"(?P<base>[a-z0-9][a-z0-9.-]*?)-(?P<major>\d+)\.(?P<minor>\d+)")
 VETO_HOURS = 24
 NOTICE = re.compile(r"^UPGRADE NOTICE (\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ)\b", re.M)
 DASHBOARD = "Upgrade cycle - Renovate's dashboard"
@@ -99,11 +103,19 @@ def paused():
     return False
 
 
+def family(name):
+    """(the unit's family or name, its minor as numbers - () for a unit not named for one): istio-1.32 -> ("istio",
+    (1, 32)); observability -> ("observability", ())."""
+    m = VERSIONED.fullmatch(name)
+    return (m["base"], (int(m["major"]), int(m["minor"]))) if m else (name, ())
+
+
 def order(name, u):
     if name == "wave-patches":
         return (0, name)
     if u["kind"] == "minor":
-        return (1, FAMILIES.index(name) if name in FAMILIES else len(FAMILIES), name)
+        base, version = family(name)
+        return (1, FAMILIES.index(base) if base in FAMILIES else len(FAMILIES), base, version, name)
     return (2, name)
 
 
