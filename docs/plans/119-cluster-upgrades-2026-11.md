@@ -188,9 +188,15 @@ Never two of these at once; no Pi turn while an infra merge moves pods that use 
   the hook Jobs (postgres-init-users, scylla-schema) succeeded, every certificate Ready, only Watchdog firing,
   ClickHouse 26.8.34.13 taking pod logs (thousands of rows a minute). The Failed pods listed are October's node-shutdown
   leftovers and restore-check-age's known failures.
-- Step 3: etcd snapshot etcd-20261114-141621.db taken (a Job from etcd-backup, verified, uploaded); the upgrade itself
-  waits for the operator's go - the session's auto mode refused to run `deploy:kubeadm:upgrade` on its own.
-- Steps 4-5 wait for the review fixes' copy run too (the host had 24.1 GB, the guard asks 25.1 GB).
+- Step 3 done ~15:14 UTC (operator: "upgrade kubernetes yourself"): etcd snapshot etcd-20261114-151124.db right before
+  (verified, uploaded), `deploy:kubeadm:upgrade -- -e k8s_upgrade_to=1.36.6` - no failure; the node Ready on kubelet
+  v1.36.6, the server v1.36.6, kubeadm/kubelet/kubectl 1.36.6-1.1 held, no kube-proxy, the control-plane pods new and
+  ready, no running pod unready, every app settled, only Watchdog. cilium-operator restarted once during it (its leader
+  lease lost with the API server - expected). The inventory read again (its Kubernetes lines alone), ops
+  k8s_package_version 1.36.6-1.1 (c25451f3).
+- Steps 4-5 wait for the review fixes' copy run: the guard's start reserve lowered to 2 GB (operator), then the radar
+  stopped for it (operator, 17:15 local: "no more memory from anywhere") - the run started 17:15 (radar-live.service to
+  start again once the copy is destroyed).
 
 **Out of wave 1** (found in the notes): PostgreSQL 18.7 - CNPG publishes no bullseye image for it; moving means the
 trixie (or bookworm) image, a glibc change (collations: reindex, `REFRESH COLLATION VERSION`) and 18.7's own reindex
