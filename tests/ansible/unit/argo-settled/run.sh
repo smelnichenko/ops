@@ -213,6 +213,33 @@ for label, ns, job in (("another CronJob's failed run", "kube-system", "etcd-bac
                        ("the same name in another namespace", "default", "restore-check-age-29910470")):
     gate(f"  {label}: not green", A, [owned(pod("x-1", "c3", ns=ns), "Job", job, phase="Failed"), pod("p2", "u3")], 1,
          "x-1 (Failed)", *FC)
+rs = owned(pod("restore-check-age-123-x", "c4", ns="kube-system"), "ReplicaSet", "restore-check-age-123", phase="Failed")
+gate("  a failed pod of a ReplicaSet named like a run: not green (a Job's only)", A, [rs, pod("p2", "u3")], 1,
+     "restore-check-age-123-x (Failed)", *FC)
+other_run = owned(pod("other-1-x", "c5", ns="ns"), "Job", "other-1", phase="Failed")
+gate("  two CronJobs listed: the second's failed run not waited for either", A, [rca, other_run, pod("p2", "u3")], 0, "",
+     "--failing-cronjobs", "kube-system/restore-check-age,ns/other")
+import re  # noqa: E402
+src = open(S).read()
+check("  both evaluations - the one-shot and the live polls the copy runs - are given the list",
+      (len(re.findall(r"evaluate\(", src)) - 1, len(re.findall(r"since, failing\)", src))), (2, 2))
+# a container OOM-killed during the wait fails the settled end, named; one killed before it does not; the one-shot
+# mode judges it only with --oom-since
+def oomed(p, finished, where="lastState"):
+    c = p["status"]["containerStatuses"][0]
+    c["name"] = "app"
+    c[where] = {"terminated": {"reason": "OOMKilled", "finishedAt": finished}}
+    return p
+OS = ("--oom-since", "2026-10-06T10:30:00Z")
+gate("--oom-since: a container OOM-killed after it (its last termination): not settled, named", A,
+     [oomed(pod("big", "o1"), "2026-10-06T10:40:00Z")], 1, "OOM-KILLED since 2026-10-06T10:30:00+00:00: ns/big/app at 2026-10-06T10:40:00Z", *OS)
+gate("  its present termination OOMKilled (not restarted yet): not settled", A,
+     [oomed(pod("big", "o2"), "2026-10-06T10:40:00Z", "state")], 1, "ns/big/app", *OS)
+gate("  killed before the wait: settled", A, [oomed(pod("big", "o3"), "2026-10-06T10:20:00Z")], 0, "", *OS)
+errored = oomed(pod("big", "o4"), "2026-10-06T10:40:00Z")
+errored["status"]["containerStatuses"][0]["lastState"]["terminated"]["reason"] = "Error"
+gate("  killed otherwise (Error) after it: settled", A, [errored], 0, "", *OS)
+gate("  the one-shot mode without --oom-since: not judged", A, [oomed(pod("big", "o5"), "2026-10-06T10:40:00Z")], 0, "")
 rc, out = run(A, [pod("p2", "u3")], "--failing-cronjobs", "kube-system/restore check")
 check("  a malformed entry: refused (exit 2), said", (rc, "is no <namespace>/<name>" in out), (2, True), out)
 # the copy's list and its wiring: the playbook passes the file's names (comments and blank lines dropped)
@@ -225,7 +252,7 @@ check("the copy's list: kube-system/restore-check-age, each name with its reason
 play = _yaml.safe_load(open("tests/ansible/copy/argo-settled.yml"))[0]
 cmd = next(t for t in play["tasks"] if t.get("name", "").startswith("Wait until every app"))["ansible.builtin.script"]["cmd"]
 check("  argo-settled.yml passes it (--failing-cronjobs from failing_cronjobs, read from the copy's list)",
-      ("--failing-cronjobs '{{ failing_cronjobs }}'" in cmd, play["vars"]["failing_cronjobs_file"],
+      ("--failing-cronjobs {{ failing_cronjobs | quote }}" in cmd, play["vars"]["failing_cronjobs_file"],
        "lookup('ansible.builtin.file', failing_cronjobs_file)" in play["vars"]["failing_cronjobs"]),
       (True, "{{ playbook_dir }}/copy-failing-cronjobs.txt", True))
 # a Succeeded pod excuses failed attempts of its Job only - another kind's failed pod is not "a later attempt completed"

@@ -74,9 +74,17 @@ PODS_IN = schedule(defaultVolumesToFsBackup=True)
 
 # --- what the schedule leaves out ---------------------------------------------------------------------------------
 fact = ts["Whether the schedule leaves pods out - then no volume is read at all"]["ansible.builtin.set_fact"]["_pods_out"]
-check("pods left out read from the schedule's template: pods excluded yes; none excluded, or others only, no",
-      [str(render(fact, _schedule=s)) for s in (PODS_OUT, PODS_IN, schedule(excludedResources=["events"]))],
-      ["True", "False", "False"])
+check("pods left out read from the schedule's template: pods excluded (either field) yes; none excluded, or others only, no",
+      [str(render(fact, _schedule=s)).strip() for s in (PODS_OUT, schedule(excludedNamespaceScopedResources=["pods"]),
+                                                       PODS_IN, schedule(excludedResources=["events"]))],
+      ["True", "True", "False", "False"])
+# a cluster-wide schedule (the weekly: namespaces "*") is checked only with pods left out
+WIDE = ts["A cluster-wide schedule is checked only with pods left out"]["ansible.builtin.assert"]["that"]
+wide = lambda **t: {"stdout": json.dumps({"spec": {"template": {"includedNamespaces": ["*"], **t}}})}
+check("a cluster-wide schedule: passed with pods left out, refused backing up pods; a namespaced one either way",
+      [condition(WIDE, _schedule=sc, _pods_out=o) for sc, o in ((wide(excludedResources=["pods"]), True), (wide(), False),
+                                                                (PODS_IN, False))],
+      [True, False, True])
 
 # --- the backup started -------------------------------------------------------------------------------------------
 start = ts["Start a backup from it"]["kubernetes.core.k8s"]["definition"]["spec"]

@@ -102,7 +102,8 @@ check("test:copy:check: the lock, then settled (pushed commits, recorded apps, i
 # the serial checks, each exactly its playbook on the copy - none in check mode, none tolerated, in this order
 PB = "cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml "
 want = [PB + "../../tests/ansible/copy/" + f for f in ("barman-check.yml", "cert-check.yml", "restore-check.yml",
-                                                        "backup-check.yml")] + \
+                                                        "backup-check.yml",
+                                                        "backup-check.yml -e schedule=velero-full-weekly")] + \
     [PB + "playbooks/scylla-backup-check.yml", PB + "../../tests/ansible/copy/sweeper-check.yml"]
 got = [c for _, c, _ in check_ if c.startswith(PB) and "argo-settled" not in c]
 check("  its serial checks, each its playbook exactly, in order", got, want)

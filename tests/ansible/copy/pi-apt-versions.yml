@@ -30,6 +30,9 @@
           {% for k, v in pi_apt_versions.items() %}{{ (k ~ '=' ~ v) | quote }} {% endfor %}
       register: _pinned
       changed_when: "' -> ' in _pinned.stdout"
+      # one Pi at a time: the packages' maintainer scripts restart haproxy, keepalived and pgbouncer - both HA members at
+      # once would take the VIP and the pooler down together
+      throttle: 1
 
     - name: What moved
       ansible.builtin.debug:

@@ -1,5 +1,6 @@
 #!/bin/bash
-# tests/ansible/unit/run.sh's fence, on harnesses of this test's own: a harness that reaches ssh, kubectl or vagrant
+# tests/ansible/unit/run.sh's fence, on harnesses of this test's own: a harness that reaches ssh, kubectl, vagrant or virsh
+# (the Vagrant copy's host guard powers VMs off with it)
 # fails the suite, named with what it ran - also when it tolerates the call's failure (the stub's exit 97 could pass a
 # negative case, its FENCED line unseen) - and one that rebuilds its PATH keeps the fence through FENCE; a harness that
 # reaches none passes.
@@ -7,16 +8,17 @@ set -u
 cd "$(dirname "$0")/../../../.." || exit 1
 W=$(mktemp -d)
 trap 'rm -rf "$W"' EXIT
-mkdir -p "$W/tolerates" "$W/rebuilds" "$W/clean"
+mkdir -p "$W/tolerates" "$W/rebuilds" "$W/destroys" "$W/clean"
 printf '#!/bin/bash\nssh pi1 uptime || true\nexit 0\n' > "$W/tolerates/run.sh"
 printf '#!/bin/bash\nenv -i PATH="${FENCE:+$FENCE:}/usr/bin:/bin" kubectl get nodes || true\nexit 0\n' > "$W/rebuilds/run.sh"
+printf '#!/bin/bash\nvirsh -c qemu:///system destroy ops_kubeadm || true\nexit 0\n' > "$W/destroys/run.sh"
 printf '#!/bin/bash\necho fine\nexit 0\n' > "$W/clean/run.sh"
 fails=0
 check() {  # check <name> <got> <want>
   if [ "$2" = "$3" ]; then echo "PASS $1"; return; fi
   echo "FAIL $1: got '$2', want '$3'"; fails=$((fails + 1))
 }
-for h in tolerates rebuilds clean; do
+for h in tolerates rebuilds destroys clean; do
   mkdir -p "$W/suite-$h/$h"; cp "$W/$h/run.sh" "$W/suite-$h/$h/run.sh"
   # without the caller's FENCE: the runner's own export is what the rebuilding harness must find
   out=$(env -u FENCE bash tests/ansible/unit/run.sh "$W/suite-$h" 2>&1); rc=$?

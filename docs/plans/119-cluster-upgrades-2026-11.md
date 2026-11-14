@@ -53,7 +53,7 @@ its branch: breaking changes, order between components, the one-way ones named.
 
 | Component | From → to | How |
 |---|---|---|
-| Debian security updates | pi1 46, pi2 20 packages | an apt upgrade playbook (one Pi at a time, the VIP's last) - made with this wave if none exists |
+| Debian security updates | pi1 46, pi2 20 packages | an apt upgrade playbook (one Pi at a time, the VIP's last) - made with this wave if none exists. The copy's Pis start at production's versions only for the five inventoried packages (plan 117): the proof exercises those and the playbook, not every package's restart |
 | Forgejo | 15.0.3 → 15.0.11 (the 15 line) | `upgrade-forgejo.yml` / `deploy:forgejo:upgrade` (vars pin moved to 15.0.11) |
 | Patroni | 4.1.0 → 4.1.5 | `upgrade-patroni.yml` / `deploy:patroni:upgrade` |
 | Vault | 1.21.3 → 1.21.4 (the last free 1.21: 1.21.5+ are Enterprise only) | `upgrade-vault.yml` / `deploy:vault:upgrade` |

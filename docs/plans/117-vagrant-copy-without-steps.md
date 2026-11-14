@@ -160,8 +160,8 @@ Correctness, security, architecture, platform reliability, test-quality (~120 re
 The third build's VMs held 25 GB of the workstation's 30 while another session's work ran: the host swapped 14 GB, the
 Argo settle timed out, and the radar station on the same host died (22:17, restarted 22:17:30). Now:
 - **VMs 22 GB**: the node 18 GB (was 20), each Pi 2 GB (was 2.5; the Pi stack uses ~1.3).
-- **Requests sized to the 18 GB node** (~17.4 GiB allocatable): ~15.3 GiB in all, computed from production's running
-  pods with the overlay's values - the apps 384 Mi, masi-browser 256 Mi, Kafka 384 Mi, OpenSearch 512 Mi with a 1 GB heap
+- **Requests sized to the 18 GB node** (~17.4 GiB allocatable): ~14.8 GiB in all, computed from production's running
+  pods with the overlay's values - the apps 384 Mi, masi-browser 256 Mi, Kafka 384 Mi, OpenSearch 512 Mi with a 512m heap
   (its fixed heap the one real-memory saving: a derived index), every sidecar 96 Mi and istiod 256 Mi (new overlay:
   `istio/istiod-values.vagrant.yaml`), Prometheus 256 Mi (`prometheus/values.vagrant.yaml`). Postgres stays 512 Mi
   (CNPG's shared_buffers floor).
@@ -204,7 +204,10 @@ Argo settle timed out, and the radar station on the same host died (22:17, resta
   boot) moves each installed one to production's version with `scripts/pi-apt-pin.sh` - from the archive while it
   still has it, else from snapshot.debian.org at that version's first publication. Run on the seventh build's Pis:
   both moved from the archive (it still serves the point release beside the security update), the inventories then
-  matched (238 lines, 19 allowed missing). An apt upgrade proven on the copy (wave 1c) now starts where production is.
+  matched (238 lines, 19 allowed missing). Only the Debian packages the inventory lists (postgresql-17, pgbouncer,
+  haproxy, glusterfs-server, keepalived - and their same-source siblings) start where production is: the Pis' other
+  packages (OpenSSL, curl, expat, liblzma... - plan 119's wave 1c names 46 on pi1, 20 on pi2) are the archive's newest
+  on the copy, so an apt upgrade proven on it exercises those five, not the rest (Open).
 - **The eighth build: ALL GREEN** (build 04:56-05:48, every check 05:48-05:55; the node ~1 GB available at the end, no
   OOM kill; the host at least ~4.1 GB available, the guard never tripped). Every serial check said its verdict: base
   backup, 3 certificates renewed, Postgres restored into a side cluster, a Velero volume restored, the daily schedule's
@@ -216,6 +219,60 @@ Argo settle timed out, and the radar station on the same host died (22:17, resta
   fell inside them. The copy's settle now takes `--failing-cronjobs` from `tests/ansible/copy/copy-failing-cronjobs.txt`
   (each CronJob with its reason): their failed runs are not waited for, a run still going is, every other failed Job
   fails the settle as before. The check itself keeps its own Vagrant test (task test:pi-restore-check).
+
+## Third full review (2026-11-14 morning) - what changed
+
+Correctness, security, architecture, platform reliability, concurrency, test quality (reverts in a copy of the tree),
+SonarQube (ops' red gate: three issues of argocd-repos.py on main's last analysis, fixed on this branch already).
+- **Host guard rewritten** (all three of correctness, security, concurrency found it - the concurrency pass Critical):
+  a `watch` trusted a watcher about to end (3 empty polls after its VMs went), so a `vagrant up` right after a
+  `destroy` - every build's first provisioning - could run unwatched. Now the watcher holds `.copy/host-guard.alive` for
+  its life, ends only after a whole grace with no VM, and decides to end under the callers' lock, re-reading whether
+  a caller relied on it since it went quiet. Started under `env -i` (production's `.env` never in it), its start and
+  end logged, `set +e` with explicit checks, the power-off before its record and a failed one said as such, a memory
+  stall (PSI full over 25%) a second trip signal, the running VMs' untouched memory counted as promised, settings that
+  are no number and a VM without a size refused, an option's value no machine name, `virsh` under a time limit and
+  named by path in tests. The Vagrantfile holds one start at a time (`.copy/vagrant-start.lock`) and refuses only a
+  start it cannot judge - halt and destroy always go on.
+- **The copy's node VM was destroyed at 07:50** (`virsh` "shut off (destroyed)") while the review's reverts ran; the
+  guard recorded no trip, and the kernel and libvirt logs are root's, so the cause is not proven. What allowed a test
+  to reach real libvirt is fixed: a harness's watcher found `virsh` on PATH, so one outliving its stub directory
+  reached the real one - now its `virsh` is named by path (gone means failing), and the harness stops every watcher of
+  its directory before removing it. My revert batch's cleanup (`pkill -f .../copy-host-guard.sh _loop`) also stopped
+  the real watcher at ~08:05 - a pattern matching more than the test's own.
+- **Unattended upgrades**: the box carries unattended-upgrades, production's hosts do not (ten and pi1 read 11-14) -
+  it would have taken production's pending security updates mid-run and undone the Pis' pins. Purged in the
+  Vagrantfile's OS upgrade; listed in both inventories (a difference would show).
+- **pi-apt-pin**: the packages built with a pinned one move with it (postgresql-client-17, libpq5); `sid` among the
+  snapshot's suites (a version that reached trixie from unstable); the snapshot origin pinned at 100 (dependencies stay
+  the archive's); `--no-remove`; signed by Debian's keyring; a killed run's source and pin cleared first; one Pi at a
+  time (the HA pair's services restart).
+- **The settle**: a container OOM-killed during the wait fails it, named (the near-full node hid them);
+  `--failing-cronjobs` quoted.
+- **backup-check** reads pods left out from `excludedNamespaceScopedResources` too, and runs for the weekly schedule
+  as well (`test:copy:check`), which it checks only with pods left out (cluster-wide: `*`).
+- **clickhouse-expected.sh and pi-apt-pin.sh compare in the C locale**: the new harness found `usér` passing the users
+  check (bash's `[A-Za-z]` under UTF-8).
+- **Velero (infra)**: the weekly holds the cluster's own resources again (`includeClusterResources: true` - any
+  excluded namespace had dropped every cluster-scoped kind since 2026-10-11); the server's default reads no volume
+  either (`defaultVolumesToFsBackup: false`: ad-hoc backups); the comments say which stores have a backup of their own
+  and which none, and what a restore brings back.
+- **Velero alerts (platform)**: `VeleroDailyBackupMissing` at 26 h (holds any failed, partial, refused or restart-killed
+  daily until a success); a failure counter born at 1 on a new Velero pod caught; `VeleroBackupFailing` an ad-hoc
+  backup's only (no double alert); the runbooks rewritten for the counter rule's one-hour window.
+
+### What the copy does not prove (it differs from production here, each covered elsewhere or open)
+
+- JVM heaps (the test environment's, not production's: an OOM of production's heap against its limit cannot happen on
+  the copy) - production's own alerts (JvmMemory) and the deploy's watch.
+- masi and monitor at 1 replica: masi's multi-instance claims and its PDB, monitor's two-replica slot claims - the test
+  environment runs monitor at 2; masi at 2 only in production.
+- masi without the operator's credentials (no ExternalSecret): a credential path change - production only.
+- The Pis' Debian packages beyond the five the inventory lists: the archive's newest on the copy.
+- The Pis' restore check (its containers do not fit the 2 GB Pis): `restore-check-age` skipped by name; the check has
+  its own Vagrant test (task test:pi-restore-check) - whether it still fits 2 GB Pis is Open.
+- The memory picture: requests sit below real use (fixed heaps: Kafka 1 GiB on 384 Mi), so the scheduler does not
+  protect the node; an OOM during the wait now fails the settle.
 
 ## Open
 
@@ -230,6 +287,16 @@ Argo settle timed out, and the radar station on the same host died (22:17, resta
   vanished mid-backup failed it); the weekly leaves `woodpecker` and `schnappy-pr-*` out too. Velero first on the copy
   (test:copy:change), production after. The charts' `backup.velero.io/backup-volumes` annotations (inert since) and
   Velero's node agent can go later in a window (removing the annotations restarts the data stores).
+- **From the third review, not done here (decisions or new work):** the mirror refuses changes to keys the overlay
+  sets (masi's heap, monitor's and masi's replicas): such a change cannot be proven on the copy - a mirror that
+  rewrites only `-Xmx` in production's `javaOpts` would let it through; `seed-vault-secrets.yml` writing
+  `<prefix>/masi-credentials` even with no key named (production's DR: a Vault re-seeded from an `.env` without
+  `MASI_*` fails the apps' sync as the copy's did) - a production playbook change; CNPG Clusters restored by Velero onto
+  empty volumes (the DR drill excludes them; production's schedules do not) and a drill restoring the schedules'
+  manifests-only backups; one storage blip at 02:00 losing a day's daily backup (twice a day, or an alert on the
+  storage location's status); `restore-check-age` exercised on the copy (seed the Pis' reports instead of skipping);
+  a harness that checks the overlay's keys against the charts (needs the platform repo: at mirror time); pinning every
+  Debian package of each Pi; `ops/.env` readable by the group (0664); Velero's store URL plain http on the LAN.
 - **One-way changes to Kafka, ClickHouse, Grafana**: Wave 0 was their only pre-change backup; Velero holds no volume
   data. A one-way change to one of them needs its backup named in its own plan first.
 

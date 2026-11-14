@@ -8,6 +8,8 @@
 # Usage: scripts/clickhouse-expected.sh <platform-ref>   ->   "<compatibility or -> <user,user...>" on one line
 # Env:   COPY_PLATFORM_DIR (default ../platform)
 set -euo pipefail
+# ranges as ASCII: under a UTF-8 locale bash's [A-Za-z] takes an accented letter too (usér passed the users check)
+export LC_ALL=C
 ops=$(cd "$(dirname "$0")/.." && pwd)
 platform_ref=${1:?usage: $0 <platform-ref>}
 ch_xml=$(git -C "${COPY_PLATFORM_DIR:-$ops/../platform}" show \

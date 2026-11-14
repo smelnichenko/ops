@@ -614,6 +614,8 @@ tasks:
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/restore-check.yml
       # a Velero backup from production's daily schedule into the Pi backup store, its volumes as the schedule decides
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/backup-check.yml
+      # and from the weekly one (cluster-wide, its manifests): its template proven before its Sunday run
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/backup-check.yml -e schedule=velero-full-weekly
       # a Scylla Manager backup of each production cluster, DONE with a fresh snapshot, no failed backup or repair task
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/scylla-backup-check.yml
       # the stale PR env sweeper against the copy's Vault: a dead token fails it, the replaced one is renewed and purges

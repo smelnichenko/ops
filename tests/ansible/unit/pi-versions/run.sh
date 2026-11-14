@@ -209,6 +209,9 @@ check("  two versions on the Pis: refused, said", (rc != 0, "haproxy" in err and
 rc, body, err = run({**own, **APT, "haproxy": "{{lookup('pipe','id')}}"})
 check("  no Debian version (a template): refused, nothing written", (rc != 0, "not a Debian version" in err, body),
       (True, True, None))
+rc, body, err = run({**own, **APT, "haproxy": "3.0.11-1+deb13u3{{x}}"})
+check("  a Debian version with a template after it: refused whole (a prefix match would pass it)",
+      (rc != 0, "not a Debian version" in err, body), (True, True, None))
 # the copy's playbook passes each as <package>=<version>, quoted, to scripts/pi-apt-pin.sh on both Pis, behind the guard
 sys.path.insert(0, "tests/ansible/unit")
 from plays import load, tasks  # noqa: E402

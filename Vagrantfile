@@ -25,12 +25,23 @@ VAGRANTFILE_API_VERSION = "2"
 # The workstation these VMs run on runs the radar station too, which they starved once (the host swapped, the radar
 # died - 2026-11-13). Every vagrant command's arguments go to the host guard: up, reload and resume start only with the
 # host's memory for the VMs they start and a reserve, and a watcher powers the biggest VM off if the host runs short
-# while they run (scripts/copy-host-guard.sh). Once per vagrant process - Vagrant may load this file more than once;
-# a guard that cannot run refuses the command too.
+# while they run (scripts/copy-host-guard.sh). Once per vagrant process - Vagrant may load this file more than once.
+# One start at a time (.copy/vagrant-start.lock, held to the process's end): two sessions' starts sized against the same
+# free memory would both pass. A start the guard refuses, or that it cannot judge (missing, not runnable), is refused;
+# any other command goes on whatever the guard says - halt and destroy free the memory the station needs.
 unless $copy_host_guard_ran
   $copy_host_guard_ran = true
+  command = ARGV.find { |a| !a.start_with?("-") }
+  starting = %w[up reload resume].include?(command)
+  if starting
+    Dir.mkdir(File.join(__dir__, ".copy")) unless Dir.exist?(File.join(__dir__, ".copy"))
+    $copy_start_lock = File.open(File.join(__dir__, ".copy", "vagrant-start.lock"), File::RDWR | File::CREAT, 0o644)
+    $copy_start_lock.flock(File::LOCK_EX | File::LOCK_NB) or
+      abort("vagrant #{ARGV.join(" ")}: another vagrant up, reload or resume runs here (#{$copy_start_lock.path}) - one start at a time")
+  end
   guard = File.join(__dir__, "scripts", "copy-host-guard.sh")
-  system(guard, "vagrant", *ARGV) or abort("vagrant #{ARGV.join(" ")}: refused by #{guard}")
+  allowed = system(guard, "vagrant", *ARGV)
+  abort("vagrant #{ARGV.join(" ")}: refused by #{guard}") if starting && !allowed
 end
 
 # Shared base provisioning for all VMs
@@ -98,6 +109,9 @@ OS_UPGRADE_SCRIPT = <<-'OSSCRIPT'
   # failed in grub-install on first boot (2026-10-02, 2 of 3 VMs, error hidden by its postinst) and aborted
   # provisioning: keep it at the box's version. The kernel still upgrades and its hook still adds the boot entry.
   apt-mark hold grub-pc grub-pc-bin > /dev/null
+  # production's hosts run no unattended upgrade (ten and the Pis: not installed, read 2026-11-14) - the box's would take
+  # the security updates production has not, between a copy's checks, and undo the Pis' pinned versions
+  apt-get -o DPkg::Lock::Timeout=600 purge -y -qq unattended-upgrades > /dev/null
   apt-get -o DPkg::Lock::Timeout=600 update -qq
   apt-get -o DPkg::Lock::Timeout=600 full-upgrade -y -qq > /tmp/os-upgrade.log 2>&1 \
     || { echo "OS upgrade failed:"; tail -30 /tmp/os-upgrade.log; exit 1; }

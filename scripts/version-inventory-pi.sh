@@ -52,7 +52,7 @@ fi
 # Nexus's install (it runs on the VIP's Pi only)
 if [ -f /opt/nexus/.version ]; then line nexus "$(cat /opt/nexus/.version)"; fi
 # Debian's, each installed one (dpkg-query fails for a package it has never seen: not installed)
-for pkg in postgresql-17 postgresql-18 pgbouncer haproxy glusterfs-server keepalived; do
+for pkg in postgresql-17 postgresql-18 pgbouncer haproxy glusterfs-server keepalived unattended-upgrades; do
   if st=$(dpkg-query -W -f='${db:Status-Abbrev} ${Version}' "$pkg" 2>/dev/null); then
     case "$st" in [ih]i*) line "$pkg" "${st##* }" ;; esac
   fi

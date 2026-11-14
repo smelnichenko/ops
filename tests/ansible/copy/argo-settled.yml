@@ -90,7 +90,7 @@
           --stable-polls {{ stable_polls }} --restart-quiet {{ restart_quiet }} --allow-out-of-sync '{{ allow_out_of_sync }}'
           {{ '--print-apps' if record_apps | bool else '' }}
           {{ ('--expect-apps ' ~ (lookup('ansible.builtin.file', apps_file).split() | join(','))) if expect_apps | bool else '' }}
-          --failing-cronjobs '{{ failing_cronjobs }}'
+          --failing-cronjobs {{ failing_cronjobs | quote }}
           {{ ('--restart-history ' ~ restart_history ~ ' --step ' ~ restart_stage) if restart_stage | length > 0 else '' }}
           {{ '--restarts-expected' if restart_stage | length > 0 and restarts_expected | bool else '' }}
         executable: python3

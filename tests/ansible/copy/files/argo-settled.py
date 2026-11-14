@@ -22,6 +22,9 @@ schnappy-pr-<N>: one starting during a production settle is no part of productio
 Applications' names on a last line, APPS <a,b>. --failing-cronjobs <ns/name,...>: a failed run of these CronJobs (a
 Job they made, <name>-<scheduled minute>) is no pod to wait for - the copy's CronJobs whose inputs it cannot have, each
 with its reason in tests/ansible/copy/copy-failing-cronjobs.txt; a run still going is waited for like any pod.
+A container the kernel killed for memory (its last or present termination OOMKilled) at or after the wait began - or
+--oom-since <ISO time> - fails the settled end, named: on a node near full one OOM kill passes the restart quiet and
+the two-step history, and reads as a failure of whatever change runs (the copy's 18 GB node, 2026-11-14).
 
 --restart-history <file> --step <label>: once settled, a pod (by uid) whose containers restarted during this step and
 during the step before it fails the wait - a crash loop slower than --restart-quiet settles between two restarts, and
@@ -272,6 +275,19 @@ def failing_run(pod, failing):
             and any(key[0] == ns and re.fullmatch(rf"{re.escape(name)}-[0-9]+", key[2]) for ns, name in failing))
 
 
+def oom_killed(pods, since):
+    """The containers the kernel killed for memory at or after `since` (their last or present termination OOMKilled),
+    as <namespace>/<pod>/<container> at <time>."""
+    out = []
+    for p in pods["items"]:
+        for c in (p.get("status") or {}).get("containerStatuses") or []:
+            for state in (c.get("lastState") or {}, c.get("state") or {}):
+                t = state.get("terminated") or {}
+                if t.get("reason") == "OOMKilled" and t.get("finishedAt") and iso(t["finishedAt"]) >= since:
+                    out.append(f"{p['metadata']['namespace']}/{p['metadata']['name']}/{c['name']} at {t['finishedAt']}")
+    return sorted(set(out))
+
+
 def ready_now(status):
     containers = status.get("containerStatuses") or []
     return status.get("phase") == "Running" and containers and all(c.get("ready") for c in containers)
@@ -432,6 +448,7 @@ def main():
     ap.add_argument("--restarts-expected", action="store_true")
     ap.add_argument("--sync-stalled", action="store_true", help="sync a stalled app once (the copy's settle only)")
     ap.add_argument("--restarted-since", help="no container restarted at or after this time (ISO 8601)")
+    ap.add_argument("--oom-since", help="no container OOM-killed at or after this time (ISO 8601); default: the wait's start")
     a = ap.parse_args()
     if a.stable_polls < 1 or bool(a.apps_json) != bool(a.pods_json) or bool(a.restart_history) != bool(a.step):
         print("bad arguments", file=sys.stderr)
@@ -453,10 +470,16 @@ def main():
             print("--expect-apps names no app", file=sys.stderr)
             return 2
 
+    oom_since = iso(a.oom_since) if a.oom_since else (None if a.apps_json else datetime.datetime.now(datetime.timezone.utc))
+
     def finish(apps, pods):
         """The settled end: the restart history judged and recorded, the app names printed - 0, or 1 for a pod that
-        restarted in two steps running."""
+        restarted in two steps running or a container OOM-killed during the wait."""
         rc = 0
+        killed = oom_killed(pods, oom_since) if oom_since is not None else []
+        if killed:
+            print(f"OOM-KILLED since {oom_since.isoformat()}: {', '.join(killed)}")
+            rc = 1
         if a.restart_history:
             print(f"RESTART HISTORY: step {a.step}" + (" (restarts expected: recorded, not judged)"
                                                        if a.restarts_expected else ""))

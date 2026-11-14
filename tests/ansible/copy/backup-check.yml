@@ -13,7 +13,7 @@
 # Why: a Velero or plugin change can leave every pod green while backups fail - the plugin and the server are paired
 # versions - and nothing else on the copy writes to the backup store.
 #
-# Usage: ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/backup-check.yml
+# Usage: ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/backup-check.yml [-e schedule=velero-full-weekly]
 - name: A Velero backup from production's daily schedule completes
   hosts: target
   become: true
@@ -51,7 +51,18 @@
 
     - name: Whether the schedule leaves pods out - then no volume is read at all
       ansible.builtin.set_fact:
-        _pods_out: "{{ 'pods' in ((_schedule.stdout | from_json).spec.template.excludedResources | default([])) }}"
+        _pods_out: >-
+          {{ 'pods' in ((_schedule.stdout | from_json).spec.template.excludedResources | default([]))
+             or 'pods' in ((_schedule.stdout | from_json).spec.template.excludedNamespaceScopedResources | default([])) }}
+
+    # the weekly is checked too (-e schedule=velero-full-weekly): cluster-wide, it is checked only with pods left out (its
+    # manifests, minutes) - one that backs up pods would read every pod's volumes (production's took ~70 min) and its
+    # namespaces are "*", no list to select from
+    - name: A cluster-wide schedule is checked only with pods left out
+      ansible.builtin.assert:
+        that: _pods_out | bool or '*' not in (_schedule.stdout | from_json).spec.template.includedNamespaces
+        fail_msg: "schedule {{ schedule }} covers every namespace and backs up pods: not checked here - leave pods out of it"
+        quiet: true
 
     # pods backed up: every emptyDir of the selected pods running now must get a volume backup - "Completed" with fewer
     # volume backups than that passed; a pod gone by the end is not counted

@@ -25,7 +25,7 @@ export KUBECONFIG="${KUBECONFIG:-/etc/kubernetes/admin.conf}"
   # host packages that make up the node
   # installed only ("ii", or "hi" when held): dpkg also remembers removed packages ("rc"), which run nothing
   dpkg-query -W -f='${db:Status-Abbrev} ${Package} ${Version}\n' \
-    containerd containerd.io runc cri-tools kubeadm kubelet kubectl kubernetes-cni 2>/dev/null \
+    containerd containerd.io runc cri-tools kubeadm kubelet kubectl kubernetes-cni unattended-upgrades 2>/dev/null \
     | awk '$1=="ii" {print "pkg", $2, $3} $1=="hi" {print "pkg", $2, $3, "(held)"}' || true
   # binaries outside the packages: a runc or containerd here runs instead of the package's (first on their PATH)
   bindir=${INVENTORY_BIN_DIR:-/usr/local/bin}  # (another only in its unit test)
