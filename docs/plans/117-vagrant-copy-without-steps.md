@@ -177,7 +177,16 @@ Argo settle timed out, and the radar station on the same host died (22:17, resta
   OOM-killed JVMs, load 350, kube-apiserver calls timed out and the Argo settle failed at 40 min. The host was fine
   throughout (4.3 GB available, the guard never tripped; the VMs 22.2 GB resident). Now the test environment's heaps
   (monitor 1g, chat/chess/admin/masi 512m - schnappy-test-apps runs the same apps on them), masi one replica (as
-  there), OpenSearch 512m; Kafka's 1 GB is the chart's own. ~14.7 GB of pods expected - measured on the next build.
+  there), OpenSearch 512m; Kafka's 1 GB is the chart's own.
+- **The fifth build** (01:19-02:32): every pod ready at the end, the node still full - pods 16.7 of 18 GB, 1.2 GB
+  available, two JVMs OOM-killed during the settle (kube-apiserver 1.9 GB, monitor's two pods 1.3 + 1.0 GB, masi 1.2 on
+  its 512m heap, OpenSearch 0.95). Monitor one replica now too (~1.1 GB each). The Pis use ~1.15 of their 2 GB - no
+  room to take there. The host: 5.7 GB available at the fullest, its swap 4 -> 7 GB, the guard never tripped.
+- **And a real finding**: the apps' sync failed on `schnappy-production-masi-credentials` - production's Vault has
+  `<prefix>/masi-credentials` (from its .env), the copy's none (its secrets file names no operator credential), and an
+  ExternalSecret extracting a path that is not there fails. The copy now renders no such ExternalSecret
+  (`masiService.credentials.existingSecret: ""`): masi without the operator's credentials, each optional in its
+  deployment - never a placeholder (it would log in to the real Gmail with a wrong password).
 
 ## Open
 

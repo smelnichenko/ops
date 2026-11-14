@@ -1,7 +1,7 @@
 # Vagrant only (the copy of production): memory REQUESTS shrunk so production fits the copy's node (ten's pods use
 # ~30 GB; operator 2026-10-02). Requests only decide scheduling - limits stay production's. Postgres keeps its 2
 # instances: the copy must see CNPG's switchover and the major-version upgrade as production will. Sized with the apps'
-# overlay (its header: the 18 GB node, ~15.3 GiB requested in all, the JVMs' heaps).
+# overlay (its header: the 18 GB node, ~14.8 GiB requested in all, the JVMs' heaps).
 postgres:
   resources:
     # not below shared_buffers (production's 512MB): CNPG's webhook refuses the Cluster, the data app's sync fails
