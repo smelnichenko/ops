@@ -1,6 +1,6 @@
 # Plan 117 — the Vagrant copy of production, without upgrade steps
 
-**Status:** decided 2026-11-13 (operator); implementation next, the Vagrant run at the end.
+**Status:** DONE 2026-11-14. The copy built from main = production green (ninth build, every check, 09:01-10:03); the Velero change green on it (10:11) and live in production (infra bb738de4, platform ff5e99c, synced 10:17): a daily backup from its schedule Completed with 4299 items and no volume read in 9 s, a weekly one 6609 items in 18 s (was ~70 min); no Velero alert. ops 6eeb9a72. The copy destroyed after.
 
 ## Why
 

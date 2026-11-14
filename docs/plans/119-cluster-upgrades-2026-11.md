@@ -1,7 +1,7 @@
 # Plan 119 — cluster and Pi upgrades, November 2026
 
 Status: **PLANNED** (operator 2026-11-13: "check if we can upgrade our cluster parts like we did recently" → report →
-"yes, please"). Wave 1 starts once plan 117's Vagrant proof and its Velero change are green.
+"yes, please"). Plan 117's Vagrant proof and its Velero change are green and live (2026-11-14): wave 1 next.
 
 ## Context
 
@@ -116,7 +116,7 @@ metrics-server 0.9.0 (0.9.1 out, no chart release yet). kagent: disabled, left a
 
 ## Order
 
-1. Plan 117's proof and its Velero change green, pushed, production's Velero backup proven.
+1. ~~Plan 117's proof and its Velero change green, pushed, production's Velero backup proven.~~ Done 2026-11-14.
 2. Wave 1: release notes; 1a branches → `test:copy:change` → merge; 1b playbooks → `test:copy:playbook` → production
    tasks; 1c the same, one Pi service at a time; inventory read again.
 3. Wave 2, then wave 3's plans - each the same way.
