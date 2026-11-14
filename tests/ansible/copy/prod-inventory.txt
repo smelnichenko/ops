@@ -212,9 +212,9 @@ image quay.io/strimzi/operator 1.2.0
 image rclone/rclone 1.75.1
 image registry.k8s.io/coredns/coredns v1.14.2
 image registry.k8s.io/etcd 3.6.8-0
-image registry.k8s.io/kube-apiserver v1.36.5
-image registry.k8s.io/kube-controller-manager v1.36.5
-image registry.k8s.io/kube-scheduler v1.36.5
+image registry.k8s.io/kube-apiserver v1.36.6
+image registry.k8s.io/kube-controller-manager v1.36.6
+image registry.k8s.io/kube-scheduler v1.36.6
 image registry.k8s.io/kube-state-metrics/kube-state-metrics v2.20.0
 image registry.k8s.io/metrics-server/metrics-server v0.9.0
 image scylladb/scylla 2026.1.15
@@ -226,7 +226,7 @@ image sonarqube 26.9.0.129388-community
 image talinx/cert-manager-webhook-porkbun 1.0.0
 image valkey/valkey 9.1.3-alpine
 image velero/velero-plugin-for-aws v1.14.4
-k8s server v1.36.5
+k8s server v1.36.6
 kafka-metadata schnappy-production/schnappy-production 4.3-IV0
 os debian 13.7
 pi pi1 caddy 2.10.0
@@ -257,7 +257,7 @@ pi pi2 vault 1.21.3
 pi pi2 versitygw 1.8.0
 pkg containerd.io 2.3.6-1~debian.13~trixie (held)
 pkg cri-tools 1.36.0-1.1 (held)
-pkg kubeadm 1.36.5-1.1 (held)
-pkg kubectl 1.36.5-1.1 (held)
-pkg kubelet 1.36.5-1.1 (held)
+pkg kubeadm 1.36.6-1.1 (held)
+pkg kubectl 1.36.6-1.1 (held)
+pkg kubelet 1.36.6-1.1 (held)
 pkg kubernetes-cni 1.9.1-1.1 (held)
