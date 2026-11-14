@@ -150,7 +150,7 @@ crd-name workloadgroups.networking.istio.io
 crd prometheus-operator 0.94.1
 crd-protected external-secrets 25/25
 helm argocd/argocd argo-cd-10.9.7 v3.5.4
-helm kube-system/cilium cilium-1.20.2 1.20.2
+helm kube-system/cilium cilium-1.20.4 1.20.4
 image alpine 3.20
 image alpine/k8s 1.35.9
 image amazon/aws-cli 2.37.1
@@ -194,12 +194,12 @@ image postgres 17-alpine
 image prom/alertmanager v0.34.1
 image prom/blackbox-exporter v0.29.1
 image quay.io/argoproj/argocd v3.5.4
-image quay.io/cilium/cilium-envoy v1.37.6-1789133542-cbec91f666af0bf742da986d43832932dbb26b82
-image quay.io/cilium/cilium v1.20.2
-image quay.io/cilium/hubble-relay v1.20.2
+image quay.io/cilium/cilium-envoy v1.39.5-1792733054-8c73b2816bc8239e27f1fd53b271884688137459
+image quay.io/cilium/cilium v1.20.4
+image quay.io/cilium/hubble-relay v1.20.4
 image quay.io/cilium/hubble-ui-backend v0.13.6
 image quay.io/cilium/hubble-ui v0.13.6
-image quay.io/cilium/operator-generic v1.20.2
+image quay.io/cilium/operator-generic v1.20.4
 image quay.io/jetstack/cert-manager-cainjector v1.21.3
 image quay.io/jetstack/cert-manager-controller v1.21.3
 image quay.io/jetstack/cert-manager-webhook v1.21.3
@@ -231,29 +231,29 @@ kafka-metadata schnappy-production/schnappy-production 4.3-IV0
 os debian 13.7
 pi pi1 caddy 2.10.0
 pi pi1 consul 1.20.6
-pi pi1 forgejo 15.0.3
+pi pi1 forgejo 15.0.11
 pi pi1 glusterfs-server 11.1-6
-pi pi1 haproxy 3.0.11-1+deb13u3
+pi pi1 haproxy 3.0.11-1+deb13u4
 pi pi1 keepalived 1:2.3.3-1
 pi pi1 keycloak 26.5.7
 pi pi1 nexus 3.90.1-01
-pi pi1 patroni 4.1.0
+pi pi1 patroni 4.1.5
 pi pi1 pgbouncer 1.24.1-1+deb13u2
-pi pi1 postgresql-17 17.11-0+deb13u1
-pi pi1 vault 1.21.3
+pi pi1 postgresql-17 17.12-0+deb13u1
+pi pi1 vault 1.21.4
 pi pi1 versitygw 1.8.0
 pi pi2 caddy 2.10.0
 pi pi2 consul 1.20.6
-pi pi2 forgejo 15.0.3
+pi pi2 forgejo 15.0.11
 pi pi2 glusterfs-server 11.1-6
-pi pi2 haproxy 3.0.11-1+deb13u3
+pi pi2 haproxy 3.0.11-1+deb13u4
 pi pi2 keepalived 1:2.3.3-1
 pi pi2 keycloak 26.5.7
 pi pi2 nexus 3.90.1-01
-pi pi2 patroni 4.1.0
+pi pi2 patroni 4.1.5
 pi pi2 pgbouncer 1.24.1-1+deb13u2
-pi pi2 postgresql-17 17.11-0+deb13u1
-pi pi2 vault 1.21.3
+pi pi2 postgresql-17 17.12-0+deb13u1
+pi pi2 vault 1.21.4
 pi pi2 versitygw 1.8.0
 pkg containerd.io 2.3.6-1~debian.13~trixie (held)
 pkg cri-tools 1.36.0-1.1 (held)

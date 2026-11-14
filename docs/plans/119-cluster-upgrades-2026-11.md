@@ -212,6 +212,31 @@ Never two of these at once; no Pi turn while an infra merge moves pods that use 
   kernel 6.18.60 booted, the bootloader up to date, Gluster healed, Patroni streaming, standby, nothing left, the mark
   gone. The run itself ended red on its last line alone - with the second turn left for later, pi1 had no plan to
   print (the review had called that default dead); fixed with a harness case. pi2's kernel soaking; pi1 next.
+  pi1 (the VIP's, 18:20 UTC, after pi2's hour of soak clean): Patroni switched over to pi2, Vault stepped down, Nexus
+  stopped and idle, keepalived stopped - pi2 took the VIP and served; apt (the same set), rebooted, keepalived and its
+  converge timer back - then `back` waited its 10 min (60 x 10 s) for netavark-firewalld-reload.service and failed the run (18:35 UTC).
+  The unit is enabled WantedBy=firewalld.service, firewalld is not installed: nothing starts it at boot - it had been
+  started by hand, so the services record (running and enabled) took it. Fixed 2afbe201: the record and `back` follow
+  what the boot pulls in (`systemctl list-dependencies --plain --all default.target`); an inactive unit outside it
+  counts as back, said - a failed one does not (9 harness cases, 8 mutations caught; read-only on both Pis: BACK 31).
+  The run again (19:07 UTC): pi1's owed reboot taken (nothing left to upgrade, no roles to hand over), every service
+  back, the mark gone; pi2 nothing to do. Both Pis: kernel 6.18.60, no failed unit, PostgreSQL 17.12, OpenSSL 3.5.9;
+  the VIP, Patroni's leader and Vault's active node on pi2, pi1 streaming with no lag, git.pmon.dev 200.
+  Found while checking: plan 120's upgrade-verify.sh could never pass on production (its pod list through the
+  environment: "Argument list too long") - fixed 67ce7788, production then SETTLED AND QUIET.
+- Step 6 (operator: "continue with patroni, vault and forgejo after pi1"): `deploy:patroni:upgrade` 19:13 UTC - 4.1.5
+  on both, paused and resumed, no failover (pi2 leading on timeline 18, pi1 streaming, no lag). `deploy:vault:upgrade`
+  19:14 UTC - a Consul snapshot, then each to 1.21.4, unsealed; the one failover: pi1 active, pi2 standby; ESO's store
+  validated, every ExternalSecret Ready. `deploy:forgejo:upgrade` 19:28 UTC (no pipeline running) - dump
+  /var/backups/forgejo/forgejo-20261114T192854Z-15.0.3.sql.gz (11M), pi2 (the VIP's) started first and migrated, then
+  pi1; 15.0.11 on both, git.pmon.dev 200, its doctor's default checks all done. `doctor check --all` (read-only, after):
+  the checks that change nothing clean but for findings older than this upgrade - the LFS gc errors (LFS off), 21
+  orphaned package blobs (494 MiB of 654 GiB), the forgejo user's authorized_keys per Pi (pi1's has key-3, pi2's
+  none: written on the Pi holding the VIP when the key was added; nothing uses git over SSH - every remote and Argo
+  source is HTTPS), WORK_PATH /usr/local/bin (custom/ holds conf only). Left for the operator.
+- Step 7: `task test:copy:inventory` (19:45 UTC) - Cilium 1.20.4 + Envoy 1.39.5, the Pis' Forgejo 15.0.11, Patroni
+  4.1.5, Vault 1.21.4, PostgreSQL 17.12, haproxy deb13u4; pi-versions.yml's Forgejo/Patroni/Vault pins gone (production
+  = the playbooks' defaults now); `cilium_version` 1.20.4. Unit suite 139/139. **Wave 1 complete.**
 
 **Out of wave 1** (found in the notes): PostgreSQL 18.7 - CNPG publishes no bullseye image for it; moving means the
 trixie (or bookworm) image, a glibc change (collations: reindex, `REFRESH COLLATION VERSION`) and 18.7's own reindex
