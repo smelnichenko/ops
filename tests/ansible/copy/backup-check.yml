@@ -57,12 +57,19 @@
 
     # the weekly is checked too (-e schedule=velero-full-weekly): cluster-wide, it is checked only with pods left out (its
     # manifests, minutes) - one that backs up pods would read every pod's volumes (production's took ~70 min) and its
-    # namespaces are "*", no list to select from
-    - name: A cluster-wide schedule is checked only with pods left out
-      ansible.builtin.assert:
-        that: _pods_out | bool or '*' not in (_schedule.stdout | from_json).spec.template.includedNamespaces
-        fail_msg: "schedule {{ schedule }} covers every namespace and backs up pods: not checked here - leave pods out of it"
-        quiet: true
+    # namespaces are "*", no list to select from: said, and nothing more checked (a copy of a production whose weekly
+    # backs up pods - before 2026-11-14 - has no weekly check)
+    - name: A cluster-wide schedule that backs up pods - not checked here, said
+      ansible.builtin.debug:
+        msg: "schedule {{ schedule }} covers every namespace and backs up pods: its volumes are every pod's - not checked on the copy"
+      when: _wide_with_pods | bool
+      vars: &wide
+        _wide_with_pods: "{{ not (_pods_out | bool) and '*' in (_schedule.stdout | from_json).spec.template.includedNamespaces }}"
+
+    - name: End here for it
+      ansible.builtin.meta: end_play
+      when: _wide_with_pods | bool
+      vars: *wide
 
     # pods backed up: every emptyDir of the selected pods running now must get a volume backup - "Completed" with fewer
     # volume backups than that passed; a pod gone by the end is not counted

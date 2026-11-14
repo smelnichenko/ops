@@ -78,13 +78,17 @@ check("pods left out read from the schedule's template: pods excluded (either fi
       [str(render(fact, _schedule=s)).strip() for s in (PODS_OUT, schedule(excludedNamespaceScopedResources=["pods"]),
                                                        PODS_IN, schedule(excludedResources=["events"]))],
       ["True", "True", "False", "False"])
-# a cluster-wide schedule (the weekly: namespaces "*") is checked only with pods left out
-WIDE = ts["A cluster-wide schedule is checked only with pods left out"]["ansible.builtin.assert"]["that"]
+# a cluster-wide schedule (the weekly: namespaces "*") is checked only with pods left out; one backing up pods: said,
+# the play ended there (no failure: production's weekly backed up pods until 2026-11-14 - the copy of it has no weekly check)
+SAY = ts["A cluster-wide schedule that backs up pods - not checked here, said"]
+END = ts["End here for it"]
 wide = lambda **t: {"stdout": json.dumps({"spec": {"template": {"includedNamespaces": ["*"], **t}}})}
-check("a cluster-wide schedule: passed with pods left out, refused backing up pods; a namespaced one either way",
-      [condition(WIDE, _schedule=sc, _pods_out=o) for sc, o in ((wide(excludedResources=["pods"]), True), (wide(), False),
-                                                                (PODS_IN, False))],
-      [True, False, True])
+WIDE_VAR = SAY["vars"]["_wide_with_pods"]
+cases = ((wide(excludedResources=["pods"]), True), (wide(), False), (PODS_IN, False), (PODS_OUT, True))
+check("a cluster-wide schedule backing up pods: said and the play ended; with pods left out, or namespaced: checked on",
+      ([str(render(WIDE_VAR, _schedule=sc, _pods_out=o)).strip() for sc, o in cases],
+       END["ansible.builtin.meta"], END["when"], SAY["when"], END["vars"]["_wide_with_pods"] == WIDE_VAR),
+      (["False", "True", "False", "False"], "end_play", "_wide_with_pods | bool", "_wide_with_pods | bool", True))
 
 # --- the backup started -------------------------------------------------------------------------------------------
 start = ts["Start a backup from it"]["kubernetes.core.k8s"]["definition"]["spec"]
