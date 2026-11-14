@@ -258,11 +258,13 @@ def scripts(doc):
                 yield t.get("name"), v["content"]
 
 
-import glob  # noqa: E402
+import glob, os  # noqa: E401,E402
 reads = [f"{f}: {n}: {line[:120]}" for f in files("deploy/ansible") for n, sc in scripts(load(f))
          for line in argv_reads(sc)]
+# files only: a checkout that ran a harness importing a script there has its __pycache__ beside them (CI's has none)
 reads += [f"{f}: {line[:120]}" for f in sorted(glob.glob("deploy/ansible/playbooks/scripts/*") + glob.glob("scripts/*.sh")
-                                               + ["bootstrap.sh"]) for line in argv_reads(open(f, errors="replace").read())]
+                                               + ["bootstrap.sh"]) if os.path.isfile(f)
+          for line in argv_reads(open(f, errors="replace").read())]
 # the full run's own playbooks (tests/ansible/copy: every step runs them, on a copy holding production's secrets)
 # too, the same rule: a pod's own shell (kubectl exec ... sh) passes its env var to its client's argv no more - the
 # ClickHouse client reads CLICKHOUSE_PASSWORD from its environment (24.8, 25.8, 26.8 measured 2026-10-09), Grafana's
