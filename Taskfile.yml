@@ -419,6 +419,10 @@ tasks:
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-pi-services.yml --tags versitygw -e @../../tests/ansible/copy/pi-versions.yml
       # the Pi VIP, as in production (Vault, Git and the backup store are reached through it)
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-keepalived.yml
+      # Debian's packages on the Pis at production's versions (pi-versions.yml's pi_apt_versions): the archive serves
+      # only its newest, production runs the security level it last took. After every package is installed, before the
+      # cold boot that restarts the services on them
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/pi-apt-versions.yml -e @../../tests/ansible/copy/pi-versions.yml
       # as on ten: Argo CD owns Istio, cert-manager, metrics-server, the Prometheus stack and the data operators
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-kubeadm.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml -e platform_by_argo_override=true
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-host-hardening.yml

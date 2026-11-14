@@ -1,0 +1,36 @@
+---
+# The copy's Pis run Debian's packages at production's versions (pi-versions.yml's pi_apt_versions, read from the Pis by
+# task test:copy:inventory): the Pi stack installs whatever Debian's archive serves, which is only each package's
+# newest, while production runs the security level it last took - the copy's inventory differed (2026-11-14: haproxy
+# deb13u4 and postgresql-17 17.12 here, deb13u3 and 17.11 there) and an apt upgrade proven on the copy would have
+# started where production never was. scripts/pi-apt-pin.sh moves each installed package to production's version, from
+# the archive or snapshot.debian.org. Run after the Pi stack (its packages installed, its clusters made by Patroni, not
+# by a package's install) and before the copy's cold boot, which restarts every service on them.
+#
+# Usage: ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/pi-apt-versions.yml \
+#          -e @../../tests/ansible/copy/pi-versions.yml
+- name: Debian's packages on the Pis at production's versions
+  hosts: pi1:pi2
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Vagrant VMs only (fails closed on any other host)
+      ansible.builtin.import_tasks: ../vagrant-only.yml
+
+    - name: Production's versions are given (pi-versions.yml, from task test:copy:inventory)
+      ansible.builtin.assert:
+        that: pi_apt_versions is defined and pi_apt_versions is mapping and pi_apt_versions | length > 0
+        fail_msg: "no pi_apt_versions - run with -e @../../tests/ansible/copy/pi-versions.yml (task test:copy:inventory writes it)"
+        quiet: true
+
+    - name: Each package at production's version - from the archive, or snapshot.debian.org once the archive moved on
+      ansible.builtin.script:
+        cmd: >-
+          ../../../scripts/pi-apt-pin.sh
+          {% for k, v in pi_apt_versions.items() %}{{ (k ~ '=' ~ v) | quote }} {% endfor %}
+      register: _pinned
+      changed_when: "' -> ' in _pinned.stdout"
+
+    - name: What moved
+      ansible.builtin.debug:
+        msg: "{{ _pinned.stdout_lines }}"

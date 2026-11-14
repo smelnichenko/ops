@@ -3,8 +3,10 @@
 <service> <version>` lines), written as extra vars where the playbooks pin another version, so the Vagrant copy
 installs production's (scripts/production-inventory.sh calls it after reading production). Forgejo and Vault carry
 their amd64 checksum (kept from the pins file when the version is unchanged, else read from the release); versitygw
-only at a version its task file has checksums for. Refuses: a service the Pis run at two versions, or on neither, or at
-what is no version.
+only at a version its task file has checksums for. And Debian's packages the Pis report (scripts/version-inventory-pi.sh
+lists them) at the versions they run, as pi_apt_versions - Debian's archive serves only the newest, so the copy moves
+its own to these (tests/ansible/copy/pi-apt-versions.yml). Refuses: a service or package the Pis run at two versions,
+or on one Pi only, or at what is no version.
 """
 import re
 import sys
@@ -47,6 +49,16 @@ PINNED = [
 ]
 # a version as the Pis report one: what production's services say goes into an extra-vars file, where text is a template
 VERSION = re.compile(r"[0-9][0-9A-Za-z.+~-]*")
+# a Debian package's version: an epoch first, maybe (keepalived 1:2.3.3-1)
+DEB_VERSION = re.compile(r"([0-9]+:)?[0-9][0-9A-Za-z.+~-]*")
+
+
+def debian_packages():
+    """The Debian packages scripts/version-inventory-pi.sh reports (its loop over them) - the same list, never a copy."""
+    m = re.search(r"^for pkg in ([a-z0-9. +-]+); do", open("scripts/version-inventory-pi.sh").read(), re.M)
+    if not m:
+        sys.exit("scripts/version-inventory-pi.sh: no `for pkg in ...` loop over Debian's packages")
+    return m[1].split()
 try:
     old = yaml.safe_load(open(pins_path)) or {}
 except FileNotFoundError:
@@ -74,6 +86,19 @@ def sha_vault(v):
     sys.exit(f"vault {v}: no linux_amd64 checksum in {url}")
 
 
+# Debian's packages, each on both Pis or on neither, at one version
+apt = {}
+for pkg in debian_packages():
+    per_host = {l.split()[1]: l.split()[3] for l in lines if re.match(rf"^pi \S+ {re.escape(pkg)} ", l)}
+    if not per_host:
+        continue
+    hosts = {l.split()[1] for l in lines if l.startswith("pi ")}
+    if set(per_host) != hosts or len(set(per_host.values())) != 1:
+        sys.exit(f"the Pis run {pkg} {sorted(per_host.items())} - one version on both expected")
+    apt[pkg] = per_host.popitem()[1]
+    if not DEB_VERSION.fullmatch(apt[pkg]):
+        sys.exit(f"the Pis report {pkg} {apt[pkg]!r} - not a Debian version")
+
 FETCH = {"forgejo": sha_forgejo, "vault": sha_vault}
 body = {}
 for name, var, playbooks in PINNED:
@@ -86,11 +111,14 @@ for name, var, playbooks in PINNED:
     if name in FETCH:
         same = str(old.get(var)) == v and (old.get(f"{name}_checksums") or {}).get("amd64")
         body[f"{name}_checksums"] = {"amd64": same or FETCH[name](v)}
+if apt:
+    body["pi_apt_versions"] = apt
 head = ("# The Pis' service versions as production runs them, where the playbooks pin another (they install their own where\n"
         "# a service is missing): the Vagrant copy installs production's. Written by scripts/production-inventory.sh\n"
         "# (task test:copy:inventory) from what the Pis run - not edited by hand. amd64 only (the Vagrant VMs). Extra vars,\n"
-        "# after vars/vault.yml.\n")
+        "# after vars/vault.yml. pi_apt_versions: Debian's packages at production's versions\n"
+        "# (tests/ansible/copy/pi-apt-versions.yml moves the copy's to them).\n")
 with open(pins_path, "w") as f:
     f.write(head + (yaml.safe_dump(body, sort_keys=False) if body else "{}\n"))
 print("the Pis: " + ", ".join(f"{n} {running[n]}" + (" (pinned)" if var in body else "") for n, var, _ in PINNED)
-      + f" -> {pins_path}")
+      + "; Debian's: " + ", ".join(f"{k} {v}" for k, v in apt.items()) + f" -> {pins_path}")

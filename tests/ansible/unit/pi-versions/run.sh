@@ -5,10 +5,11 @@
 # a bump there is followed; Forgejo's and Vault's checksum kept from the pins file when the version is unchanged
 # (nothing fetched: every fetch here fails - a proxy that is not there); refused: two Pis at two versions, a service on
 # neither, versitygw at a version its task file has no checksums for. The extra vars outrank the playbooks' own.
+# And Debian's packages the Pis report, as pi_apt_versions, run by the copy's pi-apt-versions.yml in the build.
 set -u
 cd "$(dirname "$0")/../../../.." || exit 1
 PY=python3
-"$PY" -c 'import yaml' 2> /dev/null || PY=deploy/ansible/venv/bin/python3
+"$PY" -c 'import ansible, yaml' 2> /dev/null || PY=deploy/ansible/venv/bin/python3
 PYTHONDONTWRITEBYTECODE=1 "$PY" - <<'PY_PI_VERSIONS'
 import atexit, os, re, shutil, subprocess, sys, tempfile
 import yaml
@@ -191,6 +192,44 @@ check("the copy's Pi stack passes the pins to setup-consul; its versitygw and ca
       (bool(re.search(r"playbooks/setup-consul\.yml \{\{\.PI_ARGS\}\}", tf)),
        "setup-pi-services.yml --tags versitygw -e @../../tests/ansible/copy/pi-versions.yml" in tf,
        "playbooks/setup-caddy.yml -e @../../tests/ansible/copy/pi-versions.yml" in tf), (True, True, True))
+# Debian's packages: the ones scripts/version-inventory-pi.sh reports (its loop, read here on its own), at production's
+# versions as pi_apt_versions - each on both Pis at one version (an epoch a version too); one Pi only, two versions, or no
+# version refused; a package outside that loop not written
+deb = re.search(r"^for pkg in ([a-z0-9. +-]+); do", open("scripts/version-inventory-pi.sh").read(), re.M)[1].split()
+check("the Debian packages read are version-inventory-pi.sh's own (postgresql-17 and haproxy among them)",
+      ("postgresql-17" in deb, "haproxy" in deb, "keepalived" in deb), (True, True, True))
+APT = {"haproxy": "3.0.11-1+deb13u3", "keepalived": "1:2.3.3-1", "postgresql-17": "17.11-0+deb13u1"}
+rc, body, err = run({**own, **APT, "nginx": "1.26.0-1"})
+check("Debian's packages on both Pis: pi_apt_versions at production's, an epoch kept; one outside the loop not written",
+      (rc, body), (0, {"pi_apt_versions": {k: APT[k] for k in deb if k in APT}}))
+rc, body, err = run({**own, **APT}, pi2={"haproxy": None})
+check("  a package on one Pi only: refused, said", (rc != 0, "haproxy" in err and "one version on both" in err), (True, True))
+rc, body, err = run({**own, **APT}, pi2={"haproxy": "3.0.11-1+deb13u4"})
+check("  two versions on the Pis: refused, said", (rc != 0, "haproxy" in err and "one version on both" in err), (True, True))
+rc, body, err = run({**own, **APT, "haproxy": "{{lookup('pipe','id')}}"})
+check("  no Debian version (a template): refused, nothing written", (rc != 0, "not a Debian version" in err, body),
+      (True, True, None))
+# the copy's playbook passes each as <package>=<version>, quoted, to scripts/pi-apt-pin.sh on both Pis, behind the guard
+sys.path.insert(0, "tests/ansible/unit")
+from plays import load, tasks  # noqa: E402
+from templar import render  # noqa: E402
+PF = "tests/ansible/copy/pi-apt-versions.yml"
+pt = {t.get("name"): t for t in tasks(load(PF))}
+script = next(t for n, t in pt.items() if n and n.startswith("Each package at production's version"))
+check("pi-apt-versions.yml: both Pis, the guard first, then pi-apt-pin.sh with each <package>=<version> quoted",
+      (load(PF)[0]["hosts"], list(pt)[0], render(script["ansible.builtin.script"]["cmd"], pi_apt_versions=APT).split()),
+      ("pi1:pi2", "Vagrant VMs only (fails closed on any other host)",
+       ["../../../scripts/pi-apt-pin.sh", "haproxy=3.0.11-1+deb13u3", "keepalived=1:2.3.3-1", "postgresql-17=17.11-0+deb13u1"]))
+check("  the script it runs is the repo's", os.path.isfile(os.path.join(os.path.dirname(PF), "../../../scripts/pi-apt-pin.sh")),
+      True)
+# in the build after every Pi package is installed (the Pi stack, Gluster, keepalived), before the node and the cold boot
+base_cmds = [c if isinstance(c, str) else (c.get("cmd") or "task:" + c.get("task", "")) for c in TT["_copy:base"]["cmds"]]
+ix = lambda pat: next(i for i, c in enumerate(base_cmds) if re.search(pat, c))
+pin_i = ix(r"pi-apt-versions\.yml")
+check("  the build runs it with the pins file, after the Pi stack, Gluster and keepalived, before setup-kubeadm",
+      (base_cmds[pin_i].endswith("../../tests/ansible/copy/pi-apt-versions.yml -e @../../tests/ansible/copy/pi-versions.yml"),
+       ix(r"task:_vagrant:pi-stack") < pin_i, ix(r"setup-gluster\.yml") < pin_i, ix(r"setup-keepalived\.yml") < pin_i,
+       pin_i < ix(r"setup-kubeadm\.yml")), (True,) * 5)
 print("pi-versions: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 PY_PI_VERSIONS

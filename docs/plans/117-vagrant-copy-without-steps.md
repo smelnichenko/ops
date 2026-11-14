@@ -195,6 +195,16 @@ Argo settle timed out, and the radar station on the same host died (22:17, resta
   fails (inside a here-string its failure went unseen - proven in go-task's shell). The other arguments the old tasks
   passed (argo-settled's allow_out_of_sync/restart_step, barman-check's pg_major, restore-check's restore_*,
   production-state's upgrade_from) are read by nothing left.
+- **The seventh build** (03:43-04:34): settled, seeded, the k6 smoke passed, the node 16.9 of 18 GB with 1.1 GB
+  available, no OOM kill - and the inventory failed on the Pis' Debian packages: the copy had haproxy deb13u4 and
+  postgresql-17 17.12, production deb13u3 and 17.11 (its pending security updates, plan 119's wave 1c). The copy
+  installs whatever the archive serves; production runs the level it last took. Now `scripts/pi-versions.py` records
+  the Debian packages the Pis report (version-inventory-pi.sh's own list) as `pi_apt_versions`, and
+  `tests/ansible/copy/pi-apt-versions.yml` (in `_copy:base` after the Pi stack, Gluster and keepalived, before the cold
+  boot) moves each installed one to production's version with `scripts/pi-apt-pin.sh` - from the archive while it
+  still has it, else from snapshot.debian.org at that version's first publication. Run on the seventh build's Pis:
+  both moved from the archive (it still serves the point release beside the security update), the inventories then
+  matched (238 lines, 19 allowed missing). An apt upgrade proven on the copy (wave 1c) now starts where production is.
 
 ## Open
 

@@ -14,6 +14,7 @@
    "cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-gluster.yml",
    "cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-pi-services.yml --tags versitygw -e @../../tests/ansible/copy/pi-versions.yml",
    "cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-keepalived.yml",
+   "cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/pi-apt-versions.yml -e @../../tests/ansible/copy/pi-versions.yml",
    "cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-kubeadm.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml -e platform_by_argo_override=true",
    "cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-host-hardening.yml"
   ],
