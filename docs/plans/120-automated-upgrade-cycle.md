@@ -17,7 +17,7 @@ lookup) run - its findings fixed below, three questions open.
   `.claude/skills/upgrade-fix`.
 **Done since:** the renovate-bot reset (operator: "reset renovate-bot with forgejo_admin yourself"), its PAT in
 ops/.env RENOVATE_TOKEN, write access to infra/platform/ops (operator: "grant it").
-**Not yet:** a valid GitHub read token (RENOVATE_GITHUB_TOKEN in ops/.env answers 401), the systemd user timer and its
+**Not yet:** a GitHub read token, or the six GitHub-sourced annotations moved to registries (RENOVATE_GITHUB_TOKEN in ops/.env is empty - ''; the 401 seen 2026-11-14 was the two quote characters sent as a token), the systemd user timer and its
 start time, the agent's headless permissions, `deploy:seed-secrets` for the bot's token (the operator's OK), Nexus
 annotated, a one-way change's store backups beyond etcd (Postgres, ScyllaDB, ...: blocked). Strimzi's Kafka version
 (`strimzi.kafkaVersion`, production's and the test environment's data values) is not annotated yet - a design point
