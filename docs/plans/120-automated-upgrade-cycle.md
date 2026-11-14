@@ -23,6 +23,14 @@ Kafka `version:` and Nexus annotated, a one-way change's store backups beyond et
 Argo CD in the cycle (2026-11-14): its chart default a value of its own (`argocd_chart_default`, annotated - the
 lookup: argo-cd 10.9.7 -> 10.18.0 on renovate/argocd), its unit proven on the copy by setup-argocd.yml (the chart
 default or an image pin moved; any other change refused) and applied by `task --yes deploy:argocd`.
+The test environment's units (2026-11-14, decided in "What wave 1 by hand taught the cycle"): the lookup put test
+files into five units (observability, k6 2.x, curl - platform's schnappy-test chart; both ScyllaDB lines - infra's
+schnappy-test-data), and the copy's mirror refuses those: each would have failed its proof. The preset sends the test
+environment's files to `renovate/test-<unit>` (additionalBranchPrefix; the lookup: test-observability,
+test-grafana-k6-2.x, test-curlimages-curl-8.x, test-scylladb-2026.2/2026.3 - their production twins carry no test file).
+upgrade-units.py picks an open test unit first (`test <unit> <kind>`, in its twins' order) and holds a production unit
+while its test unit is open (blocked or vetoed too); upgrade-cycle.sh's `test` action: the one-way check, merged, the
+cluster settled (upgrade-verify), recorded, reported - no copy, no review; red after the merge: blocked, not paged.
 
 **Rollout step 1 - the lookup, 2026-11-14** (Renovate 44.198.3, `local` platform, `RENOVATE_DRY_RUN=lookup`, each
 repo's branch exported to a scratch git directory under ops/.copy with the preset as its renovate.json - a `local>`

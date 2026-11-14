@@ -7,7 +7,8 @@
     "names): renovate/wave-patches (every patch); renovate/<family>-<X.Y> for the families moved one minor at a time",
     "(istio, kubernetes, cilium); renovate/<family> for the other families' minors (observability, data-operators, argocd,",
     "pi-services); each other minor and every major on a branch of its own (Renovate's own name). Label one-way: a change",
-    "whose stores have no backup path in the cycle yet - the runner leaves it for the operator."
+    "whose stores have no backup path in the cycle yet - the runner leaves it for the operator.",
+    "A test environment's files: renovate/test-<unit>, merged before its production twin."
   ],
   "extends": [
     "config:recommended",
@@ -330,6 +331,16 @@
       "addLabels": [
         "one-way"
       ]
+    },
+    {
+      "description": "The test environment's files: a unit of their own, renovate/test-<unit>, merged before its production twin (the Vagrant copy leaves the test environment out - it is its own proof)",
+      "matchFileNames": [
+        "clusters/production/schnappy-test/**",
+        "clusters/production/schnappy-test-*/**",
+        "clusters/production/argocd/apps/schnappy-test.yaml",
+        "helm/schnappy-test/**"
+      ],
+      "additionalBranchPrefix": "test-"
     }
   ],
   "ignorePresets": [

@@ -82,6 +82,19 @@ fixture(infra=[pr(2, "observability"), pr(3, "cilium-1.21"), pr(4, "kubernetes-1
 check("the families' order: kubernetes, then cilium, before observability", run("pick"), (0, "prove kubernetes-1.37 minor"))
 fixture(infra=[pr(2, "scylladb-2026.10"), pr(3, "scylladb-2026.9"), pr(4, "zz-other-1.x")])
 check("another minor named for its minor: the lowest first, by number", run("pick"), (0, "prove scylladb-2026.9 minor"))
+# a test environment's unit (renovate/test-<unit>, the preset's): merged before its production twin
+fixture(infra=[pr(1, "wave-patches"), pr(2, "observability")], platform=[pr(3, "test-observability")])
+check("a test environment's unit first, before wave-patches", run("pick"), (0, "test test-observability minor"))
+fixture(infra=[pr(1, "test-observability"), pr(2, "test-wave-patches")])
+check("test units in their twins' order (wave-patches' first)", run("pick"), (0, "test test-wave-patches patch"))
+fixture(infra=[pr(1, "test-istio-1.32", "upgrade-blocked"), pr(2, "istio-1.32"), pr(3, "observability")])
+check("a production unit waits while its test unit is open - blocked too: the next unit instead", run("pick"),
+      (0, "prove observability minor"))
+fixture(infra=[pr(1, "test-grafana-k6-2.x", "major")])
+check("a major's test unit: merged as a test unit (the 24 h notice is its production twin's)", run("pick"),
+      (0, "test test-grafana-k6-2.x major"))
+fixture(infra=[pr(1, "test-grafana-k6-2.x", "veto"), pr(2, "grafana-k6-2.x", "major")])
+check("a vetoed test unit holds its production twin too: nothing", run("pick"), (0, "NOTHING"))
 fixture(infra=[pr(2, "istio-x.32"), pr(3, "istio")])
 check("a name that only looks versioned is not (istio-x.32 is no istio minor): the family's own unit first",
       run("pick"), (0, "prove istio minor"))

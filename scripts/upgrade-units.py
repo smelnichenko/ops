@@ -4,6 +4,9 @@ its open pull requests on infra, platform and ops, grouped by branch (renovate/<
 
   list           every unit: "<unit> <kind> <repos> <labels>" a line (kind: patch, minor, major)
   pick           the night's unit and what to do with it, one line - "PAUSED", "NOTHING", or "<action> <unit> <kind>":
+                   test    a test environment's unit (renovate/test-<unit>: the copy leaves the test environment out -
+                           it is its own proof), merged before its production twin - picked first, and the twin waits
+                           while it is open
                    prove   a patch or minor unit (proven, then applied the same night)
                    notice  a major with no veto notice yet (proven, then its 24 h notice posted - applied a later night)
                    apply   a major whose notice has run out, unvetoed (proven again, then applied)
@@ -81,8 +84,13 @@ def units():
             u["repos"][repo] = pr["number"]
             u["labels"] |= {lb["name"] for lb in pr.get("labels") or []}
     for name, u in found.items():
-        u["kind"] = "major" if "major" in u["labels"] else ("patch" if name == "wave-patches" else "minor")
+        u["kind"] = "major" if "major" in u["labels"] else ("patch" if twin(name) == "wave-patches" else "minor")
     return found
+
+
+def twin(name):
+    """The production unit a test environment's unit goes before (test-observability -> observability); itself else."""
+    return name[len("test-"):] if name.startswith("test-") else name
 
 
 def noticed(name, u):
@@ -111,6 +119,7 @@ def family(name):
 
 
 def order(name, u):
+    name = twin(name)
     if name == "wave-patches":
         return (0, name)
     if u["kind"] == "minor":
@@ -124,6 +133,11 @@ def pick():
         return "PAUSED"
     all_units = units()
     open_units = {n: u for n, u in all_units.items() if not ({"upgrade-blocked", "veto"} & u["labels"])}
+    tests = sorted((n for n in open_units if n.startswith("test-")), key=lambda n: order(n, open_units[n]))
+    if tests:
+        return f"test {tests[0]} {open_units[tests[0]]['kind']}"
+    # a production unit waits while its test environment's is open - blocked or vetoed too (its twin goes first)
+    open_units = {n: u for n, u in open_units.items() if f"test-{n}" not in all_units}
     for name in sorted((n for n, u in open_units.items() if u["kind"] != "major"), key=lambda n: order(n, open_units[n])):
         return f"prove {name} {open_units[name]['kind']}"
     majors = sorted(n for n, u in open_units.items() if u["kind"] == "major")

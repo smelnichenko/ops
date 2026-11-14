@@ -136,6 +136,24 @@ check("Renovate's own name for a Postgres major, its label missing: the names' n
 rc, calls = night("apply grafana-grafana-13.x major", files={"list": "grafana-grafana-13.x major schnappy/platform major\n"})
 check("a Grafana major as Renovate names it (grafana-grafana-13.x): blocked by the names' net",
       (rc, has(calls, "upgrade-label.py")), (1, ["upgrade-label.py grafana-grafana-13.x upgrade-blocked"]))
+# a test environment's unit: no copy, no review - merged, settled, recorded, reported
+rc, calls = night("test test-observability minor")
+seq = [words(c, 2).strip() for c in calls if not c.startswith("upgrade-units.py")]
+check("a test unit: one-way judged, merged, verified, recorded, reported - no copy built or destroyed, no agent",
+      (rc, seq), (0, ["upgrade-label.py test-observability", "upgrade-verify.sh", "upgrade-record.sh test-observability",
+                      "upgrade-notice.sh applied"]))
+rc, calls = night("test test-scylladb-2026.3 minor", files={"list": "test-scylladb-2026.3 minor schnappy/infra one-way\n"})
+check("a test unit labelled one-way: blocked, never merged",
+      (rc, has(calls, "upgrade-label.py")), (1, ["upgrade-label.py test-scylladb-2026.3 upgrade-blocked"]))
+rc, calls = night("test test-observability minor", files={"verify.rc": "1"})
+check("a test unit not settled after its merge: reported blocked (not paged), not recorded",
+      (rc, [words(c, 3) for c in has(calls, "upgrade-notice.sh")], has(calls, "upgrade-record.sh")),
+      (1, ["upgrade-notice.sh blocked test-observability"], []))
+rc, calls = night("test test-observability minor", args=["--shadow"])
+check("--shadow: a test unit's comment alone, nothing merged",
+      (rc, [words(c, 3) for c in has(calls, "upgrade-label.py")]), (0, ["upgrade-label.py test-observability --comment"]))
+rc, calls = night("test observability minor")
+check("a test action for a unit with no test- name: refused, nothing done", (rc, has(calls, "upgrade-label.py")), (1, []))
 rc, calls = night("prove argocd minor", plan="test:copy:playbook PLAYBOOK=setup-argocd.yml ARGS='-e @vars/vault-vagrant.yml' RESTARTS_EXPECTED=true\n")
 check("an Argo CD unit: merged, then production's deploy:argocd", (rc, has(calls, "task --yes")), (0, ["task --yes deploy:argocd"]))
 rc, calls = night("prove centrifugo-6.x minor", plan=PLAN,

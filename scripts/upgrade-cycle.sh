@@ -62,8 +62,43 @@ case "$picked" in
   NOTHING|PAUSED) exit 0 ;;
 esac
 read -r action unit kind <<< "$picked"
-[[ $action =~ ^(prove|notice|apply)$ && $unit =~ ^[a-z0-9][a-z0-9.-]*$ && $kind =~ ^(patch|minor|major)$ ]] \
+[[ $action =~ ^(test|prove|notice|apply)$ && $unit =~ ^[a-z0-9][a-z0-9.-]*$ && $kind =~ ^(patch|minor|major)$ ]] \
   || { say "REFUSED: the pick's answer '$picked'"; exit 1; }
+[ "$action" != test ] || [[ $unit == test-* ]] || { say "REFUSED: a test action for '$unit' (no test- unit)"; exit 1; }
+
+# one-way with no backup path: Renovate's label (renovate/upgrade-cycle.json's rules) - the names a second net, failing
+# closed; the labels not read, nothing is applied
+stop_if_one_way() {
+  local labels
+  labels=$(scripts/upgrade-units.py list) || { notice blocked "$unit" "its labels not read from Forgejo - nothing applied" "$log"; exit 1; }
+  labels=$(awk -v u="$unit" '$1 == u {print $4}' <<< "$labels")
+  [ -n "$labels" ] || { notice blocked "$unit" "not in the open units any more - nothing applied" "$log"; exit 1; }
+  if [[ ,$labels, == *,one-way,* ]] || grep -qE '(postgres|postgresql|scylla|scylladb|kafka|clickhouse|strimzi|grafana|consul|vault)-[0-9]+\.(x|[0-9]+)$' <<< "$unit"; then
+    run scripts/upgrade-label.py "$unit" upgrade-blocked
+    notice blocked "$unit" "a one-way change with no backup path in the cycle yet - left for the operator" "$log"
+    exit 1
+  fi
+}
+
+# a test environment's unit: the copy leaves the test environment out - it is its own proof (plan 100's order): no copy,
+# no review; one-way left for the operator, else merged, the cluster settled, recorded - before its production twin
+if [ "$action" = test ]; then
+  stop_if_one_way
+  if [ -n "$shadow" ]; then
+    run scripts/upgrade-label.py "$unit" --comment "UPGRADE SHADOW $(date -u +%Y-%m-%dT%H:%M:%SZ) - test: the test environment's unit, merged first in a real night; nothing applied (rollout step 2)"
+    say "SHADOW $unit"
+    exit 0
+  fi
+  run scripts/upgrade-label.py "$unit" --merge || { notice blocked "$unit" "its merge failed" "$log"; exit 1; }
+  if ! run scripts/upgrade-verify.sh; then
+    notice blocked "$unit" "merged to the test environment, the cluster not settled after it - see the log" "$log"
+    exit 1
+  fi
+  run scripts/upgrade-record.sh "$unit" "$log"
+  notice applied "$unit" "the test environment's $unit applied and verified (its production unit next)" "$log"
+  say "APPLIED $unit"
+  exit 0
+fi
 
 # the copy must fit: the guard's own figure (22.5 GB of VMs + its 2 GB); one notice, then waits until the deadline
 need=$(( 22528 + 2048 + 300 ))
@@ -131,16 +166,7 @@ plan=$(task test:copy:unit UNIT="$unit" PLAN=true 2> /dev/null | grep -E '^test:
 if grep -q 'upgrade-kubeadm.yml' <<< "$plan"; then
   run ssh ten "kubectl -n kube-system create job --from=cronjob/etcd-backup etcd-backup-before-$unit && kubectl -n kube-system wait --for=condition=complete job/etcd-backup-before-$unit --timeout=300s"
 fi
-# one-way with no backup path: Renovate's label (renovate/upgrade-cycle.json's rules) - the names a second net, failing
-# closed; the labels not read, nothing is applied
-labels=$(scripts/upgrade-units.py list) || { notice blocked "$unit" "its labels not read from Forgejo - nothing applied" "$log"; exit 1; }
-labels=$(awk -v u="$unit" '$1 == u {print $4}' <<< "$labels")
-[ -n "$labels" ] || { notice blocked "$unit" "not in the open units any more - nothing applied" "$log"; exit 1; }
-if [[ ,$labels, == *,one-way,* ]] || grep -qE '(postgres|postgresql|scylla|scylladb|kafka|clickhouse|strimzi|grafana|consul|vault)-[0-9]+\.(x|[0-9]+)$' <<< "$unit"; then
-  run scripts/upgrade-label.py "$unit" upgrade-blocked
-  notice blocked "$unit" "a one-way change with no backup path in the cycle yet - left for the operator" "$log"
-  exit 1
-fi
+stop_if_one_way
 
 # 7. the apply: merges, then the ops parts' production tasks
 run scripts/upgrade-label.py "$unit" --merge || { notice blocked "$unit" "its merge failed" "$log"; exit 1; }
