@@ -198,6 +198,36 @@ failed = owned(pod("job-a", "j1"), "Job", "backup-1", phase="Failed")
 done = owned(pod("job-b", "j2"), "Job", "backup-1", phase="Succeeded")
 gate("a failed Job attempt a later attempt completed: green", A, [failed, done, pod("p2", "u3")], 0)
 gate("a failed Job attempt with no completed one: not green", A, [failed, pod("p2", "u3")], 1, "ns/job-a (Failed)")
+# --failing-cronjobs ns/name: a failed run of that CronJob (its Job <name>-<digits>) is not waited for; one still running
+# is; another CronJob's failed run, a Job of it made by hand (another name), one in another namespace are; no flag, all are
+rca = owned(pod("restore-check-age-29910470-ls77m", "c1", ns="kube-system"), "Job", "restore-check-age-29910470",
+            phase="Failed")
+FC = ("--failing-cronjobs", "kube-system/restore-check-age")
+gate("--failing-cronjobs: a failed run of a named CronJob not waited for: green", A, [rca, pod("p2", "u3")], 0, "", *FC)
+gate("  without the flag: not green", A, [rca, pod("p2", "u3")], 1, "kube-system/restore-check-age-29910470-ls77m (Failed)")
+running = owned(pod("restore-check-age-29910480-x", "c2", ns="kube-system", ready=False), "Job",
+                "restore-check-age-29910480")
+gate("  its run still going (not ready): waited for", A, [running, pod("p2", "u3")], 1, "restore-check-age-29910480-x", *FC)
+for label, ns, job in (("another CronJob's failed run", "kube-system", "etcd-backup-29910480"),
+                       ("a Job made by hand from it (another name)", "kube-system", "restore-check-age-manual"),
+                       ("the same name in another namespace", "default", "restore-check-age-29910470")):
+    gate(f"  {label}: not green", A, [owned(pod("x-1", "c3", ns=ns), "Job", job, phase="Failed"), pod("p2", "u3")], 1,
+         "x-1 (Failed)", *FC)
+rc, out = run(A, [pod("p2", "u3")], "--failing-cronjobs", "kube-system/restore check")
+check("  a malformed entry: refused (exit 2), said", (rc, "is no <namespace>/<name>" in out), (2, True), out)
+# the copy's list and its wiring: the playbook passes the file's names (comments and blank lines dropped)
+import yaml as _yaml  # noqa: E402
+FCF = "tests/ansible/copy/copy-failing-cronjobs.txt"
+names = [l.strip() for l in open(FCF) if l.strip() and not l.strip().startswith("#")]
+check("the copy's list: kube-system/restore-check-age, each name with its reason above it",
+      (names, all(open(FCF).read().split(n)[0].rstrip().splitlines()[-1].startswith("#") for n in names)),
+      (["kube-system/restore-check-age"], True))
+play = _yaml.safe_load(open("tests/ansible/copy/argo-settled.yml"))[0]
+cmd = next(t for t in play["tasks"] if t.get("name", "").startswith("Wait until every app"))["ansible.builtin.script"]["cmd"]
+check("  argo-settled.yml passes it (--failing-cronjobs from failing_cronjobs, read from the copy's list)",
+      ("--failing-cronjobs '{{ failing_cronjobs }}'" in cmd, play["vars"]["failing_cronjobs_file"],
+       "lookup('ansible.builtin.file', failing_cronjobs_file)" in play["vars"]["failing_cronjobs"]),
+      (True, "{{ playbook_dir }}/copy-failing-cronjobs.txt", True))
 # a Succeeded pod excuses failed attempts of its Job only - another kind's failed pod is not "a later attempt completed"
 rs_failed = owned(pod("rs-a", "r1"), "ReplicaSet", "web-1", phase="Failed")
 rs_done = owned(pod("rs-b", "r2"), "ReplicaSet", "web-1", phase="Succeeded")

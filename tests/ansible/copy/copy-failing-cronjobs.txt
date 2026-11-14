@@ -1,0 +1,10 @@
+# CronJobs whose runs fail on the Vagrant copy by nature - the copy cannot have what they read - and why. The copy's
+# settle (argo-settled.yml, --failing-cronjobs) does not wait for their failed runs; a run still going is waited for,
+# and every other failed Job fails the settle as before. One <namespace>/<name> a line, its reason above it.
+#
+# Reads each Pi's restore-check report from the Pi store (pi<N>/last-success): production's Pis write it daily
+# (setup-pi-restore-check.yml). The copy's Pis do not run that check - its containers are bounded at 1.5 GB each, the
+# copy's 2 GB Pis have ~0.8 GB free beside their stack - so the job fails at every :50 of every third hour (seen
+# 2026-11-14 05:50, holding the Velero change's settle). The check itself has its own Vagrant test, task
+# test:pi-restore-check.
+kube-system/restore-check-age

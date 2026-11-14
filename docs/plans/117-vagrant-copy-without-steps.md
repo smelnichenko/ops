@@ -205,6 +205,17 @@ Argo settle timed out, and the radar station on the same host died (22:17, resta
   still has it, else from snapshot.debian.org at that version's first publication. Run on the seventh build's Pis:
   both moved from the archive (it still serves the point release beside the security update), the inventories then
   matched (238 lines, 19 allowed missing). An apt upgrade proven on the copy (wave 1c) now starts where production is.
+- **The eighth build: ALL GREEN** (build 04:56-05:48, every check 05:48-05:55; the node ~1 GB available at the end, no
+  OOM kill; the host at least ~4.1 GB available, the guard never tripped). Every serial check said its verdict: base
+  backup, 3 certificates renewed, Postgres restored into a side cluster, a Velero volume restored, the daily schedule's
+  backup Completed (pods backed up, 6 of 6 volume backups), Scylla Manager backed up, the sweeper.
+- **The Velero change's first run** (05:56-06:36): every app green on the change's commits, but the settle waited 40 min
+  on one failed pod - `kube-system/restore-check-age`, which reads each Pi's restore-check report from the Pi store. The
+  copy's Pis do not run production's Pi restore check (its containers are bounded at 1.5 GB each; the copy's 2 GB Pis
+  have ~0.8 GB free), so the job fails at every :50 of every third hour - the build's checks passed only because none
+  fell inside them. The copy's settle now takes `--failing-cronjobs` from `tests/ansible/copy/copy-failing-cronjobs.txt`
+  (each CronJob with its reason): their failed runs are not waited for, a run still going is, every other failed Job
+  fails the settle as before. The check itself keeps its own Vagrant test (task test:pi-restore-check).
 
 ## Open
 

@@ -19,7 +19,9 @@ app otherwise "settles" by its absence), one more is not green unless its name m
 (production's preview environments, pr-<N>-<repo>, come and go with their pull requests: such an app's state is not
 looked at either). --ignore-namespaces <regex>: the pods there are not looked at (the preview environments'
 schnappy-pr-<N>: one starting during a production settle is no part of production). --print-apps prints the
-Applications' names on a last line, APPS <a,b>.
+Applications' names on a last line, APPS <a,b>. --failing-cronjobs <ns/name,...>: a failed run of these CronJobs (a
+Job they made, <name>-<scheduled minute>) is no pod to wait for - the copy's CronJobs whose inputs it cannot have, each
+with its reason in tests/ansible/copy/copy-failing-cronjobs.txt; a run still going is waited for like any pod.
 
 --restart-history <file> --step <label>: once settled, a pod (by uid) whose containers restarted during this step and
 during the step before it fails the wait - a crash loop slower than --restart-quiet settles between two restarts, and
@@ -262,6 +264,14 @@ def owner_key(pod):
     return meta["namespace"], owner["kind"] if owner["kind"] != "ReplicaSet" else "Deployment", name
 
 
+def failing_run(pod, failing):
+    """A failed run of a CronJob in `failing` ({(namespace, name)}): its Job named <name>-<digits> in that namespace, as
+    the CronJob controller names the Jobs it makes (a Job made by hand from it, another name, is not one)."""
+    key = owner_key(pod)
+    return (key is not None and key[1] == "Job"
+            and any(key[0] == ns and re.fullmatch(rf"{re.escape(name)}-[0-9]+", key[2]) for ns, name in failing))
+
+
 def ready_now(status):
     containers = status.get("containerStatuses") or []
     return status.get("phase") == "Running" and containers and all(c.get("ready") for c in containers)
@@ -278,11 +288,11 @@ def last_restart(containers):
     return max(iso(e) for e in ends) if ends else None
 
 
-def pod_state(pod, now=None, quiet=0, replaced=frozenset(), since=None, completed=frozenset()):
+def pod_state(pod, now=None, quiet=0, replaced=frozenset(), since=None, completed=frozenset(), failing=frozenset()):
     """(ready, restarts, why) of a pod: Succeeded, or Running with every container ready and none restarted in the
     last `quiet` seconds nor at or after `since`; a node-shutdown leftover whose owner runs a ready pod again (its key
     in `replaced`) is no pod to wait for - one whose owner never replaced it is; a failed attempt of a Job a later
-    attempt completed (its key in `completed`) is none either."""
+    attempt completed (its key in `completed`) is none either, nor a failed run of a CronJob in `failing`."""
     status = pod.get("status") or {}
     containers = status.get("containerStatuses") or []
     restarts = sum(c.get("restartCount", 0) for c in containers)
@@ -291,7 +301,7 @@ def pod_state(pod, now=None, quiet=0, replaced=frozenset(), since=None, complete
     if node_shutdown_leftover(status):
         key = owner_key(pod)
         return (True, restarts, "") if key in replaced else (False, restarts, "node-shutdown leftover, not replaced")
-    if status.get("phase") == "Failed" and owner_key(pod) in completed:
+    if status.get("phase") == "Failed" and (owner_key(pod) in completed or failing_run(pod, failing)):
         return True, restarts, ""
     if not ready_now(status):
         return False, restarts, status.get("phase", "?")
@@ -312,7 +322,7 @@ def without(pods, namespaces):
     return {**pods, "items": [p for p in pods["items"] if not re.search(namespaces, p["metadata"]["namespace"])]}
 
 
-def evaluate(apps, pods, allowed, mirror, now=None, quiet=0, expected=None, extra=None, since=None):
+def evaluate(apps, pods, allowed, mirror, now=None, quiet=0, expected=None, extra=None, since=None, failing=frozenset()):
     """One poll: (green, app problems by name, pods not ready, restart counts by pod uid). With `expected` (a set of
     names) every one of them must exist, and no other app unless its name matches the regex `extra`."""
     problems = {a["metadata"]["name"]: p for a in apps["items"]
@@ -330,7 +340,7 @@ def evaluate(apps, pods, allowed, mirror, now=None, quiet=0, expected=None, extr
                  and (k := owner_key(p)) is not None and k[1] == "Job"}
     for pod in pods["items"]:
         meta = pod["metadata"]
-        ready, count, why = pod_state(pod, now, quiet, replaced, since, completed)
+        ready, count, why = pod_state(pod, now, quiet, replaced, since, completed, failing)
         restarts[meta["uid"]] = (f"{meta['namespace']}/{meta['name']}", count)
         if not ready:
             not_ready.append(f"{meta['namespace']}/{meta['name']} ({why})")
@@ -415,6 +425,7 @@ def main():
     ap.add_argument("--expect-apps")
     ap.add_argument("--allow-extra-apps")
     ap.add_argument("--ignore-namespaces")
+    ap.add_argument("--failing-cronjobs", default="", help="ns/name,...: their failed runs not waited for")
     ap.add_argument("--print-apps", action="store_true")
     ap.add_argument("--restart-history")
     ap.add_argument("--step")
@@ -426,6 +437,12 @@ def main():
         print("bad arguments", file=sys.stderr)
         return 2
     allowed = set(filter(None, a.allow_out_of_sync.split(",")))
+    failing = set()
+    for c in filter(None, a.failing_cronjobs.split(",")):
+        if not re.fullmatch(r"[a-z0-9-]+/[a-z0-9-]+", c):
+            print(f"--failing-cronjobs: {c!r} is no <namespace>/<name>", file=sys.stderr)
+            return 2
+        failing.add(tuple(c.split("/")))
     since = iso(a.restarted_since) if a.restarted_since else None
     mirror = json.loads(os.environ.get("MIRROR_REVISIONS") or "{}")
     expected = None
@@ -456,7 +473,7 @@ def main():
             apps, pods = json.load(f_apps), without(json.load(f_pods), a.ignore_namespaces)
         now = iso(a.now) if a.now else None
         green, problems, not_ready, _ = evaluate(apps, pods, allowed, mirror, now, a.restart_quiet, expected,
-                                                 a.allow_extra_apps, since)
+                                                 a.allow_extra_apps, since, failing)
         print(("GREEN " if green else "NOT GREEN ") + summary(apps, problems, not_ready, allowed))
         report(problems, not_ready)
         return finish(apps, pods) if green else 1
@@ -483,7 +500,7 @@ def main():
             pods = without(kubectl(a.kubeconfig, "get", "pods", "-A", "-o", "json", timeout=read_timeout()),
                            a.ignore_namespaces)
             green, problems, not_ready, restarts = evaluate(apps, pods, allowed, mirror, None, a.restart_quiet,
-                                                            expected, a.allow_extra_apps, since)
+                                                            expected, a.allow_extra_apps, since, failing)
             line = summary(apps, problems, not_ready, allowed)
         except (RuntimeError, ValueError, subprocess.TimeoutExpired) as e:
             green, problems, not_ready, restarts, line = False, {}, [], last or {}, f"poll failed: {e}"

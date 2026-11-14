@@ -52,6 +52,11 @@
     # next stage judging against them
     restarts_expected: false
     apps_file: "{{ playbook_dir }}/../../../.copy/argo-apps.txt"
+    # the CronJobs whose runs fail on the copy by nature (the file says why): their failed runs not waited for
+    failing_cronjobs_file: "{{ playbook_dir }}/copy-failing-cronjobs.txt"
+    failing_cronjobs: >-
+      {{ lookup('ansible.builtin.file', failing_cronjobs_file).splitlines() | map('trim') | reject('match', '^(#|$)')
+         | join(',') }}
     restart_history: /var/lib/vagrant-copy/restart-history.json
     mirror_revisions: >-
       {{ lookup('ansible.builtin.file', playbook_dir ~ '/../../../.copy/mirror-revisions.json') | from_json
@@ -85,6 +90,7 @@
           --stable-polls {{ stable_polls }} --restart-quiet {{ restart_quiet }} --allow-out-of-sync '{{ allow_out_of_sync }}'
           {{ '--print-apps' if record_apps | bool else '' }}
           {{ ('--expect-apps ' ~ (lookup('ansible.builtin.file', apps_file).split() | join(','))) if expect_apps | bool else '' }}
+          --failing-cronjobs '{{ failing_cronjobs }}'
           {{ ('--restart-history ' ~ restart_history ~ ' --step ' ~ restart_stage) if restart_stage | length > 0 else '' }}
           {{ '--restarts-expected' if restart_stage | length > 0 and restarts_expected | bool else '' }}
         executable: python3
