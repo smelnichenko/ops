@@ -194,9 +194,13 @@ Never two of these at once; no Pi turn while an infra merge moves pods that use 
   ready, no running pod unready, every app settled, only Watchdog. cilium-operator restarted once during it (its leader
   lease lost with the API server - expected). The inventory read again (its Kubernetes lines alone), ops
   k8s_package_version 1.36.6-1.1 (c25451f3).
-- Steps 4-5 wait for the review fixes' copy run: the guard's start reserve lowered to 2 GB (operator), then the radar
-  stopped for it (operator, 17:15 local: "no more memory from anywhere") - the run started 17:15 (radar-live.service to
-  start again once the copy is destroyed).
+- The review fixes' copy run - ALL GREEN 18:43 local (the radar stopped for it by the operator; the guard's start reserve
+  2 GB): build from main = production with Kubernetes 1.36.6 (17:15-18:09); Cilium 1.20.4 (its images pulled first, one
+  minor at a time - its inventory Cilium's lines alone); the Pis' playbook previewed (--check: it failed once - the
+  handover's results were read in a preview, the VIP still on the other Pi in the holder's turn; fixed 72cd1218, green
+  again, nothing changed), run (pi2, then pi1 handing the VIP over: every check), and run again with a reboot owed on
+  pi2 (a planted mark: pi2 handed over and rebooted - its boot id changed - its mark cleared; pi1 left as it was).
+  Copy destroyed. Steps 4-5 next (each the operator's go: the session's auto mode).
 
 **Out of wave 1** (found in the notes): PostgreSQL 18.7 - CNPG publishes no bullseye image for it; moving means the
 trixie (or bookworm) image, a glibc change (collations: reindex, `REFRESH COLLATION VERSION`) and 18.7's own reindex

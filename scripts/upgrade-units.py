@@ -43,7 +43,9 @@ def get(path, **params):
     out, page = [], 1
     while True:
         q = urllib.parse.urlencode({**params, "page": page, "limit": 50})
-        req = urllib.request.Request(f"{API}{path}?{q}", headers={"Authorization": f"token {TOKEN}"} if TOKEN else {})
+        req = urllib.request.Request(f"{API}{path}?{q}")
+        if TOKEN:  # not kept across a redirect: the token never reaches another host
+            req.add_unredirected_header("Authorization", f"token {TOKEN}")
         try:
             with urllib.request.urlopen(req, timeout=30) as r:
                 data = json.loads(r.read())

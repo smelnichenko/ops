@@ -28,7 +28,8 @@ class Refused(Exception):
 
 def call(method, path, body=None):
     req = urllib.request.Request(f"{API}{path}", method=method, data=json.dumps(body).encode() if body is not None else None,
-                                 headers={"Authorization": f"token {TOKEN}", "Content-Type": "application/json"})
+                                 headers={"Content-Type": "application/json"})
+    req.add_unredirected_header("Authorization", f"token {TOKEN}")  # not kept across a redirect
     try:
         with urllib.request.urlopen(req, timeout=30) as r:
             raw = r.read()

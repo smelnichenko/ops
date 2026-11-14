@@ -74,6 +74,13 @@ check("dry run: what would be posted said, nothing sent", (rc, out.startswith("D
 rc, out, argv = run("one-way-failed", "u", "s")
 check("Alertmanager unreachable, a one-way failure: straight out - no key, not sent, said (exit 1)",
       (rc, "not reached" in out, "NOT SENT: no RESEND_API_KEY" in out), (1, True, True))
+values = os.path.join(W, "values.yaml")
+open(values, "w").write("alertmanager:\n  enabled: true\n")
+rc, out, argv = run("one-way-failed", "u", "s", RESEND_API_KEY="k", UPGRADE_NOTICE_INFRA_VALUES=values)
+check("a one-way failure with no admin address to mail: not sent, said (exit 1) - no mail to a guess",
+      (rc, "NOT SENT: no admin address" in out), (1, True))
+rc, out, argv = run("one-way-failed", "u", "s", RESEND_API_KEY="k", UPGRADE_NOTICE_INFRA_VALUES=os.path.join(W, "none.yaml"))
+check("the values file not there (no infra beside ops): not sent, said", (rc, "NOT SENT: no admin address" in out), (1, True))
 rc, out, argv = run("blocked", "u", "s")
 check("Alertmanager unreachable, any other kind: failed, no direct mail", (rc, "MAILED" in out or "NOT SENT" in out), (1, False))
 os.remove(os.path.join(W, "ssh.fail"))

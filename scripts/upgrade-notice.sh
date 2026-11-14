@@ -14,6 +14,7 @@
 # Env:   UPGRADE_NOTICE_DRY=1  print what would be posted (and mailed), send nothing
 #        UPGRADE_NOTICE_HOST   the host Alertmanager is reached through (default ten)
 #        RESEND_API_KEY        the direct mail's SMTP password (ops .env, loaded by task)
+#        UPGRADE_NOTICE_INFRA_VALUES  where the admin address is read (default ../infra's production observability values)
 set -euo pipefail
 export LC_ALL=C
 kind=${1:-}; unit=${2:-}; summary=${3:-}; details_file=${4:-}
@@ -41,11 +42,11 @@ remote="kubectl -n schnappy-infra exec deploy/schnappy-alertmanager -c alertmana
 
 direct() {
   # the same sender and address Alertmanager uses, not through it
-  local to
-  to=$(sed -n "s/^  alertEmailTo: *//p" "$ops/../infra/clusters/production/schnappy-observability/values.yaml" | tr -d "\"'")
-  [[ $to =~ ^[^@[:space:]]+@[^@[:space:]]+$ ]] || { echo "NOT SENT: no admin address in infra's alertEmailTo"; return 1; }
+  local to values=${UPGRADE_NOTICE_INFRA_VALUES:-$ops/../infra/clusters/production/schnappy-observability/values.yaml}
   if [ -n "${UPGRADE_NOTICE_DRY:-}" ]; then echo "DRY: would mail $kind $unit to infra's alertEmailTo directly"; return 0; fi
   [ -n "${RESEND_API_KEY:-}" ] || { echo "NOT SENT: no RESEND_API_KEY for the direct mail"; return 1; }
+  to=$(sed -n "s/^  alertEmailTo: *//p" "$values" 2> /dev/null | tr -d "\"'") || to=""
+  [[ $to =~ ^[^@[:space:]]+@[^@[:space:]]+$ ]] || { echo "NOT SENT: no admin address in $values (alertEmailTo)"; return 1; }
   TO="$to" SUBJECT="[UpgradeCycle] $kind: $unit - $summary" BODY="$summary"$'\n\n'"$details" python3 -I - <<'PY'
 import os, smtplib, ssl
 from email.message import EmailMessage
