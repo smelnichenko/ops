@@ -17,8 +17,12 @@ taken for a yes.
                  one: "HEALTHY <members>", or "NOT HEALTHY <members>"
   consul         Consul's servers as a Pi's reboot needs them: autopilot healthy, one loss tolerated, three healthy
                  voters: "QUORUM HOLDS <servers>", or "NO QUORUM TO SPARE <servers>"
-  serving VIP    this Pi holds the VIP and serves keepalived's own services (each running, its health URL answering):
-                 "SERVING <vip> <units>", or what is missing
+  vip-units      keepalived's own services installed here (a unit its table names but this Pi lacks - the Vagrant
+                 copy has no Nexus - is skipped by keepalived too): one a line, then "VIP UNITS <n>"
+  serving VIP [UNIT...]
+                 this Pi holds the VIP and serves the units named - each one of keepalived's, installed, running, its
+                 health URL answering (the units the Pi handing over had: one missing here is not served): "SERVING
+                 <vip> <units>", or what is missing
 
 The paths and the Consul address from the environment, for the unit harness (tests/ansible/unit/pi-packages).
 """
@@ -216,34 +220,52 @@ def consul(_args):
     return 0 if ok else 1
 
 
+def load_state(unit):
+    return run(["systemctl", "show", "-p", "LoadState", "--value", unit], timeout=30).strip()
+
+
+def vip_units(_args):
+    found = [unit for unit, _ in keepalived_services() if load_state(unit) != "not-found"]
+    for unit in found:
+        print(unit)
+    print(f"VIP UNITS {len(found)}")
+    return 0
+
+
 def serving(args):
-    if len(args) != 1:
-        raise NotRead("serving: the VIP, one address")
-    vip = args[0]
+    if not args:
+        raise NotRead("serving: the VIP, then the units it must serve")
+    vip, wanted = args[0], args[1:]
     if f" inet {vip}/" not in run(["ip", "-o", "-4", "addr", "show", "to", f"{vip}/32"]):
         print(f"NO VIP {vip} here")
         return 1
-    rows = keepalived_services()
+    urls = dict(keepalived_services())
+    unknown = [u for u in wanted if u not in urls]
+    if unknown:
+        raise NotRead(f"serving: {' '.join(unknown)} not in keepalived's table")
     missing = []
-    for unit, url in rows:
+    for unit in wanted:
+        if load_state(unit) == "not-found":
+            missing.append(f"{unit} not installed")
+            continue
         state = run(["systemctl", "is-active", unit], timeout=30, check=False).stdout.strip()
         if state != "active":
             missing.append(f"{unit} {state or 'unread'}")
             continue
         try:
-            with urllib.request.urlopen(url, timeout=5):
+            with urllib.request.urlopen(urls[unit], timeout=5):
                 pass
         except (urllib.error.URLError, OSError) as e:
-            missing.append(f"{unit} not answering {url} ({e})")
+            missing.append(f"{unit} not answering {urls[unit]} ({e})")
     if missing:
         print(f"NOT SERVING {vip}: " + ", ".join(missing))
         return 1
-    print(f"SERVING {vip} {' '.join(u for u, _ in rows) or '(keepalived has no service of its own)'}")
+    print(f"SERVING {vip} {' '.join(wanted) or '(no keepalived service to serve)'}")
     return 0
 
 
 COMMANDS = {"plan": plan, "services": services, "back": back, "gluster": gluster, "patroni": patroni,
-            "consul": consul, "serving": serving}
+            "consul": consul, "vip-units": vip_units, "serving": serving}
 
 
 def main(argv):

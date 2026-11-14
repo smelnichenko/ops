@@ -83,8 +83,9 @@ Then `task test:copy:inventory` (production read again) - the copy is built to t
   postgresql-17 17.11 on the Pis carries the same reindex notes as 17.12/18.7 - checked with the Pis' wave.
 
 **Wave 1 as built (2026-11-14):**
-- 1a: infra `upgrade/wave-1` 6a91c972, platform `upgrade/wave-1` 7abd7a1 - the table's versions, the test namespace's
-  Valkey and ScyllaDB with production's, platform CI's ClickHouse image with the chart's. ClickHouse stays at 26.8.34.13:
+- 1a: infra `upgrade/wave-1` 39be27f5, platform `upgrade/wave-1` 7abd7a1 - the table's versions, platform CI's ClickHouse
+  image with the chart's. The test namespace's Valkey and ScyllaDB on infra `upgrade/wave-1-test` cbcfc52b, merged first
+  (the copy leaves that environment out - its mirror refused them on the wave's branch: they would pass untested). ClickHouse stays at 26.8.34.13:
   26.8.35/36 are Docker tags without a GitHub release, 26.8.37 came out the same morning (notes unread). pushgateway
   1.11.4 (1.11.5: a tag, no release). ClickHouse 26.8.26's TLS default touches nothing: the server opens no TLS of its
   own (its Kafka engine inside the mesh) - no setting added. Velero chart 12.2.0 -> 12.2.5 diffed: POD_NAME (the
@@ -114,6 +115,16 @@ Then `task test:copy:inventory` (production read again) - the copy is built to t
   `test:copy:playbook` for upgrade-kubeadm.yml (`-e k8s_upgrade_to=1.36.6`, RESTARTS_EXPECTED=true), setup-kubeadm.yml
   (`--tags cilium -e cilium_version=1.20.4`), upgrade-pi-packages.yml, upgrade-patroni.yml, upgrade-vault.yml
   (`-e @vars/vault.yml -e @vars/vault-vagrant.yml` - amd64), upgrade-forgejo.yml - each with every check.
+
+**Wave 1's Vagrant proof - ALL GREEN 2026-11-14 15:12** (`.copy/run-119-w1*.log`): build from main 13:13-14:02; the
+change 12 min (every check; the copy's inventory production's but for the wave's own lines); Kubernetes 1.36.6 (no
+kube-proxy back, etcd/CoreDNS unchanged); Cilium 1.20.4 (its Envoy 1.37.6 -> 1.39.5 with the chart); the Pis' packages
+(postgresql-17 17.12, haproxy deb13u4; the box's grub holds kept back - production's Pis hold nothing); Patroni 4.1.5;
+Vault 1.21.4; Forgejo 15.0.11 (doctor: all checks). The Pis' first run failed in the VIP holder's turn: its check
+wanted Nexus on the other Pi, and the copy has no Nexus (allowed-missing; keepalived skips it). Since: the first play
+records the keepalived services each Pi has, the other Pi must serve exactly the handing-over Pi's, the run's end
+what either had - one missing fails; production's Pis both have Nexus (read). The copy was put back into production's
+layout (pi1 the VIP's, Patroni's and Vault's) and the stage run again: every handover taken, green. Copy destroyed.
 
 **Out of wave 1** (found in the notes): PostgreSQL 18.7 - CNPG publishes no bullseye image for it; moving means the
 trixie (or bookworm) image, a glibc change (collations: reindex, `REFRESH COLLATION VERSION`) and 18.7's own reindex

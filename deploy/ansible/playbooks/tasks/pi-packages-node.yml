@@ -1,8 +1,8 @@
 ---
 # One Pi's turn in upgrade-pi-packages.yml (its header says why each step): nothing to upgrade - left as it is; else
 # its roles handed to the other Pi, apt's upgrade, the reboot - Consul's leadership elsewhere, no tier-0 backup - and
-# every check after it. Expects: pi_packages (the script), each Pi's pi_packages_services (the run's first play),
-# keepalived_vip, the pis group.
+# every check after it. Expects: pi_packages (the script), each Pi's pi_packages_services and pi_packages_vip_units
+# (the run's first play), keepalived_vip, the pis group.
 - name: The other Pi, and how long a handover may take
   ansible.builtin.set_fact:
     _other_pi: "{{ groups['pis'] | difference([inventory_hostname]) | first }}"
@@ -86,9 +86,9 @@
         state: stopped
       when: pi_vip_holder == inventory_hostname
 
-    - name: The other Pi holding the VIP and serving keepalived's services (its notify script waits up to 180 s)
+    - name: The other Pi holding the VIP and serving keepalived's services this Pi had (its notify script waits up to 180 s)
       ansible.builtin.script:
-        cmd: "{{ pi_packages }} serving {{ keepalived_vip }}"
+        cmd: "{{ pi_packages }} serving {{ keepalived_vip }} {{ pi_packages_vip_units | join(' ') }}"
         executable: python3
       register: _took_vip
       retries: 40

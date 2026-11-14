@@ -15,7 +15,7 @@ PY=python3
 "$PY" -c 'import ansible, yaml' 2> /dev/null || PY=deploy/ansible/venv/bin/python3
 W=$(mktemp -d)
 trap 'kill "$(cat "$W/server.pid" 2> /dev/null)" 2> /dev/null; rm -rf "$W"' EXIT
-mkdir -p "$W/bin" "$W/state" "$W/heal"
+mkdir -p "$W/bin" "$W/state" "$W/heal" "$W/notfound"
 # apt-get: its output and exit from files, its arguments recorded
 cat > "$W/bin/apt-get" <<'STUB'
 #!/bin/bash
@@ -31,6 +31,7 @@ cat > "$W/bin/systemctl" <<'STUB'
 case "$1" in
   list-units) cat "$W/active" ;;
   list-unit-files) cat "$W/enabled" ;;
+  show) if [ -e "$W/notfound/${*: -1}" ]; then echo not-found; else echo loaded; fi ;;
   is-active) shift; rc=0
     for u in "$@"; do s=$(cat "$W/state/$u" 2> /dev/null || echo inactive); [ -e "$W/is-active.short" ] || echo "$s"
       [ "$s" = active ] || rc=3; done
@@ -278,21 +279,38 @@ ENV["CONSUL_HTTP_ADDR"] = "http://127.0.0.1:1"
 check("consul: unreachable - not read", run("consul")[1].startswith("NOT READ"), True)
 ENV["CONSUL_HTTP_ADDR"] = f"http://127.0.0.1:{PORT}"
 
-# ── serving ──
+# ── vip-units, serving ──
+check("vip-units: keepalived's services installed here", run("vip-units"), (0, "nexus.service\nVIP UNITS 1"))
+put("notfound/nexus.service", "")
+check("vip-units: one its table names but this Pi lacks (the Vagrant copy's Nexus) - skipped, as keepalived skips it",
+      run("vip-units"), (0, "VIP UNITS 0"))
+gone("notfound/nexus.service")
+os.rename(os.path.join(W, "notify_lib.sh"), os.path.join(W, "notify_lib.away"))
+check("vip-units: no keepalived on the host - none", run("vip-units"), (0, "VIP UNITS 0"))
+os.rename(os.path.join(W, "notify_lib.away"), os.path.join(W, "notify_lib.sh"))
 put("ip.out", "2: eth0    inet 192.168.11.5/24 scope global secondary eth0\n")
 put("state/nexus.service", "active"); put("nexus.status", "200")
-check("serving: the VIP here, Nexus running and answering", run("serving", "192.168.11.5"),
+check("serving: the VIP here, Nexus running and answering", run("serving", "192.168.11.5", "nexus.service"),
       (0, "SERVING 192.168.11.5 nexus.service"))
+check("serving: no unit to serve (the Pi handing over had none) - the VIP alone", run("serving", "192.168.11.5"),
+      (0, "SERVING 192.168.11.5 (no keepalived service to serve)"))
+put("notfound/nexus.service", "")
+rc, out = run("serving", "192.168.11.5", "nexus.service")
+check("serving: a unit the Pi handing over had, not installed here - not serving (never skipped)",
+      (rc, "nexus.service not installed" in out), (1, True))
+gone("notfound/nexus.service")
+check("serving: a unit keepalived's table does not name - not read",
+      run("serving", "192.168.11.5", "caddy.service")[1].startswith("NOT READ"), True)
 put("ip.out", "")
-check("serving: the VIP not here", run("serving", "192.168.11.5"), (1, "NO VIP 192.168.11.5 here"))
+check("serving: the VIP not here", run("serving", "192.168.11.5", "nexus.service"), (1, "NO VIP 192.168.11.5 here"))
 put("ip.out", "2: eth0    inet 192.168.11.50/24 scope global eth0\n")
 check("serving: an address the VIP is the start of is not it", run("serving", "192.168.11.5")[0], 1)
 put("ip.out", "2: eth0    inet 192.168.11.5/24 scope global secondary eth0\n")
 put("state/nexus.service", "activating")
-rc, out = run("serving", "192.168.11.5")
+rc, out = run("serving", "192.168.11.5", "nexus.service")
 check("serving: Nexus still starting - not serving, named", (rc, "nexus.service activating" in out), (1, True))
 put("state/nexus.service", "active"); put("nexus.status", "503")
-rc, out = run("serving", "192.168.11.5")
+rc, out = run("serving", "192.168.11.5", "nexus.service")
 check("serving: Nexus running, its status not answering yet - not serving", (rc, "not answering" in out), (1, True))
 put("nexus.status", "200")
 
@@ -343,6 +361,14 @@ check("nothing to upgrade ends the Pi's turn - only that (a new package is somet
 check("the switchover only where Patroni leads",
       [condition(every[switch]["when"], _patroni_here={"json": {"role": r}}) for r in ("primary", "master", "replica")],
       [True, True, False])
+check("the other Pi must serve what this Pi had - its own units, as the first play recorded them",
+      render(every[took]["ansible.builtin.script"]["cmd"], pi_packages="P", keepalived_vip="V",
+             pi_packages_vip_units=["nexus.service"]).split(), ["P", "serving", "V", "nexus.service"])
+final = next(t for t in book[3]["tasks"] if "serving" in str(t.get("ansible.builtin.script")))
+check("after the run: the VIP's Pi serves what either Pi had",
+      render(final["ansible.builtin.script"]["cmd"], pi_packages="P", keepalived_vip="V", ansible_play_hosts=["pi1", "pi2"],
+             hostvars={"pi1": {"pi_packages_vip_units": ["nexus.service"]}, "pi2": {"pi_packages_vip_units": []}}).split(),
+      ["P", "serving", "V", "nexus.service"])
 check("keepalived stopped only on the VIP's holder",
       [condition(every[stop]["when"], pi_vip_holder="pi1", inventory_hostname=h) for h in ("pi1", "pi2")], [True, False])
 blk = next(t for t in node if "block" in t and every[boot] in list(walk(t["block"])))

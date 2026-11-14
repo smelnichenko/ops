@@ -94,6 +94,20 @@
       ansible.builtin.set_fact:
         pi_packages_services: "{{ _services.stdout_lines | map('trim') | reject('match', '^SERVICES ') | list }}"
 
+    # what the other Pi must serve when this one hands the VIP over: keepalived's services this one has (the Vagrant
+    # copy has no Nexus - keepalived skips it there too)
+    - name: Keepalived's own services installed on each Pi
+      ansible.builtin.script:
+        cmd: "{{ pi_packages }} vip-units"
+        executable: python3
+      register: _vip_units
+      changed_when: false
+      check_mode: false  # a read
+
+    - name: Each one's, for the handover
+      ansible.builtin.set_fact:
+        pi_packages_vip_units: "{{ _vip_units.stdout_lines | map('trim') | reject('match', '^VIP UNITS ') | list }}"
+
     - name: The order - the Pi not holding the VIP first, its holder last
       ansible.builtin.group_by:
         key: "pi_packages_turn_{{ 2 if inventory_hostname == pi_vip_holder else 1 }}"
@@ -132,9 +146,11 @@
     - name: Which Pi holds the VIP now
       ansible.builtin.include_tasks: tasks/pi-vip-holder.yml
 
-    - name: The VIP's Pi serving keepalived's own services (Nexus - its notify script waits up to 180 s)
+    - name: The VIP's Pi serving keepalived's own services either Pi had (Nexus - its notify script waits up to 180 s)
       ansible.builtin.script:
-        cmd: "{{ pi_packages }} serving {{ keepalived_vip }}"
+        cmd: >-
+          {{ pi_packages }} serving {{ keepalived_vip }}
+          {{ ansible_play_hosts | map('extract', hostvars, 'pi_packages_vip_units') | flatten | unique | join(' ') }}
         executable: python3
       register: _serving
       retries: 40
