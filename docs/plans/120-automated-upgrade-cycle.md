@@ -18,9 +18,11 @@ lookup) run - its findings fixed below, three questions open.
 **Done since:** the renovate-bot reset (operator: "reset renovate-bot with forgejo_admin yourself"), its PAT in
 ops/.env RENOVATE_TOKEN, write access to infra/platform/ops (operator: "grant it").
 **Not yet:** a valid GitHub read token (RENOVATE_GITHUB_TOKEN in ops/.env answers 401), the systemd user timer and its
-start time, the agent's headless permissions, `deploy:seed-secrets` for the bot's token (the operator's OK), Argo CD's
-chart default annotated (setup-argocd.yml's `argocd_version | default(...)` is no plain value), Strimzi's Kafka
-`version:` and Nexus annotated, a one-way change's store backups beyond etcd (Postgres, ScyllaDB, ...: blocked).
+start time, the agent's headless permissions, `deploy:seed-secrets` for the bot's token (the operator's OK), Strimzi's
+Kafka `version:` and Nexus annotated, a one-way change's store backups beyond etcd (Postgres, ScyllaDB, ...: blocked).
+Argo CD in the cycle (2026-11-14): its chart default a value of its own (`argocd_chart_default`, annotated - the
+lookup: argo-cd 10.9.7 -> 10.18.0 on renovate/argocd), its unit proven on the copy by setup-argocd.yml (the chart
+default or an image pin moved; any other change refused) and applied by `task --yes deploy:argocd`.
 
 **Rollout step 1 - the lookup, 2026-11-14** (Renovate 44.198.3, `local` platform, `RENOVATE_DRY_RUN=lookup`, each
 repo's branch exported to a scratch git directory under ops/.copy with the preset as its renovate.json - a `local>`

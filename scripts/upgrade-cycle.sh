@@ -151,6 +151,7 @@ while IFS= read -r step; do
       run task --yes deploy:kubeadm:upgrade -- -e "k8s_upgrade_to=$v" ;;
     "test:copy:playbook PLAYBOOK=setup-kubeadm.yml"*) v=$(sed -n "s/.*cilium_version=\([^ ']*\).*/\1/p" <<< "$step")
       run task --yes deploy:cilium:upgrade -- -e "cilium_version=$v" ;;
+    "test:copy:playbook PLAYBOOK=setup-argocd.yml"*) run task --yes deploy:argocd ;;
     "test:copy:playbook PLAYBOOK=upgrade-patroni.yml"*) run task --yes deploy:patroni:upgrade ;;
     "test:copy:playbook PLAYBOOK=upgrade-vault.yml"*) run task --yes deploy:vault:upgrade ;;
     "test:copy:playbook PLAYBOOK=upgrade-forgejo.yml"*) run task --yes deploy:forgejo:upgrade ;;

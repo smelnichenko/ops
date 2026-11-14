@@ -136,6 +136,8 @@ check("Renovate's own name for a Postgres major, its label missing: the names' n
 rc, calls = night("apply grafana-grafana-13.x major", files={"list": "grafana-grafana-13.x major schnappy/platform major\n"})
 check("a Grafana major as Renovate names it (grafana-grafana-13.x): blocked by the names' net",
       (rc, has(calls, "upgrade-label.py")), (1, ["upgrade-label.py grafana-grafana-13.x upgrade-blocked"]))
+rc, calls = night("prove argocd minor", plan="test:copy:playbook PLAYBOOK=setup-argocd.yml ARGS='-e @vars/vault-vagrant.yml' RESTARTS_EXPECTED=true\n")
+check("an Argo CD unit: merged, then production's deploy:argocd", (rc, has(calls, "task --yes")), (0, ["task --yes deploy:argocd"]))
 rc, calls = night("prove centrifugo-6.x minor", plan=PLAN,
                   files={"list": "centrifugo-6.x minor schnappy/infra not-one-way,upgrade-cycle\n"})
 check("a label only containing the word (not-one-way) is not one-way: merged",

@@ -23,7 +23,7 @@ MAP = [
     (P + "setup-kubeadm.yml", "var", "local_path_provisioner_version", r"image (?:docker\.io/)?rancher/local-path-provisioner (\S+)"),
     (P + "setup-kubeadm.yml", "var", "k8s_package_version", r"pkg kubeadm (\S+) .*"),
     (P + "setup-kubeadm.yml", "var", "containerd_io_version", r"pkg containerd\.io (\d+\.\d+\.\d+)-\S+ .*"),
-    (P + "setup-argocd.yml", "var", "argocd_chart_version", r"helm argocd/argocd argo-cd-(\S+) .*"),
+    (P + "setup-argocd.yml", "var", "argocd_chart_default", r"helm argocd/argocd argo-cd-(\S+) .*"),
     (P + "setup-kubeadm.yml", "helm", "cnpg", r"argo-chart cnpg cloudnative-pg@(\S+)"),
     (P + "setup-kubeadm.yml", "helm", "strimzi", r"argo-chart strimzi strimzi-kafka-operator@(\S+)"),
     (P + "setup-kubeadm.yml", "helm", "scylla-operator", r"argo-chart scylla-operator scylla-operator@(\S+)"),

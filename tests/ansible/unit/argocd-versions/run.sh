@@ -23,7 +23,9 @@ def check(name, got, want):
 FIXED = {"3.3": (3, 3, 15), "3.4": (3, 4, 10), "3.5": (3, 5, 4)}
 play = yaml.safe_load(open("deploy/ansible/playbooks/setup-argocd.yml"))[0]
 pins = play["vars"]["argocd_image_pins"]
-default = re.search(r"default\('([^']+)'\)", play["vars"]["argocd_chart_version"])[1]
+check("the chart's version: an override, else its default (argocd_chart_default - Renovate's annotated value)",
+      play["vars"]["argocd_chart_version"], "{{ argocd_version | default(argocd_chart_default) }}")
+default = str(play["vars"]["argocd_chart_default"])
 inventory = open("tests/ansible/copy/prod-inventory.txt").read()
 helm = re.search(r"(?m)^helm argocd/argocd argo-cd-(\S+) (v\S+)$", inventory)
 image = re.search(r"(?m)^image quay\.io/argoproj/argocd (v\S+)$", inventory)

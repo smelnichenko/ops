@@ -76,8 +76,11 @@ VARS_FILES = {  # a vars file -> its playbook and the arguments production's tas
     "deploy/ansible/vars/vault.yml": ("upgrade-vault.yml", "-e @vars/vault-vagrant.yml"),
     "deploy/ansible/vars/forgejo.yml": ("upgrade-forgejo.yml", ""),
 }
-ORDER = {"upgrade-kubeadm.yml": 0, "setup-kubeadm.yml": 1, "upgrade-patroni.yml": 2, "upgrade-vault.yml": 3,
-         "upgrade-forgejo.yml": 4}
+ORDER = {"upgrade-kubeadm.yml": 0, "setup-kubeadm.yml": 1, "setup-argocd.yml": 2, "upgrade-patroni.yml": 3,
+         "upgrade-vault.yml": 4, "upgrade-forgejo.yml": 5}
+# Argo CD itself (no Argo app holds it): its chart default and the image pinned on a chart - setup-argocd.yml on the copy
+# with the copy's Vault values (as test:copy:build installs it), its pods restarting
+ARGOCD = {"argocd_chart_default", "argocd_image_pins"}
 for path in changed:
     if not path.startswith("deploy/ansible/"):
         continue  # renovate.json and the like: no part of a deploy
@@ -94,6 +97,14 @@ for path in changed:
                 continue  # production's Argo charts, or the packages kubeadm's upgrade brings along
             else:
                 refused.append(f"{path} {k}")
+    elif path == "deploy/ansible/playbooks/setup-argocd.yml":
+        old, new = play_vars(show("main", path) or ""), play_vars(show(BRANCH, path) or "")
+        moved = sorted(k for k in set(old) | set(new) if old.get(k) != new.get(k))
+        if not moved or set(moved) - ARGOCD:
+            refused.append(f"{path} {' '.join(sorted(set(moved) - ARGOCD)) or '(its tasks)'}")
+        else:
+            version(new["argocd_chart_default"])
+            steps.append(("setup-argocd.yml", "-e @vars/vault-vagrant.yml", True))
     elif path in VARS_FILES:
         text = show(BRANCH, path)
         if text is None:

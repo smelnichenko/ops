@@ -29,6 +29,17 @@ cat > "$W/src/ops/deploy/ansible/playbooks/setup-kubeadm.yml" <<'Y'
     some_other_version: "1.0"
   tasks: []
 Y
+cat > "$W/src/ops/deploy/ansible/playbooks/setup-argocd.yml" <<'Y'
+- name: argocd
+  hosts: target
+  vars:
+    argocd_chart_default: "10.9.7"
+    argocd_chart_version: "{{ argocd_version | default(argocd_chart_default) }}"
+    argocd_image_pins:
+      "10.2.2": v3.4.10
+    argocd_namespace: argocd
+  tasks: []
+Y
 printf 'forgejo_version: "15.0.11"\n' > "$W/src/ops/deploy/ansible/vars/forgejo.yml"
 printf 'vault_version: "1.21.4"\n' > "$W/src/ops/deploy/ansible/vars/vault.yml"
 printf 'patroni_version: "4.1.5"\n' > "$W/src/ops/deploy/ansible/vars/patroni.yml"
@@ -49,6 +60,11 @@ unit ops vault 's/1.21.4/1.21.5/' deploy/ansible/vars/vault.yml
 unit ops follows 's/v1.21.3/v1.21.4/' deploy/ansible/playbooks/setup-kubeadm.yml
 unit ops unknown 's/"1.0"/"1.1"/' deploy/ansible/playbooks/setup-kubeadm.yml
 unit ops bad-value 's/"1.20.4"/"1.21.0; rm -rf x"/' deploy/ansible/playbooks/setup-kubeadm.yml
+unit ops argocd 's/"10.9.7"/"10.18.0"/' deploy/ansible/playbooks/setup-argocd.yml
+unit ops argocd-pin 's/v3.4.10/v3.4.11/' deploy/ansible/playbooks/setup-argocd.yml
+unit ops argocd-ns 's/argocd_namespace: argocd/argocd_namespace: elsewhere/' deploy/ansible/playbooks/setup-argocd.yml
+unit ops argocd-tasks 's/tasks: \[\]/tasks: [{debug: {msg: x}}]/' deploy/ansible/playbooks/setup-argocd.yml
+unit ops argocd-bad 's/"10.9.7"/"10.18.0 -e x=y"/' deploy/ansible/playbooks/setup-argocd.yml
 (cd "$W/src/ops" && g switch -q -c renovate/pis && sed -i 's/15.0.11/15.0.12/' deploy/ansible/vars/forgejo.yml \
   && sed -i 's/4.1.5/4.1.6/' deploy/ansible/vars/patroni.yml && sed -i 's/1.36.6-1.1/1.36.7-1.1/' deploy/ansible/playbooks/setup-kubeadm.yml \
   && g commit -qam pis && g push -q origin renovate/pis 2> /dev/null && g switch -q main && g branch -q -D renovate/pis)
@@ -75,6 +91,16 @@ check "Vault: upgrade-vault with the branch's vars, the Vagrant vars beside" \
 out=$(plan pis)
 check "several parts at once: Kubernetes first, then Patroni, then Forgejo (production's order)" \
   "$(sed -nE 's/^test:copy:playbook PLAYBOOK=([a-z-]+\.yml).*/\1/p' <<< "$out" | tr '\n' ' ')" "upgrade-kubeadm.yml upgrade-patroni.yml upgrade-forgejo.yml "
+check "Argo CD's chart: setup-argocd on the copy with its Vault values, its pods restarting" "$(plan argocd)" \
+  "test:copy:playbook PLAYBOOK=setup-argocd.yml ARGS='-e @vars/vault-vagrant.yml' RESTARTS_EXPECTED=true"
+check "an image pinned on a chart: the same proof" "$(plan argocd-pin)" \
+  "test:copy:playbook PLAYBOOK=setup-argocd.yml ARGS='-e @vars/vault-vagrant.yml' RESTARTS_EXPECTED=true"
+out=$(plan argocd-ns); rc=$?
+check "another setup-argocd value: refused, named" "$rc $(grep -c 'REFUSED.*setup-argocd.yml argocd_namespace' <<< "$out")" "1 1"
+out=$(plan argocd-tasks); rc=$?
+check "setup-argocd's tasks changed, no value: refused" "$rc $(grep -c 'REFUSED.*setup-argocd.yml (its tasks)' <<< "$out")" "1 1"
+out=$(plan argocd-bad); rc=$?
+check "Argo CD's chart no version: refused" "$rc $(grep -c 'REFUSED.*no version' <<< "$out")" "1 1"
 out=$(plan follows); rc=$?
 check "a value production's Argo charts carry: no playbook for it - nothing to prove from ops, refused as such" \
   "$rc $(grep -c 'nothing to prove' <<< "$out")" "1 1"
