@@ -65,6 +65,9 @@
     node_exporter_version: "1.12.1"
     node_exporter_sha256: "b51d8a76aa2a9156a55d501aca6276fae09e262259a5e4e831d2c2222f084e63"
     node_exporter_port: 9100
+    # results a job writes for Prometheus (*.prom, the textfile collector): the offsite git mirror's last good run
+    # (setup-velero.yml) - a job's own file in a directory of root's
+    node_exporter_textfile_dir: /var/lib/node_exporter/textfile
     node_exporter_bind: "{{ node_ip_override | default('192.168.11.2') }}"
     node_exporter_archive_name: "node_exporter-{{ node_exporter_version }}.linux-amd64.tar.gz"
     node_exporter_url: "https://github.com/prometheus/node_exporter/releases/download/v{{ node_exporter_version }}/{{ node_exporter_archive_name }}"
@@ -591,6 +594,14 @@
       check_mode: false
       when: _node_exporter_version.stdout != node_exporter_version
 
+    - name: The node_exporter textfile directory - root's, each job's file its own
+      ansible.builtin.file:
+        path: "{{ node_exporter_textfile_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
     - name: Write node_exporter systemd unit
       ansible.builtin.copy:
         dest: /etc/systemd/system/node_exporter.service
@@ -612,7 +623,8 @@
             --web.listen-address={{ node_exporter_bind }}:{{ node_exporter_port }} \
             --collector.filesystem.mount-points-exclude={{ node_exporter_mount_points_exclude }} \
             --collector.netdev.device-exclude=^lxc \
-            --collector.netclass.ignored-devices=^lxc
+            --collector.netclass.ignored-devices=^lxc \
+            --collector.textfile.directory={{ node_exporter_textfile_dir }}
           Restart=on-failure
           RestartSec=10s
           NoNewPrivileges=true

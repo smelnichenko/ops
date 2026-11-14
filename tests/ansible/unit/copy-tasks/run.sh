@@ -104,9 +104,16 @@ PB = "cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml "
 want = [PB + "../../tests/ansible/copy/" + f for f in ("barman-check.yml", "cert-check.yml", "restore-check.yml",
                                                         "backup-check.yml",
                                                         "backup-check.yml -e schedule=velero-full-weekly")] + \
-    [PB + "playbooks/scylla-backup-check.yml", PB + "../../tests/ansible/copy/sweeper-check.yml"]
+    [PB + "playbooks/scylla-backup-check.yml", PB + "../../tests/ansible/copy/sweeper-check.yml",
+     PB + "../../tests/ansible/copy/offsite-mirror-check.yml"]
 got = [c for _, c, _ in check_ if c.startswith(PB) and "argo-settled" not in c]
 check("  its serial checks, each its playbook exactly, in order", got, want)
+# the offsite git mirror installed on the copy as production's deploy:velero does it, after the build's settle (Argo CD
+# owning Velero by then - before it, the Velero play installed Velero and MinIO itself), before the checks read it
+velero = [i for i, (_, c, _) in enumerate(argo) if c == PB + "playbooks/setup-velero.yml"]
+settle = [i for i, (_, c, _) in enumerate(argo) if "argo-settled.yml" in c and "record_apps=true" in c]
+check("test:copy:argo: production's setup-velero.yml once, after the build's settle", (len(velero), bool(settle) and bool(velero)
+      and velero[0] > settle[0]), (1, True))
 v = T["test:copy:check"]["vars"]
 check("  run on its own: the refs and the change from copy-refs.sh, a caller's given ones first",
       (v["COPY_INFRA_REF"], v["COPY_PLATFORM_REF"], v["COPY_CHANGE"], v["INFRA_REF"], v["PLATFORM_REF"], v["CHANGE"]),

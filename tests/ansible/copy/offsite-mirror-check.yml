@@ -1,0 +1,180 @@
+---
+# The offsite git mirror on the Vagrant copy (task test:copy:check runs it; test:copy:argo installs it with production's
+# own playbook, setup-velero.yml, as deploy:velero does on ten). Its daily job had failed unnoticed for months in
+# production - this proves, each run:
+#   1. a sync now (offsite-backup.service, as its timer starts it) ends clean
+#   2. the backup equals the copy's Forgejo: every repository of the organisation, each with Forgejo's branches and tags
+#      at the same commits, its HEAD Forgejo's default branch - and it restores: a plain clone of each checks that
+#      branch's commit out, its objects whole (tasks/offsite-mirror-equal.yml)
+#   3. it survives the VIP moving to the other Pi (ten's key was authorized on pi1 alone - with the VIP on pi2 every
+#      push was refused): keepalived stopped on the holder, the other takes the VIP, a sync again clean, the backup equal
+#      again through it - keepalived started again however the play ends
+#   4. it is watched: last-success on the volume is this run's, node_exporter serves its time and count, and Prometheus
+#      holds the OffsiteGitMirrorMissing rule with the series it reads and the alert not firing
+#
+# Usage: ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/offsite-mirror-check.yml
+- name: Vagrant VMs only
+  ansible.builtin.import_playbook: ../vagrant-only-play.yml
+
+- name: The offsite git mirror backs every repository up, restores, survives a VIP move, and is watched
+  hosts: target
+  become: true
+  gather_facts: false
+  vars:
+    mirror_user: "{{ offsite_backup_user | default('sm') }}"
+    pidir: /mnt/backups/git-mirror
+    org: schnappy
+    base: "{{ (forgejo_root_url | default('https://git.pmon.dev/')) | regex_replace('/+$', '') }}"
+    token_file: /var/lib/git-mirror/token
+    kubeconfig: /etc/kubernetes/admin.conf
+    proxy: /api/v1/namespaces/schnappy-infra/services
+    metrics_url: "http://{{ node_ip_override | default(ansible_host) }}:9100/metrics"
+  tasks:
+    - name: Vagrant VMs only (fails closed on any other host)
+      ansible.builtin.import_tasks: ../vagrant-only.yml
+
+    - name: The VIP's holder now
+      ansible.builtin.include_tasks: ../../../deploy/ansible/playbooks/tasks/pi-vip-holder.yml
+
+    - name: The holder the sync pushes through first
+      ansible.builtin.set_fact:
+        first_pi: "{{ pi_vip_holder }}"
+        other_pi: "{{ groups['pis'] | reject('equalto', pi_vip_holder) | first }}"
+
+    - name: This run's start (a result older than it is no result of this run's)
+      ansible.builtin.command: date -u +%s
+      register: _started
+      changed_when: false
+
+    # ── 1. a sync now ────────────────────────────────────────────────────
+    - name: A sync now - as its timer starts it (a oneshot - started is ended)
+      ansible.builtin.systemd:
+        name: offsite-backup.service
+        state: started
+
+    - name: It ended clean
+      ansible.builtin.command: systemctl show -p Result --value offsite-backup.service
+      register: _result_1
+      changed_when: false
+      failed_when: _result_1.stdout != 'success'
+
+    # ── 2. the backup equals Forgejo, and restores ───────────────────────
+    - name: The backup equals Forgejo through {{ first_pi }}
+      ansible.builtin.include_tasks: tasks/offsite-mirror-equal.yml
+      vars:
+        mirror_pi: "{{ first_pi }}"
+
+    # ── 3. the VIP moved ─────────────────────────────────────────────────
+    - name: The VIP moved to the other Pi, a sync through it, the backup equal again - keepalived back however it ends
+      block:
+        - name: Keepalived stopped on {{ first_pi }} - the VIP goes to {{ other_pi }}
+          ansible.builtin.systemd:
+            name: keepalived
+            state: stopped
+          delegate_to: "{{ first_pi }}"
+
+        - name: The other Pi holds the VIP
+          ansible.builtin.command: ip -o -4 addr show to {{ keepalived_vip }}/32
+          delegate_to: "{{ other_pi }}"
+          register: _vip_there
+          changed_when: false
+          until: (' inet ' ~ keepalived_vip ~ '/') in _vip_there.stdout
+          retries: 30
+          delay: 2
+
+        - name: Forgejo answers at the VIP again (the other Pi's)
+          ansible.builtin.uri:
+            url: "{{ base }}/api/healthz"
+            status_code: 200
+          register: _healthz
+          until: _healthz.status == 200
+          retries: 30
+          delay: 2
+
+        - name: This sync's start - in seconds and as last-success writes it (UTC, compared as text)
+          ansible.builtin.command: date -u +'%s %Y%m%dT%H%M%SZ'
+          register: _started_2
+          changed_when: false
+
+        - name: A sync through {{ other_pi }}
+          ansible.builtin.systemd:
+            name: offsite-backup.service
+            state: started
+
+        - name: It ended clean too
+          ansible.builtin.command: systemctl show -p Result --value offsite-backup.service
+          register: _result_2
+          changed_when: false
+          failed_when: _result_2.stdout != 'success'
+
+        - name: The backup equals Forgejo through {{ other_pi }}
+          ansible.builtin.include_tasks: tasks/offsite-mirror-equal.yml
+          vars:
+            mirror_pi: "{{ other_pi }}"
+
+        - name: Its last-success is this sync's
+          vars:
+            last: "{{ (_backup_side.stdout | from_json).last_success }}"
+          ansible.builtin.assert:
+            that:
+              - last is match('^\d{8}T\d{6}Z$')
+              - last >= _started_2.stdout.split()[1]
+            fail_msg: "last-success on the volume is '{{ last }}' - not this sync's (it started {{ _started_2.stdout.split()[1] }})"
+            quiet: true
+      always:
+        - name: Keepalived started again on {{ first_pi }}
+          ansible.builtin.systemd:
+            name: keepalived
+            state: started
+          delegate_to: "{{ first_pi }}"
+
+    - name: One Pi holds the VIP again
+      ansible.builtin.include_tasks: ../../../deploy/ansible/playbooks/tasks/pi-vip-holder.yml
+
+    # ── 4. watched ───────────────────────────────────────────────────────
+    - name: node_exporter serves the sync's result
+      ansible.builtin.uri:
+        url: "{{ metrics_url }}"
+        return_content: true
+      register: _metrics
+      check_mode: false
+
+    - name: Its time is this run's, its count every repository
+      vars:
+        lines: "{{ _metrics.content.splitlines() | reject('match', '^#') | list }}"
+        ts: "{{ lines | select('match', '^offsite_git_mirror_last_success_timestamp_seconds ') | map('split') | map('last') | first | default('0') }}"
+        count: "{{ lines | select('match', '^offsite_git_mirror_repositories ') | map('split') | map('last') | first | default('-1') }}"
+      ansible.builtin.assert:
+        that:
+          - ts | float | int >= _started_2.stdout.split()[0] | int
+          - count | float | int == (_forgejo_side.stdout | from_json) | length
+        fail_msg: >-
+          node_exporter serves offsite_git_mirror_last_success_timestamp_seconds {{ ts }} (this sync started
+          {{ _started_2.stdout.split()[0] }}) and offsite_git_mirror_repositories {{ count }} (Forgejo has
+          {{ (_forgejo_side.stdout | from_json) | length }})
+        quiet: true
+
+    # Prometheus scrapes node_exporter every 30-60 s: the series is there within a few, and the rule reads it
+    - name: Prometheus holds the rule, reads the series, and the alert is not firing
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          P='{{ proxy }}/schnappy-prometheus:9090/proxy/api/v1'
+          t=$(mktemp -d /var/tmp/offsite-mirror-check.XXXXXX)
+          trap 'rm -rf "$t"' EXIT
+          # files, not the environment: every alert rule's JSON is over the 128 KiB one variable may hold
+          kubectl --kubeconfig {{ kubeconfig }} get --raw "$P/rules?type=alert" > "$t/rules"
+          kubectl --kubeconfig {{ kubeconfig }} get --raw "$P/query?query=offsite_git_mirror_last_success_timestamp_seconds" > "$t/series"
+          python3 -I - "$t/rules" "$t/series" <<'PY'
+          import json, sys
+          rules = json.load(open(sys.argv[1]))["data"]["groups"]
+          found = [r for g in rules for r in g["rules"] if r.get("name") == "OffsiteGitMirrorMissing"]
+          series = json.load(open(sys.argv[2]))["data"]["result"]
+          print(f"rule {len(found)} state {found[0]['state'] if found else '-'} series {len(series)}")
+          PY
+      register: _prom
+      changed_when: false
+      until: _prom.stdout == 'rule 1 state inactive series 1'
+      retries: 20
+      delay: 15
