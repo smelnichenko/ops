@@ -8,7 +8,7 @@ T=$(mktemp -d)
 trap 'rm -rf "$T"' EXIT
 mkdir -p "$T/scripts" "$T/deploy/ansible/venv/bin" "$T/bin" "$T/.copy"
 mkdir -p "$T/scripts/lib"; cp "$ROOT/scripts/lib/process-groups.sh" "$T/scripts/lib/"
-cp "$ROOT/scripts/copy-checks.sh" "$T/scripts/"
+cp "$ROOT/scripts/copy-checks.sh" "$ROOT/scripts/clickhouse-expected.sh" "$T/scripts/"
 cat > "$T/bin/vagrant" <<'STUB'
 #!/bin/sh
 echo "Host kubeadm"

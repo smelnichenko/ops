@@ -187,6 +187,14 @@ Argo settle timed out, and the radar station on the same host died (22:17, resta
   ExternalSecret extracting a path that is not there fails. The copy now renders no such ExternalSecret
   (`masiService.credentials.existingSecret: ""`): masi without the operator's credentials, each optional in its
   deployment - never a placeholder (it would log in to the real Gmail with a wrong password).
+- **The sixth build** (02:37-03:25): settled - every app green, no OOM kill, the node at 16.4 of 18 GB with 1.6 GB
+  available (kube-apiserver 1.85 GB, monitor 1.46, masi 1.32, OpenSearch 0.93). It failed next, in the survival seed:
+  plan 117's rewrite had dropped the ClickHouse compatibility and users the old task passed it, so the seed expected
+  none and production's `compatibility 25.8` failed it. Now `scripts/clickhouse-expected.sh` reads them from a platform
+  ref's clickhouse-users.xml for both the seed (main) and the verify (the ref under test); the seed stops if the lookup
+  fails (inside a here-string its failure went unseen - proven in go-task's shell). The other arguments the old tasks
+  passed (argo-settled's allow_out_of_sync/restart_step, barman-check's pg_major, restore-check's restore_*,
+  production-state's upgrade_from) are read by nothing left.
 
 ## Open
 

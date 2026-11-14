@@ -28,25 +28,11 @@ pools_gone=${COPY_SCRAPE_POOLS_GONE:-}
 # one Ansible extra var: pool names (serviceMonitor/<ns>/<name>/<n>) and commas, nothing a key=value split would cut
 [[ $pools_gone =~ ^([A-Za-z0-9/._:-]+(,[A-Za-z0-9/._:-]+)*)?$ ]] \
   || { echo "COPY_SCRAPE_POOLS_GONE='$pools_gone': scrape pool names, comma-separated"; exit 1; }
-# ClickHouse's compatibility setting and users as the copy runs them: what the platform ref under test sets - a change
-# that moves the pin is held to its own value, never to a constant here. Users: the file's, plus the image's `default`
-# unless the file replaces the list.
-ch_xml=$(git -C "${COPY_PLATFORM_DIR:-$ops/../platform}" show \
-  "$platform_ref:helm/schnappy-observability/files/clickhouse-users.xml") \
-  || { echo "clickhouse-users.xml not read from platform $platform_ref"; exit 1; }
-read -r clickhouse_compat clickhouse_users < <(python3 -c '
-import sys, xml.etree.ElementTree as ET
-r = ET.fromstring(sys.stdin.read())
-users = r.find("users")
-names = set() if users is None else {u.tag for u in users}
-if users is None or users.get("replace") != "replace":
-    names.add("default")
-print(r.findtext("profiles/default/compatibility") or "-", ",".join(sorted(names)))' <<< "$ch_xml") \
-  || { echo "clickhouse-users.xml of platform $platform_ref: not parsed"; exit 1; }
+# ClickHouse's compatibility setting and users as the copy runs them: what the platform ref under test sets (its
+# clickhouse-users.xml, read by scripts/clickhouse-expected.sh - the survival seed reads the same)
+ch=$(scripts/clickhouse-expected.sh "$platform_ref") || exit 1
+read -r clickhouse_compat clickhouse_users <<< "$ch"
 [ "$clickhouse_compat" != - ] || clickhouse_compat=""
-# both go into Ansible extra vars, where text is a template: a version, user names - nothing else from the ref
-[[ $clickhouse_compat =~ ^([0-9]+\.[0-9]+)?$ && $clickhouse_users =~ ^[A-Za-z0-9_-]+(,[A-Za-z0-9_-]+)*$ ]] \
-  || { echo "clickhouse-users.xml of platform $platform_ref: compatibility '$clickhouse_compat', users '$clickhouse_users' - not a version and user names"; exit 1; }
 # own_jobs, stop_groups
 source scripts/lib/process-groups.sh
 # the checks' own bound (below): above every check's own - data-check's retries alone wait up to ~3085 s (each until's

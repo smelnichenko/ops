@@ -490,8 +490,15 @@ tasks:
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/argo-settled.yml -e expect_mirror=true -e record_apps=true -e restart_stage=build-$(date +%Y%m%d%H%M%S) {{.COPY_SETTLE}}
       # data every change must keep (verified by test:copy:check)
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/data-check.yml -e mode=seed
-      # the observability data a change must keep (ClickHouse rows, Grafana dashboards, a Tempo trace, Mimir's past)
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/survival-check.yml -e mode=seed
+      # the observability data a change must keep (ClickHouse rows, Grafana dashboards, a Tempo trace, Mimir's past);
+      # ClickHouse's compatibility setting and users as platform main sets them - its seed judges them as the verify
+      # does (scripts/clickhouse-expected.sh both; without them the seed expected none and production's 25.8 failed it)
+      - cmd: |
+          set -euo pipefail
+          ch=$(scripts/clickhouse-expected.sh main)  # its own assignment: inside the here-string a failure went unseen
+          read -r compat users <<< "$ch"
+          [ "$compat" != - ] || compat=""
+          cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/survival-check.yml -e mode=seed -e "clickhouse_compat=$compat" -e "clickhouse_users=$users"
       # the scrape pools and their target counts, the record the metrics check compares with
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/metrics-check.yml -e record_scrape_pools=true
       # production's k6 smoke once more, on demand (the chart's PostSync hook ran it already, as in production)

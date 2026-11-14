@@ -172,6 +172,33 @@ for text, want in (("", ("main", "main")), ("fix/a@abc", ("abc", "main"))):
     check(f"  a record {text!r}: what is missing read as main", state()[:2], want)
 check("  usage refused (exit 2), the record unchanged", (refs("set", "a"), refs("playbook"), refs("bogus"), refs(),
       open(f).read().strip()), ("rc=2", "rc=2", "rc=2", "rc=2", "fix/a@abc"))
+# the survival seed: ClickHouse's compatibility and users from scripts/clickhouse-expected.sh (platform main), as the
+# verify gets them - the seed command itself run against stubs: the values passed, `-` an empty setting, a failed
+# lookup stops it before the playbook (inside a here-string its failure went unseen)
+SEED = next(c["cmd"] for c in T["test:copy:argo"]["cmds"] if isinstance(c, dict) and "survival-check.yml -e mode=seed" in str(c.get("cmd")))
+SW = tempfile.mkdtemp()
+atexit.register(shutil.rmtree, SW, True)
+os.makedirs(f"{SW}/scripts"); os.makedirs(f"{SW}/deploy/ansible/venv/bin")
+with open(f"{SW}/deploy/ansible/venv/bin/ansible-playbook", "w") as f:
+    f.write('#!/bin/bash\necho "PLAYBOOK $*"\n')
+os.chmod(f"{SW}/deploy/ansible/venv/bin/ansible-playbook", 0o755)
+
+
+def seed_run(expected):
+    with open(f"{SW}/scripts/clickhouse-expected.sh", "w") as f:
+        f.write(f'#!/bin/bash\n[ "$1" = main ] || exit 9\n{expected}\n')
+    os.chmod(f"{SW}/scripts/clickhouse-expected.sh", 0o755)
+    r = subprocess.run(["bash", "-c", SEED], cwd=SW, capture_output=True, text=True)
+    return r.returncode, r.stdout.strip()
+
+
+check("the survival seed: compatibility and users from clickhouse-expected.sh main; `-` none; a failed lookup stops it",
+      (seed_run('echo "25.8 schnappy"'), seed_run('echo "- default,grafana"'), seed_run("exit 1")[0] != 0,
+       seed_run("exit 1")[1]),
+      ((0, "PLAYBOOK -i inventory/vagrant.yml ../../tests/ansible/copy/survival-check.yml -e mode=seed "
+           "-e clickhouse_compat=25.8 -e clickhouse_users=schnappy"),
+       (0, "PLAYBOOK -i inventory/vagrant.yml ../../tests/ansible/copy/survival-check.yml -e mode=seed "
+           "-e clickhouse_compat= -e clickhouse_users=default,grafana"), True, ""))
 # the host guard watches while a task works on the VMs (the radar station shares the workstation): right after the lock
 check("the copy tasks on running VMs (argo, change, playbook, check): the host guard's watcher right after the lock",
       [[c for _, c, _ in cmds(n)][:2] for n in ("test:copy:argo", "test:copy:change", "test:copy:playbook", "test:copy:check")],

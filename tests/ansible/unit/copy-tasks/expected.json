@@ -40,7 +40,7 @@
    "cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-argocd.yml",
    "cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/argo-settled.yml -e expect_mirror=true -e record_apps=true -e restart_stage=build-$(date +%Y%m%d%H%M%S) {{.COPY_SETTLE}}",
    "cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/data-check.yml -e mode=seed",
-   "cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/survival-check.yml -e mode=seed",
+   "set -euo pipefail ch=$(scripts/clickhouse-expected.sh main) # its own assignment: inside the here-string a failure went unseen read -r compat users <<< \"$ch\" [ \"$compat\" != - ] || compat=\"\" cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/survival-check.yml -e mode=seed -e \"clickhouse_compat=$compat\" -e \"clickhouse_users=$users\"",
    "cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/metrics-check.yml -e record_scrape_pools=true",
    "scripts/vagrant-smoke.sh main main",
    "scripts/vagrant-inventory.sh",
