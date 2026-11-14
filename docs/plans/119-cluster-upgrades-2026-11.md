@@ -180,6 +180,18 @@ setup-consul and upgrade-patroni not moved to pi-packages.py now (upgrade-patron
    `cert_manager_version`), the inventory and pins committed.
 Never two of these at once; no Pi turn while an infra merge moves pods that use the VIP.
 
+**Production, 2026-11-14:**
+- Step 1 done 14:08 UTC: infra cbcfc52b - the test namespace on ScyllaDB 2026.1.15 (its pod and the schema Job) and
+  Valkey 9.1.3, its apps ready, Synced/Healthy/Succeeded in 77 s.
+- Step 2 done 14:11 UTC: infra 5260928c (upgrade/wave-1 rebased onto it: disjoint files), platform 7abd7a1 - settled in
+  144 s: every app Synced/Healthy/Succeeded, every wave image running and no old one, Velero chart 12.2.5 (1.18.4),
+  the hook Jobs (postgres-init-users, scylla-schema) succeeded, every certificate Ready, only Watchdog firing,
+  ClickHouse 26.8.34.13 taking pod logs (thousands of rows a minute). The Failed pods listed are October's node-shutdown
+  leftovers and restore-check-age's known failures.
+- Step 3: etcd snapshot etcd-20261114-141621.db taken (a Job from etcd-backup, verified, uploaded); the upgrade itself
+  waits for the operator's go - the session's auto mode refused to run `deploy:kubeadm:upgrade` on its own.
+- Steps 4-5 wait for the review fixes' copy run too (the host had 24.1 GB, the guard asks 25.1 GB).
+
 **Out of wave 1** (found in the notes): PostgreSQL 18.7 - CNPG publishes no bullseye image for it; moving means the
 trixie (or bookworm) image, a glibc change (collations: reindex, `REFRESH COLLATION VERSION`) and 18.7's own reindex
 steps (unbounded `bpchar` btree, pg_trgm GiST) - its own step, on its own run. containerd 2.3.7 - Docker publishes
