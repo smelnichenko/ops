@@ -662,6 +662,30 @@
               {{ _differ | join(', ') }} - set by hand? An upgrade would drop it: carry it in cilium_values first
             quiet: true
 
+    # An upgrade's images on the node before Helm changes anything: one node, and an agent that cannot pull its image
+    # leaves every pod without a network. Each image the new chart renders with these values (the agent, the operator,
+    # Envoy, Hubble), by its digest - a pull that fails stops the run before the upgrade. The best-effort pull at the
+    # top serves a fresh install
+    - name: Cilium's images for the new chart pulled first (an upgrade - a release runs already)
+      when: _cilium_release.stdout | from_json | length > 0
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          # grep finding nothing is the refusal below's to say, not pipefail's to end unsaid (helm's failure still ends it)
+          refs=$(helm template cilium cilium/cilium --version {{ cilium_version | quote }} --namespace kube-system \
+              --values - | { grep -oE 'image: "?quay\.io/cilium/[^" ]+' || true; } \
+            | sed -E 's/^image: "?//; s/:[^@/]+@/@/' | sort -u)
+          [ -n "$refs" ] || { echo "REFUSED: no Cilium image in the rendered chart"; exit 1; }
+          for r in $refs; do ctr -n k8s.io images pull "$r" > /dev/null; echo "PULLED $r"; done
+        stdin: "{{ cilium_values | to_nice_yaml }}"
+      register: _cilium_images
+      retries: 3
+      delay: 15
+      until: _cilium_images.rc == 0
+      changed_when: true
+      tags: [cilium]
+
     - name: Install Cilium via Helm
       kubernetes.core.helm:
         kubeconfig: /etc/kubernetes/admin.conf

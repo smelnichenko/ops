@@ -18,9 +18,11 @@
 # tier-0 backup holding its Consul lock (a reboot ends it); the reboot; back: every service recorded running, Vault
 # unsealed, Consul caught up, the Gluster volumes mounted and healed, Patroni healthy, nothing left to upgrade.
 # Patroni is not paused: its leader is on the other Pi, with its own Consul agent, and a paused Patroni would leave
-# Postgres for the shutdown to kill and start none after the boot - a cluster paused already is refused. keepalived,
-# stopped here, is started again whatever happens. Any failure stops the run before the next Pi. A Pi with nothing to
-# upgrade is left as it is - no handover, no reboot: a run again after a failure goes on where it stopped.
+# Postgres for the shutdown to kill and start none after the boot - a cluster paused already is refused. A VIP the other
+# Pi does not take over goes back to this one, serving again, and the run stops - nothing upgraded. keepalived, stopped
+# here, is started again whatever happens. Any failure stops the run before the next Pi. A Pi with nothing to
+# upgrade, and no reboot owed by an earlier run (a mark written right before apt's upgrade, removed once the Pi is back
+# and checked), is left as it is: a run again after a failure goes on where it stopped. apt waits for dpkg's lock.
 #
 # A preview (--check) reads everything and changes nothing: the plan from the package lists the Pis have (no update).
 #
@@ -31,9 +33,27 @@
   become: true
   gather_facts: false
   any_errors_fatal: true
-  vars:
-    pi_packages: "{{ playbook_dir }}/scripts/pi-packages.py"
   tasks:
+    # every play after this one runs on these Pis: the script's path a fact of theirs from here on
+    - name: The script the run's reads are in, and where a Pi's owed reboot is marked
+      ansible.builtin.set_fact:
+        pi_packages: "{{ playbook_dir }}/scripts/pi-packages.py"
+        pi_packages_owed_path: /var/lib/upgrade-pi-packages.reboot-owed
+
+    # the backups that run through the VIP or under a Consul lock (UTC): Velero 02:00 daily and 03:00 Sundays, the
+    # tier-0 backup 02:40, Scylla Manager 03:00, the Pis' restore check 05:30 - a Pi's turn moves the VIP and reboots
+    - name: Not in a backup window (UTC)
+      vars:
+        _now: "{{ now(utc=true).strftime('%H:%M') }}"
+      ansible.builtin.assert:
+        that: pi_packages_quiet_windows | default([['01:50', '04:00'], ['05:20', '05:50']])
+              | selectattr(0, 'le', _now) | selectattr(1, 'ge', _now) | list | length == 0
+        fail_msg: >-
+          REFUSED: {{ _now }} UTC is in a backup window ({{ pi_packages_quiet_windows | default([['01:50', '04:00'],
+          ['05:20', '05:50']]) | map('join', '-') | join(', ') }}) - run outside it
+        quiet: true
+      run_once: true
+
     - name: Both Pis in the run (one alone has no other to hand its roles to)
       ansible.builtin.assert:
         that: ansible_play_hosts | sort == groups['pis'] | sort and ansible_play_hosts | length == 2
@@ -90,9 +110,26 @@
       changed_when: false
       check_mode: false  # a read
 
-    - name: Each one's list, for its turn
+    # an earlier run that failed between apt's upgrade and the reboot left its mark, with the services that Pi ran
+    # then: the Pi still owes its reboot, and is judged by those, not by what runs after the failure
+    - name: A reboot an earlier run still owes on each Pi (its mark)
+      ansible.builtin.stat:
+        path: "{{ pi_packages_owed_path }}"
+      register: _owed_mark
+      check_mode: false  # a read
+
+    - name: The services that run recorded
+      ansible.builtin.slurp:
+        src: "{{ pi_packages_owed_path }}"
+      register: _owed_raw
+      when: _owed_mark.stat.exists
+
+    - name: Each one's list, for its turn - the owed reboot's where one is owed
       ansible.builtin.set_fact:
-        pi_packages_services: "{{ _services.stdout_lines | map('trim') | reject('match', '^SERVICES ') | list }}"
+        pi_packages_reboot_owed: "{{ _owed_mark.stat.exists }}"
+        pi_packages_services: >-
+          {{ (_owed_raw.content | b64decode | from_json).services if _owed_mark.stat.exists
+             else _services.stdout_lines | map('trim') | reject('match', '^SERVICES ') | list }}
 
     # what the other Pi must serve when this one hands the VIP over: keepalived's services this one has (the Vagrant
     # copy has no Nexus - keepalived skips it there too)
@@ -118,8 +155,6 @@
   become: true
   gather_facts: false
   any_errors_fatal: true
-  vars:
-    pi_packages: "{{ playbook_dir }}/scripts/pi-packages.py"
   tasks:
     - name: Upgraded and rebooted, its roles handed over first
       ansible.builtin.include_tasks: tasks/pi-packages-node.yml
@@ -129,9 +164,13 @@
   become: true
   gather_facts: false
   any_errors_fatal: true
-  vars:
-    pi_packages: "{{ playbook_dir }}/scripts/pi-packages.py"
   tasks:
+    # -e pi_packages_turns=1: the first Pi alone, its new kernel soaking before the second's - a run again takes the
+    # second (the first then has nothing to upgrade)
+    - name: The second Pi left for a later run (pi_packages_turns=1)
+      ansible.builtin.meta: end_play
+      when: pi_packages_turns | default(2) | int < 2
+
     - name: Upgraded and rebooted, its roles handed over first
       ansible.builtin.include_tasks: tasks/pi-packages-node.yml
 
@@ -140,8 +179,6 @@
   become: true
   gather_facts: false
   any_errors_fatal: true
-  vars:
-    pi_packages: "{{ playbook_dir }}/scripts/pi-packages.py"
   tasks:
     - name: Which Pi holds the VIP now
       ansible.builtin.include_tasks: tasks/pi-vip-holder.yml
@@ -160,6 +197,19 @@
       check_mode: false  # a read
       when: inventory_hostname == pi_vip_holder
 
+    # Nexus is enabled at boot: on the Pi without the VIP keepalived stops it (its notify, or the converge pass)
+    - name: Keepalived's own services not running on the Pi without the VIP
+      ansible.builtin.script:
+        cmd: "{{ pi_packages }} idle {{ pi_packages_vip_units | join(' ') }}"
+        executable: python3
+      register: _idle
+      retries: 60
+      delay: 5
+      until: _idle.rc == 0
+      changed_when: false
+      check_mode: false  # a read
+      when: inventory_hostname != pi_vip_holder
+
     - name: Patroni healthy
       ansible.builtin.script:
         cmd: "{{ pi_packages }} patroni"
@@ -169,10 +219,21 @@
       check_mode: false  # a read
       run_once: true
 
+    - name: Each Pi ready to take the VIP - keepalived running, its own check passing, Forgejo's database reached
+      ansible.builtin.script:
+        cmd: "{{ pi_packages }} standby"
+        executable: python3
+      register: _standby
+      retries: 12
+      delay: 5
+      until: _standby.rc == 0
+      changed_when: false
+      check_mode: false  # a read
+
     - name: Upgraded
       ansible.builtin.debug:
         msg: >-
           {{ 'PREVIEW - nothing changed: ' if ansible_check_mode else '' }}{% for h in ansible_play_hosts %}{{ h }}:
-          {{ hostvars[h].pi_packages_done | default('nothing to upgrade') }}{{ '; ' if not loop.last }}{% endfor %};
+          {{ hostvars[h].pi_packages_done }}{{ '; ' if not loop.last }}{% endfor %};
           the VIP on {{ pi_vip_holder }}; {{ _patroni_after.stdout_lines | map('trim') | first }}
       run_once: true

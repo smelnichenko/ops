@@ -1039,7 +1039,7 @@ tasks:
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/upgrade-patroni.yml
 
   deploy:pi-packages:upgrade:
-    desc: "PRODUCTION: the Pis' apt packages upgraded, one Pi at a time (the VIP's last), each rebooted - Patroni's leader, Vault's active node and the VIP handed to the other Pi first (a switchover, the VIP moving: seconds each); -- --check to preview"
+    desc: "PRODUCTION: the Pis' apt packages upgraded, one Pi at a time (the VIP's last), each rebooted - Patroni's leader, Vault's active node and the VIP handed to the other Pi first (a switchover, the VIP moving: seconds each); refused in the backup windows (UTC 01:50-04:00, 05:20-05:50). -- --check previews from freshly read package lists; -- -e pi_packages_turns=1 upgrades the first Pi alone (its kernel soaks; a run again takes the second)"
     dir: deploy/ansible
     deps: [deploy:install]
     dotenv: ['../../.env']

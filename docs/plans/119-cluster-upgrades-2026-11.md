@@ -1,7 +1,8 @@
 # Plan 119 — cluster and Pi upgrades, November 2026
 
-Status: **PLANNED** (operator 2026-11-13: "check if we can upgrade our cluster parts like we did recently" → report →
-"yes, please"). Plan 117's Vagrant proof and its Velero change are green and live (2026-11-14): wave 1 next.
+Status: **WAVE 1 PROVEN ON THE COPY, REVIEWED; ITS FIXES BEING PROVEN, THEN PRODUCTION** (operator 2026-11-13: "check if
+we can upgrade our cluster parts like we did recently" → report → "yes, please"). Plan 117's Vagrant proof and its
+Velero change are green and live (2026-11-14).
 
 ## Context
 
@@ -125,6 +126,59 @@ wanted Nexus on the other Pi, and the copy has no Nexus (allowed-missing; keepal
 records the keepalived services each Pi has, the other Pi must serve exactly the handing-over Pi's, the run's end
 what either had - one missing fails; production's Pis both have Nexus (read). The copy was put back into production's
 layout (pi1 the VIP's, Patroni's and Vault's) and the stage run again: every handover taken, green. Copy destroyed.
+
+**Wave 1's full review (2026-11-14 15:20-16:00)** - code review, security (nothing), architecture, platform
+reliability, test quality (reverts), Sonar (3 pre-existing S6353 in pi-versions.py: `\d` with re.ASCII). No Critical;
+what it found, fixed (each with its test, each test broken and caught - 56 reverts on pi-packages, 7 on the Cilium
+guards and the Taskfile's tags):
+- The Pis' playbook could double-start Nexus: keepalived's stop gives the VIP up before its ExecStopPost stops Nexus,
+  and the other Pi starts its own on the same Gluster data. Now, on the holder: keepalived's converge timer stopped,
+  Nexus stopped and proven gone, then keepalived stopped (the timer started again in always). After every reboot and at
+  the run's end: Nexus not running on the Pi without the VIP (enabled at boot: keepalived's backup notify stops it).
+- A run failing after apt's upgrade, before the reboot, left the Pi owing its reboot and the next run skipping it
+  (0 to upgrade): now a mark, written right before the upgrade with the services the run began with, makes the next run
+  reboot it and judge it by those (/var/lib/upgrade-pi-packages.reboot-owed, removed once the Pi is back and checked).
+- The refusals that change nothing come first: a backup window (UTC 01:50-04:00, 05:20-05:50), a tier-0 backup running
+  (its lock - setup-consul's moved to tasks/tier0-backup-lock.yml), the downloads (a mirror away), /boot/firmware's
+  room, dpkg's audit; the other Pi ready to take the VIP (keepalived running, its check_services.sh, Forgejo's database
+  through PgBouncer) and holding every keepalived service this Pi has.
+- A VIP the other Pi does not take over goes back to this one (its keepalived restarted there), serving again; the run
+  stops, nothing upgraded. Before the reboot, re-checked: the VIP on the other Pi, Patroni's leader there, this Vault
+  not active, Consul's raft leader off it (moved before apt too). After it: the newest kernel booted, the bootloader
+  up to date (rpi-eeprom-update -a before the reboot: flashed by it, not by a later one nobody plans), the VIP still on
+  the other Pi; config.txt/cmdline.txt compared across apt (a change refuses the reboot).
+- Forgejo's database checked on both Pis after a switchover (PgBouncer's cached failed login, the Pis' incident).
+- apt waits for dpkg's lock (600 s); a preview plans from lists read into a directory of its own (plan --fresh: pi2's
+  own lists are old - fresh, it plans 51 + 8 with the kernel); kept-back packages named (pi2: libcamera/rpicam).
+- `-e pi_packages_turns=1`: the first Pi alone, its kernel soaking; a run again takes the second.
+- The tier-0 timer's read no longer fails open (failed_when: false swallowed a real read failure).
+- Cilium: one minor at a time (no-downgrade.yml refuses a skip or a major); its new chart's images (the agent,
+  operator, Envoy, Hubble) pulled by digest before Helm upgrades, a failed pull stopping the run (the best-effort
+  pre-pull swallowed failures and left out Envoy).
+- Harnesses: pi-packages (script and plays), consul-handover (nested includes, none conditional), cilium-one-minor,
+  cilium-images, taskfile-tags (every --tags a Taskfile command passes exists in its playbook).
+Kept as is: the apt command over the apt module (its command is the one the plan simulates); the health rules in
+setup-consul and upgrade-patroni not moved to pi-packages.py now (upgrade-patroni is proven as it is).
+
+**Production order for wave 1** (each step's state read after it; a step that fails stops the rest):
+1. infra `upgrade/wave-1-test` merged - Argo upgrades the test namespace; its ScyllaCluster pod read at 2026.1.15 and
+   Valkey at 9.1.3 (an ignore rule could hold Synced without the spec applied).
+2. infra + platform `upgrade/wave-1` merged, outside 01:50-04:00 UTC (Velero's server restarts: chart 12.2.5) - every
+   app Synced/Healthy, operationState Succeeded, the hooks' Jobs (ClickHouse init, scylla-schema, cert-manager's
+   startupapicheck) completed, the images read in the pods. Way back: revert the merge (the images are patches).
+3. `deploy:kubeadm:upgrade -- -e k8s_upgrade_to=1.36.6` - the etcd snapshot first (one-way), the node Ready, no
+   kube-proxy. Way back: a rebuild (kubeadm does not downgrade).
+4. `deploy:cilium:upgrade -- -e cilium_version=1.20.4` - its images pulled first, the agent and operator Ready. Way
+   back: `helm -n kube-system rollback cilium`.
+5. `deploy:pi-packages:upgrade -- --check` (a preview from fresh lists), then `-- -e pi_packages_turns=1` (pi2 alone),
+   pi2's new kernel soaking, then the run again (pi1, the VIP's). A Pi that does not come back from its kernel or
+   EEPROM reboot needs hands at it: the other Pi carries everything meanwhile (one Patroni member, one Gluster data
+   brick). Way back: none for the packages (no downgrade path); the older kernels stay installed.
+6. `deploy:patroni:upgrade`, `deploy:vault:upgrade`, `deploy:forgejo:upgrade` (its pg_dump first; 15.0.7's migration is
+   one-way).
+7. `task test:copy:inventory` (production read again), the ops defaults moved (`k8s_package_version`, `cilium_version`,
+   `cert_manager_version`), the inventory and pins committed.
+Never two of these at once; no Pi turn while an infra merge moves pods that use the VIP.
 
 **Out of wave 1** (found in the notes): PostgreSQL 18.7 - CNPG publishes no bullseye image for it; moving means the
 trixie (or bookworm) image, a glibc change (collations: reindex, `REFRESH COLLATION VERSION`) and 18.7's own reindex

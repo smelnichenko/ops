@@ -48,9 +48,10 @@ PINNED = [
     ("caddy", "caddy_version", lambda: play_var(f"{pb}/setup-caddy.yml", "caddy_version")),
 ]
 # a version as the Pis report one: what production's services say goes into an extra-vars file, where text is a template
-VERSION = re.compile(r"[0-9][0-9A-Za-z.+~-]*")
+# (re.ASCII: \d is 0-9 alone, as the versions are)
+VERSION = re.compile(r"\d[\dA-Za-z.+~-]*", re.ASCII)
 # a Debian package's version: an epoch first, maybe (keepalived 1:2.3.3-1)
-DEB_VERSION = re.compile(r"([0-9]+:)?[0-9][0-9A-Za-z.+~-]*")
+DEB_VERSION = re.compile(r"(\d+:)?\d[\dA-Za-z.+~-]*", re.ASCII)
 
 
 def debian_packages():

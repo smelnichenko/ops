@@ -5,8 +5,8 @@
 # Each check applies only when the tasks it guards are about to run - an upgrade passes --tags
 # and -e for its own component. Included first by setup-kubeadm.yml, with tags: always.
 #
-# Uses: containerd_io_version, k8s_package_version, cilium_version, local_path_provisioner_version, gateway_api_version,
-#       external_secrets_chart_version, external_secrets_by_helm.
+# Uses: containerd_io_version, k8s_package_version, cilium_version (no skipped minor either), local_path_provisioner_version,
+#       gateway_api_version, external_secrets_chart_version, external_secrets_by_helm.
 - name: No downgrade - the installed packages
   ansible.builtin.package_facts:
     manager: apt
@@ -75,6 +75,27 @@
   loop_control:
     label: "{{ item.release }}"
   when: _no_downgrade_cluster.stat.exists and item.runs | bool
+
+# Cilium moves one minor at a time (its upgrade guide: from the latest patch of the minor before) - a run that would skip
+# one, or cross a major, is refused before anything changes
+- name: No skipped minor - Cilium one minor at a time
+  vars:
+    _chart: >-
+      {{ (_no_downgrade_helm.stdout | default('[]') | from_json)
+         | selectattr('name', 'equalto', 'cilium') | map(attribute='chart') | first | default('') }}
+    _running: "{{ _chart | regex_replace('^.*-', '') if _chart | length > 0 else '' }}"
+    _minor: "{{ cilium_version.split('.')[:2] | map('int') | list }}"
+    _running_minor: "{{ _running.split('.')[:2] | map('int') | list if _running | length > 0 else [] }}"
+  ansible.builtin.assert:
+    that: >-
+      _running == '' or (_minor[0] == _running_minor[0] and _minor[1] - _running_minor[1] <= 1)
+    fail_msg: >-
+      REFUSED: Cilium runs {{ _running }}; {{ cilium_version }} skips a minor or crosses a major - one minor at a time,
+      from the latest patch of the minor before (Cilium's upgrade guide)
+    quiet: true
+  when:
+    - _no_downgrade_cluster.stat.exists
+    - "'all' in ansible_run_tags or 'cilium' in ansible_run_tags"
 
 - name: No downgrade - the running local-path provisioner and Gateway API bundle
   check_mode: false

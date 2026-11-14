@@ -87,14 +87,19 @@ def check(name, got, want):
 # every task in the order Ansible runs it: a block's own after the block, an included task file's (the handovers are
 # shared with upgrade-pi-packages: tasks/vault-step-down.yml, ...) where its include stands
 PLAYBOOKS = "deploy/ansible/playbooks"
-def tasks(ts):
+INCLUDES = []  # every include met, for the check below that none is conditional
+def tasks(ts, base=PLAYBOOKS):
     for t in ts or []:
         yield t
         inc = t.get("ansible.builtin.include_tasks") or t.get("ansible.builtin.import_tasks")
         if inc:
-            yield from tasks(yaml.safe_load(open(os.path.join(PLAYBOOKS, inc if isinstance(inc, str) else inc["file"]))))
+            INCLUDES.append(t)
+            f = inc if isinstance(inc, str) else inc["file"]
+            # as Ansible finds it: beside the including task file first, then the playbook's directory
+            path = os.path.join(base, f) if os.path.exists(os.path.join(base, f)) else os.path.join(PLAYBOOKS, f)
+            yield from tasks(yaml.safe_load(open(path)), os.path.dirname(path))
         for k in ("block", "rescue", "always"):
-            yield from tasks(t.get(k))
+            yield from tasks(t.get(k), base)
 play = next(p for p in yaml.safe_load(open("deploy/ansible/playbooks/setup-consul.yml"))
             if p.get("name", "").startswith("Restart the Consul servers"))
 every = list(tasks(play["tasks"]))
@@ -104,6 +109,15 @@ lock, vault, leader = find("backup holding"), find("Vault stepped down"), find("
 pause = next((t for t in every if "patroni-pause.py pause" in str(t.get("ansible.builtin.script"))), None)
 restart = next(t for t in every if t.get("name") == "Restarted")
 check("the three handovers and the pause found", [x is not None for x in (lock, vault, leader, pause)], [True] * 4)
+# the handovers' own conditions are inside the files (asserted below): an include with a when of its own would skip
+# them on the hosts it excludes - none has one
+HANDOVERS = {"tasks/vault-step-down.yml", "tasks/consul-leader-off.yml", "tasks/tier0-backup-stopped.yml",
+             "tier0-backup-lock.yml"}
+handover_incs = [t for t in INCLUDES if t.get("ansible.builtin.include_tasks") in HANDOVERS]
+check("the handovers' includes all met: Vault's, Consul's, the tier-0 backup's and its lock read",
+      sorted(t["ansible.builtin.include_tasks"] for t in handover_incs), sorted(HANDOVERS))
+check("the handovers' includes unconditional (their tasks' own conditions decide)",
+      [t["ansible.builtin.include_tasks"] for t in handover_incs if "when" in t], [])
 if None in (lock, vault, leader, pause):
     print("consul-handover: FAILED"); sys.exit(1)
 at = every.index

@@ -1,0 +1,26 @@
+---
+# No Pis' tier-0 backup holding its Consul lock - read right before a Consul server goes away (tier0-backup-stopped.yml,
+# its timer stopped first), and by upgrade-pi-packages before a Pi hands anything over too: the common refusal before
+# anything changes.
+
+# the Pis' tier-0 backup (02:40 UTC, setup-pi-backups.yml) runs under a Consul lock: a restart of a server
+# ends its session, the lock, and the backup with it - read right before the restart (its timer may start the
+# backup while the handovers run)
+- name: No tier-0 backup holding its Consul lock
+  check_mode: false  # a read: a preview refuses too
+  ansible.builtin.shell:
+    executable: /bin/bash
+    cmd: |
+      set -uo pipefail
+      if ! out=$(consul kv get -detailed pi-tier0-backup/.lock 2>&1); then
+        grep -q 'No key exists' <<< "$out" || { echo "REFUSED: the backup's lock not read: $out"; exit 1; }
+        out=""
+      fi
+      held=$(awk '$1 == "Session" && $2 != "-" {print $2}' <<< "$out")
+      if [ -n "$held" ]; then
+        echo "REFUSED: the Pis' tier-0 backup holds its Consul lock (its timer 02:40 UTC) - a restart" \
+          "ends it: run after it"
+        exit 1
+      fi
+      echo "NO BACKUP RUNNING"
+  changed_when: false

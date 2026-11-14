@@ -3,13 +3,17 @@
 Each command prints its verdict and exits 0 for yes, 1 for no - and 1 for an answer it could not read, said so: never
 taken for a yes.
 
-  plan           apt's upgrade as the playbook runs it (upgrade --with-new-pkgs: held packages stay, nothing removed),
+  plan [--fresh] apt's upgrade as the playbook runs it (upgrade --with-new-pkgs: held packages stay, nothing removed),
                  simulated: "<package> <installed> -> <candidate>" a line ("new" for one not installed yet), then
-                 "PLAN <n> upgraded, <n> new, <n> kept back". Refused: a removal planned, apt's summary not read, or
-                 its packages not the number it says
-  services       the services a reboot must bring back: running now and enabled - keepalived's own aside (they follow
-                 the VIP: its notify_lib.sh's SERVICES) - one a line, then "SERVICES <n>"
-  back UNIT...   each running again: "BACK <n>", or "NOT YET <unit> <state>, ..."
+                 "PLAN <n> upgraded, <n> new, <n> kept back". --fresh: from package lists read now into a directory of
+                 its own (a preview's - the Pi's own lists, and apt's caches, stay as they are). Refused: dpkg's audit
+                 not clean (a package half-installed), a removal planned, apt's summary not read, or its packages not
+                 the number it says
+  services       the services a reboot must bring back: running now and enabled (an instance - foo@bar - by its
+                 template's enablement) - keepalived's own aside (they follow the VIP: its notify_lib.sh's SERVICES) -
+                 one a line, then "SERVICES <n>"
+  back UNIT...   each running again - or skipped by its own start condition at this boot (a first-boot unit): "BACK
+                 <n>", or "NOT YET <unit> <state>, ..." (one not tried yet is not yet)
   gluster        every Gluster volume of fstab mounted from itself, every volume's bricks connected with nothing to
                  heal: "HEALED <volumes>", or what is not
   patroni [--leader NAME]
@@ -19,18 +23,36 @@ taken for a yes.
                  voters: "QUORUM HOLDS <servers>", or "NO QUORUM TO SPARE <servers>"
   vip-units      keepalived's own services installed here (a unit its table names but this Pi lacks - the Vagrant
                  copy has no Nexus - is skipped by keepalived too): one a line, then "VIP UNITS <n>"
+  standby        this Pi can take the VIP: keepalived running, keepalived's own check passing (its
+                 check_services.sh: Forgejo, Keycloak, Patroni, versitygw), Forgejo's database reached (its healthz -
+                 through PgBouncer and HAProxy to Patroni's leader): "STANDBY", or what is not
+  idle [UNIT...] each one not running (keepalived's own, on a Pi not holding the VIP - one running beside the holder's
+                 shares its data): "IDLE <units>", or "RUNNING <unit> <state>, ..."
+  kernel         the kernel running is the newest of its flavour installed (a reboot took the upgrade's): "BOOTED
+                 <release>", or "NOT BOOTED <newest>: running <release>"
+  boot [--min-free MB]
+                 /boot/firmware's config.txt and cmdline.txt (sha256 - a firmware or kernel package rewriting them is
+                 compared before the reboot) and its free space: "BOOT FILES config.txt=<h> cmdline.txt=<h>", "FREE <n>
+                 MB" - refused under MB; "BOOT FILES none" where there is no /boot/firmware (the Vagrant copy)
+  bootloader stage|check
+                 a Raspberry Pi's EEPROM: stage - its update put in place for the reboot to flash (rpi-eeprom-update -a);
+                 check - "BOOTLOADER UP TO DATE", or not; "NO BOOTLOADER UPDATER" where there is none
   serving VIP [UNIT...]
                  this Pi holds the VIP and serves the units named - each one of keepalived's, installed, running, its
                  health URL answering (the units the Pi handing over had: one missing here is not served): "SERVING
                  <vip> <units>", or what is missing
 
-The paths and the Consul address from the environment, for the unit harness (tests/ansible/unit/pi-packages).
+The paths, the Consul address and a cap on every command's time (PI_PACKAGES_TIMEOUT, seconds) from the environment,
+for the unit harness (tests/ansible/unit/pi-packages).
 """
+import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 import urllib.error
 import urllib.request
 
@@ -38,6 +60,14 @@ PATRONI_CONFIG = os.environ.get("PATRONI_CONFIG", "/etc/patroni/patroni.yml")
 NOTIFY_LIB = os.environ.get("KEEPALIVED_NOTIFY_LIB", "/etc/keepalived/notify_lib.sh")
 FSTAB = os.environ.get("FSTAB", "/etc/fstab")
 CONSUL = os.environ.get("CONSUL_HTTP_ADDR", "http://127.0.0.1:8500")
+CHECK_SERVICES = os.environ.get("KEEPALIVED_CHECK", "/etc/keepalived/check_services.sh")
+FORGEJO_HEALTH = os.environ.get("FORGEJO_HEALTH", "http://127.0.0.1:3000/api/healthz")
+MODULES = os.environ.get("MODULES_DIR", "/lib/modules")
+RELEASE = os.environ.get("KERNEL_RELEASE") or os.uname().release
+BOOT = os.environ.get("BOOT_FIRMWARE", "/boot/firmware")
+EEPROM = os.environ.get("RPI_EEPROM_UPDATE", "/usr/bin/rpi-eeprom-update")
+LISTS_PARENT = os.environ.get("PI_PACKAGES_LISTS_PARENT", "/var/tmp")
+TIMEOUT_CAP = float(os.environ.get("PI_PACKAGES_TIMEOUT") or 0)
 
 SUMMARY = re.compile(r"^(\d+) upgraded, (\d+) newly installed, (\d+) to remove and (\d+) not upgraded\.$", re.M)
 # "Inst <pkg> [<installed>] (<candidate> <archive> [<arch>])" - no [<installed>] for a package new to the Pi
@@ -51,6 +81,7 @@ class NotRead(Exception):
 
 def run(cmd, timeout=120, check=True):
     """The command's output - its exit judged when check (a failure is an answer not read), else the whole result."""
+    timeout = min(timeout, TIMEOUT_CAP) if TIMEOUT_CAP else timeout
     # C locale: apt's and systemd's words are the ones parsed here
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env={**os.environ, "LC_ALL": "C"})
@@ -65,8 +96,25 @@ def run(cmd, timeout=120, check=True):
     return r.stdout
 
 
-def plan(_args):
-    out = run(["apt-get", "-s", "-q", "upgrade", "--with-new-pkgs"], timeout=300)
+def plan(args):
+    if args not in ([], ["--fresh"]):
+        raise NotRead(f"plan: {' '.join(args)} - [--fresh] only")
+    audit = run(["dpkg", "--audit"], timeout=60).strip()
+    if audit:
+        print("REFUSED: dpkg's audit is not clean - " + " ".join(audit.split())[:300])
+        return 1
+    if args:
+        lists = tempfile.mkdtemp(prefix="pi-packages-lists-", dir=LISTS_PARENT)
+        try:
+            os.mkdir(os.path.join(lists, "partial"))
+            # its own lists, no binary caches written: the Pi's apt state as it was
+            own = ["-o", f"Dir::State::Lists={lists}", "-o", "Dir::Cache::pkgcache=", "-o", "Dir::Cache::srcpkgcache="]
+            run(["apt-get", "-q", *own, "update"], timeout=600)
+            out = run(["apt-get", "-s", "-q", *own, "upgrade", "--with-new-pkgs"], timeout=300)
+        finally:
+            shutil.rmtree(lists, ignore_errors=True)
+    else:
+        out = run(["apt-get", "-s", "-q", "upgrade", "--with-new-pkgs"], timeout=300)
     summary = SUMMARY.findall(out)
     if len(summary) != 1:
         raise NotRead("apt-get -s upgrade: its summary line not found")
@@ -80,8 +128,23 @@ def plan(_args):
         raise NotRead(f"apt-get -s upgrade: {len(inst)} packages listed, its summary says {upgraded} upgraded, {new} new")
     for pkg, old, cand in inst:
         print(f"{pkg} {old or 'new'} -> {cand}")
+    if kept:
+        print("KEPT BACK " + " ".join(kept_back(out)))
     print(f"PLAN {upgraded} upgraded, {new} new, {kept} kept back")
     return 0
+
+
+def kept_back(out):
+    """The packages apt names under "have been kept back:" (indented lines up to the next unindented one)."""
+    names, inside = [], False
+    for line in out.splitlines():
+        if line.startswith("The following packages have been kept back:"):
+            inside = True
+        elif inside and line.startswith(" "):
+            names += line.split()
+        elif inside:
+            break
+    return names
 
 
 def keepalived_services():
@@ -105,7 +168,9 @@ def unit_names(*args):
 def services(_args):
     running = unit_names("list-units", "--state=active")
     enabled = unit_names("list-unit-files", "--state=enabled")
-    found = sorted((running & enabled) - {unit for unit, _ in keepalived_services()})
+    # an instance is listed by its template (getty@.service enabled, getty@tty1.service running)
+    found = sorted(u for u in running if u in enabled or ("@" in u and u.split("@", 1)[0] + "@.service" in enabled))
+    found = [u for u in found if u not in {unit for unit, _ in keepalived_services()}]
     if not found:
         raise NotRead("no service running and enabled - systemd's lists not read as such")
     for unit in found:
@@ -122,12 +187,28 @@ def back(units):
     states = r.stdout.split()
     if len(states) != len(units):
         raise NotRead(f"systemctl is-active: {len(states)} states for {len(units)} units ({r.stderr.strip()[-200:]})")
-    not_yet = [f"{u} {s}" for u, s in zip(units, states) if s != "active"]
+    skipped, not_yet = [], []
+    for u, s in zip(units, states):
+        if s == "active":
+            continue
+        if condition_failed(u):
+            skipped.append(u)
+        else:
+            not_yet.append(f"{u} {s}")
     if not_yet:
         print("NOT YET " + ", ".join(not_yet))
         return 1
-    print(f"BACK {len(units)}")
+    print(f"BACK {len(units)}" + (f" ({', '.join(skipped)} skipped by its start condition)" if skipped else ""))
     return 0
+
+
+def condition_failed(unit):
+    """True when the unit's start conditions were checked at this boot and failed (systemd then leaves it inactive
+    without an error: a first-boot unit) - a unit not tried yet has no condition timestamp."""
+    props = dict(line.split("=", 1) for line in run(
+        ["systemctl", "show", "-p", "ConditionResult", "-p", "ConditionTimestampMonotonic", unit], timeout=30).splitlines()
+        if "=" in line)
+    return props.get("ConditionResult") == "no" and props.get("ConditionTimestampMonotonic", "0") not in ("", "0")
 
 
 def fstab_volumes():
@@ -232,6 +313,115 @@ def vip_units(_args):
     return 0
 
 
+def forgejo_db():
+    """None when Forgejo's healthz passes with its database ping, else what it said."""
+    try:
+        with urllib.request.urlopen(FORGEJO_HEALTH, timeout=10) as r:
+            h = json.loads(r.read())
+    except urllib.error.HTTPError as e:
+        return f"Forgejo's healthz answered {e.code}"
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        return f"Forgejo's healthz not read ({e})"
+    db = [c.get("status") for c in (h.get("checks") or {}).get("database:ping", [])]
+    if h.get("status") != "pass" or db != ["pass"]:
+        return f"Forgejo's healthz: {h.get('status')}, database {db or 'unchecked'}"
+    return None
+
+
+def standby(_args):
+    bad = []
+    state = run(["systemctl", "is-active", "keepalived"], timeout=30, check=False).stdout.strip()
+    if state != "active":
+        bad.append(f"keepalived {state or 'unread'}")
+    if not os.path.exists(CHECK_SERVICES):
+        bad.append(f"no {CHECK_SERVICES}")
+    elif run([CHECK_SERVICES], timeout=60, check=False).returncode != 0:
+        bad.append("keepalived's check_services.sh fails")
+    db = forgejo_db()
+    if db:
+        bad.append(db)
+    if bad:
+        print("NOT STANDBY: " + ", ".join(bad))
+        return 1
+    print("STANDBY")
+    return 0
+
+
+RUNNING = ("active", "activating", "reloading", "deactivating", "refreshing")
+
+
+def idle(units):
+    if not units:
+        print("IDLE (no keepalived service of its own)")
+        return 0
+    r = run(["systemctl", "is-active", *units], timeout=30, check=False)
+    states = r.stdout.split()
+    if len(states) != len(units):
+        raise NotRead(f"systemctl is-active: {len(states)} states for {len(units)} units")
+    running = [f"{u} {s}" for u, s in zip(units, states) if s in RUNNING]
+    if running:
+        print("RUNNING " + ", ".join(running))
+        return 1
+    print("IDLE " + " ".join(units))
+    return 0
+
+
+def kernel(_args):
+    flavour = RELEASE.split("-", 1)[1] if "-" in RELEASE else ""
+    try:
+        same = [d for d in os.listdir(MODULES) if (d.split("-", 1)[1] if "-" in d else "") == flavour]
+    except OSError as e:
+        raise NotRead(f"{MODULES}: {e}") from None
+    if RELEASE not in same:
+        raise NotRead(f"{RELEASE} running, not in {MODULES}")
+    newest = max(same, key=lambda d: [int(x) for x in re.findall(r"\d+", d.split("-", 1)[0])])
+    if newest != RELEASE:
+        print(f"NOT BOOTED {newest}: running {RELEASE}")
+        return 1
+    print(f"BOOTED {RELEASE}")
+    return 0
+
+
+def boot(args):
+    if args not in ([],) and not (len(args) == 2 and args[0] == "--min-free" and args[1].isdigit()):
+        raise NotRead(f"boot: {' '.join(args)} - [--min-free MB] only")
+    if not os.path.isdir(BOOT):
+        print("BOOT FILES none")
+        return 0
+    def digest(name):
+        path = os.path.join(BOOT, name)
+        if not os.path.exists(path):
+            return "absent"
+        with open(path, "rb") as f:
+            return hashlib.sha256(f.read()).hexdigest()
+    print(f"BOOT FILES config.txt={digest('config.txt')} cmdline.txt={digest('cmdline.txt')}")
+    free = shutil.disk_usage(BOOT).free // 2**20
+    if args and free < int(args[1]):
+        print(f"REFUSED: {BOOT} has {free} MB free, under {args[1]} - a kernel and its initramfs need the room")
+        return 1
+    print(f"FREE {free} MB")
+    return 0
+
+
+def bootloader(args):
+    if args not in (["stage"], ["check"]):
+        raise NotRead("bootloader: stage or check")
+    if not os.path.exists(EEPROM):
+        print("NO BOOTLOADER UPDATER")
+        return 0
+    if args == ["stage"]:
+        out = run([EEPROM, "-a"], timeout=300)
+        print("STAGED: " + " ".join(out.split())[-300:])
+        return 0
+    r = run([EEPROM], timeout=120, check=False)
+    line = next((x.strip() for x in r.stdout.splitlines() if x.strip().startswith("BOOTLOADER:")), "")
+    if line == "BOOTLOADER: up to date":
+        print("BOOTLOADER UP TO DATE")
+        return 0
+    print(f"BOOTLOADER NOT UP TO DATE: {line or 'no BOOTLOADER line'}")
+    return 1
+
+
 def serving(args):
     if not args:
         raise NotRead("serving: the VIP, then the units it must serve")
@@ -265,7 +455,8 @@ def serving(args):
 
 
 COMMANDS = {"plan": plan, "services": services, "back": back, "gluster": gluster, "patroni": patroni,
-            "consul": consul, "vip-units": vip_units, "serving": serving}
+            "consul": consul, "vip-units": vip_units, "serving": serving, "standby": standby, "idle": idle,
+            "kernel": kernel, "boot": boot, "bootloader": bootloader}
 
 
 def main(argv):
