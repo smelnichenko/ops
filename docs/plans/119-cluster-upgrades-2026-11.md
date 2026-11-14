@@ -234,7 +234,7 @@ Never two of these at once; no Pi turn while an infra merge moves pods that use 
   orphaned package blobs (494 MiB of 654 GiB), the forgejo user's authorized_keys per Pi (pi1's has key-3, pi2's
   none: written on the Pi holding the VIP when the key was added; nothing uses git over SSH - every remote and Argo
   source is HTTPS), WORK_PATH /usr/local/bin (custom/ holds conf only). Left for the operator.
-- Step 7: `task test:copy:inventory` (19:45 UTC) - Cilium 1.20.4 + Envoy 1.39.5, the Pis' Forgejo 15.0.11, Patroni
+- Step 7: `task test:copy:inventory` (19:31 UTC) - Cilium 1.20.4 + Envoy 1.39.5, the Pis' Forgejo 15.0.11, Patroni
   4.1.5, Vault 1.21.4, PostgreSQL 17.12, haproxy deb13u4; pi-versions.yml's Forgejo/Patroni/Vault pins gone (production
   = the playbooks' defaults now); `cilium_version` 1.20.4. Unit suite 139/139. **Wave 1 complete.**
 
