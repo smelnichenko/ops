@@ -1,0 +1,198 @@
+---
+# One Pi's turn in upgrade-pi-packages.yml (its header says why each step): nothing to upgrade - left as it is; else
+# its roles handed to the other Pi, apt's upgrade, the reboot - Consul's leadership elsewhere, no tier-0 backup - and
+# every check after it. Expects: pi_packages (the script), each Pi's pi_packages_services (the run's first play),
+# keepalived_vip, the pis group.
+- name: The other Pi, and how long a handover may take
+  ansible.builtin.set_fact:
+    _other_pi: "{{ groups['pis'] | difference([inventory_hostname]) | first }}"
+    consul_handover_seconds: 30
+
+- name: The package lists read anew
+  ansible.builtin.apt:
+    update_cache: true
+  when: not ansible_check_mode  # a preview plans from the lists the Pi has, writing nothing
+
+- name: What apt's upgrade does here
+  ansible.builtin.script:
+    cmd: "{{ pi_packages }} plan"
+    executable: python3
+  register: _plan
+  changed_when: false
+  check_mode: false  # a read
+
+- name: The plan
+  ansible.builtin.debug:
+    msg: "{{ _plan.stdout_lines | map('trim') | list }}"
+
+- name: Its summary, for the run's last line
+  ansible.builtin.set_fact:
+    pi_packages_done: "{{ _plan.stdout_lines | map('trim') | select('match', '^PLAN ') | first | regex_replace('^PLAN ', '') }}"
+
+- name: Nothing to upgrade - left as it is (no handover, no reboot)
+  ansible.builtin.meta: end_host
+  when: pi_packages_done is match('0 upgraded, 0 new,')
+
+# this Pi's roles go to the other: it must serve what it served when the run began
+- name: The other Pi serving - every service it ran when the run began running
+  ansible.builtin.script:
+    cmd: "{{ pi_packages }} back {{ hostvars[_other_pi].pi_packages_services | join(' ') }}"
+    executable: python3
+  delegate_to: "{{ _other_pi }}"
+  changed_when: false
+  check_mode: false  # a read
+
+- name: Patroni's role here
+  ansible.builtin.uri:
+    url: http://127.0.0.1:8008/patroni
+  register: _patroni_here
+  check_mode: false  # a read
+
+# the leader stays on the other Pi from here on, its own Consul agent with it: the reboot here is a replica's, no pause
+# needed - and none wanted (paused, Patroni leaves Postgres running when stopped, for the shutdown to kill, and starts
+# no Postgres after the boot)
+- name: Patroni's leadership handed to the other Pi - a switchover (its exit proves nothing; the next task does)
+  ansible.builtin.command: >-
+    patronictl -c /etc/patroni/patroni.yml switchover --leader {{ inventory_hostname }} --candidate {{ _other_pi }}
+    --force
+  changed_when: true
+  when: _patroni_here.json.role in ['primary', 'master']
+
+- name: The other Pi leading, this one streaming
+  ansible.builtin.script:
+    cmd: "{{ pi_packages }} patroni --leader {{ _other_pi }}"
+    executable: python3
+  register: _led
+  retries: 24
+  delay: 5
+  until: _led.rc == 0
+  changed_when: false
+  when:
+    - _patroni_here.json.role in ['primary', 'master']
+    - not ansible_check_mode  # a preview switched nothing over
+
+- name: Vault's handover (tasks/vault-step-down.yml)
+  ansible.builtin.include_tasks: vault-step-down.yml
+
+- name: Which Pi holds the VIP
+  ansible.builtin.include_tasks: pi-vip-holder.yml
+
+- name: The VIP handed over, apt's upgrade, the reboot - keepalived started again whatever happens
+  block:
+    # its ExecStopPost stops keepalived's own services here (Nexus); the other Pi takes the VIP and starts them
+    - name: The VIP handed to the other Pi - keepalived stopped here
+      ansible.builtin.systemd_service:
+        name: keepalived
+        state: stopped
+      when: pi_vip_holder == inventory_hostname
+
+    - name: The other Pi holding the VIP and serving keepalived's services (its notify script waits up to 180 s)
+      ansible.builtin.script:
+        cmd: "{{ pi_packages }} serving {{ keepalived_vip }}"
+        executable: python3
+      register: _took_vip
+      retries: 40
+      delay: 5
+      until: _took_vip.rc == 0
+      changed_when: false
+      delegate_to: "{{ _other_pi }}"
+      when:
+        - pi_vip_holder == inventory_hostname
+        - not ansible_check_mode  # a preview stopped nothing
+
+    - name: The upgrade by apt - held packages stay, nothing removed, the Pi's config files kept
+      ansible.builtin.command:
+        argv: [apt-get, -y, -q, -o, "Dpkg::Options::=--force-confdef", -o, "Dpkg::Options::=--force-confold", upgrade,
+               --with-new-pkgs]
+      environment:
+        DEBIAN_FRONTEND: noninteractive
+      changed_when: true
+
+    - name: Consul's handover (tasks/consul-leader-off.yml)
+      ansible.builtin.include_tasks: consul-leader-off.yml
+
+    - name: The tier-0 backup kept off this Pi (tasks/tier0-backup-stopped.yml)
+      ansible.builtin.include_tasks: tier0-backup-stopped.yml
+
+    - name: Rebooted
+      ansible.builtin.reboot:
+        reboot_timeout: 900
+        msg: "upgrade-pi-packages: the Pi's apt packages upgraded"
+
+    - name: Every service it ran when the run began running again
+      ansible.builtin.script:
+        cmd: "{{ pi_packages }} back {{ pi_packages_services | join(' ') }}"
+        executable: python3
+      register: _back
+      retries: 60
+      delay: 10
+      until: _back.rc == 0
+      changed_when: false
+      check_mode: false  # a read
+
+    - name: Its Vault unsealed (vault-unseal, at boot)
+      ansible.builtin.uri:
+        url: https://127.0.0.1:8200/v1/sys/health
+        ca_path: /etc/vault.d/tls/ca-cert.pem  # its certificate names 127.0.0.1
+        status_code: [200, 429]
+      register: _vault_back
+      retries: 36
+      delay: 5
+      until: _vault_back.status in [200, 429]
+      check_mode: false  # a read
+
+    - name: Consul caught up - every server healthy, one loss tolerated
+      ansible.builtin.script:
+        cmd: "{{ pi_packages }} consul"
+        executable: python3
+      register: _consul_back
+      retries: 30
+      delay: 5
+      until: _consul_back.rc == 0
+      changed_when: false
+      check_mode: false  # a read
+  always:
+    # running again on the Pi that held the VIP (nopreempt: the VIP stays where it went) - after the reboot it started
+    # itself, and where the run failed before the stop it never stopped: a no-op then
+    - name: Keepalived started again where this run stopped it
+      ansible.builtin.systemd_service:
+        name: keepalived
+        state: started
+      when: pi_vip_holder == inventory_hostname
+
+    - name: The tier-0 backup's timer started again (where it ran)
+      ansible.builtin.systemd_service:
+        name: pi-tier0-backup.timer
+        state: started
+      when: (_tier0_timer.status | default({})).ActiveState | default('') == 'active'
+
+- name: The Gluster volumes mounted, nothing to heal - what changed while the Pi was away healed onto its bricks
+  ansible.builtin.script:
+    cmd: "{{ pi_packages }} gluster"
+    executable: python3
+  register: _healed
+  retries: 60
+  delay: 10
+  until: _healed.rc == 0
+  changed_when: false
+  check_mode: false  # a read
+
+- name: Patroni healthy - its member streaming again
+  ansible.builtin.script:
+    cmd: "{{ pi_packages }} patroni"
+    executable: python3
+  register: _patroni_back
+  retries: 24
+  delay: 5
+  until: _patroni_back.rc == 0
+  changed_when: false
+  check_mode: false  # a read
+
+- name: Nothing left to upgrade here
+  ansible.builtin.script:
+    cmd: "{{ pi_packages }} plan"
+    executable: python3
+  register: _left
+  changed_when: false
+  failed_when: _left.rc != 0 or not (_left.stdout_lines | map('trim') | select('match', '^PLAN 0 upgraded, 0 new,') | list)
+  when: not ansible_check_mode  # a preview upgraded nothing

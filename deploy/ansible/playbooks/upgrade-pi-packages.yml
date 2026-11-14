@@ -1,0 +1,162 @@
+---
+# The Pis' apt packages upgraded - Debian's and the Raspberry Pi archive's (security updates, a kernel, firmware);
+# what the Pis run from releases (Vault, Consul, Forgejo, Keycloak, Nexus, Caddy, versitygw, Patroni's pip package) is
+# no apt package: their own upgrade-*.yml. One Pi at a time - the one not holding the VIP first, its holder last - each
+# rebooted after its upgrade (a library's users run its new code only once restarted, a kernel only once booted).
+# apt-get upgrade --with-new-pkgs: held packages stay, nothing is removed (a removal planned refuses the Pi before
+# anything changes), a config file the Pi has changed is kept (the playbooks own them).
+#
+# Before anything, from both Pis: the Patroni cluster healthy (a leader, its replica streaming with no lag) and not
+# paused, both Vaults unsealed, Consul's three servers healthy with one loss tolerated, every Gluster volume mounted
+# with nothing to heal, the VIP on one Pi; each Pi's services recorded - every enabled one running then (keepalived's
+# own aside: they follow the VIP) must run again after its reboot.
+#
+# Each Pi with anything to upgrade, in turn (tasks/pi-packages-node.yml): its roles handed to the other Pi first, so
+# its packages change on a Pi serving nothing - Patroni's leadership (a switchover), Vault's (a step-down), the VIP
+# (keepalived stopped here; Nexus, which follows it, answering on the other Pi before this one goes on); apt's
+# upgrade; right before the reboot, Consul's raft leadership moved off this Pi (no election while it is away) and no
+# tier-0 backup holding its Consul lock (a reboot ends it); the reboot; back: every service recorded running, Vault
+# unsealed, Consul caught up, the Gluster volumes mounted and healed, Patroni healthy, nothing left to upgrade.
+# Patroni is not paused: its leader is on the other Pi, with its own Consul agent, and a paused Patroni would leave
+# Postgres for the shutdown to kill and start none after the boot - a cluster paused already is refused. keepalived,
+# stopped here, is started again whatever happens. Any failure stops the run before the next Pi. A Pi with nothing to
+# upgrade is left as it is - no handover, no reboot: a run again after a failure goes on where it stopped.
+#
+# A preview (--check) reads everything and changes nothing: the plan from the package lists the Pis have (no update).
+#
+# Usage: task deploy:pi-packages:upgrade   (production; the Vagrant copy: task test:copy:playbook
+#        PLAYBOOK=upgrade-pi-packages.yml)
+- name: Both Pis as an upgrade needs them, each one's services recorded, the order
+  hosts: pis
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  vars:
+    pi_packages: "{{ playbook_dir }}/scripts/pi-packages.py"
+  tasks:
+    - name: Both Pis in the run (one alone has no other to hand its roles to)
+      ansible.builtin.assert:
+        that: ansible_play_hosts | sort == groups['pis'] | sort and ansible_play_hosts | length == 2
+        fail_msg: "REFUSED: the run has {{ ansible_play_hosts | sort }}, the Pis are {{ groups['pis'] | sort }}"
+        quiet: true
+      run_once: true
+
+    - name: Which Pi holds the VIP
+      ansible.builtin.include_tasks: tasks/pi-vip-holder.yml
+
+    - name: Not paused already (a paused cluster has no failover - resume it, or finish the maintenance, first)
+      ansible.builtin.script:
+        cmd: "{{ playbook_dir }}/scripts/patroni-pause.py check"
+        executable: python3
+      changed_when: false
+      check_mode: false  # a read
+      run_once: true
+
+    - name: Patroni healthy - a leader, its replica streaming with no lag
+      ansible.builtin.script:
+        cmd: "{{ pi_packages }} patroni"
+        executable: python3
+      changed_when: false
+      check_mode: false  # a read
+      run_once: true
+
+    - name: Consul's servers healthy, one loss tolerated
+      ansible.builtin.script:
+        cmd: "{{ pi_packages }} consul"
+        executable: python3
+      changed_when: false
+      check_mode: false  # a read
+      run_once: true
+
+    - name: Each Vault unsealed (200 active, 429 standby)
+      ansible.builtin.uri:
+        url: https://127.0.0.1:8200/v1/sys/health
+        ca_path: /etc/vault.d/tls/ca-cert.pem  # its certificate names 127.0.0.1
+        status_code: [200, 429]
+      check_mode: false  # a read
+
+    - name: Each Pi's Gluster volumes mounted, nothing to heal
+      ansible.builtin.script:
+        cmd: "{{ pi_packages }} gluster"
+        executable: python3
+      changed_when: false
+      check_mode: false  # a read
+
+    - name: The services each Pi's reboot must bring back
+      ansible.builtin.script:
+        cmd: "{{ pi_packages }} services"
+        executable: python3
+      register: _services
+      changed_when: false
+      check_mode: false  # a read
+
+    - name: Each one's list, for its turn
+      ansible.builtin.set_fact:
+        pi_packages_services: "{{ _services.stdout_lines | map('trim') | reject('match', '^SERVICES ') | list }}"
+
+    - name: The order - the Pi not holding the VIP first, its holder last
+      ansible.builtin.group_by:
+        key: "pi_packages_turn_{{ 2 if inventory_hostname == pi_vip_holder else 1 }}"
+      changed_when: false
+
+- name: The first Pi's turn - the one not holding the VIP
+  hosts: pi_packages_turn_1
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  vars:
+    pi_packages: "{{ playbook_dir }}/scripts/pi-packages.py"
+  tasks:
+    - name: Upgraded and rebooted, its roles handed over first
+      ansible.builtin.include_tasks: tasks/pi-packages-node.yml
+
+- name: The second Pi's turn - the VIP's holder
+  hosts: pi_packages_turn_2
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  vars:
+    pi_packages: "{{ playbook_dir }}/scripts/pi-packages.py"
+  tasks:
+    - name: Upgraded and rebooted, its roles handed over first
+      ansible.builtin.include_tasks: tasks/pi-packages-node.yml
+
+- name: Both Pis after
+  hosts: pis
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  vars:
+    pi_packages: "{{ playbook_dir }}/scripts/pi-packages.py"
+  tasks:
+    - name: Which Pi holds the VIP now
+      ansible.builtin.include_tasks: tasks/pi-vip-holder.yml
+
+    - name: The VIP's Pi serving keepalived's own services (Nexus - its notify script waits up to 180 s)
+      ansible.builtin.script:
+        cmd: "{{ pi_packages }} serving {{ keepalived_vip }}"
+        executable: python3
+      register: _serving
+      retries: 40
+      delay: 5
+      until: _serving.rc == 0
+      changed_when: false
+      check_mode: false  # a read
+      when: inventory_hostname == pi_vip_holder
+
+    - name: Patroni healthy
+      ansible.builtin.script:
+        cmd: "{{ pi_packages }} patroni"
+        executable: python3
+      register: _patroni_after
+      changed_when: false
+      check_mode: false  # a read
+      run_once: true
+
+    - name: Upgraded
+      ansible.builtin.debug:
+        msg: >-
+          {{ 'PREVIEW - nothing changed: ' if ansible_check_mode else '' }}{% for h in ansible_play_hosts %}{{ h }}:
+          {{ hostvars[h].pi_packages_done | default('nothing to upgrade') }}{{ '; ' if not loop.last }}{% endfor %};
+          the VIP on {{ pi_vip_holder }}; {{ _patroni_after.stdout_lines | map('trim') | first }}
+      run_once: true

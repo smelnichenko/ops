@@ -1,0 +1,28 @@
+---
+# Consul's raft leadership moved off this server before it goes away - setup-consul's restart, upgrade-pi-packages'
+# reboot of its Pi. Expects: consul_handover_seconds (how long the move may take).
+
+# the raft leader restarted is an election with a server already down: leadership to another first
+- name: Consul's leadership moved off this server first
+  ansible.builtin.shell:
+    executable: /bin/bash
+    cmd: |
+      set -euo pipefail
+      leader() { consul operator raft list-peers | awk '$4 == "leader" {print $1}'; }
+      l=$(leader)
+      if [ "$l" != "{{ inventory_hostname }}" ]; then echo "NOT THE LEADER ($l is)"; exit 0; fi
+      consul operator raft transfer-leader > /dev/null
+      # the wait on the host's uptime (a wall-clock step moves SECONDS); a read failing during the election
+      # is read again, never an exit unsaid
+      # hundredths: whole seconds cut a wait begun late in a second to just over its length less one
+      up() { local u; read -r u _ < /proc/uptime; u=${u/./}; echo "$((10#$u))"; }
+      end=$(( $(up) + {{ consul_handover_seconds }} * 100 ))
+      while [ "$(up)" -lt "$end" ]; do
+        l=$(leader) || l=""
+        if [ -n "$l" ] && [ "$l" != "{{ inventory_hostname }}" ]; then echo "LEADERSHIP MOVED to $l"; exit 0; fi
+        sleep 1
+      done
+      echo "REFUSED: Consul's leadership not moved off {{ inventory_hostname }} in {{ consul_handover_seconds }} s"
+      exit 1
+  register: _consul_handover
+  changed_when: "'LEADERSHIP MOVED' in _consul_handover.stdout"

@@ -1,0 +1,41 @@
+---
+# The Pis' tier-0 backup kept off this server's Consul agent while it goes away (setup-consul's restart, the reboot in
+# upgrade-pi-packages): its timer stopped - registered as _tier0_timer, the caller starts it again where it ran, whatever
+# happens - then no backup holding its Consul lock. The lock's read stays the last task: the caller's restart or reboot
+# follows it at once.
+
+# its timer stopped here first: a backup it started between the lock's read and the restart took the lock
+# through this server's agent, and the restart ended it (started again in always, where it ran)
+- name: The tier-0 backup's timer here, before its lock is read
+  ansible.builtin.systemd_service:
+    name: pi-tier0-backup.timer
+  register: _tier0_timer
+  failed_when: false  # a host without the timer: nothing to stop
+  check_mode: false  # a read
+
+- name: The tier-0 backup's timer stopped for the restart
+  ansible.builtin.systemd_service:
+    name: pi-tier0-backup.timer
+    state: stopped
+  when: _tier0_timer.status.ActiveState | default('') == 'active'
+
+# the Pis' tier-0 backup (02:40 UTC, setup-pi-backups.yml) runs under a Consul lock: a restart of a server
+# ends its session, the lock, and the backup with it - read right before the restart (its timer may start the
+# backup while the handovers run)
+- name: No tier-0 backup holding its Consul lock
+  ansible.builtin.shell:
+    executable: /bin/bash
+    cmd: |
+      set -uo pipefail
+      if ! out=$(consul kv get -detailed pi-tier0-backup/.lock 2>&1); then
+        grep -q 'No key exists' <<< "$out" || { echo "REFUSED: the backup's lock not read: $out"; exit 1; }
+        out=""
+      fi
+      held=$(awk '$1 == "Session" && $2 != "-" {print $2}' <<< "$out")
+      if [ -n "$held" ]; then
+        echo "REFUSED: the Pis' tier-0 backup holds its Consul lock (its timer 02:40 UTC) - a restart" \
+          "ends it: run after it"
+        exit 1
+      fi
+      echo "NO BACKUP RUNNING"
+  changed_when: false

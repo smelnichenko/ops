@@ -82,6 +82,39 @@ Then `task test:copy:inventory` (production read again) - the copy is built to t
 - Debian: openssl/haproxy restart their users (haproxy's restart may move the VIP), a kernel update needs a reboot;
   postgresql-17 17.11 on the Pis carries the same reindex notes as 17.12/18.7 - checked with the Pis' wave.
 
+**Wave 1 as built (2026-11-14):**
+- 1a: infra `upgrade/wave-1` 6a91c972, platform `upgrade/wave-1` 7abd7a1 - the table's versions, the test namespace's
+  Valkey and ScyllaDB with production's, platform CI's ClickHouse image with the chart's. ClickHouse stays at 26.8.34.13:
+  26.8.35/36 are Docker tags without a GitHub release, 26.8.37 came out the same morning (notes unread). pushgateway
+  1.11.4 (1.11.5: a tag, no release). ClickHouse 26.8.26's TLS default touches nothing: the server opens no TLS of its
+  own (its Kafka engine inside the mesh) - no setting added. Velero chart 12.2.0 -> 12.2.5 diffed: POD_NAME (the
+  server restarts), caCertRef, a node-agent lifecycle key fixed - none of our values changes meaning; the 1.18.4 pin stays.
+- 1b: `deploy:kubeadm:upgrade -- -e k8s_upgrade_to=1.36.6` (RESTARTS_EXPECTED on the copy); Cilium by a new
+  `deploy:cilium:upgrade -- -e cilium_version=1.20.4` (setup-kubeadm.yml `--tags cilium`, its tagged pre-pull first -
+  plan 100's runner, which passed the tags, is gone). The defaults (`k8s_package_version`, `cilium_version`) move with
+  the inventory read after production: the copy is built from them.
+- 1c: a new `upgrade-pi-packages.yml` (`deploy:pi-packages:upgrade`, `-- --check` previews): one Pi at a time, the VIP's
+  holder last; before anything Patroni healthy and not paused, both Vaults unsealed, Consul with a loss to spare, Gluster
+  mounted and healed, each Pi's running enabled services recorded (keepalived's Nexus aside); each Pi with anything to
+  upgrade hands over first - Patroni switchover, Vault step-down, the VIP (keepalived stopped, Nexus answering on the
+  other) - then `apt-get upgrade --with-new-pkgs` (holds kept, no removal, confold), Consul's raft leadership off it,
+  no tier-0 backup, the reboot, and every check back. No Patroni pause (the leader is on the other Pi with its own
+  Consul agent; paused, the shutdown would kill a Postgres Patroni left running). Its reads in
+  `playbooks/scripts/pi-packages.py` (harness `pi-packages`, each judgement broken and caught); setup-consul's Vault
+  step-down, Consul handover and tier-0 lock check moved into task files both share (harness `consul-handover`
+  follows the includes).
+- The Pis read 2026-11-14 (reads only): pi1 plans 46 upgraded + 8 new (a 6.18.60 kernel, rpi-eeprom, openjdk-21,
+  OpenSSL, curl, postgresql-17 17.11 -> 17.12, haproxy deb13u4), pi2 20 (its package lists older: the playbook updates
+  them first). PostgreSQL 17.12's reindex notes: no bpchar btree or gist_trgm_ops index in postgres/keycloak/forgejo,
+  no incremental backups (summarize_wal off) - nothing to do. Debian's postgresql-17 scripts beside Patroni: prerm stops
+  `postgresql@17-*` (inactive - Patroni runs Postgres), postinst starts `postgresql` (disabled) - harmless. rpi-eeprom
+  may stage a bootloader update at the boot; it applies at the reboot after.
+- Forgejo's pin 15.0.11, its sha256 from the release on code.forgejo.org and codeberg.org (the same).
+- The copy run: `test:copy:build`; `test:copy:change INFRA_REF=upgrade/wave-1 PLATFORM_REF=upgrade/wave-1`;
+  `test:copy:playbook` for upgrade-kubeadm.yml (`-e k8s_upgrade_to=1.36.6`, RESTARTS_EXPECTED=true), setup-kubeadm.yml
+  (`--tags cilium -e cilium_version=1.20.4`), upgrade-pi-packages.yml, upgrade-patroni.yml, upgrade-vault.yml
+  (`-e @vars/vault.yml -e @vars/vault-vagrant.yml` - amd64), upgrade-forgejo.yml - each with every check.
+
 **Out of wave 1** (found in the notes): PostgreSQL 18.7 - CNPG publishes no bullseye image for it; moving means the
 trixie (or bookworm) image, a glibc change (collations: reindex, `REFRESH COLLATION VERSION`) and 18.7's own reindex
 steps (unbounded `bpchar` btree, pg_trgm GiST) - its own step, on its own run. containerd 2.3.7 - Docker publishes

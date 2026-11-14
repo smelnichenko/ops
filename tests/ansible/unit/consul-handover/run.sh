@@ -84,9 +84,15 @@ def check(name, got, want):
     global fails
     fails += got != want
     print(("PASS " if got == want else "FAIL ") + name + ("" if got == want else f": got {got!r}, want {want!r}"))
+# every task in the order Ansible runs it: a block's own after the block, an included task file's (the handovers are
+# shared with upgrade-pi-packages: tasks/vault-step-down.yml, ...) where its include stands
+PLAYBOOKS = "deploy/ansible/playbooks"
 def tasks(ts):
     for t in ts or []:
         yield t
+        inc = t.get("ansible.builtin.include_tasks") or t.get("ansible.builtin.import_tasks")
+        if inc:
+            yield from tasks(yaml.safe_load(open(os.path.join(PLAYBOOKS, inc if isinstance(inc, str) else inc["file"]))))
         for k in ("block", "rescue", "always"):
             yield from tasks(t.get(k))
 play = next(p for p in yaml.safe_load(open("deploy/ansible/playbooks/setup-consul.yml"))

@@ -1038,6 +1038,15 @@ tasks:
     cmds:
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/upgrade-patroni.yml
 
+  deploy:pi-packages:upgrade:
+    desc: "PRODUCTION: the Pis' apt packages upgraded, one Pi at a time (the VIP's last), each rebooted - Patroni's leader, Vault's active node and the VIP handed to the other Pi first (a switchover, the VIP moving: seconds each); -- --check to preview"
+    dir: deploy/ansible
+    deps: [deploy:install]
+    dotenv: ['../../.env']
+    prompt: "Upgrade and reboot PRODUCTION's Pis, one at a time (Patroni switches over, the VIP moves)?"
+    cmds:
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/upgrade-pi-packages.yml {{.CLI_ARGS}}
+
   test:containerd-takeup:
     desc: "Vagrant (containerd.io installed, as on ten): the kubelet stopped by hand, upgrade-containerd.yml run again - it checks the containers the first run kept against the runtime and starts the kubelet (it used to end 'already there' with the node NotReady)"
     deps: [deploy:install]
@@ -1074,6 +1083,15 @@ tasks:
     prompt: "Upgrade Kubernetes on PRODUCTION (the API server away for seconds)?"
     cmds:
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/upgrade-kubeadm.yml {{.CLI_ARGS}}
+
+  deploy:cilium:upgrade:
+    desc: "PRODUCTION: Cilium on ten to the version after -- (setup-kubeadm.yml's Cilium tasks alone: -- -e cilium_version=<it>) - the agent and operator restart on the node"
+    dir: deploy/ansible
+    deps: [deploy:install]
+    dotenv: ['../../.env']
+    prompt: "Upgrade Cilium on PRODUCTION (its agent and operator restart on the node)?"
+    cmds:
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-kubeadm.yml --tags cilium {{.CLI_ARGS}}
 
   deploy:containerd:upgrade:
     desc: "PRODUCTION: containerd swapped for containerd.io (upgrade-containerd.yml; its version after --) - the kubelet stopped for the install, the containers keep running"
