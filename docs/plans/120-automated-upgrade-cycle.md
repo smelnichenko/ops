@@ -1,7 +1,7 @@
 # Plan 120 — the automated upgrade cycle
 
-Status: **PROPOSED, for the operator's review** (2026-11-13). Nothing built yet; built after plan 117 ships and plan
-119's wave 1 has gone through by hand once (the cycle automates a run already seen to work).
+Status: **DECIDED, NOT BUILT** - the review answered 2026-11-14 (below). Built once plan 119's wave 1 has gone
+through by hand (steps 1-3 live 2026-11-14; the cycle automates a run already seen to work). Plan 117 shipped.
 
 ## Decisions (operator, 2026-11-13)
 
@@ -84,12 +84,36 @@ workstation off, the copy not building) changes nothing in production and says s
 4. Majors with the 24 h notice; the pre-change backups proven first.
 Each step reviewed before the next.
 
-## For the operator's review
+## The operator's review (answered 2026-11-14)
 
-1. **Notification channel** for the notices and reports: e-mail, a push service (ntfy), a Forgejo issue? (Not a public
-   Telegram channel.)
-2. **The Claude agent's own access**: it runs unattended on the workstation with production-changing tasks - which
-   account/API key, and is its fix step (3) wanted, or should a failed proof only report?
-3. **The workstation as the runner**: it must be on at night; the copy takes ~25 GB of its 30 GB while the radar jar
-   runs beside it.
-4. **Cadence**: nightly units (a wave can take a week of nights), or weekly batches.
+1. **Notifications: e-mail** to the operator (the platform's own SMTP sender, Alertmanager's). Sent only for what is
+   acted on or was asked for: a major's veto notice (24 h), a unit blocked (red after its fix) or a one-way change's
+   failure (page, with its backup and restore steps), and - asked 2026-11-13 - each patch/minor applied. A night with
+   no unit sends nothing (the no-unattended-mail rule: no scheduled noise).
+2. **The agent: the current Claude account** - the same Claude Code login the operator's sessions use, headless on the
+   workstation. **The fix step (part 2, step 3) is required**: a red proof is diagnosed and fixed, then proven again;
+   only a second red blocks the unit. Its permissions are set for this job explicitly: in an interactive session the
+   auto mode refused `deploy:kubeadm:upgrade` (2026-11-14) - the runner's settings allow exactly the cycle's tasks
+   (`task --yes deploy:<the unit's>`, the bot's merges) and nothing else.
+3. **The workstation runs it; the operator stops the radar for it** ("I will stop radar again"): the copy needs ~24.6 GB
+   of the 30 GB (VMs 22.5 GB + the guard's 2 GB start reserve), and on 2026-11-14 it fit only with radar-live.service
+   stopped. The runner cannot stop it (a system unit, sudo asks a password): a unit's night begins only once the copy
+   guard admits the build; while it does not, the run waits within the night's window and, unadmitted, e-mails that the
+   unit waits for the radar to stop - and after the copy is destroyed, that the radar may start again. (A polkit rule
+   letting the runner stop and start radar-live itself would remove the step - the operator's call, not assumed.)
+4. **No batches: one unit a night** (a wave can take a week of nights).
+
+## What wave 1 by hand taught the cycle (2026-11-14)
+
+- A change to the test namespace cannot be proven on the copy (its mirror refuses what the overlay drops): the cycle
+  splits it onto a branch of its own, merged first - the test environment its own proof (plan 100's order) - then the
+  production unit.
+- The Pis' Debian unit runs `deploy:pi-packages:upgrade -- -e pi_packages_turns=1` one night (the Pi without the VIP,
+  its new kernel and bootloader soaking) and the second Pi the next; a preview (`-- --check`, fresh lists) goes in the
+  proof's record.
+- After each apply: `task test:copy:inventory` and the ops defaults that restate production (defaults-follow-production:
+  cert_manager_version, k8s_package_version, cilium_version, ...) moved in the same ops commit - by hand on 2026-11-14,
+  the next build's own inventory check failed otherwise.
+- Before a Kubernetes apply, a fresh etcd snapshot (a Job from the etcd-backup CronJob) - upgrade-kubeadm takes none.
+- The full review found real defects after a green copy run (Nexus double start, a failed run's reboot skipped): the
+  review stays a gate, and its fixes are proven on the copy again before the apply.
