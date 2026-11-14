@@ -775,6 +775,11 @@ check("the run's last line: each Pi's plan, the VIP's Pi, Patroni",
                                 "pi2": {"pi_packages_done": "0 upgraded, 0 new, 0 kept back"}},
                       pi_vip_holder="pi2", _patroni_after={"stdout_lines": ["HEALTHY pi2 Leader running\r"]}).split()),
       "pi1: 3 upgraded, 0 new, 0 kept back; pi2: 0 upgraded, 0 new, 0 kept back; the VIP on pi2; HEALTHY pi2 Leader running")
+check("the run's last line with the second Pi left for a later run (pi_packages_turns=1): said, not failed",
+      " ".join(render(msg["ansible.builtin.debug"]["msg"], ansible_check_mode=False, ansible_play_hosts=["pi1", "pi2"],
+                      hostvars={"pi1": {}, "pi2": {"pi_packages_done": "51 upgraded, 8 new, 4 kept back"}},
+                      pi_vip_holder="pi1", _patroni_after={"stdout_lines": ["HEALTHY pi1 Leader running"]}).split()),
+      "pi1: not taken this run (pi_packages_turns=1); pi2: 51 upgraded, 8 new, 4 kept back; the VIP on pi1; HEALTHY pi1 Leader running")
 print("pi-packages: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 PYCHECK

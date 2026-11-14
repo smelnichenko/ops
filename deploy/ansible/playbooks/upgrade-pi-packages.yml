@@ -234,6 +234,6 @@
       ansible.builtin.debug:
         msg: >-
           {{ 'PREVIEW - nothing changed: ' if ansible_check_mode else '' }}{% for h in ansible_play_hosts %}{{ h }}:
-          {{ hostvars[h].pi_packages_done }}{{ '; ' if not loop.last }}{% endfor %};
+          {{ hostvars[h].pi_packages_done | default('not taken this run (pi_packages_turns=1)') }}{{ '; ' if not loop.last }}{% endfor %};
           the VIP on {{ pi_vip_holder }}; {{ _patroni_after.stdout_lines | map('trim') | first }}
       run_once: true

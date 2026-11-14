@@ -201,6 +201,17 @@ Never two of these at once; no Pi turn while an infra merge moves pods that use 
   again, nothing changed), run (pi2, then pi1 handing the VIP over: every check), and run again with a reboot owed on
   pi2 (a planted mark: pi2 handed over and rebooted - its boot id changed - its mark cleared; pi1 left as it was).
   Copy destroyed. Steps 4-5 next (each the operator's go: the session's auto mode).
+- Step 4 done 17:13 UTC (operator "go"): `deploy:cilium:upgrade -- -e cilium_version=1.20.4` - its images pulled first,
+  the one-minor guard passed; the agent, operator, Envoy (1.39.5) and Hubble relay on 1.20.4 and ready, the release
+  cilium-1.20.4 deployed, every app settled, no running pod unready, pmon.dev 200 through the gateway. (A firing
+  MasiSourceStale - one of masi's external sources - began before it, masi's own.)
+- Step 5: the preview (`-- --check`, 17:14 UTC) nothing changed - pi1 53 upgraded + 8 new, pi2 51 + 8 (the 6.18.60
+  kernel, OpenSSL 3.5.9, PostgreSQL 17.12, haproxy deb13u4, rpi-eeprom; 4 camera packages kept back each), Patroni
+  healthy, the VIP on pi1. pi2 alone (`-- -e pi_packages_turns=1`, 17:16 UTC): Vault's active node and Consul's raft
+  leadership handed to the others, apt, the boot files unchanged, the bootloader staged, rebooted, every service back,
+  kernel 6.18.60 booted, the bootloader up to date, Gluster healed, Patroni streaming, standby, nothing left, the mark
+  gone. The run itself ended red on its last line alone - with the second turn left for later, pi1 had no plan to
+  print (the review had called that default dead); fixed with a harness case. pi2's kernel soaking; pi1 next.
 
 **Out of wave 1** (found in the notes): PostgreSQL 18.7 - CNPG publishes no bullseye image for it; moving means the
 trixie (or bookworm) image, a glibc change (collations: reindex, `REFRESH COLLATION VERSION`) and 18.7's own reindex
