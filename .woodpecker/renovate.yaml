@@ -1,0 +1,43 @@
+# The upgrade cycle's Renovate (docs/plans/120-automated-upgrade-cycle.md): one central run against infra, platform and
+# ops, their policy the shared preset renovate/upgrade-cycle.json (each repo's renovate.json extends it). It finds the
+# upgrades and keeps one branch per unit, the same name in each repo; the cycle proves a unit on the Vagrant copy and
+# applies it - Renovate never merges (automerge off in the preset).
+#
+# RENOVATE_DRY_RUN=lookup until its log reproduces plan 119's tables (the plan's rollout, step 1): it reads the repos
+# and the registries and changes nothing. Then "" (branches and PRs).
+#
+# Setup (docs/renovate-setup.md): the renovate-bot account with write on the three repos, its PAT in the
+# woodpecker-ci-secrets secret (renovate_token; github read token renovate_github_token), and a Woodpecker cron named
+# 'renovate' on ops, branch main.
+when:
+  - event: cron
+    cron: renovate
+
+steps:
+  - name: renovate
+    image: renovate/renovate:44.198.3
+    environment:
+      RENOVATE_PLATFORM: forgejo
+      RENOVATE_ENDPOINT: https://git.pmon.dev/api/v1/
+      RENOVATE_REPOSITORIES: schnappy/infra,schnappy/platform,schnappy/ops
+      RENOVATE_GIT_AUTHOR: "Renovate Bot <renovate-bot@pmon.dev>"
+      RENOVATE_ONBOARDING: "false"
+      RENOVATE_REQUIRE_CONFIG: required
+      RENOVATE_DRY_RUN: lookup
+      LOG_LEVEL: info
+    commands:
+      - renovate
+    backend_options:
+      kubernetes:
+        resources:
+          requests: { memory: 1Gi }
+          limits: { memory: 4Gi }
+        secrets:
+          - name: woodpecker-ci-secrets
+            key: renovate_token
+            target:
+              env: RENOVATE_TOKEN
+          - name: woodpecker-ci-secrets
+            key: renovate_github_token
+            target:
+              env: GITHUB_COM_TOKEN

@@ -580,6 +580,15 @@ tasks:
         vars:
           CHANGE: 'yes'
 
+  test:copy:unit:
+    desc: "Prove one Renovate unit on the built copy (the upgrade cycle's proof, plan 120) - renovate/<UNIT> fetched in infra, platform and ops; infra's and platform's applied with every check (test:copy:change), then each ops part it moves as production runs it (test:copy:playbook), its values from the unit's branch; a value with no known proof refused. PLAN=true prints the steps only"
+    requires:
+      vars: [UNIT]
+    vars:
+      PLAN: '{{.PLAN | default "false"}}'
+    cmds:
+      - cmd: scripts/copy-unit.sh '{{.UNIT}}' {{if eq .PLAN "true"}}--plan{{end}}
+
   test:copy:check:
     desc: "Every check on the built copy: Argo settled; data, survival, storage, metrics, k6 smoke, production's data paths and isolation at once (scripts/copy-checks.sh); a barman base backup; every certificate renewed; Postgres recovered and a Velero volume restored (restore-check); a Velero backup from production's daily schedule; a Scylla Manager backup; the PR-env sweeper; the inventory against production's (after a change: its own differences printed, any it did not make judged). Run on its own it checks the refs the copy runs (.copy/copy-refs)"
     deps: [deploy:install]

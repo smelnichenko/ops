@@ -1,0 +1,210 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "description": [
+    "The upgrade cycle's shared preset (ops docs/plans/120-automated-upgrade-cycle.md): Renovate finds the upgrades and",
+    "opens one branch per unit, the same name in infra, platform and ops; the cycle proves a unit on the Vagrant copy",
+    "(task test:copy:unit UNIT=<it>) and applies it - Renovate never merges. Units: renovate/wave-patches (every patch),",
+    "renovate/<family> for a family's minors (istio, observability, data-operators, argocd, pi-services), each other minor",
+    "and every major on a branch of its own; Kubernetes, Cilium and Istio one minor at a time."
+  ],
+  "extends": [
+    "config:recommended",
+    ":dependencyDashboard"
+  ],
+  "dependencyDashboardTitle": "Upgrade cycle - Renovate's dashboard (label upgrades-paused: the cycle stops)",
+  "automerge": false,
+  "dependencyDashboardApproval": false,
+  "minimumReleaseAge": "3 days",
+  "internalChecksFilter": "strict",
+  "separateMinorPatch": true,
+  "separateMajorMinor": true,
+  "separateMultipleMajor": true,
+  "rebaseWhen": "behind-base-branch",
+  "prConcurrentLimit": 0,
+  "prHourlyLimit": 0,
+  "branchConcurrentLimit": 0,
+  "branchPrefix": "renovate/",
+  "labels": [
+    "upgrade-cycle"
+  ],
+  "ignorePaths": [
+    "tests/**",
+    "docs/**",
+    "**/node_modules/**"
+  ],
+  "enabledManagers": [
+    "argocd",
+    "helmv3",
+    "helm-values",
+    "custom.regex"
+  ],
+  "argocd": {
+    "managerFilePatterns": [
+      "/^clusters/production/argocd/apps/.+\\.ya?ml$/"
+    ]
+  },
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Ansible version vars, each annotated: '# renovate: datasource=<ds> depName=<name> [versioning=<v>]' on the line above it",
+      "managerFilePatterns": [
+        "/^deploy/ansible/.+\\.ya?ml$/"
+      ],
+      "matchStrings": [
+        "#\\s*renovate:\\s*datasource=(?<datasource>\\S+)\\s+depName=(?<depName>\\S+)(?:\\s+versioning=(?<versioning>\\S+))?(?:\\s+extractVersion=(?<extractVersion>\\S+))?\\s*\\n\\s*[a-z0-9_]+:\\s*\"?v?(?<currentValue>\\d[^\"\\s-]*)"
+      ],
+      "versioningTemplate": "{{#if versioning}}{{{versioning}}}{{else}}semver-coerced{{/if}}",
+      "extractVersionTemplate": "{{#if extractVersion}}{{{extractVersion}}}{{else}}^v?(?<version>.+)${{/if}}"
+    },
+    {
+      "customType": "regex",
+      "description": "Images written as one string in values and manifests (image: repo:tag, CNPG's imageName: repo:tag@digest)",
+      "managerFilePatterns": [
+        "/^clusters/.+\\.ya?ml$/",
+        "/^helm/.+\\.ya?ml$/"
+      ],
+      "matchStrings": [
+        "(?:image|imageName):\\s*\"?(?<depName>[a-z0-9][a-z0-9._/-]*[a-z0-9]):(?<currentValue>[A-Za-z0-9][A-Za-z0-9._-]*)(?:@(?<currentDigest>sha256:[a-f0-9]{64}))?\"?\\s"
+      ],
+      "datasourceTemplate": "docker"
+    },
+    {
+      "customType": "regex",
+      "description": "A version kept beside its image (ScyllaCluster's version: with scylladb/scylla), annotated as the Ansible vars are",
+      "managerFilePatterns": [
+        "/^clusters/.+\\.ya?ml$/",
+        "/^helm/.+\\.ya?ml$/"
+      ],
+      "matchStrings": [
+        "#\\s*renovate:\\s*datasource=(?<datasource>\\S+)\\s+depName=(?<depName>\\S+)\\s*\\n\\s*[a-z0-9_]+:\\s*\"?(?<currentValue>\\d[^\"\\s]*)"
+      ]
+    }
+  ],
+  "packageRules": [
+    {
+      "description": "First-party images are promoted by GitOps (task promote:prod), never by Renovate",
+      "matchPackageNames": [
+        "/^git\\.pmon\\.dev\\//"
+      ],
+      "enabled": false
+    },
+    {
+      "description": "Every patch, every repo: one unit",
+      "matchUpdateTypes": [
+        "patch"
+      ],
+      "groupName": "wave patches",
+      "groupSlug": "wave-patches"
+    },
+    {
+      "description": "Istio and its Gateway API: their minors together (one minor at a time: the rule below)",
+      "matchUpdateTypes": [
+        "minor"
+      ],
+      "matchPackageNames": [
+        "base",
+        "istiod",
+        "gateway",
+        "/^istio\\//",
+        "/^docker\\.io\\/istio\\//",
+        "kubernetes-sigs/gateway-api"
+      ],
+      "groupName": "istio",
+      "groupSlug": "istio"
+    },
+    {
+      "description": "Observability's minors",
+      "matchUpdateTypes": [
+        "minor"
+      ],
+      "matchPackageNames": [
+        "kube-prometheus-stack",
+        "grafana",
+        "/^grafana\\//",
+        "fluent-bit",
+        "/^fluent\\//",
+        "/^clickhouse\\//",
+        "/prometheus\\/pushgateway$/",
+        "/blackbox-exporter$/",
+        "/^quay\\.io\\/prometheus\\//"
+      ],
+      "groupName": "observability",
+      "groupSlug": "observability"
+    },
+    {
+      "description": "The data operators and their stores' minors (Strimzi with Kafka, the Scylla operator and Manager with ScyllaDB)",
+      "matchUpdateTypes": [
+        "minor"
+      ],
+      "matchPackageNames": [
+        "strimzi-kafka-operator",
+        "/^quay\\.io\\/strimzi\\//",
+        "scylla-operator",
+        "scylla-manager",
+        "/^(docker\\.io\\/)?scylladb\\//"
+      ],
+      "groupName": "data operators",
+      "groupSlug": "data-operators"
+    },
+    {
+      "description": "Argo CD alone",
+      "matchUpdateTypes": [
+        "minor"
+      ],
+      "matchPackageNames": [
+        "argo-cd",
+        "/^quay\\.io\\/argoproj\\//"
+      ],
+      "groupName": "argocd",
+      "groupSlug": "argocd"
+    },
+    {
+      "description": "The Pis' services (their upgrade playbooks, one Pi at a time)",
+      "matchUpdateTypes": [
+        "minor"
+      ],
+      "matchPackageNames": [
+        "forgejo/forgejo",
+        "keycloak/keycloak",
+        "caddyserver/caddy",
+        "versity/versitygw",
+        "sonatype/nexus-public",
+        "patroni",
+        "hashicorp/vault",
+        "hashicorp/consul"
+      ],
+      "groupName": "pi services",
+      "groupSlug": "pi-services"
+    },
+    {
+      "description": "Kubernetes, Cilium and Istio: one minor at a time (Kubernetes: its packages' apt repository moves with the minor - the cycle's agent fixes k8s_version too)",
+      "matchPackageNames": [
+        "kubernetes/kubernetes",
+        "cilium",
+        "cilium/cilium",
+        "base",
+        "istiod",
+        "gateway",
+        "/^istio\\//",
+        "/^docker\\.io\\/istio\\//"
+      ],
+      "separateMultipleMinor": true
+    },
+    {
+      "description": "ClickHouse: the LTS lines only (YY.3, YY.8)",
+      "matchPackageNames": [
+        "/clickhouse\\/clickhouse-server$/"
+      ],
+      "allowedVersions": "/^\\d+\\.(3|8)\\./"
+    },
+    {
+      "description": "Majors wait out the operator's 24 h veto notice; one-way ones take their stores' backup first (the cycle)",
+      "matchUpdateTypes": [
+        "major"
+      ],
+      "addLabels": [
+        "major"
+      ]
+    }
+  ]
+}
