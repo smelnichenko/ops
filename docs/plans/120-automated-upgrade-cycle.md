@@ -1,7 +1,23 @@
 # Plan 120 — the automated upgrade cycle
 
-Status: **DECIDED, NOT BUILT** - the review answered 2026-11-14 (below). Built once plan 119's wave 1 has gone
-through by hand (steps 1-3 live 2026-11-14; the cycle automates a run already seen to work). Plan 117 shipped.
+Status: **BUILDING** (operator 2026-11-14: "start building plan 120 meanwhile", "ensure renovate works with
+vagrant") - the review answered 2026-11-14 (below); plan 119's wave 1 steps 1-3 live by hand, its last steps proving.
+
+**Built 2026-11-14 (ops upgrade/wave-1 branch, each with its harness):**
+- Renovate: `renovate/upgrade-cycle.json` (the shared preset - units, groups, one minor at a time for Kubernetes/
+  Cilium/Istio, ClickHouse's and Forgejo's lines held, majors labelled, 3 days' release age; validated by
+  renovate-config-validator 44.198.3), `renovate.json` in ops (infra and platform: their `upgrade-cycle/renovate`
+  branches), `.woodpecker/renovate.yaml` (cron, image pinned, lookup mode), 15 ops version vars annotated.
+- Its proof on the copy: `scripts/copy-unit.sh` / `task test:copy:unit UNIT=<it> [PLAN=true]` (the unit's branches,
+  test:copy:change, each ops part's playbook from the branch's values; an unknown value refused).
+- The night: `scripts/upgrade-cycle.sh` (`--shadow` for rollout step 2, `--dry`), `upgrade-units.py` (the pick),
+  `upgrade-label.py` (labels, comments, merges - whole or not at all), `upgrade-verify.sh`, `upgrade-record.sh`,
+  `upgrade-notice.sh` (platform's `upgrade-cycle/notices` branch routes the UpgradeCycle alert), the agent's
+  `.claude/skills/upgrade-fix`.
+**Not yet:** the renovate-bot's credentials (its password and PAT in ops/.env are both invalid - an admin's reset
+needed), the bot's write access to infra/platform/ops, Renovate's lookup run against plan 119's tables (its `local`
+platform: no token needed), the systemd user timer, the agent's headless permissions, a one-way change's store backups
+beyond etcd (Postgres, ScyllaDB, ...: blocked until then).
 
 ## Decisions (operator, 2026-11-13)
 
