@@ -3,6 +3,7 @@
 # 2026-11-14, the same on code.forgejo.org and codeberg.org). setup-pi-services.yml installs it where Forgejo is
 # missing; upgrade-forgejo.yml moves a running one to it.
 # 15 is the LTS line (to 2027-07-15): patches only until the next LTS (19, 2027-04) - operator 2026-10-05.
+# renovate: datasource=forgejo-releases depName=forgejo/forgejo registryUrl=https://codeberg.org
 forgejo_version: "15.0.11"
 forgejo_checksums:
   arm64: 897629ce7723b46620004ae2e7b2ff21917efd24e9a2d2f02b77888e867e4af5

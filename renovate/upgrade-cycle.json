@@ -46,15 +46,16 @@
   "customManagers": [
     {
       "customType": "regex",
-      "description": "Ansible version vars, each annotated: '# renovate: datasource=<ds> depName=<name> [versioning=<v>]' on the line above it",
+      "description": "Ansible version vars, each annotated on the line above it: '# renovate: datasource=<ds> depName=<name> [registryUrl=<url>] [versioning=<v>]' - a value restating an Argo chart takes the chart's own datasource, name and repository, so its unit's branch is the one infra's chart gets",
       "managerFilePatterns": [
         "/^deploy/ansible/.+\\.ya?ml$/"
       ],
       "matchStrings": [
-        "#\\s*renovate:\\s*datasource=(?<datasource>\\S+)\\s+depName=(?<depName>\\S+)(?:\\s+versioning=(?<versioning>\\S+))?(?:\\s+extractVersion=(?<extractVersion>\\S+))?\\s*\\n\\s*[a-z0-9_]+:\\s*\"?v?(?<currentValue>\\d[^\"\\s-]*)"
+        "#\\s*renovate:\\s*datasource=(?<datasource>\\S+)\\s+depName=(?<depName>\\S+)(?:\\s+registryUrl=(?<registryUrl>\\S+))?(?:\\s+versioning=(?<versioning>\\S+))?\\s*\\n\\s*[a-z0-9_]+:\\s*\"?v?(?<currentValue>\\d[^\"\\s-]*)"
       ],
       "versioningTemplate": "{{#if versioning}}{{{versioning}}}{{else}}semver-coerced{{/if}}",
-      "extractVersionTemplate": "{{#if extractVersion}}{{{extractVersion}}}{{else}}^v?(?<version>.+)${{/if}}"
+      "registryUrlTemplate": "{{#if registryUrl}}{{{registryUrl}}}{{/if}}",
+      "extractVersionTemplate": "^v?(?<version>.+)$"
     },
     {
       "customType": "regex",
@@ -196,6 +197,13 @@
         "/clickhouse\\/clickhouse-server$/"
       ],
       "allowedVersions": "/^\\d+\\.(3|8)\\./"
+    },
+    {
+      "description": "Forgejo: its LTS line only, patches until the next LTS (19, 2027-04) - operator 2026-10-05",
+      "matchPackageNames": [
+        "forgejo/forgejo"
+      ],
+      "allowedVersions": "/^15\\./"
     },
     {
       "description": "Majors wait out the operator's 24 h veto notice; one-way ones take their stores' backup first (the cycle)",

@@ -20,6 +20,7 @@
     - ../vars/forgejo.yml
 
   vars:
+    # renovate: datasource=github-releases depName=keycloak/keycloak
     keycloak_version: "26.5.7"
     pi_ip: "{{ node_ip_override | default(ansible_default_ipv4.address) }}"
     pi1_ip: "{{ hostvars['pi1']['ansible_host'] | default('192.168.11.4') }}"

@@ -36,6 +36,7 @@
   gather_subset: [network]  # the mounts' facts stat every Gluster mount: a hung client's held the play
 
   vars:
+    # renovate: datasource=github-releases depName=caddyserver/caddy
     caddy_version: "2.10.0"
     porkbun_api_key: "{{ lookup('env', 'PORKBUN_API_KEY') }}"
     porkbun_secret_key: "{{ lookup('env', 'PORKBUN_SECRET_KEY') }}"

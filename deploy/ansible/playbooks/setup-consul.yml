@@ -13,6 +13,7 @@
   gather_subset: [network]  # the mounts' facts stat every Gluster mount: a hung client's held the play
 
   vars:
+    # renovate: datasource=github-releases depName=hashicorp/consul
     consul_version: "1.20.6"
     consul_datacenter: "schnappy"
     pi1_ip: "{{ hostvars['pi1']['ansible_host'] | default('192.168.11.4') }}"
