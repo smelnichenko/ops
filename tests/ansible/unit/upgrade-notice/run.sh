@@ -232,9 +232,20 @@ check("  Alertmanager's annotation: its start (the files changed) and its end, t
       (desc.startswith("=== the agent's fix - files:"), desc.rstrip().endswith("the very end"), "[... the whole in the direct mail ...]" in desc,
        len(desc) < 3100), (True, True, True, True))
 open(big, "w").write("x" * 103000)
+if os.path.exists(os.path.join(W, "posts")):
+    os.remove(os.path.join(W, "posts"))
 rc, out, mails = via_copy("veto", "istio", "s", big)
-check("a veto whose details are over a mail's 100 KB: not sent, no mail, exit 1 (no notice on half its evidence)",
-      (rc, mails, "over a mail's 100 KB" in out), (1, [], True))
+check("a veto whose details are over a mail's 100 KB: not sent, no mail, NOTHING posted (an alert promising 24 h with no "
+      "evidence misleads), exit 1", (rc, mails, "over a mail's 100 KB" in out, os.path.exists(os.path.join(W, "posts"))), (1, [], True, False))
+# the edges: 3000 bytes whole in Alertmanager's annotation, 3001 cut; 102400 mailed, 102401 not
+for size, cut, mailed in ((3000, False, True), (3001, True, True), (102400, True, True), (102401, None, False)):
+    open(big, "w").write("y" * (size - 1) + "\n")
+    rc, out, posts = run("veto", "istio", "s", big, RESEND_API_KEY="k", UPGRADE_NOTICE_INFRA_VALUES=values)
+    desc = posts[0][0]["annotations"]["description"] if posts else None
+    _, _, mails = via_copy("veto", "istio", "s", big)
+    check(f"  a veto's details of {size} bytes: {'cut' if cut else 'whole' if cut is False else 'not posted'} in Alertmanager, "
+          f"{'mailed' if mailed else 'not mailed'}",
+          (None if desc is None else "[... the whole in the direct mail ...]" in desc, bool(mails)), (cut, mailed))
 open(os.path.join(W, "ssh.fail"), "w").write("")
 rc, out, mails = via_copy("veto", "istio", "s")
 check("a veto, Alertmanager unreachable, the direct mail sent: exit 0 (the mail is what it needs)", (rc, len(mails)), (0, 1))

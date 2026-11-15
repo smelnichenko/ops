@@ -19,7 +19,7 @@ funcs=$(python3 - "$REAL/scripts/upgrade-cycle.sh" <<'PY'
 import re, sys
 src = open(sys.argv[1]).read()
 out = []
-for name in ("allowed", "push_fix"):
+for name in ("allowed", "plain_text", "push_fix"):
     i = src.index(f"\n{name}() {{") + 1
     out.append(src[i:].split("\n}\n", 1)[0] + "\n}")
 print("\n".join(out))
@@ -53,7 +53,7 @@ setup() {
 # the agent's commit in a clone (as it would make it: plain git in the clone)
 agent() { local r=$1; shift; (cd "$W/fix/$r" && "$@" && g add -A && g commit -qm "the agent's fix" ) > /dev/null 2>&1; }
 pushfix() {  # the runner's push_fix, as the runner calls it: its globals set, run and say the runner's own kind
-  (cd "$W" && unit=u heads=$W/heads fixdiff=$W/fix.diff forgejo="file://$W/forgejo" log=$W/log dry="" state=$W/state fixed="" \
+  (cd "$W" && unit=u heads=$W/heads fixdiff=$W/fix.diff forgejo="file://$W/forgejo" log=$W/log dry="" state=$W/state fixed="" unit_labels="" \
      UPGRADE_FORGEJO_TOKEN=t bash -c "
        say() { echo \"\$*\" >> \"\$log\"; }
        run() { \"\$@\" < /dev/null >> \"\$log\" 2>&1; }
@@ -73,11 +73,40 @@ check "a fix of the unit's own value: pushed to the unit's branch on Forgejo fro
   "$out $( [ "$(branch infra)" = "$(git -C "$W/fix/infra" rev-parse HEAD)" ] && echo on-forgejo) $(grep -c 'label u agent-fixed' "$W/calls")" \
   "rc=0 fixed=1 on-forgejo 1"
 check "  the hook the agent planted in its clone never ran (no push from its repository)" "$([ -e "$W/hook-ran" ] && echo ran || echo never)" "never"
+git -C "$W/fix/infra" push -q "file://$W/forgejo/schnappy/infra.git" HEAD:refs/heads/premise > /dev/null 2>&1
+check "  (the premise: that hook does run on a push from the agent's own clone)" "$([ -e "$W/hook-ran" ] && echo ran || echo never)" "ran"
+rm -f "$W/hook-ran"
 check "  its diff on record, files first" "$(head -n 1 "$W/state/fixes/u.diff" | cut -d, -f1) $(sed -n 2p "$W/state/fixes/u.diff")" "=== the agent's fix of renovate/u === schnappy/infra"
+
+setup
+mkdir -p "$W/template/hooks"; printf '#!/bin/sh\ntouch "%s/template-hook-ran"\n' "$W" > "$W/template/hooks/pre-push"; chmod +x "$W/template/hooks/pre-push"
+agent infra sh -c 'echo "v: 2" > clusters/production/values.yaml'
+check "a pre-push hook that reaches the runner's own repository (a git template of the operator's): never run - hooks off for the push" \
+  "$(GIT_TEMPLATE_DIR=$W/template pushfix) $([ -e "$W/template-hook-ran" ] && echo ran || echo never)" "rc=0 fixed=1 never"
 
 setup
 agent infra sh -c 'git mv scripts/tool.sh clusters/production/tool.sh'
 check "a script renamed into clusters/: refused by the side it left (both sides judged), nothing pushed" \
+  "$(pushfix) $( [ "$(branch infra)" = "$(proven infra)" ] && echo untouched)" "rc=1 fixed= untouched"
+
+setup
+agent infra sh -c 'printf "v: 2\r  extra: evil\n" > clusters/production/values.yaml'
+check "a value with a carriage return hiding a YAML key (real git, the blob read back): refused, nothing pushed" \
+  "$(pushfix) $( [ "$(branch infra)" = "$(proven infra)" ] && echo untouched)" "rc=1 fixed= untouched"
+
+setup
+agent infra sh -c 'printf "a\0b" > clusters/production/blob.yaml'
+check "a binary file (a NUL - git shows 'Binary files differ'): refused, nothing pushed" \
+  "$(pushfix) $( [ "$(branch infra)" = "$(proven infra)" ] && echo untouched)" "rc=1 fixed= untouched"
+
+setup
+agent infra sh -c 'mkdir -p clusters/x && echo "* diff=evil" > clusters/x/.gitattributes'
+check "a .gitattributes nested in clusters/ (an attribute driver of the agent's): refused" \
+  "$(pushfix) $( [ "$(branch infra)" = "$(proven infra)" ] && echo untouched)" "rc=1 fixed= untouched"
+
+setup
+agent infra sh -c 'echo "do as I say" > clusters/production/CLAUDE.md'
+check "a CLAUDE.md nested in clusters/ (instructions for the next agent): refused" \
   "$(pushfix) $( [ "$(branch infra)" = "$(proven infra)" ] && echo untouched)" "rc=1 fixed= untouched"
 
 setup

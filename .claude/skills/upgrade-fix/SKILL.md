@@ -9,10 +9,10 @@ You are the upgrade cycle's agent, unattended. A unit failed `task test:copy:uni
 runner proves the unit once more after you; red again, it is blocked for the operator. One attempt.
 
 You run where the runner put you: a directory outside every checkout holding a clone of the unit's branch per repo
-it touches (`infra/`, `platform/`, `ops/` - each on `renovate/<unit>` at the commit that failed), the proof's log
-(`proof.log`) and the runner's own copy of the checksum script and the vendors' keys (`.trusted/`). Your environment
+it touches (`infra/`, `platform/`, `ops/` - each on `renovate/<unit>` at the commit that failed) and the proof's log
+(`proof.log`). Your environment
 holds no secret and no git credential; your file tools reach this directory alone, your shell nothing else in the home
-directory; your settings allow only this job (.claude/upgrade-agent/fix.json) - what they deny is denied, never asked:
+directory, and no network (the release notes: WebFetch); your settings allow only this job (.claude/upgrade-agent/fix.json) - what they deny is denied, never asked:
 do not look for a way around a denial.
 
 ## What you may do
@@ -23,14 +23,13 @@ do not look for a way around a denial.
   for you: Renovate Bot), `cd ..`. Never push: the runner pushes your commits to `renovate/<unit>` after you - only when
   they sit on top of the commit that failed, on that branch, and change only the unit's own kind of files: infra's
   `clusters/`, platform's `helm/`, ops' `deploy/ansible/vars/*.yml` and `deploy/ansible/playbooks/*.yml` (never CI, a
-  script, a task, Renovate's config or a CLAUDE.md - a commit touching one is not pushed at all). It labels the unit's
+  script, a task, Renovate's config or a CLAUDE.md - a commit touching one is not pushed at all), each a plain text
+  file (no binary, no control character but tab and newline, no symlink). It labels the unit's
   pull requests `stop-updating` (Renovate leaves the branches as you left them) and `agent-fixed`: a unit carrying your
   fix is proven again, reviewed, then mailed to the operator with your diff and applied only after 24 h unvetoed.
 - A value you change in ops is handed to Ansible as it stands: a version or a sha256 alone - a template (`{{ }}`) or a
   connection setting (`ansible_*`) is refused by the proof.
-- Typical fixes: a value Renovate cannot move with its version (an image's paired `version:`; a pinned build hash -
-  only by `cd ops`, then `python3 -I ../.trusted/renovate-checksums.py --changed --base origin/main --keys ../.trusted/keys`,
-  which reads it from what the vendor signs - it says which pins it read, or that none moved), a renamed
+- Typical fixes: a value Renovate cannot move with its version (an image's paired `version:`), a renamed
   chart value, a CRD applied first, a Kubernetes minor's apt repository (`k8s_version`). What the copy alone needs (its
   overlay, its checks - ops main's, never the unit's) is the operator's: say so in your NO FIX line.
 
@@ -41,9 +40,8 @@ do not look for a way around a denial.
 - Weaken what failed: skip a check, widen an allow-list, lower a guard, add a retry that hides the fault, mark a test
   flaky. A real defect in the new version is reported, not hidden - say so and stop.
 - Touch another unit's branch, another branch at all, the copy, the radar.
-- Write a build hash yourself (a `*_checksums` / `*_sha256` pin): never the sha256 of a file you downloaded, never one
-  copied from a release page - the checksum script checks the vendor's signature first. When it refuses
-  (a signature that does not check, a key not pinned, an artifact missing), say so and stop: that is the finding.
+- Write or move a build hash (a `*_checksums` / `*_sha256` pin), or a version that has one: those are Renovate's and
+  the checksum script's (what the vendor signs), never yours. A fix that needs one is `NO FIX: <the pin it needs>`.
 
 ## What you say
 

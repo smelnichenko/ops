@@ -76,7 +76,8 @@ def without_empty(v):
     Helm's values compared as they are."""
     if isinstance(v, dict):
         kept = {k: (x if k in ("valuesObject", "values") else without_empty(x)) for k, x in v.items()}
-        return {k: x for k, x in kept.items() if k in ("valuesObject", "values") or not empty(x)}
+        # Helm's values as written (false and 0 are values there), the key itself dropped when empty as omitempty does
+        return {k: x for k, x in kept.items() if not empty(x) or (k in ("valuesObject", "values") and x not in ("", None, {}))}
     if isinstance(v, list):
         return [without_empty(x) for x in v]
     return v
@@ -126,6 +127,18 @@ PY
 }
 
 up() { local u; read -r u _ < "${UPGRADE_VERIFY_UPTIME:-/proc/uptime}"; echo "${u%.*}"; }
+subject() {  # what a complaint is about: "app <name>", "pod <ns>/<owner>" (a ReplicaSet's or a StatefulSet's pods), "critical alert <name>", the line else
+  case "$1" in
+    "app "*) cut -d' ' -f1-2 <<< "$1" ;;
+    "pod "*) local p=${1#pod }; p=${p%% *}
+      # a ReplicaSet's hash holds a digit (node-exporter-x7k2q is a DaemonSet's pod, "exporter" no hash)
+      if [[ $p =~ ^(.+)-([a-z0-9]{8,10})-[a-z0-9]{5}$ && ${BASH_REMATCH[2]} == *[0-9]* ]]; then echo "pod ${BASH_REMATCH[1]}"
+      elif [[ $p =~ ^(.+)-([0-9]+|[a-z0-9]{5})$ ]]; then echo "pod ${BASH_REMATCH[1]}"
+      else echo "pod $p"; fi ;;
+    "critical alert "*) cut -d' ' -f1-3 <<< "$1" ;;
+    *) echo "$1" ;;
+  esac
+}
 crit=""; [ "$hold" -gt 0 ] || crit=critical  # with no hold the alerts are part of the settle
 need=1; [ "$hold" -gt 0 ] || [ "$settle" -eq 0 ] || need=2  # waiting for Argo with no hold: two clean looks in a row
 end=$(( $(up) + settle * 60 )); clean=0
@@ -145,12 +158,14 @@ declare -A seen=()
 while [ "$(up)" -lt "$end" ]; do
   sleep "$poll"
   out=$(look critical) && { seen=(); continue; }
-  # what is wrong now, counted in a row; gone from a look, its count starts again
+  # what is wrong now, counted in a row by its subject - the app, the pod's owner (a pod recreated under a new name is
+  # the same failure), the alert - whatever its words this look; gone from a look, its count starts again
   declare -A now=()
   while IFS= read -r line; do
     [ -n "$line" ] || continue
-    now[$line]=$(( ${seen[$line]:-0} + 1 ))
-    if [ "${now[$line]}" -ge "$streak" ]; then echo "NOT QUIET during the hold ($streak looks in a row):"; echo "$out"; exit 1; fi
+    key=$(subject "$line")
+    now[$key]=$(( ${seen[$key]:-0} + 1 ))
+    if [ "${now[$key]}" -ge "$streak" ]; then echo "NOT QUIET during the hold ($streak looks in a row):"; echo "$out"; exit 1; fi
   done <<< "$out"
   seen=(); for k in "${!now[@]}"; do seen[$k]=${now[$k]}; done
   unset now

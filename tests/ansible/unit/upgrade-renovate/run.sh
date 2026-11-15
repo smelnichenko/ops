@@ -177,18 +177,15 @@ values = "alertmanager:\n  enabled: true\n  image: prom/alertmanager:v0.34.1\n"
 print(found(".woodpecker/ci.yaml", ci), found("helm/schnappy-observability/values.yaml", values))
 PYPRESET
 )" "[('prom/alertmanager', 'v0.34.1')] [('prom/alertmanager', 'v0.34.1')]"
-# a run rebases what is open: at most three a repo (Woodpecker builds one at a time - every branch rebased was a queue
-# of builds ahead of the apps' deploys), opened in the cycle's own order
-check "the preset: three pull requests a repo at most, the test environment's first, the patch wave next, majors last" \
+# a run rebases nothing that has no conflict (Woodpecker builds one at a time; infra's main moves many times a day - a
+# rebase of every branch at every run was a queue of builds ahead of the apps' deploys); no cap per repo (it split one
+# unit across the repos: its infra half waiting while its ops half was picked)
+check "the preset: branches rebased on a conflict alone, no cap on pull requests or branches (a unit whole in every repo)" \
   "$("$PY" - <<'PYLIMIT'
 import json
 d = json.load(open("renovate/upgrade-cycle.json"))
-pri = {}
-for r in d["packageRules"]:
-    if "prPriority" in r:
-        key = "test" if any("schnappy-test" in f for f in r.get("matchFileNames", [])) else r.get("groupSlug") or ",".join(r.get("matchUpdateTypes", []))
-        pri[key] = r["prPriority"]
-print(d.get("prConcurrentLimit"), d.get("branchConcurrentLimit"), pri.get("test", 0) > pri.get("wave-patches", 0) > 0 > pri.get("major", 0))
+print(d.get("rebaseWhen"), d.get("prConcurrentLimit"), d.get("branchConcurrentLimit"), d.get("prHourlyLimit"),
+      any("prPriority" in r for r in d["packageRules"]))
 PYLIMIT
-)" "3 3 True"
+)" "conflicted 0 0 0 False"
 if [ "$fails" = 0 ]; then echo "upgrade-renovate: ALL-PASS"; else echo "upgrade-renovate: $fails FAILED"; exit 1; fi

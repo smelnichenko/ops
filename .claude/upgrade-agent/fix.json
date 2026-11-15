@@ -14,16 +14,7 @@
       ]
     },
     "network": {
-      "allowedDomains": [
-        "code.forgejo.org",
-        "download.pytorch.org",
-        "download.sonatype.com",
-        "get.helm.sh",
-        "github.com",
-        "objects.githubusercontent.com",
-        "release-assets.githubusercontent.com",
-        "releases.hashicorp.com"
-      ]
+      "allowedDomains": []
     }
   },
   "permissions": {
@@ -37,7 +28,6 @@
       "Skill(upgrade-fix)",
       "Bash(cd ops)",
       "Bash(cd ..)",
-      "Bash(python3 -I ../.trusted/renovate-checksums.py --changed --base origin/main --keys ../.trusted/keys)",
       "Bash(git status)",
       "Bash(git status *)",
       "Bash(git diff)",

@@ -8,7 +8,10 @@ Two Renovates use the `renovate-bot` account:
   (`.env` `RENOVATE_TOKEN`, by name) and the shared preset `renovate/upgrade-cycle.json` (each repo's `renovate.json`
   extends it), then `scripts/upgrade-cycle.sh` proves one unit on the Vagrant copy and applies it. `task upgrade
   LOOKUP=true` reads only. Its Woodpecker pipeline (`.woodpecker/renovate.yaml` in ops) is gone.
-- **monitor's own** (below) - its weekly Woodpecker cron, dependency PRs on `schnappy/monitor`.
+- **monitor's own** (below) - its weekly Woodpecker cron, dependency PRs on `schnappy/monitor`. Its token in
+  `woodpecker-ci-secrets` (`renovate_token`) is seeded from `RENOVATE_APPS_TOKEN` - a bot of its own with write on
+  monitor and masi alone - never `RENOVATE_TOKEN` (the cycle's `renovate-bot`, write on infra, platform and ops: every
+  pipeline can mount that secret). Until that bot exists the key is empty and monitor's and masi's Renovate do not run.
 
 Monitor's Renovate runs as a Woodpecker **cron** pipeline against the self-hosted Forgejo
 (`platform=forgejo`), modelled on the proven `depcheck-nightly` pipeline. Repo

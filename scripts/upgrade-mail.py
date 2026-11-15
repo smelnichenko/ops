@@ -24,8 +24,11 @@ def send(to, subject, body, key, smtp=None):
     m = EmailMessage()
     m["From"], m["To"], m["Subject"] = SENDER, to, clean(subject).replace("\n", " ")
     m.set_content(clean(body))
-    with (smtp or smtplib.SMTP)(HOST, PORT, timeout=30) as s:
-        s.starttls(context=ssl.create_default_context())
+    context = ssl.create_default_context()  # the server's certificate checked against the system's CAs, its name too
+    context.minimum_version = ssl.TLSVersion.TLSv1_2
+    connect = smtp or smtplib.SMTP
+    with connect(HOST, PORT, timeout=30) as s:
+        s.starttls(context=context)
         s.login(USER, key)
         s.send_message(m)
 
@@ -36,7 +39,8 @@ def main():
     except KeyError as e:
         print(f"NOT SENT: {e} missing")
         return 1
-    except Exception as e:  # noqa: BLE001 - the page's last way out: whatever stopped it is said, never a traceback
+    # the page's last way out: whatever stopped it is said, never a traceback
+    except Exception as e:
         print(f"NOT SENT: {type(e).__name__}: {e}")
         return 1
     print("MAILED directly")

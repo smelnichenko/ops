@@ -19,10 +19,10 @@ grouped by branch (renovate/<unit> - the same name in each repo).
                  major's notice before a new one's. Left out:
                  a unit labelled upgrade-blocked (red after its fix) or veto, a major in its 24 h; everything while the
                  dashboard issue carries upgrades-paused (the kill switch) - and no dashboard issue open: not read (exit 1)
-  noticed UNIT   when the unit's veto notice was posted (the runner's latest "UPGRADE NOTICE <iso> diff=<hash>"
-                 comment: a fix noticed again starts its 24 h again), or "NONE"; a notice holds only while the unit
-                 changes what it announced (its diff hash: upgrade-label.py --diff-hash) - a newer release Renovate
-                 moved the branch to since is noticed again
+  noticed UNIT   when the unit's veto notice was posted and the heads it announced (the runner's latest "UPGRADE
+                 NOTICE <iso> heads=<repo>@<sha>,..." comment: a fix noticed again starts its 24 h again), "<iso>
+                 <heads>", or "NONE" - the runner applies only those heads, main merged into them aside (git judges it);
+                 anything else is noticed again
   held UNIT      what holds the unit now, one a line - upgrade-blocked, veto (on any of its pull requests), paused (the
                  dashboard's upgrades-paused); nothing when nothing does: the runner asks again right before a merge
                  (a veto or the kill switch set during the proof and the review was not seen at the pick's time)
@@ -54,7 +54,7 @@ VERSIONED = re.compile(r"(?P<base>[a-z0-9][a-z0-9.-]*?)-(?P<major>\d+)\.(?P<mino
 VETO_HOURS = 24
 # the runner's comment starts with it - a line inside another comment of the bot's (Renovate posts as the same account,
 # release notes quoted) is no notice
-NOTICE = re.compile(r"UPGRADE NOTICE (\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ)(?: diff=([0-9a-f]{64}))?\b")
+NOTICE = re.compile(r"UPGRADE NOTICE (\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ)(?: heads=(\S+))?")
 # renovate/upgrade-cycle.json's dependencyDashboardTitle - each repo's dashboard (all three extend the preset)
 DASHBOARD = "Upgrade cycle - Renovate's dashboard (label upgrades-paused: the cycle stops)"
 
@@ -63,8 +63,9 @@ class NotRead(Exception):
     pass
 
 
-def get(path, **params):
-    """Every page of a list endpoint (or one object), as Forgejo answers it."""
+def get(path, paged=True, **params):
+    """Every page of a list endpoint (or one object), as Forgejo answers it - one read of an endpoint that takes no
+    pages (an issue's comments: every one at once, its page 2 the same list again - a loop with no end)."""
     out, page = [], 1
     while True:
         q = urllib.parse.urlencode({**params, "page": page, "limit": 50})
@@ -76,7 +77,7 @@ def get(path, **params):
                 data = json.loads(r.read())
         except (OSError, ValueError) as e:  # URLError is an OSError
             raise NotRead(f"{path}: {e}") from None
-        if not isinstance(data, list):
+        if not isinstance(data, list) or not paged:
             return data
         out += data
         if len(data) < 50:
@@ -123,31 +124,18 @@ def twin(name):
 
 
 def noticed(_name, u):
-    """The latest runner notice on any of the unit's pull requests, (its time, the diff hash it announced) - a unit
-    noticed again (its agent's fix, after its first notice) waits its 24 h from then: what was noticed first is not
-    what applies."""
+    """The latest runner notice on any of the unit's pull requests, (its time, the heads it announced) - a unit noticed
+    again (its agent's fix, after its first notice) waits its 24 h from then: what was noticed first is not what
+    applies."""
     found = []
     for repo, number in u["repos"].items():
-        for c in get(f"/repos/{repo}/issues/{number}/comments"):
+        for c in get(f"/repos/{repo}/issues/{number}/comments", paged=False):
             if (c.get("user") or {}).get("login") != BOT:
                 continue
             m = NOTICE.match(c.get("body") or "")
             if m:
                 found.append((datetime.datetime.fromisoformat(m.group(1).replace("Z", "+00:00")), m.group(2) or ""))
     return max(found) if found else None
-
-
-def current_hash(name):
-    """What the unit changes now - upgrade-label.py's own hash (one definition of it, never two)."""
-    import importlib.util
-    spec = importlib.util.spec_from_file_location("upgrade_label", os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                                                               "upgrade-label.py"))
-    label = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(label)
-    try:
-        return label.unit_diff_hash(name)
-    except label.Refused as e:
-        raise NotRead(f"{name}'s diff: {e}") from None
 
 
 def paused():
@@ -200,51 +188,64 @@ def pick():
     open_units = {n: u for n, u in open_units.items() if f"test-{n}" not in all_units}
     for name in sorted((n for n, u in open_units.items() if not waits_notice(u)), key=lambda n: order(n, open_units[n])):
         return f"prove {name} {open_units[name]['kind']}"
-    majors = sorted(n for n, u in open_units.items() if waits_notice(u))
-    waiting, again = [], []
-    for name in majors:
-        n = noticed(name, open_units[name])
-        if n is None:
-            continue
-        t, announced = n
-        if now() - t >= datetime.timedelta(hours=VETO_HOURS):
-            # what applies is what was announced, or it is noticed again (a newer release, another fix since)
-            (waiting if announced and announced == current_hash(name) else again).append((t, name))
+    return pick_noticed(open_units, sorted(n for n, u in open_units.items() if waits_notice(u)))
+
+
+def pick_noticed(open_units, majors):
+    """A major (or a unit carrying the agent's fix) whose notice ran out - the earliest noticed first; else one with no
+    notice yet. Whether it applies what was noticed is the runner's to judge (the notice's heads, by git)."""
+    notices = {name: noticed(name, open_units[name]) for name in majors}
+    waiting = sorted((n[0], name) for name, n in notices.items() if n and now() - n[0] >= datetime.timedelta(hours=VETO_HOURS))
     if waiting:
-        name = min(waiting)[1]
+        name = waiting[0][1]
         return f"apply {name} {open_units[name]['kind']}"
-    for name in [n for _, n in sorted(again)] + [n for n in majors if noticed(n, open_units[n]) is None]:
-        return f"notice {name} {open_units[name]['kind']}"
+    for name in majors:
+        if notices[name] is None:
+            return f"notice {name} {open_units[name]['kind']}"
     return "NOTHING"
 
 
+def show_list():
+    for name, u in sorted(units().items()):
+        print(f"{name} {u['kind']} {','.join(sorted(u['repos']))} {','.join(sorted(u['labels'])) or '-'}")
+    return 0
+
+
+def show_pick():
+    print(pick())
+    return 0
+
+
+def show_held(name):
+    u = units().get(name)
+    if u is None:
+        print(f"NO UNIT {name}")
+        return 1
+    for reason in sorted({"upgrade-blocked", "veto"} & u["labels"]):
+        print(reason)
+    if paused():
+        print("paused")
+    return 0
+
+
+def show_noticed(name):  # its time and the heads it announced
+    u = units().get(name)
+    if u is None:
+        print(f"NO UNIT {name}")
+        return 1
+    n = noticed(name, u)
+    print(n[0].strftime("%Y-%m-%dT%H:%M:%SZ") + (f" {n[1]}" if n[1] else "") if n else "NONE")
+    return 0
+
+
 def main(argv):
+    commands = {("list",): show_list, ("pick",): show_pick}
+    unit_commands = {"held": show_held, "noticed": show_noticed}
     try:
-        if argv == ["list"]:
-            for name, u in sorted(units().items()):
-                print(f"{name} {u['kind']} {','.join(sorted(u['repos']))} {','.join(sorted(u['labels'])) or '-'}")
-            return 0
-        if argv == ["pick"]:
-            print(pick())
-            return 0
-        if len(argv) == 2 and argv[0] == "held":
-            u = units().get(argv[1])
-            if u is None:
-                print(f"NO UNIT {argv[1]}")
-                return 1
-            for reason in sorted({"upgrade-blocked", "veto"} & u["labels"]):
-                print(reason)
-            if paused():
-                print("paused")
-            return 0
-        if len(argv) == 2 and argv[0] == "noticed":  # its time
-            u = units().get(argv[1])
-            if u is None:
-                print(f"NO UNIT {argv[1]}")
-                return 1
-            n = noticed(argv[1], u)
-            print(n[0].strftime("%Y-%m-%dT%H:%M:%SZ") + (f" diff={n[1]}" if n[1] else "") if n else "NONE")
-            return 0
+        if tuple(argv) in commands:
+            return commands[tuple(argv)]()
+        if len(argv) == 2 and argv[0] in unit_commands:
+            return unit_commands[argv[0]](argv[1])
     except NotRead as e:
         print(f"NOT READ: Forgejo's answer - {e}")
         return 1

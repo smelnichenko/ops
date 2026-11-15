@@ -6,11 +6,12 @@
 # directory readable but the clones - ~/.bash_history, ops' .env.test, ~/.claude, other checkouts all hidden -, .git's
 # hooks and config unwritable, only the vendors' hosts reachable; the review --restricted reading no CLAUDE.md of the
 # clones): the Bash sandbox on and failing closed, nothing auto-allowed, the whole home directory unreadable to Bash but
-# the clones' directory, no network but the checksum script's vendors (the review none); the denials every job keeps
+# the clones' directory, no network for Bash (the release notes are WebFetch's); the denials every job keeps
 # (production, other hosts, the network, the operator's credentials, a branch or a push); no allow that grants one of
 # them (a forced push, a push through -C, a new branch among the probes); no whole-tool Read or Edit (a file tool outside
-# the clones); the skill's own commands allowed word for word (the checksum script the runner's copy, outside what the
-# agent may edit), its "never" denied; the review's instructions name the passes the runner requires.
+# the clones); the skill's own commands allowed word for word, no interpreter or checksum script at all (a relative
+# path ran whatever script the agent made), its "never" denied; the review's instructions name the passes the runner
+# requires.
 set -u
 cd "$(dirname "$0")/../../../.." || exit 1
 python3 - <<'PYCHECK'
@@ -34,10 +35,8 @@ for name, d in (("fix", fix), ("review", review)):
            sb.get("filesystem", {}).get("denyRead"), sb.get("filesystem", {}).get("allowRead"), sb.get("excludedCommands"),
            sorted(sb.get("filesystem", {}).get("allowWrite", []))),
           (True, True, False, False, ["~"], [WORK], [], []))
-check("fix: Bash's network the checksum script's vendors alone; the review's none",
-      (sorted(fix["sandbox"]["network"]["allowedDomains"]), review["sandbox"]["network"]["allowedDomains"]),
-      (sorted(["code.forgejo.org", "download.pytorch.org", "download.sonatype.com", "get.helm.sh", "github.com",
-               "objects.githubusercontent.com", "release-assets.githubusercontent.com", "releases.hashicorp.com"]), []))
+check("Bash's network none, the fix's and the review's (no command of theirs needs it - the release notes are WebFetch's)",
+      (fix["sandbox"]["network"]["allowedDomains"], review["sandbox"]["network"]["allowedDomains"]), ([], []))
 # what every job denies: production, other hosts, the network, the operator's credentials, a branch, a push
 MUST_DENY = ["Bash(task *)", "Bash(ssh *)", "Bash(scp *)", "Bash(curl *)", "Bash(wget *)", "Bash(kubectl *)", "Bash(helm *)",
              "Bash(ansible*)", "Bash(sudo *)", "Bash(docker *)", "Bash(git push*)", "Bash(git -C * push*)",
@@ -80,12 +79,8 @@ check("the skill's literal commands allowed word for word, or with their argumen
       [])
 check("the skill never tells the agent to push or to use git -C (never matched by a wildcard rule)",
       (bool(re.search(r"`git[^`]*push", skill)), bool(re.search(r"`git -C", skill))), (False, False))
-check("fix: the checksum script allowed only as the runner's copy (../.trusted, outside what the agent may edit), with "
-      "the runner's keys",
-      [r for r in fix["permissions"]["allow"] if "renovate-checksums" in r],
-      ["Bash(python3 -I ../.trusted/renovate-checksums.py --changed --base origin/main --keys ../.trusted/keys)"])
-check("the runner hands the agent that copy (ops main's script and keys into .trusted)",
-      'cp scripts/renovate-checksums.py "$fixdir/.trusted/" && cp -r renovate/keys "$fixdir/.trusted/keys"' in runner, True)
+check("fix: no checksum script, no interpreter at all (a relative path ran whatever script the agent made there)",
+      [r for r in fix["permissions"]["allow"] if "python" in r or "renovate-checksums" in r], [])
 instructions = open(".claude/upgrade-agent/review.md").read()
 required = re.search(r'REVIEW_PASSES="([^"]+)"', runner).group(1).split()
 check("the review's instructions name every pass the runner requires on its PASSES line, and its two lines",

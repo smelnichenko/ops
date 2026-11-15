@@ -130,17 +130,18 @@ json=$(A_NAME=UpgradeCycle A_KIND="$kind" A_UNIT="$unit" A_SEVERITY="$severity" 
        A_NOTICE="$(date -u +%Y%m%dT%H%M%SZ)-$$" A_SUMMARY="$summary" A_DETAILS="$details" \
        A_START="$(date -u '+%Y-%m-%dT%H:%M:%SZ')" A_END="$(date -u -d "+${hours} hours" '+%Y-%m-%dT%H:%M:%SZ')" alert)
 
+if [ "$kind" = veto ] && [ -n "$details_file" ] && [ -z "$mail_details" ]; then
+  # refused before anything is posted: an alert saying "applies after 24 h" with no mail carrying its evidence misleads
+  echo "NOT SENT: the details ($(wc -c < "$details_file") bytes) are over a mail's 100 KB - no notice on half its evidence"
+  exit 1
+fi
 if [ "$kind" = one-way-failed ] || [ "$kind" = veto ]; then
   # a page recorded first: the runner refuses while it is open, whether or not Alertmanager took it
   if [ "$kind" = one-way-failed ] && [ -z "${UPGRADE_NOTICE_DRY:-}" ]; then mkdir -p "$pages"; printf '%s\n' "$json" > "$pages/$unit.json"; fi
   posted=0; mailed=0
   if post <<< "$json"; then echo "POSTED $kind $unit (Alertmanager mails it$([ "$kind" = veto ] || echo ", hourly"))"; posted=1
   else echo "Alertmanager not reached through $host"; fi
-  if [ "$kind" = veto ] && [ -n "$details_file" ] && [ -z "$mail_details" ]; then
-    echo "NOT SENT: the details ($(wc -c < "$details_file") bytes) are over a mail's 100 KB - no notice on half its evidence"
-  else
-    direct && mailed=1
-  fi
+  direct && mailed=1
   if [ "$kind" = veto ]; then [ "$mailed" = 1 ] || exit 1; else [ "$posted$mailed" != 00 ] || exit 1; fi
   exit 0
 fi

@@ -12,8 +12,6 @@ and ops), as the renovate-bot:
                       (default 0) (a red or running CI is hours of proof for a merge that is refused)
   UNIT --update       each pull request whose base moved past it: main merged into its branch (Forgejo's update, as the
                       bot) - a unit Renovate no longer rebases (stop-updating) brought onto main for its proof
-  UNIT --diff-hash    a hash of what the unit changes (each pull request's changed lines and files, no context or
-                      positions): its notice holds for this - a rebase onto a newer main keeps it, a newer release not
   UNIT --merge --expect FILE
                       each merged - infra, platform, then ops - only when every one's head is green (its CI's status
                       success), mergeable and still the commit FILE (--heads' lines) says was proven, its base branch
@@ -160,10 +158,6 @@ def green(unit, wait=0):
         time.sleep(float(os.environ.get("UPGRADE_GREEN_POLL", "60")))
 
 
-def diff_hash(unit):
-    print(unit_diff_hash(unit))
-
-
 def update(unit):
     """Each pull request whose base moved past it brought up to date - main merged into its branch, by Forgejo, as the
     bot (a unit Renovate no longer rebases: stop-updating, the agent's fix on it). What it changes stays (its diff)."""
@@ -175,47 +169,33 @@ def update(unit):
             print(f"UPDATED {repo}#{pr['number']} ({behind} commit(s) of {ref} merged in)")
 
 
-def unit_diff_hash(unit):
-    """What the unit changes, independent of where its bases stand: each pull request's diff, its changed lines and
-    file names alone (no context, no hunk positions), hashed - a notice holds for this, and for nothing else."""
-    import hashlib
-    h = hashlib.sha256()
-    for repo, pr in sorted(prs(unit), key=lambda x: REPOS.index(x[0])):
-        req = urllib.request.Request(f"{API}/repos/{repo}/pulls/{pr['number']}.diff")
-        req.add_unredirected_header("Authorization", f"token {TOKEN}")
-        try:
-            with urllib.request.urlopen(req, timeout=60) as r:
-                text = r.read().decode("utf-8", "replace")
-        except (OSError, http.client.HTTPException) as e:
-            raise Refused(f"{repo}#{pr['number']}'s diff: {e}") from None
-        h.update(repo.encode() + b"\n")
-        for line in text.splitlines():
-            if line.startswith(("+++ ", "--- ")) or (line[:1] in "+-" and line[:1]):
-                h.update(line.encode() + b"\n")
-    return h.hexdigest()
-
-
-def cd_only(repo, pr, proven_base, base):
-    """The base branch moved since the proof by CD's app promotions alone (each commit its author's, its files CD's):
-    the merged tree is the proven one plus app image tags production gets anyway - a unit that changes another line of
-    CD's file merges beside them (Forgejo's mergeable, already required, says whether the two meet)."""
+def cd_promotions(repo):
+    """CD's author and the files its promotions touch in this repo (scripts/cd-promotions.json) - none: no CD here."""
     try:
         with open(CD_FILE, encoding="utf-8") as f:
             cd = json.load(f)
     except (OSError, ValueError):
-        return False
-    paths = set((cd.get("paths") or {}).get(repo.split("/")[1], []))
+        return None, set()
+    return cd.get("author"), set((cd.get("paths") or {}).get(repo.split("/")[1], []))
+
+
+def is_promotion(commit, author, paths):
+    files = {f.get("filename") for f in commit.get("files") or []}
+    return ((commit.get("commit") or {}).get("author") or {}).get("email") == author and bool(files) and not files - paths
+
+
+def cd_only(repo, proven_base, base):
+    """The base branch moved since the proof by CD's app promotions alone (each commit its author's, its files CD's):
+    the merged tree is the proven one plus app image tags production gets anyway - a unit that changes another line of
+    CD's file merges beside them (Forgejo's mergeable, already required, says whether the two meet)."""
+    author, paths = cd_promotions(repo)
     if not paths or (call("GET", f"/repos/{repo}/compare/{base}...{proven_base}") or {}).get("total_commits") != 0:
         return False  # no CD here, or the proven base no longer on the branch
     moved = call("GET", f"/repos/{repo}/compare/{proven_base}...{base}") or {}
     commits = moved.get("commits") or []
     if not commits or len(commits) != moved.get("total_commits"):
         return False  # a list cut short is no proof of what is in it
-    for c in commits:
-        files = {f.get("filename") for f in c.get("files") or []}
-        if ((c.get("commit") or {}).get("author") or {}).get("email") != cd.get("author") or not files or files - paths:
-            return False
-    return True
+    return all(is_promotion(c, author, paths) for c in commits)
 
 
 def went_in(repo, number, definite, head="", base_ref="main"):
@@ -227,17 +207,20 @@ def went_in(repo, number, definite, head="", base_ref="main"):
         if i:
             time.sleep(float(os.environ.get("UPGRADE_MERGE_WAIT", "10")))
         try:
-            if (call("GET", f"/repos/{repo}/pulls/{number}") or {}).get("merged"):
-                return True
-            # a 4xx refused it before anything moved; after a 5xx or no answer, its head on the base is a merge too
-            if not definite and head and (call("GET", f"/repos/{repo}/compare/{base_ref}...{head}") or {}).get("total_commits") == 0:
+            if merged_now(repo, number, head if not definite else "", base_ref):
                 return True
         except Refused:
             continue
-        else:
-            if definite:
-                return False
+        if definite:
+            return False
     return None
+
+
+def merged_now(repo, number, head, base_ref):
+    """The pull request merged - its flag, or (head given: after a 5xx or no answer) its head on the base already."""
+    if (call("GET", f"/repos/{repo}/pulls/{number}") or {}).get("merged"):
+        return True
+    return bool(head) and (call("GET", f"/repos/{repo}/compare/{base_ref}...{head}") or {}).get("total_commits") == 0
 
 
 def read_expected(path):
@@ -258,46 +241,57 @@ def read_expected(path):
     return expected
 
 
+def ready(repo, pr, proven):
+    """The pull request as it was proven: its head the proven commit, green, mergeable, its base the proven one (or
+    moved by CD's promotions alone) - refused else, nothing merged."""
+    number, head, proven_base = proven
+    sha = pr["head"]["sha"]
+    if sha != head:
+        raise Refused(f"{repo}#{pr['number']} moved since its proof ({head[:12]} proven, {sha[:12]} now) - nothing merged")
+    st = state(repo, sha)
+    if st != "success":
+        raise Refused(f"{repo}#{pr['number']} not green (its CI: {st or 'none'}) - nothing merged")
+    if pr.get("mergeable") is False:
+        raise Refused(f"{repo}#{pr['number']} not mergeable - nothing merged")
+    base = base_of(repo, pr)
+    if base == proven_base:
+        return
+    if not cd_only(repo, proven_base, base):
+        raise Refused(f"{repo}'s {(pr.get('base') or {}).get('ref') or 'main'} moved since the proof "
+                      f"({proven_base[:12]} proven, {base[:12]} now) - nothing merged")
+    print(f"BASE {repo}: moved since the proof by CD's app promotions alone ({proven_base[:12]} -> {base[:12]})")
+
+
+def merge_one(repo, pr, head, merged):
+    """One pull request merged at its proven head - its answer lost (a timeout, a 5xx, Forgejo restarting) is no proof
+    it did not merge: read again. Merged: True; refused with nothing in before it: Refused; else Partial."""
+    try:
+        call("POST", f"/repos/{repo}/pulls/{pr['number']}/merge",
+             {"Do": "merge", "delete_branch_after_merge": True, "head_commit_id": head})
+    except Refused as e:
+        went = went_in(repo, pr["number"], e.definite, head, (pr.get("base") or {}).get("ref") or "main")
+        if went:
+            print(f"MERGED {repo}#{pr['number']} (its answer lost: {e})")
+            return
+        if merged or went is None:
+            raise Partial(f"merged {', '.join(merged) or 'nothing known'}; {repo}#{pr['number']} not"
+                          f"{' known' if went is None else ''}: {e}") from None
+        raise
+    print(f"MERGED {repo}#{pr['number']}")
+
+
 def merge(unit, expected):
     found = prs(unit)
     if {repo: pr["number"] for repo, pr in found} != {repo: n for repo, (n, _, _) in expected.items()}:
         raise Refused(f"the unit's pull requests are not the ones proven ({sorted(r for r, _ in found)} against "
                       f"{sorted(expected)}) - nothing merged")
-    for repo, pr in found:  # every one green, mergeable and the proven commit first: a unit goes in whole or not at all
-        sha = pr["head"]["sha"]
-        if sha != expected[repo][1]:
-            raise Refused(f"{repo}#{pr['number']} moved since its proof ({expected[repo][1][:12]} proven, {sha[:12]} now) "
-                          f"- nothing merged")
-        st = state(repo, sha)
-        if st != "success":
-            raise Refused(f"{repo}#{pr['number']} not green (its CI: {st or 'none'}) - nothing merged")
-        if pr.get("mergeable") is False:
-            raise Refused(f"{repo}#{pr['number']} not mergeable - nothing merged")
-        base = base_of(repo, pr)
-        if base != expected[repo][2]:
-            if not cd_only(repo, pr, expected[repo][2], base):
-                raise Refused(f"{repo}'s {(pr.get('base') or {}).get('ref') or 'main'} moved since the proof "
-                              f"({expected[repo][2][:12]} proven, {base[:12]} now) - nothing merged")
-            print(f"BASE {repo}: moved since the proof by CD's app promotions alone ({expected[repo][2][:12]} -> {base[:12]})")
+    for repo, pr in found:  # every one as proven first: a unit goes in whole or not at all
+        ready(repo, pr, expected[repo])
     merged = []
     try:
         for repo, pr in sorted(found, key=lambda x: REPOS.index(x[0])):
-            try:
-                call("POST", f"/repos/{repo}/pulls/{pr['number']}/merge",
-                     {"Do": "merge", "delete_branch_after_merge": True, "head_commit_id": expected[repo][1]})
-            except Refused as e:
-                # its answer lost (a timeout, Forgejo restarting) is no proof it did not merge: read it again
-                went = went_in(repo, pr["number"], e.definite, expected[repo][1], (pr.get("base") or {}).get("ref") or "main")
-                if went:
-                    merged.append(f"{repo}#{pr['number']}")
-                    print(f"MERGED {repo}#{pr['number']} (its answer lost: {e})")
-                    continue
-                if merged or went is None:
-                    raise Partial(f"merged {', '.join(merged) or 'nothing known'}; {repo}#{pr['number']} not"
-                                  f"{' known' if went is None else ''}: {e}") from None
-                raise
+            merge_one(repo, pr, expected[repo][1], merged)
             merged.append(f"{repo}#{pr['number']}")
-            print(f"MERGED {repo}#{pr['number']}")
     except (Partial, Refused):
         raise
     except Exception as e:  # anything else once a merge was asked for: what went in is not known - never "nothing"
@@ -323,8 +317,25 @@ def pause(text):
     print(f"PAUSED schnappy/ops#{number}")
 
 
-USAGE = ("usage: upgrade-label.py UNIT LABEL | UNIT --comment TEXT | UNIT --heads | UNIT --green [SECONDS] | UNIT --diff-hash | "
+USAGE = ("usage: upgrade-label.py UNIT LABEL | UNIT --comment TEXT | UNIT --heads | UNIT --green [SECONDS] | "
          "UNIT --update | UNIT --merge --expect FILE | --pause TEXT")
+
+
+def unit_action(unit, args):
+    """What the arguments ask of the unit, as a call - None: a usage it lacks."""
+    if args == ["--heads"]:
+        return lambda: heads(unit)
+    if args[:1] == ["--green"] and len(args) <= 2 and all(x.isdigit() for x in args[1:]):
+        return lambda: green(unit, int(args[1]) if len(args) == 2 else 0)
+    if args == ["--update"]:
+        return lambda: update(unit)
+    if len(args) == 3 and args[:2] == ["--merge", "--expect"]:
+        return lambda: merge(unit, read_expected(args[2]))
+    if len(args) == 2 and args[0] == "--comment" and args[1]:
+        return lambda: comment(unit, args[1])
+    if len(args) == 1 and re.fullmatch(r"[a-z0-9][a-z0-9-]*", args[0]):
+        return lambda: label(unit, args[0])
+    return None
 
 
 def main(argv):
@@ -338,25 +349,12 @@ def main(argv):
     if len(argv) < 2 or not re.fullmatch(r"[a-z0-9][a-z0-9.-]*", argv[0]):
         print(USAGE)
         return 2
-    unit = argv[0]
+    action = unit_action(argv[0], argv[1:])
+    if action is None:
+        print(USAGE)
+        return 2
     try:
-        if argv[1:] == ["--heads"]:
-            heads(unit)
-        elif argv[1:2] == ["--green"] and len(argv) <= 3 and all(x.isdigit() for x in argv[2:]):
-            green(unit, int(argv[2]) if len(argv) == 3 else 0)
-        elif argv[1:] == ["--diff-hash"]:
-            diff_hash(unit)
-        elif argv[1:] == ["--update"]:
-            update(unit)
-        elif len(argv) == 4 and argv[1:3] == ["--merge", "--expect"]:
-            merge(unit, read_expected(argv[3]))
-        elif argv[1] == "--comment" and len(argv) == 3 and argv[2]:
-            comment(unit, argv[2])
-        elif len(argv) == 2 and re.fullmatch(r"[a-z0-9][a-z0-9-]*", argv[1]):
-            label(unit, argv[1])
-        else:
-            print(USAGE)
-            return 2
+        action()
     except Partial as e:
         print(f"PARTIAL: {e}")
         return 3

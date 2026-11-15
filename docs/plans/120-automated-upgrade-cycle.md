@@ -92,6 +92,20 @@ merge alone; the journal holds the etcd snapshot's name and the pull requests me
 record to push, not a page; verify compares each app against its spec, says a stalled one, leaves preview environments'
 pods and alerts out, wants two clean looks when it waits for Argo and a streak of 10 in the hold; the spans 210 (the
 apply's own waits) and 330 at the start; the etcd check reads the pod that succeeded.
+**Round six (2026-11-15) - done:** a notice is bound to the heads it announced (`heads=` on its comment): an apply run
+checks with git that each head proven now descends from the announced one with nothing but main's commits merged in -
+else noticed again (the diff hash it replaces could not see a carriage return, a binary or a rename). The agent has no
+checksum script and no network for its shell (a relative path to the "trusted" copy ran a script the agent made);
+its files must be plain text (no NUL, no control character but tab and newline); the record of its fix starts again
+for a new instance of a unit's name, is removed on apply, and over 100 KB blocks the unit (an oversize veto is refused
+before Alertmanager is posted to). Renovate rebases a branch only on a conflict and has no cap (the cap split units
+across repos); the runner brings the picked unit onto main by Forgejo's update in every repo (ops too), waits for the
+new heads; a red CI is a try; tries are counted per unit (heads move with every update) and reset by a notice, a
+shadow proof or an apply; ops' main must still be the gate's right before the merge; the test path pages unless every
+complaint is placed in the test environment; issue comments are read in one request (Forgejo takes no pages there - a
+loop with no end at 50); verify keys its hold's streak on the subject (the app, the pod's owner, the alert) and keeps
+an empty Helm `values` out of the spec comparison; the etcd check tries each pod that succeeded; the seed playbook maps
+monitor's and masi's `renovate_token` to a bot of their own (`RENOVATE_APPS_TOKEN`), never the cycle's.
 **The first real run:** `task upgrade RUNNER=false` - Renovate's branches and pull requests made, nothing applied; their
 labels read (the shadow week checked them). Then `task upgrade SHADOW=true` proves and reviews a unit on the copy,
 applying nothing - the cycle's first proof; until it ends clean (the runner's own record,

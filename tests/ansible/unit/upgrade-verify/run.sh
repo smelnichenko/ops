@@ -18,8 +18,11 @@ cat > "$W/bin/ssh" <<'STUB'
 read -r u _ < "$W/uptime"; echo "$((${u%.*} + 61)).00 0.00" > "$W/uptime"
 case "$*" in
   *"get applications"*) n=$(cat "$W/looks" 2>/dev/null || echo 0)
-    if [[ " $(cat "$W/bad-app-looks" 2>/dev/null) " == *" $n "* ]]; then cat "$W/apps-bad.json"; else cat "$W/apps.json"; fi ;;
-  *"get pods"*) cat "$W/pods.json" ;;
+    if [[ " $(cat "$W/bad-app-looks" 2>/dev/null) " == *" $n "* ]]; then
+      if [ -e "$W/apps-bad.$n.json" ]; then cat "$W/apps-bad.$n.json"; else cat "$W/apps-bad.json"; fi
+    else cat "$W/apps.json"; fi ;;
+  *"get pods"*) n=$(cat "$W/looks" 2>/dev/null || echo 0); if [ -e "$W/pods.$n.json" ]; then cat "$W/pods.$n.json"; else cat "$W/pods.json"; fi ;;
+
   *"amtool alert query"*) n=$(cat "$W/looks" 2>/dev/null || echo 0); echo $((n + 1)) > "$W/looks"
     if [ -e "$W/alert-looks" ]; then
       if [[ " $(cat "$W/alert-looks") " == *" $n "* ]]; then cat "$W/alerts.json"; else echo '[]'; fi
@@ -57,8 +60,8 @@ def pod(ns, name, phase="Running", ready=(True,)):
     return {"metadata": {"namespace": ns, "name": name},
             "status": {"phase": phase, "containerStatuses": [{"name": f"c{i}", "ready": r} for i, r in enumerate(ready)]}}
 def run(apps, pods, alerts=(), alert_after=None, down=False, settle="0", hold="2", pods_raw=None, streak="5", revs="",
-        alert_until=None, alert_looks=None, bad_app_looks=None):
-    for f in ("down", "looks", "alert-after", "alert-until", "alert-looks", "bad-app-looks"):
+        alert_until=None, alert_looks=None, bad_app_looks=None, bad_apps=None, apps_by_look=None, pods_by_look=None):
+    for f in [x for x in os.listdir(W) if x.startswith(("apps-bad.", "pods."))] + ["down", "looks", "alert-after", "alert-until", "alert-looks", "bad-app-looks"]:
         if os.path.exists(os.path.join(W, f)):
             os.remove(os.path.join(W, f))
     json.dump({"items": apps}, open(os.path.join(W, "apps.json"), "w"))
@@ -73,9 +76,12 @@ def run(apps, pods, alerts=(), alert_after=None, down=False, settle="0", hold="2
         open(os.path.join(W, "alert-until"), "w").write(str(alert_until))
     if alert_looks is not None:
         open(os.path.join(W, "alert-looks"), "w").write(" ".join(map(str, alert_looks)))
+    for name, by_look in (("apps-bad", apps_by_look), ("pods", pods_by_look)):  # an answer of its own at each look
+        for n, items in (by_look or {}).items():
+            json.dump({"items": items}, open(os.path.join(W, f"{name}.{n}.json"), "w"))
     if bad_app_looks is not None:
         open(os.path.join(W, "bad-app-looks"), "w").write(" ".join(map(str, bad_app_looks)))
-        json.dump({"items": apps + [app("x", health="Progressing")]}, open(os.path.join(W, "apps-bad.json"), "w"))
+        json.dump({"items": apps + (bad_apps or [app("x", health="Progressing")])}, open(os.path.join(W, "apps-bad.json"), "w"))
     if down:
         open(os.path.join(W, "down"), "w").write("")
     env = {**os.environ, "PATH": os.path.join(W, "bin") + ":" + os.environ["PATH"], "W": W,
@@ -117,6 +123,9 @@ check("hold 0, nothing firing: settled and quiet in one look", (rc, out.strip())
 rc, out = run(OK_APPS, OK_PODS, hold="0", settle="5")
 check("hold 0 while waiting for Argo (settle > 0): two clean looks in a row (a look between a compare and its sync is no "
       "settle)", (rc, out.strip(), int(open(os.path.join(W, "looks")).read())), (0, "SETTLED AND QUIET (2 looks in a row)", 2))
+rc, out = run(OK_APPS, OK_PODS, hold="0", settle="15", bad_app_looks=(1,))
+check("  clean, then not, then clean twice: the count starts again - three clean looks of four, settled on the last two",
+      (rc, out.strip(), int(open(os.path.join(W, "looks")).read())), (0, "SETTLED AND QUIET (2 looks in a row)", 4))
 rc, out = run(OK_APPS + [app("pr-42-monitor", health="Degraded", labels={"preview-env": "true"})], OK_PODS)
 check("a preview environment's app broken (a pull request's): no part of production - settled", rc, 0)
 rc, out = run(OK_APPS, OK_PODS, alerts=[{"labels": {"alertname": "Watchdog", "severity": "critical"}}], alert_after=0, streak="1")
@@ -133,6 +142,23 @@ check("a preview environment's pod crash-looping and its alert firing (its names
       (rc, out.strip().splitlines()[-1]), (0, "SETTLED AND QUIET for 2 min"))
 rc, out = run(OK_APPS + [PREVIEW], [pod("schnappy-production", "monitor-0", ready=(False,))])
 check("  control: the same pod in production's namespace - not settled", (rc, "pod schnappy-production/monitor-0" in out), (1, True))
+rc, out = run(OK_APPS + [app("pr-7-site", health="Degraded", labels={"preview-env": "true"})], OK_PODS,
+              alerts=[{"labels": {"alertname": "NodeDown", "severity": "critical"}}], alert_after=0, streak="1")
+check("a preview app with no destination of its own: no namespace of 'preview' - a critical alert with no namespace (a "
+      "node's) still not quiet", (rc, "critical alert NodeDown" in out), (1, True))
+# a streak counts its subject, not its words: an app broken all hour while its state flips, a pod recreated under new names
+FLIP = [[app("observability", health="Degraded")], [app("observability", health="Progressing")]]
+rc, out = run(OK_APPS, OK_PODS, streak="3", hold="15", bad_app_looks=(1, 2, 3, 4), bad_apps=FLIP[0])
+check("an app broken through the hold (the same words each look): not quiet", (rc, "NOT QUIET" in out), (1, True))
+rc, out = run(OK_APPS, OK_PODS, streak="3", hold="15", bad_app_looks=(1, 2, 3, 4),
+              apps_by_look={n: OK_APPS + FLIP[n % 2] for n in (1, 2, 3, 4)})
+check("an app broken through the hold, its state flipping each look (Degraded, Progressing): the same subject - not quiet",
+      (rc, "NOT QUIET" in out), (1, True))
+rc, out = run(OK_APPS, OK_PODS, streak="3", hold="15",
+              pods_by_look={n: [pod("schnappy-production", f"monitor-7d9f8b6c4d-{x}", ready=(False,))]
+                            for n, x in ((1, "aaaa1"), (2, "bbbb2"), (3, "cccc3"), (4, "dddd4"))})
+check("a Deployment's pod unready, recreated under a new name each look: its owner the subject - not quiet",
+      (rc, "NOT QUIET" in out), (1, True))
 STALL = app("cert-manager", sync="OutOfSync")
 STALL["spec"]["syncPolicy"] = {"automated": {}}
 STALL["status"]["operationState"] = {"phase": "Succeeded", "operation": {"initiatedBy": {"automated": True}}}
@@ -186,6 +212,14 @@ check("a single-source app (spec.source, sync.revision), its targetRevision unse
       run([one], OK_PODS, revs=f"infra={c[1]}")[0], 1)
 check("  at the merge: settled", run([app("cluster-config", sources=[(INFRA, None)], revisions=[c[1]], single=True)], OK_PODS,
                                     revs=f"infra={c[1]}")[0], 0)
+empty_values = app("observability", sources=[(INFRA, "HEAD")], revisions=[c[1]], compared=[{"repoURL": INFRA, "targetRevision": "HEAD"}])
+empty_values["spec"]["sources"][0]["helm"] = {"values": "", "skipCrds": False}
+check("a spec carrying what Go leaves out of comparedTo (helm.values \"\", skipCrds false): the same spec - settled",
+      run([empty_values], OK_PODS, revs=f"infra={c[1]}")[0], 0)
+zero = app("observability", sources=[(INFRA, "HEAD")], revisions=[c[1]], compared=[{"repoURL": INFRA, "targetRevision": "HEAD",
+                                                                                     "helm": {"valuesObject": {}}}])
+zero["spec"]["sources"][0]["helm"] = {"valuesObject": {"replicas": 0, "enabled": False}}
+check("  Helm values of false and 0 against none compared: values, not emptiness - an older spec", run([zero], OK_PODS, revs=f"infra={c[1]}")[0], 1)
 older = app("observability", sources=[(INFRA, "HEAD")], revisions=[c[1]], compared=[{"repoURL": INFRA, "targetRevision": "HEAD",
                                                                                        "helm": {"valuesObject": {"v": 1}}}])
 rc, out = run([older], OK_PODS, revs=f"infra={c[1]}")

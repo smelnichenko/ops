@@ -285,23 +285,11 @@ fixture(UNIT, {"a1": "success", "b1": "pending", "c1": "success"})
 r = subprocess.run([sys.executable, "scripts/upgrade-label.py", "wave-patches", "--green", "1"], capture_output=True, text=True,
                    env={**env, "UPGRADE_GREEN_POLL": "0.2"}, timeout=60)
 check("  still running at the wait's end: not green yet (exit 1)", (r.returncode, "not green yet" in r.stdout), (1, True))
-# what the unit changes, independent of its base: a notice holds for this
-D1 = "diff --git a/x b/x\nindex 1..2 100644\n--- a/x\n+++ b/x\n@@ -1,3 +1,3 @@\n ctx\n-a: 1\n+a: 2\n ctx\n"
-D1_MOVED = "diff --git a/x b/x\nindex 7..8 100644\n--- a/x\n+++ b/x\n@@ -40,3 +40,3 @@\n other ctx\n-a: 1\n+a: 2\n more\n"
-D2 = D1.replace("+a: 2", "+a: 3")
-def hashed(d_infra):
-    fixture({"infra": [pr(1, "wave-patches", "a1")]}, {}, extra={"/repos/schnappy/infra/pulls/1.diff": d_infra})
-    return run("wave-patches", "--diff-hash")
-h1, h1m, h2 = hashed(D1), hashed(D1_MOVED), hashed(D2)
-fixture(UNIT, {}, extra={f"/repos/schnappy/infra/compare/{SHA['a1']}...main": {"total_commits": 2, "commits": []},
-                         f"/repos/schnappy/platform/compare/{SHA['b1']}...main": {"total_commits": 0, "commits": []},
-                         f"/repos/schnappy/ops/compare/{SHA['c1']}...main": {"total_commits": 0, "commits": []}})
+fixture(UNIT, {"a1": "success", "b1": "error", "c1": "success"})
+check("green: a CI that errored (no build ran) is red too (exit 4)", run("wave-patches", "--green")[0], 4)
+fixture(UNIT, {})
 rc, out = run("wave-patches", "--update")
-check("update: only the pull request its base moved past brought up to date (main merged in, by Forgejo)",
-      (rc, [x[0] for x in writes()], out), (0, ["/repos/schnappy/infra/pulls/1/update?style=merge"],
-                                           "UPDATED schnappy/infra#1 (2 commit(s) of main merged in)"))
-check("diff-hash: the same change on a moved base (other context, other positions) the same hash; another change another",
-      (h1[0], h1m[0], h2[0], len(h1[1]), h1[1] == h1m[1], h1[1] != h2[1]), (0, 0, 0, 64, True, True))
+check("update: a pull request whose compare is not read: refused (exit 1), nothing updated", (rc, writes()), (1, []))
 many = {"infra": [pr(i, f"other-{i:03d}", "a2") for i in range(1, 61)] + [pr(99, "wave-patches", "a1")]}
 fixture(many, {})
 check("heads: more than one page of pull requests - the unit's on the second page found",
