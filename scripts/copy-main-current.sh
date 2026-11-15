@@ -5,12 +5,46 @@
 # change's ref (<dir>:<ref>, not main) must contain origin/main: one cut from an older main tests "the change minus
 # what production got since". When production's main moved since the copy was built (.copy/copy-built, the mains the
 # build mirrored), the change's run is warned: those commits come with it and read as its own lines.
+# CD's app promotions alone (scripts/cd-promotions.json: its author, its files - infra's app image tags, many a day) are
+# no stale base: a main, or a change, behind origin/main by those alone passes (said), a change touching none of their
+# files - what it proves is the same tree but for app tags production gets anyway.
 #
 # Usage: scripts/copy-main-current.sh <repo dir>[:<ref>]...
 # Env:   COPY_BUILT_FILE (default .copy/copy-built beside this script's repo: "<repo name> <commit>" lines)
+#        COPY_CD_FILE (default scripts/cd-promotions.json beside this script)
 set -euo pipefail
 [ "$#" -gt 0 ] || { echo "usage: $0 <repo dir>[:<ref>]..."; exit 2; }
 bad=0
+cd_file=${COPY_CD_FILE:-$(cd "$(dirname "$0")" && pwd)/cd-promotions.json}
+# cd_only <repo> <from> <to> [<ref>]: <from>..<to> CD's promotions alone (each commit its author's, its files CD's, at
+# least one), and <ref>'s own change since <from> touching none of those files - exit 0, the count said; else exit 1
+cd_only() {
+  python3 -I - "$cd_file" "$@" <<'PY'
+import json, os, subprocess, sys
+cd_file, repo, frm, to = sys.argv[1:5]
+ref = sys.argv[5] if len(sys.argv) > 5 else ""
+try:
+    cd = json.load(open(cd_file))
+except (OSError, ValueError):
+    sys.exit(1)
+paths = set(cd.get("paths", {}).get(os.path.basename(repo.rstrip("/")), []))
+def git(*a):
+    return subprocess.run(["git", "-C", repo, *a], capture_output=True, text=True, check=True).stdout
+if not paths:
+    sys.exit(1)
+commits = git("rev-list", f"{frm}..{to}").split()
+if not commits:
+    sys.exit(1)
+for c in commits:
+    author = git("log", "-1", "--format=%ae", c).strip()
+    files = set(git("diff-tree", "--no-commit-id", "--name-only", "-r", "-m", c).split())
+    if author != cd["author"] or not files or files - paths:
+        sys.exit(1)
+if ref and set(git("diff", "--name-only", f"{frm}...{ref}").split()) & paths:
+    sys.exit(1)
+print(len(commits))
+PY
+}
 built_file=${COPY_BUILT_FILE:-$(cd "$(dirname "$0")/.." && pwd)/.copy/copy-built}
 for arg in "$@"; do
   repo=${arg%%:*}
@@ -22,6 +56,8 @@ for arg in "$@"; do
     here=$(git -C "$repo" rev-parse main)
     if [ "$here" = "$there" ]; then
       echo "$repo: main $here = origin/main"
+    elif git -C "$repo" merge-base --is-ancestor "$here" "$there" && n=$(cd_only "$repo" "$here" "$there"); then
+      echo "$repo: main $here behind origin/main $there by $n CD promotion(s) alone (app image tags) - passes"
     else
       echo "$repo: main $here, origin/main $there - bring main to origin/main first"
       bad=1
@@ -35,6 +71,8 @@ for arg in "$@"; do
     if [ -n "$built" ] && [ "$built" != "$there" ]; then
       echo "$repo: WARNING - production's main moved $(git -C "$repo" rev-list --count "$built..$there" 2> /dev/null || echo ?) commit(s) since the copy was built at $built: they come with $ref, its inventory reads them as its own"
     fi
+  elif base=$(git -C "$repo" merge-base "$there" "$ref") && n=$(cd_only "$repo" "$base" "$there" "$ref"); then
+    echo "$repo: $ref behind origin/main $there by $n CD promotion(s) alone (app image tags, files it does not touch) - passes"
   else
     echo "$repo: $ref does not contain origin/main $there - rebase it on origin/main first"
     bad=1

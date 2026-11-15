@@ -3,9 +3,11 @@
 # stdin through ssh; the same post was proven against Alertmanager v0.34.1 itself, 2026-11-15): ssh stubbed, recording
 # its host, the remote command and what it was given - each kind's severity and lifetime from now, a label of each
 # notice's own, the summary and the details whole (quotes, $, backticks, newlines - amtool refused a '"'), the details'
-# last 3000 bytes; a one-way failure a page: recorded, mailed straight out too (no key - said), resolved (ended now,
-# its record gone), posted again with a week's end; Alertmanager unreachable: a notice fails, a page's record stays;
-# refused: a kind, a unit, no summary, a resolve without a page, usages it lacks.
+# last 3000 bytes (one cut inside a character: replaced); a one-way failure a page: recorded, mailed straight out too
+# (no key - said), resolved (ended now, its record gone), posted again with a week's end; a veto mailed straight out
+# too; the direct mail as notice.sh hands it over (a copy beside a recording mail script) and upgrade-mail.py's main()
+# with its SMTP replaced - each way it fails said; Alertmanager unreachable: a notice fails, a page's record stays, a
+# page or veto mailed is through; refused: a kind, a unit, no summary, a resolve without a page, usages it lacks.
 set -u
 cd "$(dirname "$0")/../../../.." || exit 1
 W=$(mktemp -d)
@@ -22,7 +24,7 @@ echo >> "$W/posts"
 STUB
 chmod +x "$W/bin"/*
 W=$W python3 - <<'PYCHECK'
-import datetime, json, os, re, subprocess, sys
+import datetime, json, os, re, shutil, subprocess, sys
 W = os.environ["W"]
 PAGES = os.path.join(W, "pages")
 fails = 0
@@ -148,6 +150,87 @@ check("the direct mail: Resend's SMTP on 587, STARTTLS before the login (user re
 r = subprocess.run([sys.executable, "-I", "scripts/upgrade-mail.py"], capture_output=True, text=True,
                    env={"PATH": os.environ["PATH"], "TO": "a@b.c", "SUBJECT": "s", "BODY": "b"})
 check("the direct mail without its key: not sent, said (exit 1)", (r.returncode, "NOT SENT" in r.stdout), (1, True))
+# the direct mail's main() as the page calls it: Resend's SMTP replaced (smtplib.SMTP), each way it fails said (exit 1),
+# a body whose end was cut inside a character mailed all the same
+def mail_main(env, smtp_class):
+    code = r"""
+import importlib.util, json, os, smtplib, sys
+spec = importlib.util.spec_from_file_location("um", "scripts/upgrade-mail.py"); um = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(um)
+sent = []
+class Ok:
+    def __init__(self, *a, **k): pass
+    def __enter__(self): return self
+    def __exit__(self, *a): pass
+    def starttls(self, context): pass
+    def login(self, u, k): pass
+    def send_message(self, m): sent.append([m["Subject"], m.get_content()])
+class AuthFails(Ok):
+    def login(self, u, k): raise smtplib.SMTPAuthenticationError(535, b"bad key")
+class Refused(Ok):
+    def __init__(self, *a, **k): raise ConnectionRefusedError("refused")
+class Odd(Ok):
+    def send_message(self, m): raise ValueError("something else")
+smtplib.SMTP = {"ok": Ok, "auth": AuthFails, "refused": Refused, "odd": Odd}[sys.argv[1]]
+rc = um.main()
+print(json.dumps({"rc": rc, "sent": sent}))
+"""
+    r = subprocess.run([sys.executable, "-I", "-c", code, smtp_class], capture_output=True, env={"PATH": os.environ["PATH"], **env})
+    lines = r.stdout.decode("utf-8", "replace").strip().split("\n")
+    return lines[:-1], (json.loads(lines[-1]) if lines and lines[-1].startswith("{") else {"rc": None, "err": r.stderr[-300:]})
+MAILENV = {"TO": "a@b.c", "SUBJECT": "[UpgradeCycle] one-way-failed: u - s", "BODY": "s\n\nthe log", "RESEND_API_KEY": "k"}
+said, res = mail_main(MAILENV, "ok")
+check("the direct mail's main(): mailed (exit 0), said", (res.get("rc"), said, res.get("sent")),
+      (0, ["MAILED directly"], [["[UpgradeCycle] one-way-failed: u - s", "s\n\nthe log\n"]]))
+for kind, why in (("auth", "the key refused (SMTPAuthenticationError)"), ("refused", "the connection refused"),
+                  ("odd", "any other error")):
+    said, res = mail_main(MAILENV, kind)
+    check(f"  {why}: not sent, said (exit 1) - never a traceback", (res.get("rc"), said[:1] and said[0][:9]), (1, "NOT SENT:"))
+cut = "s\n\n" + "x" * 10 + "\u00e9"
+env = {**MAILENV, "BODY": cut}
+env_bytes = {k: v.encode() for k, v in env.items()}
+env_bytes["BODY"] = env_bytes["BODY"][:-1]  # the last character cut inside its two bytes (tail -c 3000)
+said, res = mail_main({k: os.fsdecode(v) for k, v in env_bytes.items()}, "ok")
+check("  a body cut inside a character: mailed all the same, the byte replaced", (res.get("rc"), (res.get("sent") or [[0, ""]])[0][1][-3:]),
+      (0, "x\ufffd\n"))
+# the notice's direct mail as upgrade-notice.sh hands it over (a copy of it beside a recording mail script): the admin
+# address, the subject and body whole, the key passed on - a page and a veto mailed, other kinds not; a page mailed
+# with Alertmanager unreachable: exit 0 (it reached the operator)
+C = os.path.join(W, "copy")
+os.makedirs(os.path.join(C, "scripts"))
+shutil.copy("scripts/upgrade-notice.sh", os.path.join(C, "scripts"))
+open(os.path.join(C, "scripts/upgrade-mail.py"), "w").write("""import json, os, sys
+open(os.environ["MAILS"], "a").write(json.dumps({k: os.environ.get(k) for k in ("TO", "SUBJECT", "BODY", "RESEND_API_KEY")}) + "\\n")
+sys.exit(int(os.environ.get("MAIL_RC", "0")))
+""")
+MAILS = os.path.join(W, "mails")
+def via_copy(*args, **env):
+    if os.path.exists(MAILS):
+        os.remove(MAILS)
+    r = subprocess.run(["bash", os.path.join(C, "scripts/upgrade-notice.sh"), *args], capture_output=True, text=True,
+                       env={**ENV, "MAILS": MAILS, "RESEND_API_KEY": "the-key", "UPGRADE_NOTICE_INFRA_VALUES": values, **env})
+    return r.returncode, r.stdout, [json.loads(x) for x in open(MAILS)] if os.path.exists(MAILS) else []
+open(values, "w").write("alertmanager:\n  enabled: true\n  alertEmailTo: admin@example.org\n")
+open(details, "w").write("restore: step one")
+rc, out, mails = via_copy("one-way-failed", "u4", "it broke", details)
+check("a page's direct mail: to the admin, '[UpgradeCycle] <kind>: <unit> - <summary>', the summary then the details, "
+      "the key passed on", (rc, mails),
+      (0, [{"TO": "admin@example.org", "SUBJECT": "[UpgradeCycle] one-way-failed: u4 - it broke",
+            "BODY": "it broke\n\nrestore: step one", "RESEND_API_KEY": "the-key"}]))
+rc, out, mails = via_copy("veto", "pg-19.x", "applies in 24 h")
+check("a veto: mailed straight out too", (rc, [m["SUBJECT"] for m in mails]), (0, ["[UpgradeCycle] veto: pg-19.x - applies in 24 h"]))
+rc, out, mails = via_copy("applied", "u", "s")
+check("an applied notice: Alertmanager's alone (no direct mail)", (rc, mails), (0, []))
+open(os.path.join(W, "ssh.fail"), "w").write("")
+rc, out, mails = via_copy("one-way-failed", "u5", "s")
+check("a page, Alertmanager unreachable, the direct mail sent: exit 0 (it reached the operator)", (rc, len(mails)), (0, 1))
+rc, out, mails = via_copy("veto", "pg-19.x", "s", MAIL_RC="1")
+check("a veto, neither Alertmanager nor the mail: exit 1 (no clock may start)", (rc, len(mails)), (1, 1))
+os.remove(os.path.join(W, "ssh.fail"))
+open(details, "wb").write("\u00e9".encode() + b"y" * 2999)  # its last 3000 bytes start inside the character
+rc, out, posts = run("applied", "u", "s", details)
+check("details whose last 3000 bytes cut a character: posted, the byte replaced (never a lost notice)",
+      (rc, posts[0][0]["annotations"]["description"][:1] if posts else None), (0, "\ufffd"))
 for args in (("nope", "u", "s"), ("applied", "Bad/Unit", "s"), ("applied", "u", ""), ("applied", "u", "s", "/nonexistent"),
              ("resolve",), ("resolve", "Bad/Unit"), ("repost", "x"), ("open", "x"), ()):
     check(f"refused: {args}", run(*args)[0], 2)

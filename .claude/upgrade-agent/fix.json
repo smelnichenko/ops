@@ -7,22 +7,10 @@
     "excludedCommands": [],
     "filesystem": {
       "denyRead": [
-        "~/.git-credentials",
-        "~/.kube",
-        "~/.ssh",
-        "~/.claude/.credentials.json",
-        "~/.config",
-        "~/.netrc",
-        "~/.docker",
-        "~/.gnupg",
-        "~/.vault-token",
-        "~/.ansible",
-        "/home/sm/src/ops/.env",
-        "/home/sm/src/infra/.env",
-        "/home/sm/src/platform/.env",
-        "~/.pgpass",
-        "/home/sm/src/ops/deploy/ansible/vars/sealed-secrets-key-backup.yaml",
-        "/home/sm/src/ops/vault-recovery"
+        "~"
+      ],
+      "allowRead": [
+        "/home/sm/src/.upgrade-cycle-work"
       ]
     },
     "network": {
@@ -49,11 +37,15 @@
       "Skill(upgrade-fix)",
       "Bash(cd ops)",
       "Bash(cd ..)",
-      "Bash(python3 -I scripts/renovate-checksums.py --changed --base origin/main)",
-      "Bash(git status*)",
-      "Bash(git diff*)",
-      "Bash(git log*)",
-      "Bash(git show*)",
+      "Bash(python3 -I ../.trusted/renovate-checksums.py --changed --base origin/main --keys ../.trusted/keys)",
+      "Bash(git status)",
+      "Bash(git status *)",
+      "Bash(git diff)",
+      "Bash(git diff *)",
+      "Bash(git log)",
+      "Bash(git log *)",
+      "Bash(git show)",
+      "Bash(git show *)",
       "Bash(git add *)",
       "Bash(git commit *)",
       "Bash(cd infra)",

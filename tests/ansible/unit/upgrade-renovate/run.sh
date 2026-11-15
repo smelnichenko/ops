@@ -4,8 +4,9 @@
 # the bot's token by name and never on a command line, no bind mount, the allowed post-upgrade command from
 # renovate/allowed-commands.json, lookup only when asked, a GitHub token only when there is one; Renovate's failure, a
 # logged error or fatal, or a repository it did not read through (no renovate.json on its main: "disabled-no-config")
-# stopping the task before the runner. The task: LOOKUP true or false alone, the real run refused until the runner's
-# open items are done, the runner given the bot's token by environment.
+# stopping the task before the runner; refused beside a running runner (its lock). The task: LOOKUP true or false alone,
+# the applying run refused until the runner's record of a clean shadow proof, the runner given the bot's token by
+# environment.
 set -u
 cd "$(dirname "$0")/../../../.." || exit 1
 W=$(mktemp -d)
@@ -111,8 +112,11 @@ def render(text, lookup, runner, shadow="false"):
     text = text.replace("{{.LOOKUP}}", lookup).replace("{{.RUNNER}}", runner).replace("{{.SHADOW}}", shadow)
     text = text.replace('{{if eq .SHADOW "true"}}--shadow{{end}}', "--shadow" if shadow == "true" else "")
     return text.replace('{{if eq .LOOKUP "true"}}--lookup{{end}}', "--lookup" if lookup == "true" else "")
+TB = os.path.join(W, "tb")
+os.makedirs(TB, exist_ok=True)
 def admitted(lookup, runner, shadow="false", ps=None):
-    return all(subprocess.run(["sh", "-c", render(p, lookup, runner, shadow)]).returncode == 0 for p in (pre if ps is None else ps))
+    # run where the task runs (ops' root - a directory of the harness's own: the runner's shadow record its to make)
+    return all(subprocess.run(["sh", "-c", render(p, lookup, runner, shadow)], cwd=TB).returncode == 0 for p in (pre if ps is None else ps))
 VALUES = ("true", "false", "1", "yes", "TRUE", "")
 # the value checks on their own (they stay when the applying runner's refusal goes): true or false, nothing else
 values_only = [p for p in pre if p.count("{{.") == 2 and "= false" in p]
@@ -131,18 +135,46 @@ def ran(lookup, runner, shadow="false"):
                        env={**os.environ, "REC": rec, "RENOVATE_TOKEN": "the-bots"})
     return open(rec).read().split("\n")[:-1] if os.path.exists(rec) else []
 TF = ("true", "false")
+before = sorted(f"{l}/{r}/{x}" for l in TF for r in TF for x in TF if admitted(l, r, x))
+os.makedirs(os.path.join(TB, ".upgrade-cycle"), exist_ok=True)
+open(os.path.join(TB, ".upgrade-cycle/shadow-proven"), "w").write("unit wave-patches\n")
+after = sorted(f"{l}/{r}/{x}" for l in TF for r in TF for x in TF if admitted(l, r, x))
+os.remove(os.path.join(TB, ".upgrade-cycle/shadow-proven"))
 print(len(cmds), "PRODUCTION" in t.get("prompt", "") and "radar" in t.get("prompt", ""),
       t["vars"]["LOOKUP"], t["vars"]["RUNNER"], t["vars"]["SHADOW"], t.get("deps"),
-      any("ignore_error" in c for c in t["cmds"] if isinstance(c, dict)),
-      sorted(f"{l}/{r}/{x}" for l in TF for r in TF for x in TF if admitted(l, r, x)),
+      any("ignore_error" in c for c in t["cmds"] if isinstance(c, dict)), before, after,
       [v for v in VALUES if all(admitted(v if i == 0 else "false", v if i == 1 else "false", v if i == 2 else "true", values_only)
                                 for i in range(3))], sep="|")
 print(ran("true", "true"), ran("false", "false"), ran("false", "true", "true"), ran("false", "true"), sep="|")
 PYCHECK
 )
-check "task upgrade: a prompt naming production and the radar, LOOKUP false, RUNNER true and SHADOW false by default, no step's failure ignored; admitted: LOOKUP=true, RUNNER=false or SHADOW=true (the applying runner refused until the cycle's first proof); each value true or false alone (1, yes, TRUE, empty never)" \
-  "$(head -1 <<< "$got")" "4|True|{{.LOOKUP | default \"false\"}}|{{.RUNNER | default \"true\"}}|{{.SHADOW | default \"false\"}}|['deploy:install']|False|['false/false/false', 'false/false/true', 'false/true/true', 'true/false/false', 'true/false/true', 'true/true/false', 'true/true/true']|['true', 'false']"
+check "task upgrade: a prompt naming production and the radar, LOOKUP false, RUNNER true and SHADOW false by default, no step's failure ignored; admitted: LOOKUP=true, RUNNER=false or SHADOW=true until the runner recorded the cycle's first clean shadow proof (.upgrade-cycle/shadow-proven), every mode after it; each value true or false alone (1, yes, TRUE, empty never)" \
+  "$(head -1 <<< "$got")" "4|True|{{.LOOKUP | default \"false\"}}|{{.RUNNER | default \"true\"}}|{{.SHADOW | default \"false\"}}|['deploy:install']|False|['false/false/false', 'false/false/true', 'false/true/true', 'true/false/false', 'true/false/true', 'true/true/false', 'true/true/true']|['false/false/false', 'false/false/true', 'false/true/false', 'false/true/true', 'true/false/false', 'true/false/true', 'true/true/false', 'true/true/true']|['true', 'false']"
 check "task upgrade's commands as run: LOOKUP=true - Renovate reads, nothing else; RUNNER=false - Renovate's branches alone; SHADOW=true - the lock, the gates, Renovate, the runner --shadow with the bot's token; the applying runner the same without --shadow" \
   "$(tail -1 <<< "$got")" "['upgrade-renovate.sh --lookup token=none']|['upgrade-renovate.sh  token=none']|['copy-lock.sh  token=none', 'upgrade-cycle.sh --preflight token=none', 'upgrade-renovate.sh  token=none', 'upgrade-cycle.sh --shadow token=the-bots']|['copy-lock.sh  token=none', 'upgrade-cycle.sh --preflight token=none', 'upgrade-renovate.sh  token=none', 'upgrade-cycle.sh  token=the-bots']"
+ARGS=()
+exec 8>> .upgrade-cycle/lock
+flock -n 8 || { echo "the lock is held by something else - the next check cannot run"; exit 1; }
+check "Renovate beside a running runner (its lock held): refused, docker never run" \
+  "$(run RENOVATE_TOKEN=$TOKEN) $([ -e "$W/argv" ] && echo ran || echo not-run) $(grep -c 'holds' "$W/out")" "1 not-run 1"
+exec 8>&-
 check "no CI cron runs Renovate any more (.woodpecker/renovate.yaml gone)" "$([ -e .woodpecker/renovate.yaml ] && echo present || echo gone)" "gone"
+# platform's CI check runs the chart's Alertmanager image (its render step refuses the two apart): the preset finds both,
+# one depName - one branch moves them together (else every Alertmanager release left platform's unit red for good)
+check "the preset moves platform's CI Alertmanager image with the chart's: both found, the same depName and version, nothing else in CI" \
+  "$("$PY" - <<'PYPRESET'
+import json, re
+d = json.load(open("renovate/upgrade-cycle.json"))
+def found(path, text):
+    out = []
+    for m in d["customManagers"]:
+        if any(re.search(p.strip("/"), path) for p in m["managerFilePatterns"]):
+            for s in m["matchStrings"]:
+                out += [(g.group("depName"), g.group("currentValue")) for g in re.finditer(s.replace("(?<", "(?P<"), text)]
+    return out
+ci = "  - name: alertmanager-check\n    image: prom/alertmanager:v0.34.1\n  - name: lint\n    image: alpine/helm:3.20.0\n"
+values = "alertmanager:\n  enabled: true\n  image: prom/alertmanager:v0.34.1\n"
+print(found(".woodpecker/ci.yaml", ci), found("helm/schnappy-observability/values.yaml", values))
+PYPRESET
+)" "[('prom/alertmanager', 'v0.34.1')] [('prom/alertmanager', 'v0.34.1')]"
 if [ "$fails" = 0 ]; then echo "upgrade-renovate: ALL-PASS"; else echo "upgrade-renovate: $fails FAILED"; exit 1; fi

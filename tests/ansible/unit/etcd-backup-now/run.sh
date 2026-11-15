@@ -1,0 +1,56 @@
+#!/bin/bash
+# scripts/etcd-backup-now.sh - production's etcd snapshot before a one-way Kubernetes change - with ssh stubbed (the
+# Job's states, one per read, from the case's list; its logs; a read that fails): the Job Complete - taken, its upload's
+# OK line (the snapshot's name) said; still running (no condition) - read again; a pod failed but the Job retrying (its
+# Failed condition not set) - read again, then taken; the Job Failed - failed, its logs said; Complete but no OK line in
+# the upload's log - not taken as proof; one read failing - read again; reads failing in a row - given up; never done in
+# its time - said; the Job not made - said.
+set -u
+cd "$(dirname "$0")/../../../.." || exit 1
+W=$(mktemp -d)
+trap 'rm -rf "$W"' EXIT
+mkdir -p "$W/bin"
+cat > "$W/bin/ssh" <<'STUB'
+#!/bin/bash
+echo "$*" >> "$W/calls"
+case "$*" in
+  *"create job"*) exit "$(cat "$W/create.rc" 2>/dev/null || echo 0)" ;;
+  *"get job"*) n=$(cat "$W/n" 2>/dev/null || echo 1); echo $((n + 1)) > "$W/n"
+    st=$(sed -n "${n}p" "$W/states"); [ -n "$st" ] || st=$(tail -1 "$W/states")
+    [ "$st" != FAIL ] || exit 255
+    printf '%s' "$st" ;;
+  *"-c upload"*) cat "$W/upload.log" ;;
+  *"--all-containers"*) echo "pod etcd-backup-now-x: upload: connection refused" ;;
+esac
+STUB
+chmod +x "$W/bin/ssh"
+fails=0
+check() { if [ "$2" = "$3" ]; then echo "PASS $1"; else echo "FAIL $1"; echo "    got:  $2"; echo "    want: $3"; fails=$((fails + 1)); fi; }
+run() {  # run <states, one a line> [create rc]
+  rm -f "$W/calls" "$W/n"; printf '%s\n' "$1" > "$W/states"; echo "${2:-0}" > "$W/create.rc"
+  printf 'etcd-backup OK: etcd-20261120-030000.db uploaded; current backups:\n  1 2026-11-20 etcd-20261120-030000.db\n  1 a\n  1 b\n  1 c\n  1 d\n' > "$W/upload.log"
+  PATH="$W/bin:$PATH" W="$W" ETCD_BACKUP_POLL=0 ETCD_BACKUP_TRIES=${TRIES:-20} ETCD_BACKUP_READ_FAILS=3 \
+    bash scripts/etcd-backup-now.sh > "$W/out" 2>&1
+  echo "$? $(grep -c 'get job' "$W/calls")"
+}
+check "the Job Complete at once: taken (exit 0), one read" "$(run 'True/')" "0 1"
+check "  its upload's OK line said - the snapshot's name (a restore takes it), though 5 lines follow it" \
+  "$(grep -c '^etcd-backup OK: etcd-20261120-030000.db' "$W/out") $(grep -c 'taken' "$W/out")" "1 1"
+check "  the Job made from the CronJob" "$(grep -c 'kubectl -n kube-system create job --from=cronjob/etcd-backup etcd-backup-now-' "$W/calls")" 1
+check "running (no condition yet), then Complete: read until it is" "$(run $'/\n/\nTrue/')" "0 3"
+check "a pod failed, the Job retrying (Failed not set): read on, then Complete - taken, never FAILED on its first pod" \
+  "$(run $'/\n/\n/\nTrue/')" "0 4"
+r=$(run $'/\n/True'); check "the Job Failed (its retries spent): FAILED (exit 1), its logs said" \
+  "$r $(grep -c 'FAILED' "$W/out") $(grep -c 'connection refused' "$W/out")" "1 2 1 1"
+run 'True/' > /dev/null; : > "$W/upload.log"
+PATH="$W/bin:$PATH" W="$W" ETCD_BACKUP_POLL=0 bash scripts/etcd-backup-now.sh > "$W/out" 2>&1; rc=$?
+check "Complete but no OK line in the upload's log: not taken as proof (exit 1)" "$rc $(grep -c 'not taken as proof' "$W/out")" "1 1"
+check "a read failing once (ten's ssh): read again, then taken" "$(run $'/\nFAIL\nTrue/')" "0 3"
+check "reads failing 3 times, never twice in a row: read on, then taken (a good read starts the count again)" \
+  "$(run $'FAIL\n/\nFAIL\n/\nFAIL\nTrue/')" "0 6"
+r=$(run $'/\nFAIL\nFAIL\nFAIL\nTrue/'); check "reads failing 3 times in a row: given up (exit 1), said" \
+  "$r $(grep -c 'not read 3 times in a row' "$W/out")" "1 4 1"
+r=$(TRIES=5 run '/'); check "never done in its time: said (exit 1)" "$r $(grep -c 'not done in' "$W/out")" "1 5 1"
+r=$(run 'True/' 1); check "the Job not made: said (exit 1), nothing read" "$r $(grep -c 'its Job not made' "$W/out")" "1 0 1"
+echo "etcd-backup-now: $([ $fails -eq 0 ] && echo ALL-PASS || echo "$fails FAILED")"
+[ $fails -eq 0 ]

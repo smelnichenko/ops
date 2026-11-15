@@ -1,0 +1,10 @@
+{
+  "_comment": "CD's own commits on a repository's main: Woodpecker's app promotions (deploy(test) / promote(prod)), image tags alone, by this author in these files - never part of an upgrade unit. A unit proven on a main these alone moved since, touching none of these files, is still the tree proven plus app tags production gets anyway (scripts/copy-main-current.sh, scripts/upgrade-label.py).",
+  "author": "woodpecker@pmon.dev",
+  "paths": {
+    "infra": [
+      "clusters/production/schnappy-production-apps/values.yaml",
+      "clusters/production/schnappy-test-apps/values.yaml"
+    ]
+  }
+}

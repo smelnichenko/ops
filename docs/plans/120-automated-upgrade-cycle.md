@@ -2,8 +2,8 @@
 
 Status: **BUILDING** (operator 2026-11-14: "start building plan 120 meanwhile", "ensure renovate works with
 vagrant") - the review answered 2026-11-14 (below); plan 119's wave 1 done by hand (2026-11-14); rollout step 1 (the
-lookup) run - its findings fixed below, three questions open. 2026-11-15: one manual task, no shadow, Kafka's operator
-first (decisions below).
+lookup) run - its findings fixed below, three questions open. 2026-11-15: one manual task, Kafka's operator first
+(decisions below); review rounds two to four done - the applying runner waits for its first clean shadow proof.
 
 **Built 2026-11-14 (ops upgrade/wave-1 branch, each with its harness):**
 - Renovate: `renovate/upgrade-cycle.json` (the shared preset - units, groups, one minor at a time for Kubernetes/
@@ -25,16 +25,17 @@ before the runner; harness `upgrade-renovate`) - `LOOKUP=true` alone: the real r
 items below are done (its first real run's review, 2026-11-15, found them - the runner had never run).
 **The runner's open items - DONE 2026-11-15 (each with its harness; the first real run's review found them):** the
 headless agents (fix, review) run with a clean environment (`env -i` HOME PATH: none of ops/.env, the account's login
-rather than the API key), settings of their own (`.claude/upgrade-agent/fix.json`, `review.json`: `--setting-sources
-project,local --permission-mode dontAsk --permission-prompts none` - what they do not allow is denied, never asked;
-smoke-tested: a push and kubectl denied), in clones of the unit's branches under `.copy/upgrade-fix/` (never the
-operator's trees); the runner labels stop-updating itself. The gates before anything (and `--preflight` before
+rather than the API key), settings of their own (`.claude/upgrade-agent/fix.json`, `review.json`, `--permission-mode
+dontAsk --permission-prompts none` - what they do not allow is denied, never asked; smoke-tested: a push and kubectl
+denied; both `--restricted` since the rounds below), in clones of the unit's branches (outside every checkout since
+round two: `../.upgrade-cycle-work`); the runner labels stop-updating itself. The gates before anything (and `--preflight` before
 Renovate): the backup windows from the real schedules (00:50-04:00 daily: the mirror at 04:00 local, CNPG 01:30,
 Velero 02:00, the Pis' backups 02:40, ScyllaDB and Sunday's Velero 03:00; Sundays 04:00-05:00 ScyllaDB's repair;
 05:20-05:50 the Pis' restore check), no open page (posted again), ops on main clean and origin's, the memory free
 (refused at once), no apply recorded today. The heads read before the proof and after it, the merge pinned to them
 (`--merge --expect`, Forgejo's head_commit_id); the plan read or the unit blocked; `task deploy:etcd:backup` (a Job
-of its own name, waited for) checked; the window read again before the apply (waited out); the pull checked. Units
+of its own name, waited for) checked; the window read again before the apply (refused when near - never waited out);
+the pull checked. Units
 and notices only the bot's (author, head repository). Notices: a JSON post to Alertmanager's API (proven against
 v0.34.1: quotes, $, newlines intact), a start, a label each, the log's tail; pages recorded, mailed straight out too,
 `resolve`/`repost`/`open`; verify skips the cycle's own page. Platform: the notices' route ahead of the critical one,
@@ -49,12 +50,35 @@ commands mapped before the merge (node_exporter's added); held (veto, upgrade-bl
 journal of the apply (`.upgrade-cycle/inflight`) and a signal trap after the merge; a partial merge exit 3 - paged and
 the cycle paused (the dashboard's upgrades-paused); bases pinned (main moved since the proof refuses the merge); ops
 brought by fetch and fast-forward (a pull followed the operator's pull.rebase and refused on the copy's inventory
-record); the etcd snapshot right before kubeadm; the copy destroyed after the review; a copy that does not build ends
-the run without blaming the unit; the veto mail before its comment; the record committing only its paths.
+record); the etcd snapshot right before kubeadm (before the merge since round four); the copy destroyed after the
+review; a copy that does not build ends the run without blaming the unit; the veto mail before its comment; the record
+committing only its paths.
+**Rounds three and four (2026-11-15) - done:** what the agent writes is held off the workstation and production until
+proven, reviewed and noticed: its Bash sandbox reads nothing of the home directory but the clones (`denyRead ~`,
+`allowRead` the clones; `.git`'s hooks and config unwritable - each proven with the CLI), its checksum script the
+runner's copy (`.trusted/`, outside what it may edit); the runner fetches its commits into a repository of its own,
+keeps them only inside the unit's own files (infra's `clusters/`, platform's `helm/`, ops' Ansible vars and playbooks -
+never CI, scripts, tasks, Renovate's config or a CLAUDE.md) and pushes from there to Forgejo's URL; a unit it fixed is
+labelled `agent-fixed` and waits for a 24 h notice with its diff, as a major does (the latest notice starts the 24 h).
+The copy hands Ansible only versions and hashes from a unit's branch (a template or an `ansible_*` setting refused - it
+runs on the workstation) and hands it Argo CD's and node_exporter's new values (it proved main's before); a changed
+task in setup-kubeadm refused. The review `--restricted` (no instructions from the clones), the reviewers' own agents
+handed to it, every pass named (correctness, security, architecture, reliability, tests) or no verdict; labelled
+only on CRITICAL (a review or fix that did not finish is retried, not blocked). CD's app promotions on infra's main
+(the two app-tag files, Woodpecker's author: ~16 a day) no longer refuse a proof or a merge
+(`scripts/cd-promotions.json`). The gates: Alertmanager's loaded config probed, critical alerts in the one look before
+an apply, a journal with no page paged by the next run, the start's span the proof's time and the apply's (270 min).
+The apply: the etcd snapshot (`scripts/etcd-backup-now.sh`, the Job's own conditions - it retries a pod) before the
+merge; a refused merge leaves no journal; an unknown merge answer (read again for 2 min) pages; ops fast-forwarded after
+every merge; Argo settled on the merge's commits before the commands and in the verify (Argo polls; preview apps
+aside; one thing wrong for 5 looks in a row fails the hold); a closed terminal stops nothing after the journal; no step
+holds the run's lock; Renovate refuses to run beside a runner. Notices: a veto mailed straight out too; the kill switch
+fails closed (no dashboard issue: not read) and a pause makes the issue where none is open; platform's CI Alertmanager
+image moved with the chart's (one Renovate branch).
 **The first real run:** `task upgrade RUNNER=false` - Renovate's branches and pull requests made, nothing applied; their
 labels read (the shadow week checked them). Then `task upgrade SHADOW=true` proves and reviews a unit on the copy,
-applying nothing - the cycle's first proof; until then the task refuses the applying runner (its precondition), lifted
-with that proof.
+applying nothing - the cycle's first proof; until it ends clean (the runner's own record,
+`.upgrade-cycle/shadow-proven`) the applying runner is refused, by the task and by the runner itself.
 **Not yet:** a GitHub read token, or the six GitHub-sourced annotations moved to registries (RENOVATE_GITHUB_TOKEN in ops/.env is empty - ''; the 401 seen 2026-11-14 was the two quote characters sent as a token), `deploy:seed-secrets` for the bot's token (the operator's OK), Nexus
 annotated, a one-way change's store backups beyond etcd (Postgres, ScyllaDB, ...: blocked). Strimzi's Kafka version
 (`strimzi.kafkaVersion`, production's and the test environment's data values) is not annotated yet - a design point
@@ -159,22 +183,26 @@ Woodpecker cron until 2026-11-15), against
 
 **2. The upgrade runner - proves and applies** (on the workstation: the copy needs ~25 GB and libvirt; nowhere else).
 `task upgrade`, started by the operator after Renovate's run (outside the backup windows - the runner's list, from the
-real schedules: it refuses them, and waits one out before an apply), runs a deterministic driver,
+real schedules: it refuses a run a window would meet, at its start and again before the merge), runs a deterministic
+driver,
 `scripts/upgrade-cycle.sh`; no CI agent on the
 workstation (a Woodpecker agent there would give any pipeline a shell on it). Each run, one unit:
 1. **Pick**: the next open Renovate unit in order - wave-patches, then minor groups, then one major whose 24 h notice
    has run out unvetoed. Paused when an `upgrades-paused` label is on ops' dashboard issue (the kill switch).
 2. **Prove**: the copy lock; `test:copy:build` (from main = production), `test:copy:change` with the unit's infra and
-   platform branches, `test:copy:playbook` for each ops part the unit moves (Kubernetes → upgrade-kubeadm.yml,
-   containerd → upgrade-containerd.yml, a Pi service → its upgrade playbook, Cilium → its playbook); every check.
-   Then the unit's diff gets a full review (the review agents, as by hand). The results go on the PRs.
-3. **Fix**: a failed proof calls the Claude agent (headless, a skill of its own) to diagnose and push a fix commit to
-   the unit's branches (labelled `stop-updating` so Renovate leaves them), then proves again - once. Still red: labelled
-   `upgrade-blocked`, reported, the next unit next run. (2026-11-15: the agent commits only, in clones; the runner
-   checks and pushes.)
-4. **Gate**: patches and minors go on. A major gets its notice (the mail first, then the PR comment that starts the
-   clock) and waits 24 h; a `veto` label stops it for good (read again right before the merge).
-5. **Back up** before any one-way change (below) - taken and its restore proven on the copy in step 2.
+   platform branches, `test:copy:playbook` for each ops part the unit moves (Kubernetes → upgrade-kubeadm.yml, a Pi
+   service → its upgrade playbook, Cilium → its playbook, Argo CD → setup-argocd.yml, node_exporter →
+   setup-host-hardening.yml; containerd not yet - refused); every check. Then the unit's diff gets a review (the
+   review agent, its passes named). A shadow run's result goes on the PRs.
+3. **Fix**: a failed proof calls the Claude agent (headless, a skill of its own) to diagnose and commit a fix in clones
+   of the unit's branches; the runner checks and pushes it (labelled `stop-updating` so Renovate leaves them, and
+   `agent-fixed`), then proves again - once. Still red: labelled `upgrade-blocked`, reported, the next unit next run.
+   Green: reviewed, then a 24 h notice with the fix's diff - applied by a later run, unvetoed.
+4. **Gate**: patches and minors go on. A major, or a unit carrying the agent's fix, gets its notice (the mail first,
+   then the PR comment that starts the clock) and waits 24 h; a `veto` label stops it for good (read again right before
+   the merge).
+5. **Back up** before any one-way change (below), before the merge: today etcd before Kubernetes (its restore covered
+   by production's own daily restore checks, not by the copy); the others blocked until theirs exist.
 6. **Apply**: merge the infra/platform PRs (the bot through Forgejo's API, never an admin account), Argo syncs; the ops
    part merged and its PRODUCTION task run non-interactively (`task --yes deploy:...`), the Pis one at a time, the
    VIP's last.
@@ -188,10 +216,10 @@ workstation (a Woodpecker agent there would give any pipeline a shell on it). Ea
 containerd, database majors and format changes (Postgres majors, ScyllaDB release lines, ClickHouse compatibility,
 Kafka metadata, Strimzi CRD conversions), Vault/Consul majors (storage), Forgejo majors (migrations), Grafana majors.
 Each takes its stores' backup first: Postgres (a CNPG base backup - `deploy:postgres:base-backup`), ScyllaDB (Scylla
-Manager - `check:production:scylla-backup`), Kafka, ClickHouse, Grafana, OpenSearch, etcd (none today: plan 100's
+Manager - `check:production:scylla-backup`), Kafka, ClickHouse, Grafana, OpenSearch (none in the cycle yet: plan 100's
 Wave 0 backups - `upgrade-backup.yml` and its rehearsal, in git history before plan 117 - come back as the pre-change
-backup, each store's restore proven on the copy), the Pis (Consul snapshot, Forgejo's own pg_dump, Patroni's base
-backup - their upgrade playbooks take them).
+backup, each store's restore proven on the copy), etcd (`task deploy:etcd:backup`, taken before a Kubernetes unit's
+merge), the Pis (Consul snapshot, Forgejo's own pg_dump, Patroni's base backup - their upgrade playbooks take them).
 
 **4. Build hashes, verified (operator 2026-11-15: "yes" - with option B's lookups).** A version Renovate moves takes
 its pinned hashes with it, each read from what the vendor signs - never from the file it guards:
@@ -239,8 +267,9 @@ workstation off, the copy not building) changes nothing in production and says s
 ## Rollout of this plan
 
 1. Renovate in lookup mode (`RENOVATE_DRY_RUN=lookup`) until its log reproduces plan 119's tables.
-2. ~~Renovate opening PRs; the runner proving them, applying nothing, a week (shadow).~~ Dropped 2026-11-15 (no
-   shadow): `task upgrade` - Renovate's branches and PRs, then one unit proven and applied.
+2. ~~Renovate opening PRs; the runner proving them, applying nothing, a week (shadow).~~ The week dropped 2026-11-15:
+   `task upgrade` - Renovate's branches and PRs, then one unit proven and applied - after one clean shadow proof
+   (`task upgrade SHADOW=true`) that the cycle runs end to end.
 3. Patches and minors applied automatically.
 4. Majors with the 24 h notice; the pre-change backups proven first.
 Each step reviewed before the next.

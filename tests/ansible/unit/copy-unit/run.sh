@@ -6,7 +6,9 @@
 # files (their upgrade playbooks, the branch's file passed, Vault's Vagrant vars beside), several at once in
 # production's order; a value production's Argo charts carry (cert_manager_version) no playbook; refused: a changed
 # value with no known proof, a value that is no version, no branch anywhere, a branch that changes nothing a proof
-# runs, a name that is no unit's.
+# runs, a name that is no unit's. Argo CD's and node_exporter's new values handed to main's playbook (else main's version
+# is proven); a value handed to Ansible that is no version or hash (a template, a connection setting, a YAML tag) and a
+# changed task in setup-kubeadm refused.
 set -u
 cd "$(dirname "$0")/../../../.." || exit 1
 OPS=$PWD
@@ -49,7 +51,7 @@ cat > "$W/src/ops/deploy/ansible/playbooks/setup-host-hardening.yml" <<'Y'
     node_exporter_port: 9100
   tasks: []
 Y
-printf 'forgejo_version: "15.0.11"\n' > "$W/src/ops/deploy/ansible/vars/forgejo.yml"
+printf 'forgejo_version: "15.0.11"\nforgejo_checksums:\n  arm64: %s\n' "$(printf 'cd%.0s' $(seq 32))" > "$W/src/ops/deploy/ansible/vars/forgejo.yml"
 printf 'vault_version: "1.21.4"\n' > "$W/src/ops/deploy/ansible/vars/vault.yml"
 printf 'patroni_version: "4.1.5"\n' > "$W/src/ops/deploy/ansible/vars/patroni.yml"
 echo "image: a:1" > "$W/src/infra/clusters/v.yaml"; echo "image: b:1" > "$W/src/platform/helm/v.yaml"
@@ -76,6 +78,13 @@ unit ops argocd-tasks 's/tasks: \[\]/tasks: [{debug: {msg: x}}]/' deploy/ansible
 unit ops argocd-bad 's/"10.9.7"/"10.18.0 -e x=y"/' deploy/ansible/playbooks/setup-argocd.yml
 unit ops node-exporter 's/"1.12.1"/"1.13.0"/; s/b51d8a76aa2a9156a55d501aca6276fae09e262259a5e4e831d2c2222f084e63/'"$(printf 'ab%.0s' $(seq 32))"'/' deploy/ansible/playbooks/setup-host-hardening.yml
 unit ops node-exporter-port 's/node_exporter_port: 9100/node_exporter_port: 9101/' deploy/ansible/playbooks/setup-host-hardening.yml
+# what the copy hands Ansible on this workstation: a version or a hash, never a template, never a connection setting
+unit ops vault-jinja 's/"1.21.4"/"{{ lookup('"'"'pipe'"'"', '"'"'id'"'"') }}"/' deploy/ansible/vars/vault.yml
+unit ops forgejo-conn 's/^forgejo_version: "15.0.11"$/forgejo_version: "15.0.12"\nansible_ssh_common_args: "1"/' deploy/ansible/vars/forgejo.yml
+unit ops forgejo-hash-jinja 's/: cdcd[c-d]*$/: "{{ x }}"/' deploy/ansible/vars/forgejo.yml
+unit ops forgejo-vault-tag 's/"15.0.11"/!vault |\n  $ANSIBLE_VAULT;1.1;AES256/' deploy/ansible/vars/forgejo.yml
+unit ops argocd-pin-jinja 's/v3.4.10/"{{ lookup('"'"'env'"'"', '"'"'HOME'"'"') }}"/' deploy/ansible/playbooks/setup-argocd.yml
+unit ops kubeadm-task 's/tasks: \[\]/tasks: [{name: x, command: id, tags: [cilium]}]/; s/"1.20.4"/"1.21.0"/' deploy/ansible/playbooks/setup-kubeadm.yml
 (cd "$W/src/ops" && g switch -q -c renovate/pis && sed -i 's/15.0.11/15.0.12/' deploy/ansible/vars/forgejo.yml \
   && sed -i 's/4.1.5/4.1.6/' deploy/ansible/vars/patroni.yml && sed -i 's/1.36.6-1.1/1.36.7-1.1/' deploy/ansible/playbooks/setup-kubeadm.yml \
   && g commit -qam pis && g push -q origin renovate/pis 2> /dev/null && g switch -q main && g branch -q -D renovate/pis)
@@ -98,7 +107,7 @@ check "Cilium: setup-kubeadm's Cilium tasks at the version" "$(plan cilium-1.21)
   "test:copy:playbook PLAYBOOK=setup-kubeadm.yml ARGS='--tags cilium -e cilium_version=1.21.0'"
 out=$(plan forgejo)
 f=$(sed -n "s/^test:copy:playbook PLAYBOOK=upgrade-forgejo.yml ARGS='-e @\([^']*\)'$/\1/p" <<< "$out")
-check "Forgejo: upgrade-forgejo with the branch's vars file" "$( [ -n "$f" ] && cat "$f")" 'forgejo_version: "15.0.12"'
+check "Forgejo: upgrade-forgejo with the branch's vars file" "$( [ -n "$f" ] && head -1 "$f")" 'forgejo_version: "15.0.12"'
 check "  written in the ops repo's .copy (not this one's)" "$(case "$f" in "$W/src/ops/.copy/"*) echo yes;; *) echo "no: $f";; esac)" yes
 out=$(plan vault)
 check "Vault: upgrade-vault with the branch's vars, the Vagrant vars beside" \
@@ -106,10 +115,15 @@ check "Vault: upgrade-vault with the branch's vars, the Vagrant vars beside" \
 out=$(plan pis)
 check "several parts at once: Kubernetes first, then Patroni, then Forgejo (production's order)" \
   "$(sed -nE 's/^test:copy:playbook PLAYBOOK=([a-z-]+\.yml).*/\1/p' <<< "$out" | tr '\n' ' ')" "upgrade-kubeadm.yml upgrade-patroni.yml upgrade-forgejo.yml "
-check "Argo CD's chart: setup-argocd on the copy with its Vault values, its pods restarting" "$(plan argocd)" \
-  "test:copy:playbook PLAYBOOK=setup-argocd.yml ARGS='-e @vars/vault-vagrant.yml' RESTARTS_EXPECTED=true"
-check "an image pinned on a chart: the same proof" "$(plan argocd-pin)" \
-  "test:copy:playbook PLAYBOOK=setup-argocd.yml ARGS='-e @vars/vault-vagrant.yml' RESTARTS_EXPECTED=true"
+# the copy runs main's playbook: the unit's new values must reach it (-e), or main's version is what gets proven
+vars_of() { sed -n "s/^test:copy:playbook PLAYBOOK=$1 ARGS='-e @\([^ ']*\).*/\1/p" <<< "$2"; }
+out=$(plan argocd); f=$(vars_of setup-argocd.yml "$out")
+check "Argo CD's chart: setup-argocd on the copy with the branch's chart version handed to it, its Vault values beside, its pods restarting" \
+  "$(sed "s|@$f|@VARS|" <<< "$out") | $( [ -n "$f" ] && cat "$f")" \
+  "test:copy:playbook PLAYBOOK=setup-argocd.yml ARGS='-e @VARS -e @vars/vault-vagrant.yml' RESTARTS_EXPECTED=true | argocd_chart_default: 10.18.0"
+out=$(plan argocd-pin); f=$(vars_of setup-argocd.yml "$out")
+check "an image pinned on a chart: the same proof, the branch's pins handed to it" "$( [ -n "$f" ] && tr '\n' ' ' < "$f")" \
+  "argocd_image_pins:   10.2.2: v3.4.11 "
 out=$(plan argocd-ns); rc=$?
 check "another setup-argocd value: refused, named" "$rc $(grep -c 'REFUSED.*setup-argocd.yml argocd_namespace' <<< "$out")" "1 1"
 out=$(plan argocd-tasks); rc=$?
@@ -129,8 +143,18 @@ out=$(plan no-such); rc=$?
 check "no branch anywhere: refused, no such unit" "$rc $(grep -c 'no such unit' <<< "$out")" "1 1"
 out=$(plan 'Bad/Name'); rc=$?
 check "a name that is no unit's: refused before anything" "$rc $(grep -c '^REFUSED' <<< "$out")" "2 1"
-check "node_exporter's version and its hash: production's setup-host-hardening on the copy" "$(plan node-exporter)" \
-  "test:copy:playbook PLAYBOOK=setup-host-hardening.yml ARGS=''"
+out=$(plan node-exporter); f=$(vars_of setup-host-hardening.yml "$out")
+check "node_exporter's version and its hash: production's setup-host-hardening on the copy, the branch's two handed to it" \
+  "$(sed "s|@$f|@VARS|" <<< "$out") | $( [ -n "$f" ] && tr '\n' ' ' < "$f")" \
+  "test:copy:playbook PLAYBOOK=setup-host-hardening.yml ARGS='-e @VARS' | node_exporter_sha256: $(printf 'ab%.0s' $(seq 32)) node_exporter_version: 1.13.0 "
+for u in vault-jinja forgejo-conn forgejo-hash-jinja forgejo-vault-tag argocd-pin-jinja; do
+  out=$(plan "$u"); rc=$?
+  check "  $u: a value the copy would hand Ansible that is no version or hash (a template, a connection setting, a tag): refused" \
+    "$rc $(grep -c '^REFUSED' <<< "$out") $(grep -c 'test:copy:playbook' <<< "$out")" "1 1 0"
+done
+out=$(plan kubeadm-task); rc=$?
+check "setup-kubeadm's tasks changed beside its Cilium version (main's tasks are what the copy runs): refused" \
+  "$rc $(grep -c 'REFUSED.*setup-kubeadm.yml (its tasks)' <<< "$out")" "1 1"
 out=$(plan node-exporter-port); rc=$?
 check "  another of its values (its port): refused, no known proof" "$rc $(grep -c 'node_exporter_port' <<< "$out")" "1 1"
 out=$(plan vault-keyed); rc=$?

@@ -3,7 +3,9 @@
 # summary, and the notice was lost) as an UpgradeCycle alert, which its own route mails to the single admin address,
 # with no "resolved" mail (platform: alertmanager-configmap's email-notice). A kind is a severity and a lifetime:
 #   applied         info      1 h   a patch or minor applied (the operator asked for one after each)
-#   veto            warning  24 h   a major's notice: what, the proof, when it applies - a veto stops it
+#   veto            warning  24 h   a major's notice: what, the proof, when it applies - a veto stops it; mailed
+#                                   straight out too (its 24 h starts at its comment: a restart of Alertmanager within
+#                                   its group's 30 s lost the mail, never the clock)
 #   blocked         warning   1 h   a unit red after its fix, or a run that could not go on: said, the unit waits
 #   one-way-failed  critical  7 d   a one-way change failed: its backup and restore steps - a PAGE: Alertmanager
 #                                   repeats it hourly while it holds it (alerts live in its memory: a restart drops
@@ -42,10 +44,12 @@ post() {  # the alert's JSON on stdin, to Alertmanager's API through the host
 alert() {  # labels and annotations from the environment (never through a shell's quoting) - one alert's JSON
   python3 -I - <<'PY'
 import json, os
+def clean(text):  # a log's end cut inside a character: its bytes replaced
+    return text.encode("utf-8", "surrogateescape").decode("utf-8", "replace")
 labels = {k: os.environ[v] for k, v in (("alertname", "A_NAME"), ("kind", "A_KIND"), ("unit", "A_UNIT"),
                                           ("severity", "A_SEVERITY"), ("notice", "A_NOTICE"))}
 print(json.dumps([{"labels": labels,
-                   "annotations": {"summary": os.environ["A_SUMMARY"], "description": os.environ["A_DETAILS"]},
+                   "annotations": {"summary": clean(os.environ["A_SUMMARY"]), "description": clean(os.environ["A_DETAILS"])},
                    "startsAt": os.environ["A_START"], "endsAt": os.environ["A_END"]}]))
 PY
 }
@@ -117,11 +121,11 @@ json=$(A_NAME=UpgradeCycle A_KIND="$kind" A_UNIT="$unit" A_SEVERITY="$severity" 
        A_NOTICE="$(date -u +%Y%m%dT%H%M%SZ)-$$" A_SUMMARY="$summary" A_DETAILS="$details" \
        A_START="$(date -u '+%Y-%m-%dT%H:%M:%SZ')" A_END="$(date -u -d "+${hours} hours" '+%Y-%m-%dT%H:%M:%SZ')" alert)
 
-if [ "$kind" = one-way-failed ]; then
-  # recorded first: the runner refuses while it is open, whether or not Alertmanager took it
-  if [ -z "${UPGRADE_NOTICE_DRY:-}" ]; then mkdir -p "$pages"; printf '%s\n' "$json" > "$pages/$unit.json"; fi
+if [ "$kind" = one-way-failed ] || [ "$kind" = veto ]; then
+  # a page recorded first: the runner refuses while it is open, whether or not Alertmanager took it
+  if [ "$kind" = one-way-failed ] && [ -z "${UPGRADE_NOTICE_DRY:-}" ]; then mkdir -p "$pages"; printf '%s\n' "$json" > "$pages/$unit.json"; fi
   posted=0; mailed=0
-  if post <<< "$json"; then echo "POSTED $kind $unit (Alertmanager pages it hourly)"; posted=1
+  if post <<< "$json"; then echo "POSTED $kind $unit (Alertmanager mails it$([ "$kind" = veto ] || echo ", hourly"))"; posted=1
   else echo "Alertmanager not reached through $host"; fi
   direct && mailed=1
   [ "$posted$mailed" != 00 ] || exit 1

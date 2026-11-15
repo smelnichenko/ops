@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # The upgrade cycle's proof of one Renovate unit on the built Vagrant copy: the unit's branch, renovate/<unit>, fetched
 # from origin in infra, platform and ops; infra's and platform's mirrored onto the copy with every check (task
-# test:copy:change), then each ops part the unit moves run as production would run it (task test:copy:playbook), its
-# new values read from the unit's own branch - the ops checkout
-# stays as it is. A changed ops value with no known proof is refused: the unit is not proven, never waved through.
+# test:copy:change), then each ops part the unit moves run as production would run it (task test:copy:playbook): the
+# ops checkout's playbook (main's), the unit's new values from its own branch handed to it (-e, a vars file beside) -
+# the ops checkout stays as it is. A changed ops value with no known proof is refused: the unit is not proven, never
+# waved through; so is a value that is no version or hash (the values reach Ansible on this workstation, where the
+# operator's ssh, kube and Vault are in reach: a Jinja expression in one, or a connection setting, would run here).
 #
 # Usage: scripts/copy-unit.sh <unit> [--plan]     --plan: what it would run, one task a line; runs nothing
 # Env:   COPY_UNIT_SRC (the directory holding infra, platform and ops - default this repo's parent; the harness's own)
@@ -75,6 +77,12 @@ FOLLOW = {"cert_manager_version", "external_secrets_chart_version", "metrics_ser
 def play_vars(text):
     doc = yaml.safe_load(text) or []
     return (doc[0].get("vars") or {}) if isinstance(doc, list) and doc and isinstance(doc[0], dict) else {}
+def without_vars(text):
+    """the playbook as parsed, its first play's vars left out - what else it changes is a task"""
+    doc = yaml.safe_load(text or "") or []
+    if isinstance(doc, list) and doc and isinstance(doc[0], dict):
+        doc[0] = {k: v for k, v in doc[0].items() if k != "vars"}
+    return doc
 steps, refused = [], []
 import re
 VERSION = re.compile(r"[0-9][0-9A-Za-z.+~-]*", re.ASCII)  # a value that reaches a command line: a version, nothing else
@@ -83,6 +91,42 @@ def version(v):
     if not VERSION.fullmatch(v):
         raise SystemExit(f"REFUSED: the unit's value {v!r} is no version")
     return v
+# what a vars file handed to Ansible may change: versions and hashes, under plain keys - never a template (Ansible renders
+# a value where it is used: "{{ lookup('pipe', ...) }}" runs on this workstation) nor a connection setting (ansible_*:
+# an ssh ProxyCommand runs here too)
+PIN = re.compile(r"v?[0-9][0-9A-Za-z.+~-]*|[0-9a-f]{64}", re.ASCII)
+KEY = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*", re.ASCII)
+def pins(old, new, where):
+    bad = []
+    def walk(o, n, path):
+        if o == n:
+            return
+        if isinstance(n, dict):
+            o = o if isinstance(o, dict) else {}
+            for k, v in n.items():
+                if not KEY.fullmatch(str(k)) or (not path and str(k).startswith("ansible_")):
+                    bad.append(f"{where} {path}{str(k)[:60]!r} (no plain key)")
+                else:
+                    walk(o.get(k), v, f"{path}{k}.")
+        elif isinstance(n, list):
+            o = o if isinstance(o, list) else []
+            for i, v in enumerate(n):
+                walk(o[i] if i < len(o) else None, v, f"{path}{i}.")
+        elif n is not None and not isinstance(n, bool) and not PIN.fullmatch(str(n)):
+            bad.append(f"{where} {path.rstrip('.')} {str(n)[:60]!r} (no version or hash)")
+    walk(old, new, "")
+    return bad
+def load(text, where):
+    try:
+        return yaml.safe_load(text or "") or {}
+    except yaml.YAMLError as e:  # a tag safe_load does not know (!vault, !unsafe) among them
+        raise SystemExit(f"REFUSED: {where} on the branch not read as plain YAML ({str(e).splitlines()[0]})")
+def vars_file(values, name):
+    """the branch's moved values, written where test:copy:playbook reads them (-e @<file>)"""
+    dest = os.path.join(OUT, name)
+    with open(dest, "w") as f:
+        yaml.safe_dump(values, f, default_flow_style=False)
+    return dest
 VARS_FILES = {  # a vars file -> its playbook and the arguments production's task passes (the Vagrant ones beside)
     "deploy/ansible/vars/patroni.yml": ("upgrade-patroni.yml", ""),
     "deploy/ansible/vars/vault.yml": ("upgrade-vault.yml", "-e @vars/vault-vagrant.yml"),
@@ -100,6 +144,8 @@ for path in changed:
         continue  # renovate.json and the like: no part of a deploy
     if path == "deploy/ansible/playbooks/setup-kubeadm.yml":
         old, new = play_vars(show("main", path) or ""), play_vars(show(BRANCH, path) or "")
+        if without_vars(show("main", path)) != without_vars(show(BRANCH, path)):
+            refused.append(f"{path} (its tasks)")  # main's tasks are what the copy runs: a changed task is unproven
         for k in sorted(set(old) | set(new)):
             if old.get(k) == new.get(k):
                 continue
@@ -118,7 +164,10 @@ for path in changed:
             refused.append(f"{path} {' '.join(sorted(set(moved) - ARGOCD)) or '(its tasks)'}")
         else:
             version(new["argocd_chart_default"])
-            steps.append(("setup-argocd.yml", "-e @vars/vault-vagrant.yml", True))
+            moved_values = {k: new[k] for k in moved if k in new}
+            refused += pins({k: old.get(k) for k in moved}, moved_values, path)
+            dest = vars_file(moved_values, "setup-argocd-vars.yml")
+            steps.append(("setup-argocd.yml", f"-e @{dest} -e @vars/vault-vagrant.yml", True))
     elif path == "deploy/ansible/playbooks/setup-host-hardening.yml":
         old, new = play_vars(show("main", path) or ""), play_vars(show(BRANCH, path) or "")
         moved = sorted(k for k in set(old) | set(new) if old.get(k) != new.get(k))
@@ -126,12 +175,15 @@ for path in changed:
             refused.append(f"{path} {' '.join(sorted(set(moved) - NODE_EXPORTER)) or '(its tasks)'}")
         else:
             version(new["node_exporter_version"])
-            steps.append(("setup-host-hardening.yml", "", False))
+            moved_values = {k: new[k] for k in moved if k in new}
+            refused += pins({k: old.get(k) for k in moved}, moved_values, path)
+            steps.append(("setup-host-hardening.yml", f"-e @{vars_file(moved_values, 'setup-host-hardening-vars.yml')}", False))
     elif path in VARS_FILES:
         text = show(BRANCH, path)
         if text is None:
             refused.append(f"{path} (gone on the branch)")
             continue
+        refused += pins(load(show("main", path), path), load(text, path), path)
         dest = os.path.join(OUT, os.path.basename(path))
         open(dest, "w").write(text)
         playbook, extra = VARS_FILES[path]

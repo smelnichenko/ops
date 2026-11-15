@@ -10,13 +10,17 @@ grouped by branch (renovate/<unit> - the same name in each repo).
                    prove   a patch or minor unit (proven, then applied in the same run)
                    notice  a major with no veto notice yet (proven, then its 24 h notice posted - applied a later run)
                    apply   a major whose notice has run out, unvetoed (proven again, then applied)
+                 A unit carrying the agent's fix (labelled agent-fixed by the runner) waits for its notice as a major
+                 does, whatever its kind: what an agent wrote reaches production only after the operator was mailed it
+                 and 24 h passed unvetoed.
                  The order: renovate/wave-patches, then the family minors (istio, kubernetes, cilium, observability,
                  data-operators, argocd, pi-services - the first three one minor at a time, named <family>-<X.Y>, the
                  lowest first), then any other minor (a <name>-<X.Y> one by its version), then majors - a waiting
                  major's notice before a new one's. Left out:
                  a unit labelled upgrade-blocked (red after its fix) or veto, a major in its 24 h; everything while the
-                 dashboard issue carries upgrades-paused (the kill switch).
-  noticed UNIT   when the unit's veto notice was posted (the runner's "UPGRADE NOTICE <iso>" comment), or "NONE"
+                 dashboard issue carries upgrades-paused (the kill switch) - and no dashboard issue open: not read (exit 1)
+  noticed UNIT   when the unit's veto notice was posted (the runner's latest "UPGRADE NOTICE <iso>" comment: a fix
+                 noticed again starts its 24 h again), or "NONE"
   held UNIT      what holds the unit now, one a line - upgrade-blocked, veto (on any of its pull requests), paused (the
                  dashboard's upgrades-paused); nothing when nothing does: the runner asks again right before a merge
                  (a veto or the kill switch set during the proof and the review was not seen at the pick's time)
@@ -26,7 +30,8 @@ named renovate/<unit> all the same, is no unit; a notice is the bot's own commen
 24 h veto).
 
 Env: UPGRADE_FORGEJO_URL (default https://git.pmon.dev/api/v1), UPGRADE_FORGEJO_TOKEN (the renovate-bot's PAT),
-     UPGRADE_NOW (an ISO time, for the harness). Exit 0 with an answer, 1 when Forgejo's answer was not read.
+     UPGRADE_NOW (an ISO time, for the harness). Exit 0 with an answer, 1 when Forgejo's answer was not read (the
+     dashboard issue missing among them: pick and held fail closed without the kill switch).
 """
 import datetime
 import json
@@ -113,7 +118,8 @@ def twin(name):
 
 
 def noticed(_name, u):
-    """The earliest runner notice on any of the unit's pull requests."""
+    """The latest runner notice on any of the unit's pull requests - a unit noticed again (its agent's fix, after its
+    first notice) waits its 24 h from then: what was noticed first is not what applies."""
     times = []
     for repo, number in u["repos"].items():
         for c in get(f"/repos/{repo}/issues/{number}/comments"):
@@ -122,14 +128,16 @@ def noticed(_name, u):
             m = NOTICE.search(c.get("body") or "")
             if m:
                 times.append(datetime.datetime.fromisoformat(m.group(1).replace("Z", "+00:00")))
-    return min(times) if times else None
+    return max(times) if times else None
 
 
 def paused():
+    """The kill switch: the dashboard issue's upgrades-paused. No dashboard is not "not paused" - the switch is gone (the
+    issue closed, renamed, Renovate's config changed), so nothing is read: the pick and held fail closed."""
     for issue in get("/repos/schnappy/ops/issues", state="open", type="issues"):
         if (issue.get("title") or "").startswith(DASHBOARD):
             return "upgrades-paused" in {lb["name"] for lb in issue.get("labels") or []}
-    return False
+    raise NotRead(f"no open issue titled {DASHBOARD!r} in schnappy/ops - the kill switch not read")
 
 
 def family(name):
@@ -149,6 +157,11 @@ def order(name, u):
     return (2, 0, name, (), name)
 
 
+def waits_notice(u):
+    """A major, or a unit with the agent's fix in it: applied only after a 24 h notice."""
+    return u["kind"] == "major" or "agent-fixed" in u["labels"]
+
+
 def pick():
     if paused():
         return "PAUSED"
@@ -159,9 +172,9 @@ def pick():
         return f"test {tests[0]} {open_units[tests[0]]['kind']}"
     # a production unit waits while its test environment's is open - blocked or vetoed too (its twin goes first)
     open_units = {n: u for n, u in open_units.items() if f"test-{n}" not in all_units}
-    for name in sorted((n for n, u in open_units.items() if u["kind"] != "major"), key=lambda n: order(n, open_units[n])):
+    for name in sorted((n for n, u in open_units.items() if not waits_notice(u)), key=lambda n: order(n, open_units[n])):
         return f"prove {name} {open_units[name]['kind']}"
-    majors = sorted(n for n, u in open_units.items() if u["kind"] == "major")
+    majors = sorted(n for n, u in open_units.items() if waits_notice(u))
     waiting = []
     for name in majors:
         t = noticed(name, open_units[name])
@@ -170,10 +183,11 @@ def pick():
         if now() - t >= datetime.timedelta(hours=VETO_HOURS):
             waiting.append((t, name))
     if waiting:
-        return f"apply {min(waiting)[1]} major"
+        name = min(waiting)[1]
+        return f"apply {name} {open_units[name]['kind']}"
     for name in majors:
         if noticed(name, open_units[name]) is None:
-            return f"notice {name} major"
+            return f"notice {name} {open_units[name]['kind']}"
     return "NOTHING"
 
 

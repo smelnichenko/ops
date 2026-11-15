@@ -3,8 +3,10 @@
 # local server, a process of its own, its answers from the case's fixture, paged as Forgejo pages): units grouped by
 # branch across infra, platform and ops, their kind (major by label, wave-patches a patch); the pick's order -
 # wave-patches, the family minors in order, other minors, majors; blocked and vetoed units left out; a major noticed,
-# applied only after its 24 h (an unvetoed one), the waiting one before a new notice; the kill switch on the dashboard
-# issue; more than one page of pull requests; Forgejo unreachable - not read, never NOTHING.
+# applied only after its 24 h (an unvetoed one, exactly 24 h its end; the earliest notice its own), the waiting one before
+# a new notice (the one noticed first first); the kill switch on the dashboard issue (found by its title, on any page;
+# none open - not read, never "not paused"); more than one page of pull requests; Forgejo unreachable - not read, never
+# NOTHING.
 set -u
 cd "$(dirname "$0")/../../../.." || exit 1
 W=$(mktemp -d)
@@ -45,11 +47,14 @@ def pr(number, unit, *labels, user="renovate-bot", fork=False):
     # the repository's own branch unless fork (head.repo filled in by fixture() for its repo)
     return {"number": number, "head": {"ref": f"renovate/{unit}", "repo": "FORK" if fork else None},
             "user": {"login": user}, "labels": [{"name": x} for x in labels]}
-def fixture(infra=(), platform=(), ops=(), comments=None, dashboard_labels=()):
+def fixture(infra=(), platform=(), ops=(), comments=None, dashboard_labels=(), dashboard=True, others=1):
+    # the dashboard behind other open issues (one labelled upgrades-paused itself: the title, not the first issue, decides)
+    issues = [{"title": f"an issue {i}", "labels": [{"name": "upgrades-paused"}]} for i in range(others)]
+    if dashboard:
+        issues.append({"title": "Upgrade cycle - Renovate's dashboard (label upgrades-paused: the cycle stops)",
+                       "labels": [{"name": x} for x in dashboard_labels]})
     fx = {"/repos/schnappy/infra/pulls": list(infra), "/repos/schnappy/platform/pulls": list(platform),
-          "/repos/schnappy/ops/pulls": list(ops),
-          "/repos/schnappy/ops/issues": [{"title": "Upgrade cycle - Renovate's dashboard (label upgrades-paused: the cycle stops)",
-                                          "labels": [{"name": x} for x in dashboard_labels]}]}
+          "/repos/schnappy/ops/pulls": list(ops), "/repos/schnappy/ops/issues": issues}
     # a comment: its body (the bot's), or (author, body)
     for (repo, n), bodies in (comments or {}).items():
         fx[f"/repos/schnappy/{repo}/issues/{n}/comments"] = [
@@ -116,6 +121,30 @@ check("a major noticed 23 h ago: still in its 24 h - nothing", run("pick"), (0, 
 check("noticed: the notice's time", run("noticed", "postgresql-19.x"), (0, "2026-11-19T04:00:00Z"))
 fixture(infra=[pr(3, "postgresql-19.x", "major")], comments={("infra", 3): ["UPGRADE NOTICE 2026-11-19T02:59:00Z"]})
 check("a major noticed 24 h ago, unvetoed: applied", run("pick"), (0, "apply postgresql-19.x major"))
+fixture(infra=[pr(3, "postgresql-19.x", "major")], comments={("infra", 3): ["UPGRADE NOTICE 2026-11-19T03:00:00Z"]})
+check("a major noticed exactly 24 h ago: its 24 h over - applied", run("pick"), (0, "apply postgresql-19.x major"))
+fixture(infra=[pr(3, "postgresql-19.x", "major")], ops=[pr(5, "postgresql-19.x", "major")],
+        comments={("infra", 3): ["UPGRADE NOTICE 2026-11-19T10:00:00Z", "UPGRADE NOTICE 2026-11-19T08:00:00Z"],
+                  ("ops", 5): ["UPGRADE NOTICE 2026-11-19T09:00:00Z"]})
+check("noticed more than once, on more than one pull request: the latest notice is the unit's (noticed again - its "
+      "agent's fix - its 24 h start again)", run("noticed", "postgresql-19.x"), (0, "2026-11-19T10:00:00Z"))
+fixture(infra=[pr(3, "postgresql-19.x", "major")],
+        comments={("infra", 3): ["UPGRADE NOTICE 2026-11-17T00:00:00Z", "UPGRADE NOTICE 2026-11-19T20:00:00Z"]})
+check("a major noticed days ago, then again 7 h ago (its fix): still in its 24 h - nothing", run("pick"), (0, "NOTHING"))
+# the agent's fix in a unit (agent-fixed): a 24 h notice first, whatever its kind
+fixture(infra=[pr(1, "istio-1.32", "agent-fixed"), pr(2, "observability")])
+check("a minor carrying the agent's fix: waits for its notice - the next minor proven first", run("pick"),
+      (0, "prove observability minor"))
+fixture(infra=[pr(1, "istio-1.32", "agent-fixed")])
+check("  alone: its notice (kind kept)", run("pick"), (0, "notice istio-1.32 minor"))
+fixture(infra=[pr(1, "istio-1.32", "agent-fixed")], comments={("infra", 1): ["UPGRADE NOTICE 2026-11-19T02:00:00Z"]})
+check("  noticed 25 h ago, unvetoed: applied (kind kept)", run("pick"), (0, "apply istio-1.32 minor"))
+fixture(infra=[pr(1, "wave-patches", "agent-fixed")], comments={("infra", 1): ["UPGRADE NOTICE 2026-11-19T20:00:00Z"]})
+check("  a patch wave with the agent's fix in its 24 h: nothing", run("pick"), (0, "NOTHING"))
+fixture(infra=[pr(3, "aaa-5.x", "major"), pr(4, "zzz-2.x", "major")],
+        comments={("infra", 3): ["UPGRADE NOTICE 2026-11-18T02:00:00Z"], ("infra", 4): ["UPGRADE NOTICE 2026-11-17T02:00:00Z"]})
+check("two majors past their 24 h: the one noticed first applied first (not the first by name)", run("pick"),
+      (0, "apply zzz-2.x major"))
 fixture(infra=[pr(3, "postgresql-19.x", "major", "veto")], comments={("infra", 3): ["UPGRADE NOTICE 2026-11-18T00:00:00Z"]})
 check("a vetoed major: never applied", run("pick"), (0, "NOTHING"))
 fixture(infra=[pr(3, "postgresql-19.x", "major"), pr(4, "kafka-5.x", "major")],
@@ -136,6 +165,12 @@ check("held: what holds a unit now - nothing for a free one, its labels for one 
       ((0, ""), (0, "veto"), (0, "upgrade-blocked\nveto"), (1, "NO UNIT nope")))
 fixture(infra=[pr(1, "wave-patches")], dashboard_labels=["upgrades-paused"])
 check("held: the dashboard's kill switch - paused", run("held", "wave-patches"), (0, "paused"))
+fixture(infra=[pr(1, "wave-patches")], dashboard_labels=["upgrades-paused"], others=60)
+check("the dashboard on the second page of issues: its kill switch read there", (run("pick"), run("held", "wave-patches")),
+      ((0, "PAUSED"), (0, "paused")))
+fixture(infra=[pr(1, "wave-patches")], dashboard=False)
+check("no dashboard issue open (closed, renamed): the kill switch not read - pick and held fail closed (exit 1), never "
+      "'not paused'", (run("pick")[0], run("held", "wave-patches")[0]), (1, 1))
 check("held: Forgejo unreachable - not read (exit 1), never 'nothing holds it'",
       run("held", "wave-patches", url="http://127.0.0.1:1/api/v1")[0], 1)
 fixture(infra=[pr(1, "wave-patches", user="mallory"), pr(2, "istio", fork=True), pr(3, "observability")])

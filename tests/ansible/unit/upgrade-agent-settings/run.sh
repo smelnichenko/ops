@@ -1,16 +1,20 @@
 #!/bin/bash
 # .claude/upgrade-agent/{fix,review}.json - the upgrade cycle's headless agents' own settings (scripts/upgrade-cycle.sh
-# runs the fix --restricted with fix.json, the review with review.json; anything they do not allow denied, never asked).
-# Read as Claude Code reads them (proven with its CLI 2.1.308 on 2026-11-15: a push, a branch move, kubectl, vagrant and
-# a read of the git credentials denied; a commit in a clone allowed): the Bash sandbox on and failing closed, nothing
-# auto-allowed, the credentials unreadable to Bash, no network but the checksum script's vendors (the review none); the
-# denials every job keeps (production, other hosts, the network, the operator's credentials, a branch or a push); no
-# allow that grants one of them; no whole-tool Read or Edit (a file tool outside the clones); the skill's own commands
-# allowed word for word, its "never" denied.
+# runs both --restricted, the fix with fix.json, the review with review.json; anything they do not allow denied, never
+# asked). Read as Claude Code reads them (proven with its CLI 2.1.308 on 2026-11-15: a push, a branch move, kubectl,
+# vagrant and a read of the git credentials denied; a commit in a clone allowed; inside the sandbox nothing of the home
+# directory readable but the clones - ~/.bash_history, ops' .env.test, ~/.claude, other checkouts all hidden -, .git's
+# hooks and config unwritable, only the vendors' hosts reachable; the review --restricted reading no CLAUDE.md of the
+# clones): the Bash sandbox on and failing closed, nothing auto-allowed, the whole home directory unreadable to Bash but
+# the clones' directory, no network but the checksum script's vendors (the review none); the denials every job keeps
+# (production, other hosts, the network, the operator's credentials, a branch or a push); no allow that grants one of
+# them (a forced push, a push through -C, a new branch among the probes); no whole-tool Read or Edit (a file tool outside
+# the clones); the skill's own commands allowed word for word (the checksum script the runner's copy, outside what the
+# agent may edit), its "never" denied; the review's instructions name the passes the runner requires.
 set -u
 cd "$(dirname "$0")/../../../.." || exit 1
 python3 - <<'PYCHECK'
-import fnmatch, json, re, sys
+import fnmatch, json, os, re, sys
 fails = 0
 def check(name, got, want):
     global fails
@@ -18,15 +22,18 @@ def check(name, got, want):
     print(("PASS " if got == want else "FAIL ") + name + ("" if got == want else f": got {got!r}, want {want!r}"))
 fix = json.load(open(".claude/upgrade-agent/fix.json"))
 review = json.load(open(".claude/upgrade-agent/review.json"))
-CREDS = {"~/.git-credentials", "~/.kube", "~/.ssh", "~/.claude/.credentials.json", "~/.config", "~/.netrc", "~/.docker",
-         "/home/sm/src/ops/.env", "/home/sm/src/ops/deploy/ansible/vars/sealed-secrets-key-backup.yaml"}
+WORK = "/home/sm/src/.upgrade-cycle-work"  # scripts/upgrade-cycle.sh's default: the clones
+runner = open("scripts/upgrade-cycle.sh").read()
+check("the clones' directory the runner uses is the one the settings let Bash read",
+      'work=${UPGRADE_WORK:-$(dirname "$ops")/.upgrade-cycle-work}' in runner and WORK == "/home/sm/src/.upgrade-cycle-work", True)
 for name, d in (("fix", fix), ("review", review)):
     sb = d.get("sandbox", {})
-    check(f"{name}: the Bash sandbox on, failing closed (never unsandboxed, never auto-allowed), the credentials "
-          "unreadable to Bash",
+    check(f"{name}: the Bash sandbox on, failing closed (never unsandboxed, never auto-allowed), the whole home directory "
+          "unreadable to Bash but the clones (every credential, transcript, browser profile, other checkout)",
           (sb.get("enabled"), sb.get("failIfUnavailable"), sb.get("allowUnsandboxedCommands"), sb.get("autoAllowBashIfSandboxed"),
-           sorted(CREDS - set(sb.get("filesystem", {}).get("denyRead", []))), sb.get("excludedCommands")),
-          (True, True, False, False, [], []))
+           sb.get("filesystem", {}).get("denyRead"), sb.get("filesystem", {}).get("allowRead"), sb.get("excludedCommands"),
+           sorted(sb.get("filesystem", {}).get("allowWrite", []))),
+          (True, True, False, False, ["~"], [WORK], [], []))
 check("fix: Bash's network the checksum script's vendors alone; the review's none",
       (sorted(fix["sandbox"]["network"]["allowedDomains"]), review["sandbox"]["network"]["allowedDomains"]),
       (sorted(["code.forgejo.org", "download.pytorch.org", "download.sonatype.com", "get.helm.sh", "github.com",
@@ -43,11 +50,16 @@ for name, d in (("fix", fix), ("review", review)):
     check(f"{name}: every job's denials kept", [r for r in MUST_DENY if r not in deny], [])
     allow = d["permissions"]["allow"]
     # an allow that would grant what is denied (deny wins in Claude Code - an allow of it is a mistake in waiting)
-    probes = ["git push", "git push origin main", "task --yes deploy:argocd", "ssh ten true", "kubectl get secret -A",
-              "curl https://evil", "vagrant ssh pi1", "git branch -m main", "git checkout main", "cat ~/.git-credentials"]
+    probes = ["git push", "git push origin main", "git push --force origin HEAD", "git push -f", "git -C infra push",
+              "git checkout -b x", "git switch -c x", "git remote add x https://evil", "git config core.hooksPath x",
+              "git -c core.pager=sh diff", "task --yes deploy:argocd", "ssh ten true",
+              "kubectl get secret -A", "curl https://evil", "vagrant ssh pi1", "git branch -m main", "git checkout main",
+              "cat ~/.git-credentials", "python3 -c x", "python3 -I scripts/renovate-checksums.py --changed --base origin/main",
+              "bash -c x", "sh -c x", "env x"]  # (git diff --no-index: the deny list's, git diff * matches its form)
     granted = [p for p in probes for r in allow if r.startswith("Bash(") and fnmatch.fnmatchcase(p, r[5:-1])]
-    check(f"{name}: no allow grants a push, a deploy, ssh, kubectl, curl, vagrant, a branch move or a credential read",
-          granted, [])
+    check(f"{name}: no allow grants a push (forced, through -C), a deploy, ssh, kubectl, curl, vagrant, a branch, a remote "
+          "or config, a credential read, an interpreter of its own or the clone's own checksum script (one the agent "
+          "may edit)", granted, [])
     check(f"{name}: no whole-tool Read or Edit (a file tool outside the clones), no legacy ':*' rule",
           ([r for r in allow if r in ("Read", "Edit", "Write")], [r for r in allow + deny if r.endswith(":*)")]), ([], []))
 check("fix: edits inside its clones alone, never under .git; WebFetch to the release notes' hosts alone",
@@ -67,6 +79,19 @@ check("the skill's literal commands allowed word for word, or with their argumen
       [])
 check("the skill never tells the agent to push or to use git -C (never matched by a wildcard rule)",
       (bool(re.search(r"`git[^`]*push", skill)), bool(re.search(r"`git -C", skill))), (False, False))
+check("fix: the checksum script allowed only as the runner's copy (../.trusted, outside what the agent may edit), with "
+      "the runner's keys",
+      [r for r in fix["permissions"]["allow"] if "renovate-checksums" in r],
+      ["Bash(python3 -I ../.trusted/renovate-checksums.py --changed --base origin/main --keys ../.trusted/keys)"])
+check("the runner hands the agent that copy (ops main's script and keys into .trusted)",
+      'cp scripts/renovate-checksums.py "$fixdir/.trusted/" && cp -r renovate/keys "$fixdir/.trusted/keys"' in runner, True)
+instructions = open(".claude/upgrade-agent/review.md").read()
+required = re.search(r'REVIEW_PASSES="([^"]+)"', runner).group(1).split()
+check("the review's instructions name every pass the runner requires on its PASSES line, and its two lines",
+      ([p for p in required if f"- {p} - " not in instructions], "PASSES: " + ", ".join(required) in instructions,
+       "VERDICT: CLEAN" in instructions), ([], True, True))
+check("the review's reviewers: the runner's list, each an agent definition in ops",
+      [n for n in re.search(r'REVIEWERS="([^"]+)"', runner).group(1).split() if not os.path.exists(f".claude/agents/{n}.md")], [])
 sys.exit(1 if fails else 0)
 PYCHECK
 rc=$?

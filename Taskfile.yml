@@ -594,12 +594,13 @@ tasks:
       - cmd: scripts/copy-unit.sh '{{.UNIT}}' {{if eq .PLAN "true"}}--plan{{end}}
 
   # the upgrade cycle by hand (the operator's decisions of 2026-11-15): Renovate and the runner work in tandem - one task,
-  # started by the operator, run locally; no timer, no CI cron. The runner applies what it proved (no shadow); a major
-  # waits out its 24 h notice (one run gives it, a later one applies it). The copy lock taken first and the runner's
-  # gates read before Renovate (a window near, a page open, ops not origin's main, the radar running, an apply today:
-  # refused before anything moved). RUNNER=false: Renovate's branches made, no runner - a first run's labels read before
-  # anything applies. SHADOW=true: the runner proves and reviews a unit, applies nothing (its result on the pull
-  # requests). Until the cycle's first shadow proof, the applying runner is refused
+  # started by the operator, run locally; no timer, no CI cron. The runner applies what it proved; a major, or a unit
+  # carrying the agent's fix, waits out its 24 h notice (one run gives it, a later one applies it). The copy lock taken
+  # first and the runner's gates read before Renovate (a window near, a page open, ops not origin's main, the radar
+  # running, an apply today: refused before anything moved). RUNNER=false: Renovate's branches made, no runner - a first
+  # run's labels read before anything applies. SHADOW=true: the runner proves and reviews a unit, applies nothing (its
+  # result on the pull requests). Until the cycle's first clean shadow proof (.upgrade-cycle/shadow-proven, the runner's
+  # own record of it), the applying runner is refused - here and by the runner itself
   upgrade:
     desc: "PRODUCTION: the upgrade cycle - Renovate on the workstation (its branches and pull requests in infra, platform, ops), then one unit proven on the Vagrant copy and applied (scripts/upgrade-cycle.sh; a major after its 24 h notice). Stop the radar first: the copy needs its memory. LOOKUP=true: Renovate reads only; RUNNER=false: Renovate's branches, no runner; SHADOW=true: a unit proven and reviewed, nothing applied"
     deps: [deploy:install]
@@ -616,8 +617,8 @@ tasks:
         msg: "REFUSED: RUNNER is true or false - not '{{.RUNNER}}'"
       - sh: '[ "{{.SHADOW}}" = true ] || [ "{{.SHADOW}}" = false ]'
         msg: "REFUSED: SHADOW is true or false - not '{{.SHADOW}}'"
-      - sh: '[ "{{.LOOKUP}}" = true ] || [ "{{.RUNNER}}" = false ] || [ "{{.SHADOW}}" = true ]'
-        msg: "REFUSED: the applying runner waits for the cycle's first proof - LOOKUP=true reads, RUNNER=false makes Renovate's branches, SHADOW=true proves a unit without applying it"
+      - sh: '[ "{{.LOOKUP}}" = true ] || [ "{{.RUNNER}}" = false ] || [ "{{.SHADOW}}" = true ] || [ -e .upgrade-cycle/shadow-proven ]'
+        msg: "REFUSED: the applying runner waits for the cycle's first clean shadow proof (.upgrade-cycle/shadow-proven) - SHADOW=true proves a unit without applying it; LOOKUP=true reads, RUNNER=false makes Renovate's branches"
     cmds:
       # one copy run at a time (scripts/copy-lock.sh): the run's own nested copy tasks share it
       - cmd: '[ "{{.LOOKUP}}" = true ] || [ "{{.RUNNER}}" = false ] || scripts/copy-lock.sh'
@@ -627,26 +628,12 @@ tasks:
       - cmd: '[ "{{.LOOKUP}}" = true ] || [ "{{.RUNNER}}" = false ] || UPGRADE_FORGEJO_TOKEN="$RENOVATE_TOKEN" scripts/upgrade-cycle.sh {{if eq .SHADOW "true"}}--shadow{{end}}'
 
   # the backup before a one-way Kubernetes change: a snapshot now, from the hourly etcd-backup CronJob's own template (to
-  # the Pi backup store, off the node), its Job named for the moment, read until it succeeds or fails (10 min - a wait
-  # for "complete" sat a failed Job's whole timeout out), the snapshot's name from its upload's log
+  # the Pi backup store, off the node) - the upgrade cycle takes it before the merge
   deploy:etcd:backup:
-    desc: "PRODUCTION: an etcd snapshot now - a Job from the etcd-backup CronJob (kube-system, to the Pi backup store), read until it succeeds or fails (10 min); the backup before a one-way Kubernetes change"
+    desc: "PRODUCTION: an etcd snapshot now - a Job from the etcd-backup CronJob (kube-system, to the Pi backup store), read until the Job is Complete or Failed (scripts/etcd-backup-now.sh); the backup before a one-way Kubernetes change"
     prompt: "Take an etcd snapshot on PRODUCTION now?"
     cmds:
-      - cmd: |
-          set -euo pipefail
-          job=etcd-backup-now-$(date -u +%Y%m%d%H%M%S)
-          ssh -o BatchMode=yes ten "kubectl -n kube-system create job --from=cronjob/etcd-backup $job"
-          for _ in $(seq 60); do
-            st=$(ssh -o BatchMode=yes ten "kubectl -n kube-system get job $job -o jsonpath='{.status.succeeded}/{.status.failed}'")
-            case "$st" in
-              1/*) ssh -o BatchMode=yes ten "kubectl -n kube-system logs job/$job -c upload --tail=3"; echo "ETCD SNAPSHOT $job: taken"; exit 0 ;;
-              */[1-9]*) ssh -o BatchMode=yes ten "kubectl -n kube-system logs job/$job --all-containers --tail=20" || true
-                echo "ETCD SNAPSHOT $job: FAILED"; exit 1 ;;
-            esac
-            sleep 10
-          done
-          echo "ETCD SNAPSHOT $job: not done in 10 min"; exit 1
+      - cmd: scripts/etcd-backup-now.sh
 
   test:copy:check:
     desc: "Every check on the built copy: Argo settled; data, survival, storage, metrics, k6 smoke, production's data paths and isolation at once (scripts/copy-checks.sh); a barman base backup; every certificate renewed; Postgres recovered and a Velero volume restored (restore-check); a Velero backup from production's daily schedule; a Scylla Manager backup; the PR-env sweeper; the inventory against production's (after a change: its own differences printed, any it did not make judged). Run on its own it checks the refs the copy runs (.copy/copy-refs)"

@@ -2,7 +2,9 @@
 # scripts/upgrade-label.py - the upgrade cycle's hands on a unit's pull requests - against a throwaway Forgejo API (a
 # local server, a process of its own, recording every write): a label on each pull request (made in a repo where
 # missing), a comment on each, the merge - infra, platform, then ops - only when every one is green and mergeable (one
-# red, or not mergeable: none merged); refused: no pull request for the unit, Forgejo unreachable, a usage it lacks.
+# red, or not mergeable: none merged), its base moved only by CD's app promotions its files untouched (else refused); a
+# lost answer read again, unknown is PARTIAL; --green; pause on the dashboard (made under Renovate's title where none is
+# open); refused: no pull request for the unit, Forgejo unreachable, a usage it lacks.
 set -u
 cd "$(dirname "$0")/../../../.." || exit 1
 W=$(mktemp -d)
@@ -22,6 +24,8 @@ class H(http.server.BaseHTTPRequestHandler):
         u = urllib.parse.urlparse(self.path)
         p = u.path.removeprefix("/api/v1")
         q = urllib.parse.parse_qs(u.query)
+        with open(os.path.join(W, "reads"), "a") as f:
+            f.write(p + "\n")
         data = fx.get(p)
         if isinstance(data, list) and "page" in q:  # Forgejo's pages, newest first: 50 a page
             limit, page = int(q.get("limit", ["50"])[0]), int(q["page"][0])
@@ -37,6 +41,10 @@ class H(http.server.BaseHTTPRequestHandler):
             f.write(json.dumps([p, body]) + "\n")
         if p in fx.get("fail_post", []):
             self.answer({"message": "merge failed"}, 500); return
+        if p in fx.get("drop_post", []):  # the answer lost: the connection closed with none (Forgejo restarting)
+            self.close_connection = True; return
+        if p == "/repos/schnappy/ops/issues":
+            self.answer({"number": 42}); return
         self.answer({"id": 77} if p.endswith("/labels") and "labels" not in (body or {}) else {})
     def log_message(self, *a): pass
 s = http.server.HTTPServer(("127.0.0.1", 0), H)
@@ -60,8 +68,8 @@ def pr(n, unit, sha, mergeable=True, user="renovate-bot", fork=False):
     return {"number": n, "head": {"ref": f"renovate/{unit}", "sha": SHA.get(sha, sha), "repo": "FORK" if fork else None},
             "user": {"login": user}, "mergeable": mergeable}
 BASE = "e" * 40
-def fixture(prs, states, labels=None, base=None, fail_post=(), merged=None, issues=None):
-    fx = {"fail_post": list(fail_post)}
+def fixture(prs, states, labels=None, base=None, fail_post=(), merged=None, issues=None, drop_post=(), extra=None):
+    fx = {"fail_post": list(fail_post), "drop_post": list(drop_post)}
     for repo in ("infra", "platform", "ops"):
         fx[f"/repos/schnappy/{repo}/branches/main"] = {"commit": {"id": (base or {}).get(repo, BASE)}}
         for p in prs.get(repo, []):
@@ -78,15 +86,17 @@ def fixture(prs, states, labels=None, base=None, fail_post=(), merged=None, issu
     for sha, st in states.items():
         for repo in ("infra", "platform", "ops"):
             fx[f"/repos/schnappy/{repo}/commits/{SHA.get(sha, sha)}/status"] = {"state": st}
+    fx.update(extra or {})
     json.dump(fx, open(os.path.join(W, "fixture.json"), "w"))
-    for f in ("writes", "auth"):
+    for f in ("writes", "auth", "reads"):
         if os.path.exists(os.path.join(W, f)):
             os.remove(os.path.join(W, f))
 def writes():
     p = os.path.join(W, "writes")
     return [json.loads(x) for x in open(p)] if os.path.exists(p) else []
 def run(*args, url=None):
-    env = {**os.environ, "UPGRADE_FORGEJO_URL": url or f"http://127.0.0.1:{PORT}/api/v1", "UPGRADE_FORGEJO_TOKEN": "t"}
+    env = {**os.environ, "UPGRADE_FORGEJO_URL": url or f"http://127.0.0.1:{PORT}/api/v1", "UPGRADE_FORGEJO_TOKEN": "t",
+           "UPGRADE_MERGE_READS": "3", "UPGRADE_MERGE_WAIT": "0.05"}
     r = subprocess.run([sys.executable, "scripts/upgrade-label.py", *args], capture_output=True, text=True, env=env, timeout=60)
     return r.returncode, r.stdout.strip()
 UNIT = {"infra": [pr(1, "wave-patches", "a1"), pr(2, "istio", "a2")], "platform": [pr(5, "wave-patches", "b1")],
@@ -177,19 +187,94 @@ fixture(UNIT, {"a1": "success", "b1": "success", "c1": "success"}, fail_post=["/
 rc, out = run("wave-patches", "--merge", "--expect", PROVEN)
 check("merge: an answer lost that did merge (read again: merged) - counted, the rest merged (exit 0)",
       (rc, "MERGED schnappy/infra#1 (its answer lost" in out, len(writes())), (0, True, 3))
+fixture(UNIT, {"a1": "success", "b1": "success", "c1": "success"}, fail_post=["/repos/schnappy/infra/pulls/1/merge"],
+        extra={"/repos/schnappy/infra/pulls/1": None})
+rc, out = run("wave-patches", "--merge", "--expect", PROVEN)
+check("merge: the first refused, its state then not read - not known: PARTIAL (exit 3), never 'nothing merged'",
+      (rc, "PARTIAL: merged nothing known; schnappy/infra#1 not known" in out), (3, True))
+fixture(UNIT, {"a1": "success", "b1": "success", "c1": "success"}, fail_post=["/repos/schnappy/platform/pulls/5/merge"],
+        extra={"/repos/schnappy/platform/pulls/5": None})
+rc, out = run("wave-patches", "--merge", "--expect", PROVEN)
+check("merge: the second refused after the first went in, its state not read - PARTIAL (exit 3), the first named",
+      (rc, "PARTIAL: merged schnappy/infra#1; schnappy/platform#5 not known" in out), (3, True))
+fixture(UNIT, {"a1": "success", "b1": "success", "c1": "success"}, drop_post=["/repos/schnappy/infra/pulls/1/merge"])
+rc, out = run("wave-patches", "--merge", "--expect", PROVEN)
+check("merge: the first's answer lost (no HTTP answer), not merged when read again and again - not known: PARTIAL "
+      "(exit 3), read 3 times", (rc, "not known" in out, open(os.path.join(W, "reads")).read().split().count("/repos/schnappy/infra/pulls/1")),
+      (3, True, 3))
+fixture(UNIT, {"a1": "success", "b1": "success", "c1": "success"}, drop_post=["/repos/schnappy/infra/pulls/1/merge"],
+        merged={"schnappy/infra#1": True})
+rc, out = run("wave-patches", "--merge", "--expect", PROVEN)
+check("merge: an answer lost that did merge - counted, the rest merged (exit 0)",
+      (rc, "MERGED schnappy/infra#1 (its answer lost" in out, len(writes())), (0, True, 3))
+fixture(UNIT, {"a1": "success", "b1": "success", "c1": "success"}, fail_post=["/repos/schnappy/infra/pulls/1/merge"],
+        extra={"/repos/schnappy/infra/pulls/1": [1]})
+rc, out = run("wave-patches", "--merge", "--expect", PROVEN)
+check("merge: an error of any other kind once a merge was asked for (an answer of the wrong shape) - PARTIAL (exit 3)",
+      (rc, out.startswith("PARTIAL")), (3, True))
+# infra's main moved since the proof: by CD's app promotions alone (scripts/cd-promotions.json), the unit touching none
+# of their files - merged (the proven tree plus app tags); anything else - refused
+CDF = ["clusters/production/schnappy-production-apps/values.yaml", "clusters/production/schnappy-test-apps/values.yaml"]
+NEW = "9" * 40
+def cdc(email="woodpecker@pmon.dev", files=(CDF[0],)):
+    return {"commit": {"author": {"email": email}}, "files": [{"filename": f} for f in files]}
+def moved(commits, unit_files=("clusters/production/cert-manager/values.yaml",), behind=0, total=None):
+    return {f"/repos/schnappy/infra/compare/{NEW}...{BASE}": {"total_commits": behind, "commits": []},
+            f"/repos/schnappy/infra/compare/{BASE}...{NEW}": {"total_commits": len(commits) if total is None else total,
+                                                              "commits": commits},
+            "/repos/schnappy/infra/pulls/1/files": [{"filename": f} for f in unit_files]}
+GREEN = {"a1": "success", "b1": "success", "c1": "success"}
+fixture(UNIT, GREEN, base={"infra": NEW}, extra=moved([cdc(), cdc(files=CDF)]))
+rc, out = run("wave-patches", "--merge", "--expect", PROVEN)
+check("merge: infra's main moved by CD's promotions alone, their files untouched by the unit - merged, said",
+      (rc, "BASE schnappy/infra: moved since the proof by CD's app promotions alone" in out, len(writes())), (0, True, 3))
+for why, extra in (("a CD commit touching another file", moved([cdc(), cdc(files=("clusters/production/istio/values.yaml",))])),
+                   ("a commit by another author", moved([cdc(), cdc(email="someone@pmon.dev")])),
+                   ("the unit touching CD's file itself", moved([cdc()], unit_files=(CDF[1],))),
+                   ("the proven base no longer on main (a force push)", moved([cdc()], behind=1)),
+                   ("a list of commits cut short", moved([cdc()], total=300)),
+                   ("a commit with no files (a merge)", moved([cdc(files=())]))):
+    fixture(UNIT, GREEN, base={"infra": NEW}, extra=extra)
+    rc, out = run("wave-patches", "--merge", "--expect", PROVEN)
+    check(f"  {why}: none merged, named", (rc, writes(), "infra's main moved since the proof" in out), (1, [], True))
+fixture({**UNIT, "ops": [pr(8, "wave-patches", "c1")]}, GREEN, base={"ops": NEW},
+        extra={f"/repos/schnappy/ops/compare/{NEW}...{BASE}": {"total_commits": 0, "commits": []},
+               f"/repos/schnappy/ops/compare/{BASE}...{NEW}": {"total_commits": 1, "commits": [cdc()]}})
+check("  ops (no CD files of its own) moved by such a commit: none merged", run("wave-patches", "--merge", "--expect", PROVEN)[0], 1)
+fixture(UNIT, {"a1": "success", "b1": "success", "c1": "success"})
+rc, out = run("wave-patches", "--green")
+check("green: every head's CI success - exit 0, each said", (rc, out.split("\n")),
+      (0, ["schnappy/infra#1 success", "schnappy/platform#5 success", "schnappy/ops#8 success"]))
+fixture(UNIT, {"a1": "success", "b1": "pending", "c1": "failure"})
+rc, out = run("wave-patches", "--green")
+check("green: one running, one red - exit 1, both named", (rc, out.split("\n")[-1]),
+      (1, "REFUSED: not green: schnappy/platform#5, schnappy/ops#8"))
 many = {"infra": [pr(i, f"other-{i:03d}", "a2") for i in range(1, 61)] + [pr(99, "wave-patches", "a1")]}
 fixture(many, {})
 check("heads: more than one page of pull requests - the unit's on the second page found",
       run("wave-patches", "--heads"), (0, f"schnappy/infra 99 {SHA['a1']} {BASE}"))
-DASH = [{"number": 3, "title": "Upgrade cycle - Renovate's dashboard (label upgrades-paused: the cycle stops)", "labels": []}]
+TITLE = json.load(open("renovate/upgrade-cycle.json"))["dependencyDashboardTitle"]
+OTHER = {"number": 2, "title": "an issue of its own", "labels": []}
+DASH = [OTHER, {"number": 3, "title": TITLE, "labels": []}]
 fixture({}, {}, labels={"ops": []}, issues=DASH)
 rc, out = run("--pause", "a one-way failure: kubernetes-1.37 - see the mail")
-check("pause: the dashboard issue labelled upgrades-paused (made where missing), the reason its comment",
+check("pause: the dashboard issue (by its title, behind another open issue) labelled upgrades-paused (the label made "
+      "where missing), the reason its comment",
       (rc, [x[0] for x in writes()], writes()[-1][1]["body"] if writes() else None),
       (0, ["/repos/schnappy/ops/labels", "/repos/schnappy/ops/issues/3/labels", "/repos/schnappy/ops/issues/3/comments"],
        "a one-way failure: kubernetes-1.37 - see the mail"))
-fixture({}, {}, issues=[])
-check("pause without a dashboard issue: refused (said - never a silent no-op)", run("--pause", "x")[0], 1)
+fixture({}, {}, labels={"ops": [{"name": "upgrades-paused", "id": 9}]}, issues=DASH)
+rc, out = run("--pause", "x")
+check("pause, the label there already: no label made, its own id used", (rc, [x for x in writes() if x[0].endswith("/3/labels")],
+      [x[0] for x in writes() if x[0] == "/repos/schnappy/ops/labels"]), (0, [["/repos/schnappy/ops/issues/3/labels", {"labels": [9]}]], []))
+fixture({}, {}, labels={"ops": [{"name": "upgrades-paused", "id": 9}]}, issues=[OTHER])
+rc, out = run("--pause", "the reason")
+w = writes()
+check("pause without a dashboard issue open: one made under Renovate's own title (the preset's), labelled, the reason "
+      "its body and comment - the kill switch never missing when pulled",
+      (rc, [x[0] for x in w], w[0][1] if w else None, "MADE schnappy/ops#42" in out),
+      (0, ["/repos/schnappy/ops/issues", "/repos/schnappy/ops/issues/42/comments"],
+       {"title": TITLE, "body": "the reason", "labels": [9]}, True))
 fixture(UNIT, {})
 rc, out = run("nope", "--heads")
 check("no pull request for the unit: refused", (rc, out.startswith("REFUSED"), writes()), (1, True, []))

@@ -6,24 +6,33 @@ and ops), as the renovate-bot:
   UNIT --comment TEXT the comment on each (the veto notice: "UPGRADE NOTICE <iso> ...")
   UNIT --heads        each pull request's head and its base branch's commit, "<repo> <number> <head> <base>" a line -
                       what the runner proves
+  UNIT --green        each head's CI status, "<repo>#<number> <state>" a line; exit 0 every one success, 1 else (a
+                      red or running CI is hours of proof for a merge that is refused)
   UNIT --merge --expect FILE
                       each merged - infra, platform, then ops - only when every one's head is green (its CI's status
                       success), mergeable and still the commit FILE (--heads' lines) says was proven, its base branch
-                      not moved since (a merge onto a newer main is a tree nobody proved) - the same pull requests -
-                      each merged at that commit (Forgejo refuses a head that moved): one not, and none is merged. A
-                      merge failing after another went in: PARTIAL, exit 3 - what went in said (half a unit applies)
-  --pause TEXT        the cycle paused: ops' dashboard issue labelled upgrades-paused (the pick's kill switch), TEXT its
-                      comment - a one-way failure's durable mark (the runner's own record is a local file)
+                      not moved since (a merge onto a newer main is a tree nobody proved) but by CD's app promotions
+                      alone (scripts/cd-promotions.json: its author, its files, none the unit touches - infra's main
+                      moves many times a day by those) - the same pull requests - each merged at that commit (Forgejo
+                      refuses a head that moved): one not, and none is merged. A merge whose answer is lost is read
+                      again until it shows (a refusal Forgejo answered: once); not known, or one failing after another
+                      went in: PARTIAL, exit 3 - what went in said (half a unit may apply)
+  --pause TEXT        the cycle paused: ops' dashboard issue labelled upgrades-paused (the pick's kill switch; the
+                      issue made, under Renovate's own title, where none is open), TEXT its comment - a one-way
+                      failure's durable mark (the runner's own record is a local file)
 Only the bot's own pull requests, from a branch of the repository itself, are a unit's: another account's, or one from a
 fork, named renovate/<unit> all the same, is never labelled, commented on or merged.
 
-Env: UPGRADE_FORGEJO_URL (default https://git.pmon.dev/api/v1), UPGRADE_FORGEJO_TOKEN (the bot's PAT).
-Exit 0 done, 1 refused or Forgejo's answer not read (nothing merged), 3 a merge partly done.
+Env: UPGRADE_FORGEJO_URL (default https://git.pmon.dev/api/v1), UPGRADE_FORGEJO_TOKEN (the bot's PAT),
+     UPGRADE_MERGE_READS (12) and UPGRADE_MERGE_WAIT (10 s): a lost merge answer read again that often, that far apart.
+Exit 0 done, 1 refused or Forgejo's answer not read (nothing merged), 3 a merge partly done or not known.
 """
+import http.client
 import json
 import os
 import re
 import sys
+import time
 import urllib.error
 import urllib.request
 
@@ -32,10 +41,17 @@ TOKEN = os.environ.get("UPGRADE_FORGEJO_TOKEN", "")
 REPOS = ("schnappy/infra", "schnappy/platform", "schnappy/ops")
 BOT = "renovate-bot"
 DASHBOARD = "Upgrade cycle - Renovate's dashboard"
+# renovate/upgrade-cycle.json's dependencyDashboardTitle: the issue made under it is the one Renovate keeps
+DASHBOARD_TITLE = "Upgrade cycle - Renovate's dashboard (label upgrades-paused: the cycle stops)"
+CD_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cd-promotions.json")
 
 
 class Refused(Exception):
-    pass
+    """Forgejo's no - definite when Forgejo itself answered it (an HTTP status), else its answer was not had."""
+
+    def __init__(self, msg, definite=False):
+        super().__init__(msg)
+        self.definite = definite
 
 
 class Partial(Exception):
@@ -51,8 +67,8 @@ def call(method, path, body=None):
             raw = r.read()
             return json.loads(raw) if raw.strip() else None
     except urllib.error.HTTPError as e:
-        raise Refused(f"{method} {path}: {e.code} {e.read()[:200]!r}") from None
-    except (OSError, ValueError) as e:  # URLError is an OSError
+        raise Refused(f"{method} {path}: {e.code} {e.read()[:200]!r}", definite=True) from None
+    except (OSError, ValueError, http.client.HTTPException) as e:  # URLError is an OSError; a cut body HTTPException
         raise Refused(f"{method} {path}: {e}") from None
 
 
@@ -111,6 +127,61 @@ def heads(unit):
         print(f"{repo} {pr['number']} {pr['head']['sha']} {base_of(repo, pr)}")
 
 
+def state(repo, sha):
+    return (call("GET", f"/repos/{repo}/commits/{sha}/status") or {}).get("state")
+
+
+def green(unit):
+    bad = []
+    for repo, pr in prs(unit):
+        st = state(repo, pr["head"]["sha"])
+        print(f"{repo}#{pr['number']} {st or 'none'}")
+        if st != "success":
+            bad.append(f"{repo}#{pr['number']}")
+    if bad:
+        raise Refused(f"not green: {', '.join(bad)}")
+
+
+def cd_only(repo, pr, proven_base, base):
+    """The base branch moved since the proof by CD's app promotions alone (each commit its author's, its files CD's) -
+    files the unit does not touch: the merged tree is the proven one plus app image tags production gets anyway."""
+    try:
+        with open(CD_FILE, encoding="utf-8") as f:
+            cd = json.load(f)
+    except (OSError, ValueError):
+        return False
+    paths = set((cd.get("paths") or {}).get(repo.split("/")[1], []))
+    if not paths or (call("GET", f"/repos/{repo}/compare/{base}...{proven_base}") or {}).get("total_commits") != 0:
+        return False  # no CD here, or the proven base no longer on the branch
+    moved = call("GET", f"/repos/{repo}/compare/{proven_base}...{base}") or {}
+    commits = moved.get("commits") or []
+    if not commits or len(commits) != moved.get("total_commits"):
+        return False  # a list cut short is no proof of what is in it
+    for c in commits:
+        files = {f.get("filename") for f in c.get("files") or []}
+        if ((c.get("commit") or {}).get("author") or {}).get("email") != cd.get("author") or not files or files - paths:
+            return False
+    return not ({f.get("filename") for f in every(f"/repos/{repo}/pulls/{pr['number']}/files")} & paths)
+
+
+def went_in(repo, number, definite):
+    """A merge whose POST failed: merged after all (True), not (False: Forgejo answered no, and says so), or not
+    known (None: its answer lost and the pull request not merged after waiting, or not read)."""
+    reads = 1 if definite else max(1, int(os.environ.get("UPGRADE_MERGE_READS", "12")))
+    for i in range(reads):
+        if i:
+            time.sleep(float(os.environ.get("UPGRADE_MERGE_WAIT", "10")))
+        try:
+            if (call("GET", f"/repos/{repo}/pulls/{number}") or {}).get("merged"):
+                return True
+        except Refused:
+            continue
+        else:
+            if definite:
+                return False
+    return None
+
+
 def read_expected(path):
     """--heads' lines: {repo: (number, sha)} - a line that is not one refused."""
     expected = {}
@@ -139,54 +210,62 @@ def merge(unit, expected):
         if sha != expected[repo][1]:
             raise Refused(f"{repo}#{pr['number']} moved since its proof ({expected[repo][1][:12]} proven, {sha[:12]} now) "
                           f"- nothing merged")
-        state = (call("GET", f"/repos/{repo}/commits/{sha}/status") or {}).get("state")
-        if state != "success":
-            raise Refused(f"{repo}#{pr['number']} not green (its CI: {state or 'none'}) - nothing merged")
+        st = state(repo, sha)
+        if st != "success":
+            raise Refused(f"{repo}#{pr['number']} not green (its CI: {st or 'none'}) - nothing merged")
         if pr.get("mergeable") is False:
             raise Refused(f"{repo}#{pr['number']} not mergeable - nothing merged")
         base = base_of(repo, pr)
         if base != expected[repo][2]:
-            raise Refused(f"{repo}'s {(pr.get('base') or {}).get('ref') or 'main'} moved since the proof "
-                          f"({expected[repo][2][:12]} proven, {base[:12]} now) - nothing merged")
+            if not cd_only(repo, pr, expected[repo][2], base):
+                raise Refused(f"{repo}'s {(pr.get('base') or {}).get('ref') or 'main'} moved since the proof "
+                              f"({expected[repo][2][:12]} proven, {base[:12]} now) - nothing merged")
+            print(f"BASE {repo}: moved since the proof by CD's app promotions alone ({expected[repo][2][:12]} -> {base[:12]})")
     merged = []
-    for repo, pr in sorted(found, key=lambda x: REPOS.index(x[0])):
-        try:
-            call("POST", f"/repos/{repo}/pulls/{pr['number']}/merge",
-                 {"Do": "merge", "delete_branch_after_merge": True, "head_commit_id": expected[repo][1]})
-        except Refused as e:
-            # its answer lost (a timeout, Forgejo restarting) is no proof it did not merge: read it again
+    try:
+        for repo, pr in sorted(found, key=lambda x: REPOS.index(x[0])):
             try:
-                went_in = bool((call("GET", f"/repos/{repo}/pulls/{pr['number']}") or {}).get("merged"))
-            except Refused:
-                went_in = None
-            if went_in:
-                merged.append(f"{repo}#{pr['number']}")
-                print(f"MERGED {repo}#{pr['number']} (its answer lost: {e})")
-                continue
-            if merged or went_in is None:
-                raise Partial(f"merged {', '.join(merged) or 'nothing known'}; {repo}#{pr['number']} not"
-                              f"{' (its state not read)' if went_in is None else ''}: {e}") from None
-            raise
-        merged.append(f"{repo}#{pr['number']}")
-        print(f"MERGED {repo}#{pr['number']}")
+                call("POST", f"/repos/{repo}/pulls/{pr['number']}/merge",
+                     {"Do": "merge", "delete_branch_after_merge": True, "head_commit_id": expected[repo][1]})
+            except Refused as e:
+                # its answer lost (a timeout, Forgejo restarting) is no proof it did not merge: read it again
+                went = went_in(repo, pr["number"], e.definite)
+                if went:
+                    merged.append(f"{repo}#{pr['number']}")
+                    print(f"MERGED {repo}#{pr['number']} (its answer lost: {e})")
+                    continue
+                if merged or went is None:
+                    raise Partial(f"merged {', '.join(merged) or 'nothing known'}; {repo}#{pr['number']} not"
+                                  f"{' known' if went is None else ''}: {e}") from None
+                raise
+            merged.append(f"{repo}#{pr['number']}")
+            print(f"MERGED {repo}#{pr['number']}")
+    except (Partial, Refused):
+        raise
+    except Exception as e:  # anything else once a merge was asked for: what went in is not known - never "nothing"
+        raise Partial(f"merged {', '.join(merged) or 'nothing known'}; then {e!r}") from None
 
 
 def pause(text):
+    have = {lb["name"]: lb["id"] for lb in every("/repos/schnappy/ops/labels")}
+    if "upgrades-paused" not in have:
+        have["upgrades-paused"] = call("POST", "/repos/schnappy/ops/labels",
+                                       {"name": "upgrades-paused", "color": "#b60205"})["id"]
     for issue in every("/repos/schnappy/ops/issues?state=open&type=issues"):
         if (issue.get("title") or "").startswith(DASHBOARD):
-            have = {lb["name"]: lb["id"] for lb in every("/repos/schnappy/ops/labels")}
-            if "upgrades-paused" not in have:
-                have["upgrades-paused"] = call("POST", "/repos/schnappy/ops/labels",
-                                               {"name": "upgrades-paused", "color": "#b60205"})["id"]
-            call("POST", f"/repos/schnappy/ops/issues/{issue['number']}/labels", {"labels": [have["upgrades-paused"]]})
-            call("POST", f"/repos/schnappy/ops/issues/{issue['number']}/comments", {"body": text})
-            print(f"PAUSED schnappy/ops#{issue['number']}")
-            return
-    raise Refused("no dashboard issue to pause the cycle on")
+            number = issue["number"]
+            call("POST", f"/repos/schnappy/ops/issues/{number}/labels", {"labels": [have["upgrades-paused"]]})
+            break
+    else:  # none open (closed, renamed): made under Renovate's title - the kill switch never missing when it is pulled
+        number = call("POST", "/repos/schnappy/ops/issues",
+                      {"title": DASHBOARD_TITLE, "body": text, "labels": [have["upgrades-paused"]]})["number"]
+        print(f"MADE schnappy/ops#{number} (no dashboard issue was open)")
+    call("POST", f"/repos/schnappy/ops/issues/{number}/comments", {"body": text})
+    print(f"PAUSED schnappy/ops#{number}")
 
 
-USAGE = ("usage: upgrade-label.py UNIT LABEL | UNIT --comment TEXT | UNIT --heads | UNIT --merge --expect FILE | "
-         "--pause TEXT")
+USAGE = ("usage: upgrade-label.py UNIT LABEL | UNIT --comment TEXT | UNIT --heads | UNIT --green | "
+         "UNIT --merge --expect FILE | --pause TEXT")
 
 
 def main(argv):
@@ -204,6 +283,8 @@ def main(argv):
     try:
         if argv[1:] == ["--heads"]:
             heads(unit)
+        elif argv[1:] == ["--green"]:
+            green(unit)
         elif len(argv) == 4 and argv[1:3] == ["--merge", "--expect"]:
             merge(unit, read_expected(argv[3]))
         elif argv[1] == "--comment" and len(argv) == 3 and argv[2]:
