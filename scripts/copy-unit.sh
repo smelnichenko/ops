@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# The upgrade cycle's proof of one Renovate unit on the built Vagrant copy (docs/plans/120-automated-upgrade-cycle.md,
-# part 2 step 2): the unit's branch, renovate/<unit>, fetched from origin in infra, platform and ops; infra's and
-# platform's mirrored onto the copy with every check (task test:copy:change), then each ops part the unit moves run as
-# production would run it (task test:copy:playbook), its new values read from the unit's own branch - the ops checkout
+# The upgrade cycle's proof of one Renovate unit on the built Vagrant copy: the unit's branch, renovate/<unit>, fetched
+# from origin in infra, platform and ops; infra's and platform's mirrored onto the copy with every check (task
+# test:copy:change), then each ops part the unit moves run as production would run it (task test:copy:playbook), its
+# new values read from the unit's own branch - the ops checkout
 # stays as it is. A changed ops value with no known proof is refused: the unit is not proven, never waved through.
 #
 # Usage: scripts/copy-unit.sh <unit> [--plan]     --plan: what it would run, one task a line; runs nothing

@@ -5,10 +5,11 @@
 #   applied         info      1 h   a patch or minor applied (the operator asked for one after each)
 #   veto            warning  24 h   a major's notice: what, the proof, when it applies - a veto stops it
 #   blocked         warning   1 h   a unit red after its fix, or a run that could not go on: said, the unit waits
-#   one-way-failed  critical  7 d   a one-way change failed: its backup and restore steps - a PAGE: repeated hourly until
-#                                   resolved, mailed straight out too (the same sender, Resend's SMTP alerts@pmon.dev, to
-#                                   the same address, infra's alertEmailTo - Alertmanager may be what broke), and
-#                                   recorded: the runner refuses while one is open
+#   one-way-failed  critical  7 d   a one-way change failed: its backup and restore steps - a PAGE: Alertmanager
+#                                   repeats it hourly while it holds it (alerts live in its memory: a restart drops
+#                                   them - posted again at each run's start); mailed straight out too
+#                                   (scripts/upgrade-mail.py: Alertmanager may be what broke); recorded - the runner
+#                                   refuses while one is open, and pauses the cycle (the dashboard's upgrades-paused)
 # Each notice carries a label of its own (notice=<time>-<pid>): a second one of a kind for a unit within the first's
 # lifetime is a new alert, mailed - one label set the same was deduplicated. It starts now (amtool sent none: the mail
 # said the notice started at its end).
@@ -20,20 +21,22 @@
 #        scripts/upgrade-notice.sh open             the open pages' units, one a line
 # Env:   UPGRADE_NOTICE_DRY=1  print what would be posted (and mailed), send nothing
 #        UPGRADE_NOTICE_HOST   the host Alertmanager is reached through (default ten)
-#        UPGRADE_PAGES         where the open pages are recorded (default ops' .copy/upgrade-pages)
+#        UPGRADE_PAGES         where the open pages are recorded (default ops' .upgrade-cycle/pages - not .copy's scratch:
+#                              the runner's refusal must outlive a cleanup)
 #        RESEND_API_KEY        the direct mail's SMTP password (ops .env, loaded by task)
 #        UPGRADE_NOTICE_INFRA_VALUES  where the admin address is read (default ../infra's production observability values)
 set -euo pipefail
 export LC_ALL=C
 ops=$(cd "$(dirname "$0")/.." && pwd)
 host=${UPGRADE_NOTICE_HOST:-ten}
-pages=${UPGRADE_PAGES:-$ops/.copy/upgrade-pages}
+pages=${UPGRADE_PAGES:-$ops/.upgrade-cycle/pages}
 usage="REFUSED: upgrade-notice.sh <applied|veto|blocked|one-way-failed> <unit> <summary> [<details file>] | resolve <unit> | repost | open"
-remote="kubectl -n schnappy-infra exec -i deploy/schnappy-alertmanager -c alertmanager -- wget -qO- --header 'Content-Type: application/json' --post-file=/dev/stdin http://localhost:9093/api/v2/alerts"
+# bounded: wget's own default waits 15 min, an idle ssh forever
+remote="kubectl -n schnappy-infra exec -i deploy/schnappy-alertmanager -c alertmanager -- wget -T 20 -qO- --header 'Content-Type: application/json' --post-file=/dev/stdin http://localhost:9093/api/v2/alerts"
 
 post() {  # the alert's JSON on stdin, to Alertmanager's API through the host
   if [ -n "${UPGRADE_NOTICE_DRY:-}" ]; then echo "DRY: ssh $host $remote <<< $(cat)"; return 0; fi
-  ssh -o ConnectTimeout=15 -o BatchMode=yes "$host" "$remote" > /dev/null
+  ssh -o ConnectTimeout=15 -o ServerAliveInterval=10 -o ServerAliveCountMax=3 -o BatchMode=yes "$host" "$remote" > /dev/null
 }
 
 alert() {  # labels and annotations from the environment (never through a shell's quoting) - one alert's JSON
@@ -53,18 +56,8 @@ direct() {  # the same sender and address Alertmanager uses, not through it
   [ -n "${RESEND_API_KEY:-}" ] || { echo "NOT SENT: no RESEND_API_KEY for the direct mail"; return 1; }
   to=$(sed -n "s/^  alertEmailTo: *//p" "$values" 2> /dev/null | tr -d "\"'") || to=""
   [[ $to =~ ^[^@[:space:]]+@[^@[:space:]]+$ ]] || { echo "NOT SENT: no admin address in $values (alertEmailTo)"; return 1; }
-  TO="$to" SUBJECT="[UpgradeCycle] $kind: $unit - $summary" BODY="$summary"$'\n\n'"$details" python3 -I - <<'PY'
-import os, smtplib, ssl
-from email.message import EmailMessage
-m = EmailMessage()
-m["From"], m["To"], m["Subject"] = "alerts@pmon.dev", os.environ["TO"], os.environ["SUBJECT"]
-m.set_content(os.environ["BODY"])
-with smtplib.SMTP("smtp.resend.com", 587, timeout=30) as s:
-    s.starttls(context=ssl.create_default_context())
-    s.login("resend", os.environ["RESEND_API_KEY"])
-    s.send_message(m)
-print("MAILED directly")
-PY
+  TO="$to" SUBJECT="[UpgradeCycle] $kind: $unit - $summary" BODY="$summary"$'\n\n'"$details" \
+    python3 -I "$ops/scripts/upgrade-mail.py"
 }
 
 valid_unit() { [[ ${1:-} =~ ^[a-z0-9][a-z0-9.-]*$ ]] || { echo "REFUSED: '${1:-}' is no unit's name"; exit 2; }; }

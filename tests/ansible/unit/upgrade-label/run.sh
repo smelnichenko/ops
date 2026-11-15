@@ -13,17 +13,30 @@ W = sys.argv[1]
 class H(http.server.BaseHTTPRequestHandler):
     def answer(self, data, code=200):
         body = json.dumps(data).encode(); self.send_response(code); self.end_headers(); self.wfile.write(body)
+    def auth(self):
+        with open(os.path.join(W, "auth"), "a") as f:
+            f.write((self.headers.get("Authorization") or "") + "\n")
     def do_GET(self):
+        self.auth()
         fx = json.load(open(os.path.join(W, "fixture.json")))
-        p = urllib.parse.urlparse(self.path).path.removeprefix("/api/v1")
+        u = urllib.parse.urlparse(self.path)
+        p = u.path.removeprefix("/api/v1")
+        q = urllib.parse.parse_qs(u.query)
         data = fx.get(p)
+        if isinstance(data, list) and "page" in q:  # Forgejo's pages, newest first: 50 a page
+            limit, page = int(q.get("limit", ["50"])[0]), int(q["page"][0])
+            data = data[(page - 1) * limit:page * limit]
         self.answer(data if data is not None else {"message": "not found"}, 200 if data is not None else 404)
     def do_POST(self):
+        self.auth()
         n = int(self.headers.get("Content-Length") or 0)
         body = json.loads(self.rfile.read(n) or b"null")
         p = urllib.parse.urlparse(self.path).path.removeprefix("/api/v1")
+        fx = json.load(open(os.path.join(W, "fixture.json")))
         with open(os.path.join(W, "writes"), "a") as f:
             f.write(json.dumps([p, body]) + "\n")
+        if p in fx.get("fail_post", []):
+            self.answer({"message": "merge failed"}, 500); return
         self.answer({"id": 77} if p.endswith("/labels") and "labels" not in (body or {}) else {})
     def log_message(self, *a): pass
 s = http.server.HTTPServer(("127.0.0.1", 0), H)
@@ -46,8 +59,16 @@ def pr(n, unit, sha, mergeable=True, user="renovate-bot", fork=False):
     # head.repo filled in by fixture() for its repo (a fork's another's)
     return {"number": n, "head": {"ref": f"renovate/{unit}", "sha": SHA.get(sha, sha), "repo": "FORK" if fork else None},
             "user": {"login": user}, "mergeable": mergeable}
-def fixture(prs, states, labels=None):
-    fx = {}
+BASE = "e" * 40
+def fixture(prs, states, labels=None, base=None, fail_post=(), merged=None, issues=None):
+    fx = {"fail_post": list(fail_post)}
+    for repo in ("infra", "platform", "ops"):
+        fx[f"/repos/schnappy/{repo}/branches/main"] = {"commit": {"id": (base or {}).get(repo, BASE)}}
+        for p in prs.get(repo, []):
+            p.setdefault("base", {"ref": "main"})
+            fx[f"/repos/schnappy/{repo}/pulls/{p['number']}"] = {"merged": (merged or {}).get(f"schnappy/{repo}#{p['number']}", False)}
+    if issues is not None:
+        fx["/repos/schnappy/ops/issues"] = issues
     for repo in ("infra", "platform", "ops"):
         for p in prs.get(repo, []):
             p["head"]["repo"] = {"full_name": ("someone/" if p["head"]["repo"] in ("FORK", {"full_name": "someone/" + repo})
@@ -58,8 +79,9 @@ def fixture(prs, states, labels=None):
         for repo in ("infra", "platform", "ops"):
             fx[f"/repos/schnappy/{repo}/commits/{SHA.get(sha, sha)}/status"] = {"state": st}
     json.dump(fx, open(os.path.join(W, "fixture.json"), "w"))
-    if os.path.exists(os.path.join(W, "writes")):
-        os.remove(os.path.join(W, "writes"))
+    for f in ("writes", "auth"):
+        if os.path.exists(os.path.join(W, f)):
+            os.remove(os.path.join(W, f))
 def writes():
     p = os.path.join(W, "writes")
     return [json.loads(x) for x in open(p)] if os.path.exists(p) else []
@@ -85,9 +107,11 @@ check("comment: on each, the text whole", (rc, [(x[0], x[1]["body"][:14]) for x 
       (0, [(f"/repos/schnappy/{r}/issues/{n}/comments", "UPGRADE NOTICE") for r, n in (("infra", 1), ("platform", 5), ("ops", 8))]))
 fixture(UNIT, {})
 rc, heads_out = run("wave-patches", "--heads")
-check("heads: each of the unit's pull requests, its number and head - nothing written",
-      (rc, heads_out.split("\n"), writes()),
-      (0, [f"schnappy/infra 1 {SHA['a1']}", f"schnappy/platform 5 {SHA['b1']}", f"schnappy/ops 8 {SHA['c1']}"], []))
+check("heads: each of the unit's pull requests, its number, its head and its base branch's commit - nothing written; "
+      "every request with the bot's token",
+      (rc, heads_out.split("\n"), writes(), set(open(os.path.join(W, "auth")).read().split("\n")) - {""}),
+      (0, [f"schnappy/infra 1 {SHA['a1']} {BASE}", f"schnappy/platform 5 {SHA['b1']} {BASE}", f"schnappy/ops 8 {SHA['c1']} {BASE}"],
+       [], {"token t"}))
 PROVEN = os.path.join(W, "proven")
 def proven(text=heads_out):
     open(PROVEN, "w").write(text + "\n")
@@ -110,7 +134,8 @@ rc, out = run("wave-patches", "--merge", "--expect", PROVEN)
 check("merge: the pull requests not the ones proven (one gone, or one new) - none merged",
       (rc, writes(), "not the ones proven" in out), (1, [], True))
 fixture(UNIT, {"a1": "success", "b1": "success", "c1": "success"})
-for bad in ("", "schnappy/infra 1 nothex", "schnappy/elsewhere 1 " + SHA["a1"], "just words"):
+for bad in ("", f"schnappy/infra 1 nothex {BASE}", f"schnappy/infra 1 {SHA['a1']} nothex", f"schnappy/infra 1 {SHA['a1']}",
+            f"schnappy/elsewhere 1 {SHA['a1']} {BASE}", "just words"):
     proven(bad)
     check(f"merge: proven heads that are none ({bad!r}): refused, nothing merged",
           (run("wave-patches", "--merge", "--expect", PROVEN)[0], writes()), (1, []))
@@ -130,7 +155,41 @@ fixture({"infra": [pr(1, "wave-patches", "a1", user="mallory")], "platform": [pr
 rc, out = run("wave-patches", "--heads")
 check("another account's pull request, or a fork's, named renovate/<unit>: none of the unit's (heads, labels)",
       (rc, out.split("\n"), run("wave-patches", "upgrade-blocked")[0], [x[0] for x in writes()][-1]),
-      (0, [f"schnappy/ops 8 {SHA['c1']}"], 0, "/repos/schnappy/ops/issues/8/labels"))
+      (0, [f"schnappy/ops 8 {SHA['c1']} {BASE}"], 0, "/repos/schnappy/ops/issues/8/labels"))
+fixture(UNIT, {"a1": "success", "b1": "success", "c1": "success"}, base={"platform": "f" * 40})
+proven()
+rc, out = run("wave-patches", "--merge", "--expect", PROVEN)
+check("merge: a base branch moved since the proof (a merge onto a main nobody proved) - none merged, named",
+      (rc, writes(), "platform's main moved since the proof" in out), (1, [], True))
+fixture(UNIT, {"a1": "success", "b1": "success", "c1": "success"}, fail_post=["/repos/schnappy/platform/pulls/5/merge"])
+proven()
+rc, out = run("wave-patches", "--merge", "--expect", PROVEN)
+check("merge: platform's failing after infra's went in - PARTIAL (exit 3), what went in named, ops not tried",
+      (rc, out.split("\n")[0], "PARTIAL: merged schnappy/infra#1; schnappy/platform#5 not" in out,
+       [x[0] for x in writes()]),
+      (3, "MERGED schnappy/infra#1", True, ["/repos/schnappy/infra/pulls/1/merge", "/repos/schnappy/platform/pulls/5/merge"]))
+fixture(UNIT, {"a1": "success", "b1": "success", "c1": "success"}, fail_post=["/repos/schnappy/infra/pulls/1/merge"])
+rc, out = run("wave-patches", "--merge", "--expect", PROVEN)
+check("merge: the first failing, not merged (read again) - nothing in: refused (exit 1), nothing after it tried",
+      (rc, out.startswith("REFUSED"), [x[0] for x in writes()]), (1, True, ["/repos/schnappy/infra/pulls/1/merge"]))
+fixture(UNIT, {"a1": "success", "b1": "success", "c1": "success"}, fail_post=["/repos/schnappy/infra/pulls/1/merge"],
+        merged={"schnappy/infra#1": True})
+rc, out = run("wave-patches", "--merge", "--expect", PROVEN)
+check("merge: an answer lost that did merge (read again: merged) - counted, the rest merged (exit 0)",
+      (rc, "MERGED schnappy/infra#1 (its answer lost" in out, len(writes())), (0, True, 3))
+many = {"infra": [pr(i, f"other-{i:03d}", "a2") for i in range(1, 61)] + [pr(99, "wave-patches", "a1")]}
+fixture(many, {})
+check("heads: more than one page of pull requests - the unit's on the second page found",
+      run("wave-patches", "--heads"), (0, f"schnappy/infra 99 {SHA['a1']} {BASE}"))
+DASH = [{"number": 3, "title": "Upgrade cycle - Renovate's dashboard (label upgrades-paused: the cycle stops)", "labels": []}]
+fixture({}, {}, labels={"ops": []}, issues=DASH)
+rc, out = run("--pause", "a one-way failure: kubernetes-1.37 - see the mail")
+check("pause: the dashboard issue labelled upgrades-paused (made where missing), the reason its comment",
+      (rc, [x[0] for x in writes()], writes()[-1][1]["body"] if writes() else None),
+      (0, ["/repos/schnappy/ops/labels", "/repos/schnappy/ops/issues/3/labels", "/repos/schnappy/ops/issues/3/comments"],
+       "a one-way failure: kubernetes-1.37 - see the mail"))
+fixture({}, {}, issues=[])
+check("pause without a dashboard issue: refused (said - never a silent no-op)", run("--pause", "x")[0], 1)
 fixture(UNIT, {})
 rc, out = run("nope", "--heads")
 check("no pull request for the unit: refused", (rc, out.startswith("REFUSED"), writes()), (1, True, []))

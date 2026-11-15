@@ -13,7 +13,7 @@ first (decisions below).
   version vars annotated.
 - Its proof on the copy: `scripts/copy-unit.sh` / `task test:copy:unit UNIT=<it> [PLAN=true]` (the unit's branches,
   test:copy:change, each ops part's playbook from the branch's values; an unknown value refused).
-- The night: `scripts/upgrade-cycle.sh` (`--dry`; `--shadow` a flag only since 2026-11-15), `upgrade-units.py` (the pick),
+- The run: `scripts/upgrade-cycle.sh` (`--dry`, `--preflight`; `--shadow` - task upgrade SHADOW=true), `upgrade-units.py` (the pick),
   `upgrade-label.py` (labels, comments, merges - whole or not at all), `upgrade-verify.sh`, `upgrade-record.sh`,
   `upgrade-notice.sh` (platform's `upgrade-cycle/notices` branch routes the UpgradeCycle alert), the agent's
   `.claude/skills/upgrade-fix`.
@@ -39,10 +39,23 @@ and notices only the bot's (author, head repository). Notices: a JSON post to Al
 v0.34.1: quotes, $, newlines intact), a start, a label each, the log's tail; pages recorded, mailed straight out too,
 `resolve`/`repost`/`open`; verify skips the cycle's own page. Platform: the notices' route ahead of the critical one,
 their own subject, the inhibit rule by unit, CI running amtool and Alertmanager itself on the config.
+**Second review round (2026-11-15) - done:** the fix agent `--restricted` with its Bash sandboxed (bubblewrap: the
+credentials unreadable, no network but the checksum script's vendors), committing only - the runner checks its commits
+(on the unit's branch, on top of the proven head) and pushes them as the bot; no copy access for it (`vagrant ssh`
+passes options to ssh); clones outside every checkout; plain git (`git -C` never matches a wildcard rule) - each proven
+with Claude Code's CLI 2.1.308. The runner's own lock; the gates again right before the merge (hours later), with the
+local infra/platform mains, production's live Alertmanager route and production's health; the plan's production
+commands mapped before the merge (node_exporter's added); held (veto, upgrade-blocked, the kill switch) read again; a
+journal of the apply (`.upgrade-cycle/inflight`) and a signal trap after the merge; a partial merge exit 3 - paged and
+the cycle paused (the dashboard's upgrades-paused); bases pinned (main moved since the proof refuses the merge); ops
+brought by fetch and fast-forward (a pull followed the operator's pull.rebase and refused on the copy's inventory
+record); the etcd snapshot right before kubeadm; the copy destroyed after the review; a copy that does not build ends
+the run without blaming the unit; the veto mail before its comment; the record committing only its paths.
 **The first real run:** `task upgrade RUNNER=false` - Renovate's branches and pull requests made, nothing applied; their
-labels read (the shadow week checked them). Then the runner's first run proves a unit on the copy; until then the task
-refuses the runner (its precondition), lifted with that proof.
-**Not yet:** a GitHub read token, or the six GitHub-sourced annotations moved to registries (RENOVATE_GITHUB_TOKEN in ops/.env is empty - ''; the 401 seen 2026-11-14 was the two quote characters sent as a token), the agent's headless permissions, `deploy:seed-secrets` for the bot's token (the operator's OK), Nexus
+labels read (the shadow week checked them). Then `task upgrade SHADOW=true` proves and reviews a unit on the copy,
+applying nothing - the cycle's first proof; until then the task refuses the applying runner (its precondition), lifted
+with that proof.
+**Not yet:** a GitHub read token, or the six GitHub-sourced annotations moved to registries (RENOVATE_GITHUB_TOKEN in ops/.env is empty - ''; the 401 seen 2026-11-14 was the two quote characters sent as a token), `deploy:seed-secrets` for the bot's token (the operator's OK), Nexus
 annotated, a one-way change's store backups beyond etcd (Postgres, ScyllaDB, ...: blocked). Strimzi's Kafka version
 (`strimzi.kafkaVersion`, production's and the test environment's data values) is not annotated yet - a design point
 first: the test environment's unit merges before its production twin, but the Strimzi operator is one, shared, and
@@ -157,17 +170,18 @@ workstation (a Woodpecker agent there would give any pipeline a shell on it). Ea
    Then the unit's diff gets a full review (the review agents, as by hand). The results go on the PRs.
 3. **Fix**: a failed proof calls the Claude agent (headless, a skill of its own) to diagnose and push a fix commit to
    the unit's branches (labelled `stop-updating` so Renovate leaves them), then proves again - once. Still red: labelled
-   `upgrade-blocked`, reported, the next unit next night.
-4. **Gate**: patches and minors go on. A major gets its notice (PR comment + notification) and waits 24 h; a `veto`
-   label or comment stops it for good.
+   `upgrade-blocked`, reported, the next unit next run. (2026-11-15: the agent commits only, in clones; the runner
+   checks and pushes.)
+4. **Gate**: patches and minors go on. A major gets its notice (the mail first, then the PR comment that starts the
+   clock) and waits 24 h; a `veto` label stops it for good (read again right before the merge).
 5. **Back up** before any one-way change (below) - taken and its restore proven on the copy in step 2.
 6. **Apply**: merge the infra/platform PRs (the bot through Forgejo's API, never an admin account), Argo syncs; the ops
    part merged and its PRODUCTION task run non-interactively (`task --yes deploy:...`), the Pis one at a time, the
    VIP's last.
-7. **Verify**: Argo settled on the merge, `check:production:data`, a Velero backup from the schedule
-   (`deploy:backup`), no critical alert for an hour. Red: a reversible change is reverted (a revert PR, merged, Argo
-   syncs) and reported; a one-way change pages the operator with its backup and restore steps - never undone blind.
-8. **Record**: the run (unit, proof, review, apply, verify) committed to ops (`docs/upgrades/<date>.md`) and sent as a
+7. **Verify** (`scripts/upgrade-verify.sh`): every Argo app Synced and Healthy within 30 min, every pod ready, then an
+   hour with no critical alert (the cycle's own page aside). Red: paged, the cycle paused - never undone blind (a revert
+   PR is the operator's; `check:production:data` and a Velero backup are not run by the cycle yet).
+8. **Record**: the run committed to ops (`docs/upgrades/<date>-<unit>.md`, its paths alone) and sent as a
    notification; `task test:copy:inventory` read again so the next copy is built to the new production.
 
 **3. One-way changes and their backups.** One-way: Kubernetes (kubeadm does not downgrade, patches included),
@@ -218,7 +232,7 @@ tarball is hashed, never unpacked.
 
 ## Guardrails
 
-One unit per night, one production apply per day; the copy lock (one copy run at a time); production touched only
+One unit per run, one production apply per day (the runner refuses a second); the copy lock (one copy run at a time); production touched only
 through Taskfile tasks and merges by the bot; no force-sync of root, no prune; a run that cannot finish (the
 workstation off, the copy not building) changes nothing in production and says so; the kill switch above.
 
@@ -245,15 +259,15 @@ Each step reviewed before the next.
 2. **The agent: the current Claude account** - the same Claude Code login the operator's sessions use, headless on the
    workstation. **The fix step (part 2, step 3) is required**: a red proof is diagnosed and fixed, then proven again;
    only a second red blocks the unit. Its permissions are set for this job explicitly: in an interactive session the
-   auto mode refused `deploy:kubeadm:upgrade` (2026-11-14) - the runner's settings allow exactly the cycle's tasks
-   (`task --yes deploy:<the unit's>`, the bot's merges) and nothing else.
+   auto mode refused `deploy:kubeadm:upgrade` (2026-11-14) - the runner runs the production tasks and the bot's merges
+   itself; the agents' own settings (.claude/upgrade-agent/) deny every task, push and host.
 3. **The workstation runs it; the operator stops the radar for it** ("I will stop radar again"): the copy needs ~24.6 GB
    of the 30 GB (VMs 22.5 GB + the guard's 2 GB start reserve), and on 2026-11-14 it fit only with radar-live.service
-   stopped. The runner cannot stop it (a system unit, sudo asks a password): a unit's night begins only once the copy
-   guard admits the build; while it does not, the run waits within the night's window and, unadmitted, e-mails that the
-   unit waits for the radar to stop - and after the copy is destroyed, that the radar may start again. (A polkit rule
+   stopped. The runner cannot stop it (a system unit, sudo asks a password): a run started with the radar up is refused
+   at once (2026-11-15: started by hand - the operator is there; no wait, no mail), and the copy is destroyed as soon as
+   the review is done - the radar may start while the apply goes on. (A polkit rule
    letting the runner stop and start radar-live itself would remove the step - the operator's call, not assumed.)
-4. **No batches: one unit a night** (a wave can take a week of nights).
+4. **No batches: one unit a run, one apply a day** (a wave can take a week).
 
 ## What wave 1 by hand taught the cycle (2026-11-14)
 

@@ -130,6 +130,14 @@ check("more than one page of pull requests: the second page read (wave-patches o
 check("Forgejo unreachable: not read (exit 1), never NOTHING", run("pick", url="http://127.0.0.1:1/api/v1")[0], 1)
 check("noticed: a unit not open", run("noticed", "nope"), (1, "NO UNIT nope"))
 check("a command it does not take", run("apply")[0], 2)
+fixture(infra=[pr(1, "wave-patches"), pr(2, "istio", "veto"), pr(3, "observability", "upgrade-blocked", "veto")])
+check("held: what holds a unit now - nothing for a free one, its labels for one blocked or vetoed",
+      (run("held", "wave-patches"), run("held", "istio"), run("held", "observability"), run("held", "nope")),
+      ((0, ""), (0, "veto"), (0, "upgrade-blocked\nveto"), (1, "NO UNIT nope")))
+fixture(infra=[pr(1, "wave-patches")], dashboard_labels=["upgrades-paused"])
+check("held: the dashboard's kill switch - paused", run("held", "wave-patches"), (0, "paused"))
+check("held: Forgejo unreachable - not read (exit 1), never 'nothing holds it'",
+      run("held", "wave-patches", url="http://127.0.0.1:1/api/v1")[0], 1)
 fixture(infra=[pr(1, "wave-patches", user="mallory"), pr(2, "istio", fork=True), pr(3, "observability")])
 check("another account's pull request, or one from a fork, named renovate/<unit> all the same: no unit",
       (run("pick"), run("list")[1].split("\n")), ((0, "prove observability minor"), ["observability minor schnappy/infra -"]))

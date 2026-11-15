@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""upgrade-units.py - the upgrade cycle's view of Renovate's units (docs/plans/120-automated-upgrade-cycle.md, part 2):
-its open pull requests on infra, platform and ops, grouped by branch (renovate/<unit> - the same name in each repo).
+"""upgrade-units.py - the upgrade cycle's view of Renovate's units: its open pull requests on infra, platform and ops,
+grouped by branch (renovate/<unit> - the same name in each repo).
 
   list           every unit: "<unit> <kind> <repos> <labels>" a line (kind: patch, minor, major)
-  pick           the night's unit and what to do with it, one line - "PAUSED", "NOTHING", or "<action> <unit> <kind>":
+  pick           the run's unit and what to do with it, one line - "PAUSED", "NOTHING", or "<action> <unit> <kind>":
                    test    a test environment's unit (renovate/test-<unit>: the copy leaves the test environment out -
                            it is its own proof), merged before its production twin - picked first, and the twin waits
                            while it is open
-                   prove   a patch or minor unit (proven, then applied the same night)
-                   notice  a major with no veto notice yet (proven, then its 24 h notice posted - applied a later night)
+                   prove   a patch or minor unit (proven, then applied in the same run)
+                   notice  a major with no veto notice yet (proven, then its 24 h notice posted - applied a later run)
                    apply   a major whose notice has run out, unvetoed (proven again, then applied)
                  The order: renovate/wave-patches, then the family minors (istio, kubernetes, cilium, observability,
                  data-operators, argocd, pi-services - the first three one minor at a time, named <family>-<X.Y>, the
@@ -17,6 +17,9 @@ its open pull requests on infra, platform and ops, grouped by branch (renovate/<
                  a unit labelled upgrade-blocked (red after its fix) or veto, a major in its 24 h; everything while the
                  dashboard issue carries upgrades-paused (the kill switch).
   noticed UNIT   when the unit's veto notice was posted (the runner's "UPGRADE NOTICE <iso>" comment), or "NONE"
+  held UNIT      what holds the unit now, one a line - upgrade-blocked, veto (on any of its pull requests), paused (the
+                 dashboard's upgrades-paused); nothing when nothing does: the runner asks again right before a merge
+                 (a veto or the kill switch set during the proof and the review was not seen at the pick's time)
 
 A unit is the bot's own pull requests, from branches of the repositories themselves - another account's, or a fork's,
 named renovate/<unit> all the same, is no unit; a notice is the bot's own comment (anyone's backdated one skipped the
@@ -183,6 +186,16 @@ def main(argv):
         if argv == ["pick"]:
             print(pick())
             return 0
+        if len(argv) == 2 and argv[0] == "held":
+            u = units().get(argv[1])
+            if u is None:
+                print(f"NO UNIT {argv[1]}")
+                return 1
+            for reason in sorted({"upgrade-blocked", "veto"} & u["labels"]):
+                print(reason)
+            if paused():
+                print("paused")
+            return 0
         if len(argv) == 2 and argv[0] == "noticed":
             u = units().get(argv[1])
             if u is None:
@@ -194,7 +207,7 @@ def main(argv):
     except NotRead as e:
         print(f"NOT READ: Forgejo's answer - {e}")
         return 1
-    print("usage: upgrade-units.py list | pick | noticed UNIT")
+    print("usage: upgrade-units.py list | pick | noticed UNIT | held UNIT")
     return 2
 
 

@@ -44,7 +44,7 @@ def at(s):
     return datetime.datetime.strptime(s, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=datetime.timezone.utc)
 def hours_from_now(s):
     return round((at(s) - datetime.datetime.now(datetime.timezone.utc)).total_seconds() / 3600)
-REMOTE = ("kubectl -n schnappy-infra exec -i deploy/schnappy-alertmanager -c alertmanager -- wget -qO- --header "
+REMOTE = ("kubectl -n schnappy-infra exec -i deploy/schnappy-alertmanager -c alertmanager -- wget -T 20 -qO- --header "
           "'Content-Type: application/json' --post-file=/dev/stdin http://localhost:9093/api/v2/alerts")
 details = os.path.join(W, "details.txt")
 TEXT = "proof: green\nit's \"quoted\", $HOME stays $HOME, `no` command\n  indented line"
@@ -87,8 +87,9 @@ check("one-way-failed: a page - critical, a week, posted, recorded as posted; ma
       (0, "critical", 168, True, True, True))
 rc, out, _ = run("open")
 check("open: the open pages' units", (rc, out.split()), (0, ["scylla-2026.3"]))
+aged = json.load(open(page)); aged[0]["endsAt"] = "2026-01-01T00:00:00Z"; json.dump(aged, open(page, "w"))
 rc, out, posts = run("repost")
-check("repost: every open page posted again, the same labels, its end a week from now - the record too",
+check("repost: every open page posted again, the same labels, its end a week from now - the record too (aged first)",
       (rc, len(posts), posts[0][0]["labels"] == rec[0]["labels"], hours_from_now(posts[0][0]["endsAt"]),
        json.load(open(page))[0]["endsAt"] == posts[0][0]["endsAt"]), (0, 1, True, 168, True))
 open(os.path.join(W, "ssh.fail"), "w").write("")
@@ -120,6 +121,33 @@ rc, out, posts = run("one-way-failed", "u3", "s", UPGRADE_NOTICE_DRY="1")
 check("dry run: what would be posted and mailed said, nothing sent or recorded",
       (rc, "DRY: ssh ten kubectl" in out, "would mail" in out, posts, os.path.exists(os.path.join(PAGES, "u3.json"))),
       (0, True, True, [], False))
+# the direct mail as it goes out - scripts/upgrade-mail.py against an SMTP that records, never the network
+probe = subprocess.run([sys.executable, "-I", "-c", r"""
+import json, sys
+sys.path.insert(0, "scripts")
+import importlib.util
+spec = importlib.util.spec_from_file_location("um", "scripts/upgrade-mail.py"); um = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(um)
+calls = []
+class S:
+    def __init__(self, host, port, timeout): calls.append(["connect", host, port, timeout])
+    def __enter__(self): return self
+    def __exit__(self, *a): calls.append(["quit"])
+    def starttls(self, context): calls.append(["starttls", context is not None])
+    def login(self, user, key): calls.append(["login", user, key])
+    def send_message(self, m): calls.append(["send", m["From"], m["To"], m["Subject"], m.get_content()])
+um.send("admin@example.org", "[UpgradeCycle] one-way-failed: k - it broke", "it broke\n\nrestore steps", "the-key", smtp=S)
+print(json.dumps(calls))
+"""], capture_output=True, text=True)
+check("the direct mail: Resend's SMTP on 587, STARTTLS before the login (user resend, the key), from alerts@pmon.dev "
+      "to the admin, the subject and body whole",
+      json.loads(probe.stdout or "[]"),
+      [["connect", "smtp.resend.com", 587, 30], ["starttls", True], ["login", "resend", "the-key"],
+       ["send", "alerts@pmon.dev", "admin@example.org", "[UpgradeCycle] one-way-failed: k - it broke", "it broke\n\nrestore steps\n"],
+       ["quit"]])
+r = subprocess.run([sys.executable, "-I", "scripts/upgrade-mail.py"], capture_output=True, text=True,
+                   env={"PATH": os.environ["PATH"], "TO": "a@b.c", "SUBJECT": "s", "BODY": "b"})
+check("the direct mail without its key: not sent, said (exit 1)", (r.returncode, "NOT SENT" in r.stdout), (1, True))
 for args in (("nope", "u", "s"), ("applied", "Bad/Unit", "s"), ("applied", "u", ""), ("applied", "u", "s", "/nonexistent"),
              ("resolve",), ("resolve", "Bad/Unit"), ("repost", "x"), ("open", "x"), ()):
     check(f"refused: {args}", run(*args)[0], 2)

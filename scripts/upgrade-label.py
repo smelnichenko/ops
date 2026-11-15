@@ -1,20 +1,24 @@
 #!/usr/bin/env python3
 """upgrade-label.py - the upgrade cycle's hands on a Renovate unit's pull requests (renovate/<unit> in infra, platform
-and ops), as the renovate-bot (docs/plans/120-automated-upgrade-cycle.md):
+and ops), as the renovate-bot:
 
   UNIT LABEL          the label on each of the unit's pull requests (made in the repo where missing)
   UNIT --comment TEXT the comment on each (the veto notice: "UPGRADE NOTICE <iso> ...")
-  UNIT --heads        each pull request's head, "<repo> <number> <sha>" a line - what the runner proves
+  UNIT --heads        each pull request's head and its base branch's commit, "<repo> <number> <head> <base>" a line -
+                      what the runner proves
   UNIT --merge --expect FILE
                       each merged - infra, platform, then ops - only when every one's head is green (its CI's status
-                      success), mergeable and still the commit FILE (--heads' lines) says was proven - the same pull
-                      requests, none moved since - each merged at that commit (Forgejo refuses a head that moved): one
-                      not, and none is merged (a unit goes in whole or not at all)
+                      success), mergeable and still the commit FILE (--heads' lines) says was proven, its base branch
+                      not moved since (a merge onto a newer main is a tree nobody proved) - the same pull requests -
+                      each merged at that commit (Forgejo refuses a head that moved): one not, and none is merged. A
+                      merge failing after another went in: PARTIAL, exit 3 - what went in said (half a unit applies)
+  --pause TEXT        the cycle paused: ops' dashboard issue labelled upgrades-paused (the pick's kill switch), TEXT its
+                      comment - a one-way failure's durable mark (the runner's own record is a local file)
 Only the bot's own pull requests, from a branch of the repository itself, are a unit's: another account's, or one from a
 fork, named renovate/<unit> all the same, is never labelled, commented on or merged.
 
 Env: UPGRADE_FORGEJO_URL (default https://git.pmon.dev/api/v1), UPGRADE_FORGEJO_TOKEN (the bot's PAT).
-Exit 0 done, 1 refused or Forgejo's answer not read.
+Exit 0 done, 1 refused or Forgejo's answer not read (nothing merged), 3 a merge partly done.
 """
 import json
 import os
@@ -27,10 +31,15 @@ API = os.environ.get("UPGRADE_FORGEJO_URL", "https://git.pmon.dev/api/v1").rstri
 TOKEN = os.environ.get("UPGRADE_FORGEJO_TOKEN", "")
 REPOS = ("schnappy/infra", "schnappy/platform", "schnappy/ops")
 BOT = "renovate-bot"
+DASHBOARD = "Upgrade cycle - Renovate's dashboard"
 
 
 class Refused(Exception):
     pass
+
+
+class Partial(Exception):
+    """Some of a unit's pull requests merged, then one did not."""
 
 
 def call(method, path, body=None):
@@ -47,6 +56,18 @@ def call(method, path, body=None):
         raise Refused(f"{method} {path}: {e}") from None
 
 
+def every(path):
+    """Every page of a list endpoint (one page of 50 hid an older pull request: half a unit seen, half merged)."""
+    out, page = [], 1
+    sep = "&" if "?" in path else "?"
+    while True:
+        data = call("GET", f"{path}{sep}limit=50&page={page}") or []
+        out += data
+        if len(data) < 50:
+            return out
+        page += 1
+
+
 def ours(repo, pr):
     """The bot's own pull request, from a branch of the repository itself."""
     head_repo = ((pr.get("head") or {}).get("repo") or {}).get("full_name")
@@ -56,7 +77,7 @@ def ours(repo, pr):
 def prs(unit):
     found = []
     for repo in REPOS:
-        for pr in call("GET", f"/repos/{repo}/pulls?state=open&limit=50") or []:
+        for pr in every(f"/repos/{repo}/pulls?state=open"):
             if (pr.get("head") or {}).get("ref") == f"renovate/{unit}" and ours(repo, pr):
                 found.append((repo, pr))
     if not found:
@@ -66,7 +87,7 @@ def prs(unit):
 
 def label(unit, name):
     for repo, pr in prs(unit):
-        have = {lb["name"]: lb["id"] for lb in call("GET", f"/repos/{repo}/labels?limit=50") or []}
+        have = {lb["name"]: lb["id"] for lb in every(f"/repos/{repo}/labels")}
         if name not in have:
             have[name] = call("POST", f"/repos/{repo}/labels", {"name": name, "color": "#d93f0b"})["id"]
         call("POST", f"/repos/{repo}/issues/{pr['number']}/labels", {"labels": [have[name]]})
@@ -79,9 +100,15 @@ def comment(unit, text):
         print(f"COMMENTED {repo}#{pr['number']}")
 
 
+def base_of(repo, pr):
+    """The commit the pull request's base branch is at now."""
+    ref = (pr.get("base") or {}).get("ref") or "main"
+    return ((call("GET", f"/repos/{repo}/branches/{ref}") or {}).get("commit") or {}).get("id") or ""
+
+
 def heads(unit):
     for repo, pr in prs(unit):
-        print(f"{repo} {pr['number']} {pr['head']['sha']}")
+        print(f"{repo} {pr['number']} {pr['head']['sha']} {base_of(repo, pr)}")
 
 
 def read_expected(path):
@@ -93,9 +120,10 @@ def read_expected(path):
         raise Refused(f"the proven heads not read ({path}: {e})") from None
     for line in filter(None, (x.strip() for x in lines)):
         parts = line.split()
-        if len(parts) != 3 or parts[0] not in REPOS or not parts[1].isdigit() or not re.fullmatch(r"[0-9a-f]{40}", parts[2]):
+        if (len(parts) != 4 or parts[0] not in REPOS or not parts[1].isdigit()
+                or not all(re.fullmatch(r"[0-9a-f]{40}", x) for x in parts[2:])):
             raise Refused(f"the proven heads' line {line!r} is none")
-        expected[parts[0]] = (int(parts[1]), parts[2])
+        expected[parts[0]] = (int(parts[1]), parts[2], parts[3])
     if not expected:
         raise Refused(f"no proven head in {path}")
     return expected
@@ -103,7 +131,7 @@ def read_expected(path):
 
 def merge(unit, expected):
     found = prs(unit)
-    if {repo: pr["number"] for repo, pr in found} != {repo: n for repo, (n, _) in expected.items()}:
+    if {repo: pr["number"] for repo, pr in found} != {repo: n for repo, (n, _, _) in expected.items()}:
         raise Refused(f"the unit's pull requests are not the ones proven ({sorted(r for r, _ in found)} against "
                       f"{sorted(expected)}) - nothing merged")
     for repo, pr in found:  # every one green, mergeable and the proven commit first: a unit goes in whole or not at all
@@ -116,15 +144,61 @@ def merge(unit, expected):
             raise Refused(f"{repo}#{pr['number']} not green (its CI: {state or 'none'}) - nothing merged")
         if pr.get("mergeable") is False:
             raise Refused(f"{repo}#{pr['number']} not mergeable - nothing merged")
+        base = base_of(repo, pr)
+        if base != expected[repo][2]:
+            raise Refused(f"{repo}'s {(pr.get('base') or {}).get('ref') or 'main'} moved since the proof "
+                          f"({expected[repo][2][:12]} proven, {base[:12]} now) - nothing merged")
+    merged = []
     for repo, pr in sorted(found, key=lambda x: REPOS.index(x[0])):
-        call("POST", f"/repos/{repo}/pulls/{pr['number']}/merge",
-             {"Do": "merge", "delete_branch_after_merge": True, "head_commit_id": expected[repo][1]})
+        try:
+            call("POST", f"/repos/{repo}/pulls/{pr['number']}/merge",
+                 {"Do": "merge", "delete_branch_after_merge": True, "head_commit_id": expected[repo][1]})
+        except Refused as e:
+            # its answer lost (a timeout, Forgejo restarting) is no proof it did not merge: read it again
+            try:
+                went_in = bool((call("GET", f"/repos/{repo}/pulls/{pr['number']}") or {}).get("merged"))
+            except Refused:
+                went_in = None
+            if went_in:
+                merged.append(f"{repo}#{pr['number']}")
+                print(f"MERGED {repo}#{pr['number']} (its answer lost: {e})")
+                continue
+            if merged or went_in is None:
+                raise Partial(f"merged {', '.join(merged) or 'nothing known'}; {repo}#{pr['number']} not"
+                              f"{' (its state not read)' if went_in is None else ''}: {e}") from None
+            raise
+        merged.append(f"{repo}#{pr['number']}")
         print(f"MERGED {repo}#{pr['number']}")
 
 
+def pause(text):
+    for issue in every("/repos/schnappy/ops/issues?state=open&type=issues"):
+        if (issue.get("title") or "").startswith(DASHBOARD):
+            have = {lb["name"]: lb["id"] for lb in every("/repos/schnappy/ops/labels")}
+            if "upgrades-paused" not in have:
+                have["upgrades-paused"] = call("POST", "/repos/schnappy/ops/labels",
+                                               {"name": "upgrades-paused", "color": "#b60205"})["id"]
+            call("POST", f"/repos/schnappy/ops/issues/{issue['number']}/labels", {"labels": [have["upgrades-paused"]]})
+            call("POST", f"/repos/schnappy/ops/issues/{issue['number']}/comments", {"body": text})
+            print(f"PAUSED schnappy/ops#{issue['number']}")
+            return
+    raise Refused("no dashboard issue to pause the cycle on")
+
+
+USAGE = ("usage: upgrade-label.py UNIT LABEL | UNIT --comment TEXT | UNIT --heads | UNIT --merge --expect FILE | "
+         "--pause TEXT")
+
+
 def main(argv):
+    if len(argv) == 2 and argv[0] == "--pause" and argv[1]:
+        try:
+            pause(argv[1])
+        except Refused as e:
+            print(f"REFUSED: {e}")
+            return 1
+        return 0
     if len(argv) < 2 or not re.fullmatch(r"[a-z0-9][a-z0-9.-]*", argv[0]):
-        print("usage: upgrade-label.py UNIT LABEL | UNIT --comment TEXT | UNIT --heads | UNIT --merge --expect FILE")
+        print(USAGE)
         return 2
     unit = argv[0]
     try:
@@ -137,8 +211,11 @@ def main(argv):
         elif len(argv) == 2 and re.fullmatch(r"[a-z0-9][a-z0-9-]*", argv[1]):
             label(unit, argv[1])
         else:
-            print("usage: upgrade-label.py UNIT LABEL | UNIT --comment TEXT | UNIT --heads | UNIT --merge --expect FILE")
+            print(USAGE)
             return 2
+    except Partial as e:
+        print(f"PARTIAL: {e}")
+        return 3
     except Refused as e:
         print(f"REFUSED: {e}")
         return 1

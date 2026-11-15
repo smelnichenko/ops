@@ -14,3 +14,5 @@ __pycache__/
 .copy/
 # the retired upgrade test's working files - a checkout that ran it still has them
 .upgrade/
+# the upgrade cycle's state: its open pages, an apply's journal, its lock (scripts/upgrade-cycle.sh)
+.upgrade-cycle/

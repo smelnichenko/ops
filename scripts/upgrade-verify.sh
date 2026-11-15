@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# The upgrade cycle's check after an apply (docs/plans/120-automated-upgrade-cycle.md, part 2 step 7): production settled
-# and quiet - read only, through ten.
+# The upgrade cycle's check after an apply (and, settle 0 and hold 0, its look at production before one): production
+# settled and quiet - read only, through ten.
 #   settle  within UPGRADE_VERIFY_SETTLE minutes: every Argo app Synced and Healthy, its last operation Succeeded (or none),
 #           every running pod ready
 #   hold    then for UPGRADE_VERIFY_HOLD minutes, every UPGRADE_VERIFY_POLL seconds: still so, and no critical alert firing
