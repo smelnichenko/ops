@@ -17,7 +17,9 @@ grouped by branch (renovate/<unit> - the same name in each repo).
                  data-operators, argocd, pi-services - the first three one minor at a time, named <family>-<X.Y>, the
                  lowest first), then any other minor (a <name>-<X.Y> one by its version), then majors - a waiting
                  major's notice before a new one's. Left out:
-                 a unit labelled upgrade-blocked (red after its fix) or veto, a major in its 24 h; everything while the
+                 a unit labelled upgrade-blocked (red after its fix) or veto, a major in its 24 h, a unit any of whose pull
+                 requests lacks Renovate's own labels (upgrade-cycle, major, one-way: its kind not known - Forgejo applies
+                 only labels a repo has); everything while the
                  dashboard issue carries upgrades-paused (the kill switch) - and no dashboard issue open: not read (exit 1)
   noticed UNIT   when the unit's veto notice was posted and the heads it announced (the runner's latest "UPGRADE
                  NOTICE <iso> heads=<repo>@<sha>,..." comment: a fix noticed again starts its 24 h again), "<iso>
@@ -35,6 +37,7 @@ Env: UPGRADE_FORGEJO_URL (default https://git.pmon.dev/api/v1), UPGRADE_FORGEJO_
      UPGRADE_NOW (an ISO time, for the harness). Exit 0 with an answer, 1 when Forgejo's answer was not read (the
      dashboard issue missing among them: pick and held fail closed without the kill switch).
 """
+import base64
 import datetime
 import json
 import os
@@ -57,6 +60,7 @@ VETO_HOURS = 24
 NOTICE = re.compile(r"UPGRADE NOTICE (\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ)(?: heads=(\S+))?")
 # renovate/upgrade-cycle.json's dependencyDashboardTitle - each repo's dashboard (all three extend the preset)
 DASHBOARD = "Upgrade cycle - Renovate's dashboard (label upgrades-paused: the cycle stops)"
+RENOVATE_LABELS = {"upgrade-cycle", "major", "one-way"}
 
 
 class NotRead(Exception):
@@ -105,9 +109,13 @@ def units():
             if not ref.startswith("renovate/") or not ours(repo, pr):
                 continue
             name = ref[len("renovate/"):]
-            u = found.setdefault(name, {"repos": {}, "labels": set()})
+            u = found.setdefault(name, {"repos": {}, "labels": set(), "unlabelled": False})
             u["repos"][repo] = pr["number"]
-            u["labels"] |= {lb["name"] for lb in pr.get("labels") or []}
+            names = {lb["name"] for lb in pr.get("labels") or []} | renovate_labels(pr)
+            u["labels"] |= names
+            # Renovate's own labels on every pull request of it (the preset: upgrade-cycle, major, one-way - Forgejo
+            # applies only labels the repo has): without them its kind, its one-way mark are not known
+            u["unlabelled"] |= not names & RENOVATE_LABELS
     for name, u in found.items():
         if "major" in u["labels"]:
             u["kind"] = "major"
@@ -116,6 +124,19 @@ def units():
         else:
             u["kind"] = "minor"
     return found
+
+
+def renovate_labels(pr):
+    """The labels Renovate gave the pull request, as its own record in the body says (<!--renovate-debug:...-->) -
+    Forgejo drops a label the repo did not have when the pull request was made, and Renovate, recording it as set,
+    never adds it again: its record is what it decided."""
+    m = re.search(r"<!--renovate-debug:([A-Za-z0-9+/=]+)-->", pr.get("body") or "")
+    if not m:
+        return set()
+    try:
+        return set(json.loads(base64.b64decode(m.group(1))).get("labels") or [])
+    except (ValueError, TypeError, AttributeError):
+        return set()
 
 
 def twin(name):
@@ -180,7 +201,8 @@ def pick():
     if paused():
         return "PAUSED"
     all_units = units()
-    open_units = {n: u for n, u in all_units.items() if not ({"upgrade-blocked", "veto"} & u["labels"])}
+    # unlabelled (Renovate's labels not on it): never picked - a major unlabelled read as a minor, applied with no notice
+    open_units = {n: u for n, u in all_units.items() if not ({"upgrade-blocked", "veto"} & u["labels"]) and not u["unlabelled"]}
     tests = sorted((n for n in open_units if n.startswith("test-")), key=lambda n: order(n, open_units[n]))
     if tests:
         return f"test {tests[0]} {open_units[tests[0]]['kind']}"
@@ -207,7 +229,8 @@ def pick_noticed(open_units, majors):
 
 def show_list():
     for name, u in sorted(units().items()):
-        print(f"{name} {u['kind']} {','.join(sorted(u['repos']))} {','.join(sorted(u['labels'])) or '-'}")
+        print(f"{name} {u['kind']} {','.join(sorted(u['repos']))} {','.join(sorted(u['labels'])) or '-'}"
+              + (" UNLABELLED" if u["unlabelled"] else ""))
     return 0
 
 

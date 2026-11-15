@@ -45,8 +45,10 @@ def check(name, got, want):
     global fails
     fails += got != want
     print(("PASS " if got == want else "FAIL ") + name + ("" if got == want else f": got {got!r}, want {want!r}"))
-def pr(number, unit, *labels, user="renovate-bot", fork=False):
-    # the repository's own branch unless fork (head.repo filled in by fixture() for its repo)
+def pr(number, unit, *labels, user="renovate-bot", fork=False, renovate=True):
+    # the repository's own branch unless fork (head.repo filled in by fixture() for its repo); Renovate's own label on it
+    # (upgrade-cycle, as the preset puts it) unless it has major or one-way, or renovate=False (Forgejo applied none)
+    labels = list(labels) + (["upgrade-cycle"] if renovate and not {"upgrade-cycle", "major", "one-way"} & set(labels) else [])
     return {"number": number, "head": {"ref": f"renovate/{unit}", "repo": "FORK" if fork else None},
             "user": {"login": user}, "labels": [{"name": x} for x in labels]}
 DASH_TITLE = json.load(open("renovate/upgrade-cycle.json"))["dependencyDashboardTitle"]
@@ -87,6 +89,20 @@ check("list: one line a unit - its kind, its repos, its labels", run("list"), (0
     "istio minor schnappy/infra,schnappy/ops upgrade-cycle", "postgresql-19.x major schnappy/infra major",
     "wave-patches patch schnappy/infra,schnappy/platform upgrade-cycle"])))
 check("wave-patches first, before the minors and the majors", run("pick"), (0, "prove wave-patches patch"))
+fixture(infra=[pr(1, "wave-patches"), pr(3, "sonarqube-26.x", renovate=False)], platform=[pr(7, "wave-patches", renovate=False)])
+import base64  # noqa: E402
+def recorded(p, *labels):  # Renovate's own record in the body: the labels it decided (Forgejo dropped them)
+    p["body"] = "This PR contains...\n<!--renovate-debug:" + base64.b64encode(json.dumps({"labels": list(labels)}).encode()).decode() + "-->"
+    return p
+fixture(infra=[recorded(pr(3, "kafka-5.x", renovate=False), "major"), recorded(pr(4, "istio", renovate=False), "upgrade-cycle")])
+check("labels Renovate decided and Forgejo dropped (its record in the body): read as its own - a major still a major, "
+      "noticed; the minor proven", (run("list")[1].split("\n"), run("pick")),
+      (["istio minor schnappy/infra upgrade-cycle", "kafka-5.x major schnappy/infra major"], (0, "prove istio minor")))
+fixture(infra=[pr(1, "wave-patches"), pr(3, "sonarqube-26.x", renovate=False)], platform=[pr(7, "wave-patches", renovate=False)])
+check("a pull request without Renovate's labels (the repo had none to apply - a major would read as a minor): its unit "
+      "never picked, said in the list", (run("pick"), run("list")[1].split("\n")),
+      ((0, "NOTHING"),
+       ["sonarqube-26.x minor schnappy/infra - UNLABELLED", "wave-patches patch schnappy/infra,schnappy/platform upgrade-cycle UNLABELLED"]))
 fixture(infra=[pr(2, "observability"), pr(3, "istio"), pr(4, "cert-manager-1.x"), pr(5, "argocd")])
 check("the family minors in their order (istio before observability), before any other minor", run("pick"),
       (0, "prove istio minor"))
@@ -199,7 +215,7 @@ check("held: Forgejo unreachable - not read (exit 1), never 'nothing holds it'",
       run("held", "wave-patches", url="http://127.0.0.1:1/api/v1")[0], 1)
 fixture(infra=[pr(1, "wave-patches", user="mallory"), pr(2, "istio", fork=True), pr(3, "observability")])
 check("another account's pull request, or one from a fork, named renovate/<unit> all the same: no unit",
-      (run("pick"), run("list")[1].split("\n")), ((0, "prove observability minor"), ["observability minor schnappy/infra -"]))
+      (run("pick"), run("list")[1].split("\n")), ((0, "prove observability minor"), ["observability minor schnappy/infra upgrade-cycle"]))
 fixture(infra=[pr(3, "postgresql-19.x", "major")],
         comments={("infra", 3): [("mallory", "UPGRADE NOTICE 2026-11-01T00:00:00Z - backdated")]})
 check("a notice comment by anyone but the bot: no notice (a backdated one skipped the 24 h)",
