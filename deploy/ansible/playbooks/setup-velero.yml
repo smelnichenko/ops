@@ -1073,7 +1073,9 @@
           done
           [ -n "$repos" ] || { say "FAILED: no repository listed"; exit 1; }
           failed="" mirrored=""
-          while read -r r head; do
+          # the list on a descriptor of its own: ssh reads its standard input, and on the loop's it swallowed every
+          # repository after the first (the copy's check, 2026-11-15: the run clean, one repository of two mirrored)
+          while read -r r head <&3; do
             [ -n "$r" ] || continue
             [[ $r =~ ^[A-Za-z0-9._-]+$ ]] || { failed+=" $r(its name)"; continue; }
             [[ $head =~ ^[A-Za-z0-9._/-]+$ ]] || { failed+=" $r(its default branch)"; continue; }
@@ -1106,7 +1108,7 @@
             ssh "${ssh_opts[@]}" "$pi" "timeout 60 mountpoint -q $pidir && git -C $pidir/$r.git symbolic-ref HEAD refs/heads/$head" \
               2>&1 | logger -t git-mirror || { failed+=" $r(its HEAD)"; continue; }
             mirrored+=" $r"
-          done <<< "$repos"
+          done 3<<< "$repos"
           if [ -n "$failed" ]; then
             say "FAILED:$failed"
             exit 1

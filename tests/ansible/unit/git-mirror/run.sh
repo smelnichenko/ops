@@ -53,6 +53,8 @@ STUB
 cat > "$W/bin/git" <<'STUB'
 #!/bin/bash
 echo "git $* PROMPT=${GIT_TERMINAL_PROMPT:-unset} SSH=${GIT_SSH_COMMAND:-}" >> "$W/git-calls"
+# a push reads its standard input too (ssh beneath it): the same as ssh's stub
+case "$*" in *" push "*) cat > /dev/null ;; esac
 args=("$@")
 for ((i = 0; i < ${#args[@]}; i++)); do
   [ "${args[$i]}" = clone ] && { dest=${args[$((${#args[@]} - 1))]}; mkdir -p "$dest"; touch "$dest/HEAD"; exit 0; }
@@ -81,6 +83,8 @@ STUB
 cat > "$W/bin/ssh" <<'STUB'
 #!/bin/bash
 echo "ssh $*" >> "$W/ssh-calls"
+# as ssh does: its standard input read (sent to the remote command) - a loop fed on it loses every line after the first
+cat > /dev/null
 [ -n "${INIT_FAILS:-}" ] && [[ $* == *"/$INIT_FAILS.git/HEAD"* ]] && { echo "fatal: cannot mkdir" >&2; exit 128; }
 # LAST_FAILS: the last-success write refused on the Pi
 [ -n "${LAST_FAILS:-}" ] && [[ $* == *"last-success"* ]] && { echo "Permission denied" >&2; exit 1; }
@@ -393,6 +397,10 @@ check("a good run's result for Prometheus: its time (now) and how many it mirror
        metrics.get("offsite_git_mirror_repositories")), (True, "2"))
 check("  its push with the mirror user's key", (bool(push), all("-i /home/sm/.ssh/id_ed25519" in l for l in push)),
       (True, True))
+# the 2026-11-15 copy run: clean, one repository of two mirrored - ssh read the loop's list from its standard input
+check("every repository listed is mirrored though ssh and git read their standard input (three of three)",
+      (lambda r: (r[0], sorted(re.findall(r" push .*/([\w.-]+\.git) PROMPT=", "\n".join(r[2])))))(
+          run([["ops", "infra", "site"]])), (0, ["infra.git", "ops.git", "site.git"]))
 # its own helper for Forgejo's URL alone (git's credential.<url>.helper) and no redirect followed: a redirect off the
 # host (a misconfigured proxy) asked the helper for the new host, and it answered any with the token
 check("its git: no prompt (none to answer), the Pi's host keys checked, the credential helper reset before its own - "
