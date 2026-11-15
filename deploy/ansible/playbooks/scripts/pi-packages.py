@@ -245,7 +245,7 @@ def condition_failed(unit):
     """True when the unit's start conditions were checked at this boot and failed (systemd then leaves it inactive
     without an error: a first-boot unit) - a unit not tried yet has no condition timestamp."""
     out = run(["systemctl", "show", "-p", "ConditionResult", "-p", "ConditionTimestampMonotonic", unit], timeout=30)
-    props = {k: v for k, v in (line.split("=", 1) for line in out.splitlines() if "=" in line)}
+    props = {k: v for k, sep, v in (line.partition("=") for line in out.splitlines()) if sep}
     return props.get("ConditionResult") == "no" and props.get("ConditionTimestampMonotonic", "0") not in ("", "0")
 
 
