@@ -2,7 +2,8 @@
 
 Status: **BUILDING** (operator 2026-11-14: "start building plan 120 meanwhile", "ensure renovate works with
 vagrant") - the review answered 2026-11-14 (below); plan 119's wave 1 done by hand (2026-11-14); rollout step 1 (the
-lookup) run - its findings fixed below, three questions open.
+lookup) run - its findings fixed below, three questions open. 2026-11-15: one manual task, no shadow, Kafka's operator
+first (decisions below).
 
 **Built 2026-11-14 (ops upgrade/wave-1 branch, each with its harness):**
 - Renovate: `renovate/upgrade-cycle.json` (the shared preset - units, groups, one minor at a time for Kubernetes/
@@ -17,8 +18,8 @@ lookup) run - its findings fixed below, three questions open.
   `.claude/skills/upgrade-fix`.
 **Done since:** the renovate-bot reset (operator: "reset renovate-bot with forgejo_admin yourself"), its PAT in
 ops/.env RENOVATE_TOKEN, write access to infra/platform/ops (operator: "grant it").
-**Not yet:** a GitHub read token, or the six GitHub-sourced annotations moved to registries (RENOVATE_GITHUB_TOKEN in ops/.env is empty - ''; the 401 seen 2026-11-14 was the two quote characters sent as a token), the systemd user timer and its
-start time, the agent's headless permissions, `deploy:seed-secrets` for the bot's token (the operator's OK), Nexus
+**Not yet:** a GitHub read token, or the six GitHub-sourced annotations moved to registries (RENOVATE_GITHUB_TOKEN in ops/.env is empty - ''; the 401 seen 2026-11-14 was the two quote characters sent as a token), `task upgrade`
+(the decisions of 2026-11-15), the agent's headless permissions, `deploy:seed-secrets` for the bot's token (the operator's OK), Nexus
 annotated, a one-way change's store backups beyond etcd (Postgres, ScyllaDB, ...: blocked). Strimzi's Kafka version
 (`strimzi.kafkaVersion`, production's and the test environment's data values) is not annotated yet - a design point
 first: the test environment's unit merges before its production twin, but the Strimzi operator is one, shared, and
@@ -82,11 +83,27 @@ Kafka 4.2.2, ...). What it found, fixed in the preset and the runner (harness ca
   Cilium, Argo CD itself, Gateway API CRDs, the Pis) through ops version vars and their `deploy:*` tasks.
 - Vault needs no new access: each Pi unseals its own Vault already; `deploy:vault:upgrade` runs as by hand.
 
+## Decisions (operator, 2026-11-15)
+
+- **One task, started by hand, run locally - `task upgrade`** ("it should be started by hand by a single task with
+  renovate, since they work in tandem, run locally"): Renovate on the workstation (docker, its image pinned, the
+  shared preset, `renovate/allowed-commands.json`), then the runner. No systemd timer, no Woodpecker cron -
+  `.woodpecker/renovate.yaml` and ops' `renovate` cron go. The copy runs on the workstation; the operator stops the
+  radar for a run.
+- **No shadow** ("no shadow mode, deploy once it works in vagrant tests"): rollout step 2 dropped - the task runs the
+  runner for real: a unit proven on the copy and reviewed clean is applied (a major after its 24 h notice: one run gives
+  the notice, a later one applies it). `--shadow` stays a flag of the script, never the task's default.
+- **Kafka: the operator first** ("operator first!"): Strimzi's operator - one, shared by production's and the test
+  environment's Kafka - a unit of its own, proven on the copy against production's Kafka; a Kafka version
+  (`strimzi.kafkaVersion`, each environment's, annotated then) becomes a unit only once the operator supporting it is
+  live - the test environment first, production after (4.3.2 needs Strimzi 1.3: test-first alone broke the test env).
+
 ## Parts
 
 **1. Renovate CLI - finds the upgrades, opens the PRs** (chosen over Updatecli, Dependabot, Argo CD Image Updater,
 Flux image automation, Keel, Kargo: the only one with native Forgejo, every version source here, and grouping;
-comparison 2026-11-13). Runs as a Woodpecker cron in ops (`.woodpecker/renovate.yaml`), image pinned exactly, against
+comparison 2026-11-13). Runs on the workstation as `task upgrade`'s first half (docker, the image pinned exactly - a
+Woodpecker cron until 2026-11-15), against
 `schnappy/infra`, `schnappy/platform`, `schnappy/ops`; the existing `renovate-bot` account and secrets
 (docs/renovate-setup.md). Shared preset:
 - `automerge: false` (the cycle merges, not Renovate), `dependencyDashboardApproval: false`, `minimumReleaseAge: 3 days`,
@@ -105,9 +122,9 @@ comparison 2026-11-13). Runs as a Woodpecker cron in ops (`.woodpecker/renovate.
   rendered charts, in CI).
 
 **2. The upgrade runner - proves and applies** (on the workstation: the copy needs ~25 GB and libvirt; nowhere else).
-A systemd user timer (nightly, outside 02:00-03:00 and Sunday's 03:00-04:15 backup windows) runs a deterministic
-driver, `scripts/upgrade-cycle.sh`; no CI agent on the workstation (a Woodpecker agent there would give any pipeline a
-shell on it). Each night, one unit:
+`task upgrade`, started by the operator after Renovate's run (outside 02:00-03:00 and Sunday's 03:00-04:15 backup
+windows - the runner refuses them), runs a deterministic driver, `scripts/upgrade-cycle.sh`; no CI agent on the
+workstation (a Woodpecker agent there would give any pipeline a shell on it). Each run, one unit:
 1. **Pick**: the next open Renovate unit in order - wave-patches, then minor groups, then one major whose 24 h notice
    has run out unvetoed. Paused when an `upgrades-paused` label is on ops' dashboard issue (the kill switch).
 2. **Prove**: the copy lock; `test:copy:build` (from main = production), `test:copy:change` with the unit's infra and
@@ -141,8 +158,7 @@ backup - their upgrade playbooks take them).
 **4. Build hashes, verified (operator 2026-11-15: "yes" - with option B's lookups).** A version Renovate moves takes
 its pinned hashes with it, each read from what the vendor signs - never from the file it guards:
 - **The writer**: Renovate's post-upgrade task, once a branch on every ops update (`scripts/renovate-checksums.py
-  --changed`, the one command `renovate/allowed-commands.json` allows - the pipeline reads that file, the manual task
-  will) rewrites the pins of each version the branch moved. The upgrade-fix skill moves a pin only with `--changed --base origin/main` on the unit's
+  --changed`, the one command `renovate/allowed-commands.json` allows - `task upgrade` reads that file) rewrites the pins of each version the branch moved. The upgrade-fix skill moves a pin only with `--changed --base origin/main` on the unit's
   branch, never writing a hash itself.
 - **The gates**: `scripts/copy-unit.sh`, before a unit's proof, checks the branch's moved pins against main's keys
   (`--check --changed --base main --ref renovate/<unit>`) and refuses a unit that changes the keys, the checker or the
@@ -185,7 +201,8 @@ workstation off, the copy not building) changes nothing in production and says s
 ## Rollout of this plan
 
 1. Renovate in lookup mode (`RENOVATE_DRY_RUN=lookup`) until its log reproduces plan 119's tables.
-2. Renovate opening PRs; the runner proving them, applying nothing, a week (shadow).
+2. ~~Renovate opening PRs; the runner proving them, applying nothing, a week (shadow).~~ Dropped 2026-11-15 (no
+   shadow): `task upgrade` - Renovate's branches and PRs, then one unit proven and applied.
 3. Patches and minors applied automatically.
 4. Majors with the 24 h notice; the pre-change backups proven first.
 Each step reviewed before the next.
