@@ -63,7 +63,7 @@ old_keys = keys_dir("keys-old", [VENDOR, OLD], [VENDOR, OLD])       # a key expi
 
 # ── the mirror: each vendor's files where the script reads them ─────────────
 V = {"vault": "1.22.0", "forgejo": "15.0.12", "helm": "v3.21.0", "node_exporter": "1.13.0", "nexus": "3.91.0-02",
-     "versitygw": "1.9.0"}
+     "versitygw": "1.9.0", "consul": "1.21.0", "keycloak": "26.6.0", "gateway_api": "v1.6.0"}
 M = os.path.join(W, "mirror")
 def put(url, data):
     p = os.path.join(M, url.split("://", 1)[1] + ("index.html" if url.endswith("/") else ""))
@@ -88,6 +88,18 @@ zips = {a: f"vault {v} {a} zip".encode() for a in ("arm64", "amd64", "386")}
 sums_url = f"https://releases.hashicorp.com/vault/{v}/vault_{v}_SHA256SUMS"
 sign(put(sums_url, listing((f"vault_{v}_linux_{a}.zip", z) for a, z in zips.items())))
 expect["vault"] = {a: h(zips[a]) for a in ("arm64", "amd64")}
+v = V["consul"]
+czips = {a: f"consul {v} {a} zip".encode() for a in ("arm64", "amd64")}
+sign(put(f"https://releases.hashicorp.com/consul/{v}/consul_{v}_SHA256SUMS",
+         listing((f"consul_{v}_linux_{a}.zip", z) for a, z in czips.items())))
+expect["consul"] = {a: h(z) for a, z in czips.items()}
+v = V["keycloak"]
+kurl = f"https://github.com/keycloak/keycloak/releases/download/{v}/keycloak-{v}.tar.gz"
+sign(put(kurl, f"keycloak {v} tarball"), armor=True)
+expect["keycloak"] = {"noarch": h(f"keycloak {v} tarball")}
+v = V["gateway_api"]
+put(f"https://github.com/kubernetes-sigs/gateway-api/releases/download/{v}/standard-install.yaml", f"gateway api {v} crds")
+expect["gateway_api"] = {"noarch": h(f"gateway api {v} crds")}
 v = V["forgejo"]
 fj = {a: f"https://code.forgejo.org/forgejo/forgejo/releases/download/v{v}/forgejo-{v}-linux-{a}" for a in ("arm64", "amd64")}
 binaries = {a: f"forgejo {v} {a} binary".encode() for a in fj}
@@ -183,18 +195,18 @@ bump(*PIN)
 code, out = run("--changed")
 check("every pin moved: each rewritten from its vendor's signed material (or TLS, said); 0",
       (code, pins_now() == expect, out.count("rewritten"), "signed: HashiCorp" in out, "signed: Forgejo" in out,
-       "signed: Helm" in out, "TLS alone" in out), (0, True, 7, True, True, True, True))
+       "signed: Helm" in out, "signed: Keycloak" in out, "TLS alone" in out), (0, True, 10, True, True, True, True, True))
 changed = diff_lines()
 check("  nothing else in the files changed: each moved version and each pin's hash, the rest as it was (the nexus "
       "map's sha256: prefix and quotes kept); versitygw's new version an entry of its own, as the ones before it",
       (all(re.search(r"_version:|^\+\s+\"1\.9\.0\":$|^[-+]\s+(-\s+)?\S+:\s*\"?(sha256:)?[0-9a-f]{64}", l) for l in changed),
        len([l for l in changed if l.startswith("+")]), any('"sha256:' + expect["nexus"]["x86_64"] + '"' in l for l in changed),
        len([l for l in changed if l.startswith("-") and "_version:" not in l])),
-      (True, 6 + 8 + 3 + 2, True, 8 + 2))
+      (True, 9 + 8 + 4 + 3 + 2, True, 8 + 4 + 2))
 vg_text = open(os.path.join(R, PIN["versitygw"]["file"])).read()
 check("  versitygw's new entry after the ones before it", re.findall(r'^\s+"(\d+\.\d+\.\d+)":$', vg_text, re.M)[-1:], ["1.9.0"])
 code, out = run("--check")
-check("  --check after it: every pin ok; 0", (code, out.count("STALE"), out.count(" ok")), (0, 0, 12))
+check("  --check after it: every pin ok; 0", (code, out.count("STALE"), out.count(" ok")), (0, 0, 16))
 
 # --check: a stale pin, a missing versitygw entry - said, nothing written
 p = os.path.join(R, PIN["vault"]["file"])
@@ -354,11 +366,14 @@ literals = {(path, i) for path in files("deploy/ansible")
             for i, l in enumerate(open(path, encoding="utf-8"))
             if "@sha256:" not in l and re.search(r"(?<![0-9a-f])[0-9a-f]{64}(?![0-9a-f])", l)}
 check("every build hash under deploy/ansible is a line the script verifies (none left out), and there are hashes to "
-      "verify (the scan reads the tree)", (sorted(literals - covered), len(literals) >= 14), ([], True))
+      "verify (the scan reads the tree)", (sorted(literals - covered), len(literals) >= 18), ([], True))
 
 # each playbook downloads the artifact the script hashes: its URL, rendered with a version and an arch, names it
 DOWNLOADS = {  # pin -> the playbooks' download lines (their file, a marker on the line)
     "vault": [("upgrade-vault.yml", "url: \"https://releases.hashicorp.com/vault/"), ("setup-vault-pi.yml", "url: \"https://releases.hashicorp.com/vault/")],
+    "consul": [("setup-consul.yml", "url: \"https://releases.hashicorp.com/consul/")],
+    "keycloak": [("setup-pi-services.yml", "url: \"https://github.com/keycloak/")],
+    "gateway_api": [("setup-kubeadm.yml", "url: \"https://github.com/kubernetes-sigs/gateway-api/")],
     "forgejo": [("setup-pi-services.yml", "url: \"https://code.forgejo.org/"), ("upgrade-forgejo.yml", "url: \"https://code.forgejo.org/")],
     "helm": [("setup-kubeadm.yml", "https://get.helm.sh/helm-")],
     "node_exporter": [("setup-host-hardening.yml", "node_exporter_archive_name:")],
@@ -370,7 +385,7 @@ def artifact(pin, v, a):
     fill = lambda t: t.format(v=v, a=a, p=pin.get("product", ""))  # noqa: E731
     if "name" in vd:
         return fill(vd["name"])
-    return fill(vd.get("xz") or vd["each"].removesuffix(".sha256")).rsplit("/", 1)[1]
+    return fill(vd.get("xz") or vd.get("artifact") or vd["each"].removesuffix(".sha256")).rsplit("/", 1)[1]
 bad = []
 for n, places in DOWNLOADS.items():
     pin = PIN[n]

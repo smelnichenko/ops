@@ -71,7 +71,7 @@ changed = subprocess.run(["git", "-C", OPS, "diff", "--name-only", f"main...{BRA
                          check=True).stdout.split()
 # the values ops restates from production's Argo charts (defaults-follow-production): they move with the infra unit
 FOLLOW = {"cert_manager_version", "external_secrets_chart_version", "metrics_server_chart_version", "istio_version",
-          "argocd_chart_version", "local_path_provisioner_version", "gateway_api_version"}
+          "argocd_chart_version", "local_path_provisioner_version", "gateway_api_version", "gateway_api_sha256"}
 def play_vars(text):
     doc = yaml.safe_load(text) or []
     return (doc[0].get("vars") or {}) if isinstance(doc, list) and doc and isinstance(doc[0], dict) else {}

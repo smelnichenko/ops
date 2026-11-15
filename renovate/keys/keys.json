@@ -31,5 +31,13 @@
     ],
     "source": "https://raw.githubusercontent.com/helm/helm/main/KEYS (the maintainers' keys; 3.20.0 signed by 208DD36ED5BB3745A16743A4C7C6FBB5B91C1155); the KEYS file's expired key (76939899..., expired 2022-08-07) not pinned",
     "url": "https://raw.githubusercontent.com/helm/helm/main/KEYS"
+  },
+  "keycloak": {
+    "file": "keycloak.asc",
+    "fingerprints": [
+      "861AB50E8CC6611FB6BC01A6B8F12EA26FD6EEBA"
+    ],
+    "source": "https://www.keycloak.org/keys (\"Keycloak Bot\", its key file linked there; it signs the release tarballs' .asc too)",
+    "url": "https://www.keycloak.org/keys/keycloak-2.asc"
   }
 }

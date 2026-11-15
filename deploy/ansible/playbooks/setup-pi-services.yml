@@ -22,6 +22,9 @@
   vars:
     # renovate: datasource=docker depName=quay.io/keycloak/keycloak versioning=semver
     keycloak_version: "26.5.7"
+    # the tarball, its .asc checked against Keycloak's key (scripts/renovate-checksums.py - moved with the version, never
+    # by hand)
+    keycloak_sha256: "34870950e9edfd6e5647e5a95efbd6a235499813c2f652361d84298c74b5711c"
     pi_ip: "{{ node_ip_override | default(ansible_default_ipv4.address) }}"
     pi1_ip: "{{ hostvars['pi1']['ansible_host'] | default('192.168.11.4') }}"
     pi2_ip: "{{ hostvars['pi2']['ansible_host'] | default('192.168.11.6') }}"
@@ -556,6 +559,7 @@
       ansible.builtin.get_url:
         url: "https://github.com/keycloak/keycloak/releases/download/{{ keycloak_version }}/keycloak-{{ keycloak_version }}.tar.gz"
         dest: "/opt/keycloak-{{ keycloak_version }}.tar.gz"
+        checksum: "sha256:{{ keycloak_sha256 }}"
         mode: '0644'
         timeout: 60
       register: _kc_dl

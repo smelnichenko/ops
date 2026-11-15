@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """pi-versions.py <inventory> <pins file> - the Pis' service versions production runs (its inventory's `pi <host>
 <service> <version>` lines), written as extra vars where the playbooks pin another version, so the Vagrant copy
-installs production's (scripts/production-inventory.sh calls it after reading production). Forgejo and Vault carry
-their amd64 checksum (kept from the pins file when the version is unchanged, else read from what the vendor signs -
+installs production's (scripts/production-inventory.sh calls it after reading production). Forgejo, Vault, Consul and
+Keycloak carry their amd64 checksum (kept from the pins file when the version is unchanged, else read from what the vendor signs -
 scripts/renovate-checksums.py's own reading; PI_VERSIONS_MIRROR / PI_VERSIONS_KEYS: the harness's); versitygw
 only at a version its task file has checksums for. And Debian's packages the Pis report (scripts/version-inventory-pi.sh
 lists them) at the versions they run, as pi_apt_versions - Debian's archive serves only the newest, so the copy moves
@@ -83,16 +83,19 @@ for name, _, _ in PINNED:
         sys.exit(f"the Pis report {name} {running[name]!r} - not a version")
 
 
-def verified_amd64(name, v):
-    """The release's amd64 build hash, its vendor's signature checked (renovate-checksums.py's pin and vendor)."""
-    pin = {**next(p for p in rc.PINS if p["name"] == name), "arches": ["amd64"]}
+def pinned(name, v):
+    """{its pin's key: the release's build hash} - a map's amd64 entry (the Vagrant VMs), or its one hash - read as
+    renovate-checksums.py reads it, its vendor's signature checked."""
+    pin = next(p for p in rc.PINS if p["name"] == name)
+    label = "amd64" if pin["shape"] == "map" else pin["arches"][0]
     with tempfile.TemporaryDirectory(prefix="pi-versions.") as work:
         try:
             keys = rc.Keys(os.environ.get("PI_VERSIONS_KEYS", "renovate/keys"), work)
-            want, _ = rc.hashes(pin, v, ["amd64"], rc.Fetcher(os.environ.get("PI_VERSIONS_MIRROR"), work), keys)
+            want, _ = rc.hashes({**pin, "arches": [label]}, v, [label],
+                                rc.Fetcher(os.environ.get("PI_VERSIONS_MIRROR"), work), keys)
         except rc.Refused as e:
             sys.exit(f"{name} {v}: {e}")
-    return want["amd64"]
+    return {pin["key"]: {"amd64": want[label]} if pin["shape"] == "map" else want[label]}
 
 
 # Debian's packages, each on both Pis or on neither, at one version
@@ -108,7 +111,7 @@ for pkg in debian_packages():
     if not DEB_VERSION.fullmatch(apt[pkg]):
         sys.exit(f"the Pis report {pkg} {apt[pkg]!r} - not a Debian version")
 
-FETCH = ("forgejo", "vault")
+FETCH = ("forgejo", "vault", "consul", "keycloak")  # each with its pin in renovate-checksums.py
 body = {}
 for name, var, playbooks in PINNED:
     v = running[name]
@@ -118,8 +121,9 @@ for name, var, playbooks in PINNED:
         sys.exit(f"the Pis run versitygw {v}: tasks/versitygw.yml's vgw_checksums has none for it - add them first")
     body[var] = v
     if name in FETCH:
-        same = str(old.get(var)) == v and (old.get(f"{name}_checksums") or {}).get("amd64")
-        body[f"{name}_checksums"] = {"amd64": same or verified_amd64(name, v)}
+        key = next(p["key"] for p in rc.PINS if p["name"] == name)
+        kept = old.get(key) if str(old.get(var)) == v else None
+        body.update({key: kept} if (kept.get("amd64") if isinstance(kept, dict) else kept) else pinned(name, v))
 if apt:
     body["pi_apt_versions"] = apt
 head = ("# The Pis' service versions as production runs them, where the playbooks pin another (they install their own where\n"

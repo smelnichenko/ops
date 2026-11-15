@@ -65,13 +65,15 @@ def bumped(v):
 
 
 check("every service at the playbooks' own: nothing pinned", run(own)[:2], (0, {}))
-for name, var in (("patroni", "patroni_version"), ("consul", "consul_version"), ("keycloak", "keycloak_version")):
+for name, var in (("patroni", "patroni_version"),):
     check(f"{name} at another version than the playbooks': pinned to production's, alone",
           run({**own, name: bumped(own[name])})[:2], (0, {var: bumped(own[name])}))
-# Forgejo and Vault carry their checksum: kept from the file when the version is the same - nothing fetched
-for name in ("forgejo", "vault"):
+# Forgejo, Vault, Consul and Keycloak carry their checksum: kept from the file when the version is the same - nothing
+# fetched (Keycloak's a single hash, the others a map's amd64 entry)
+for name, key in (("forgejo", "forgejo_checksums"), ("vault", "vault_checksums"), ("consul", "consul_checksums"),
+                  ("keycloak", "keycloak_sha256")):
     v = bumped(own[name])
-    old = {f"{name}_version": v, f"{name}_checksums": {"amd64": "ab" * 32}}
+    old = {f"{name}_version": v, key: "ab" * 32 if key == "keycloak_sha256" else {"amd64": "ab" * 32}}
     check(f"{name} pinned, its checksum kept from the file (nothing fetched)",
           run({**own, name: v}, old=old)[:2], (0, old))
 # the fetch itself: what the vendor signs (renovate-checksums.py's reading) - a mirror of the vendors (PI_VERSIONS_MIRROR)
@@ -88,9 +90,9 @@ KEY = next(l.split(":")[9] for l in gpg("--with-colons", "--list-keys", "Vendor 
            if l.startswith("fpr:"))
 KEYS = os.path.join(W, "keys")
 os.makedirs(KEYS)
-for v in ("hashicorp", "forgejo"):
+for v in ("hashicorp", "forgejo", "keycloak"):
     open(os.path.join(KEYS, f"{v}.asc"), "wb").write(gpg("--armor", "--export", KEY).stdout)
-json.dump({v: {"file": f"{v}.asc", "fingerprints": [KEY]} for v in ("hashicorp", "forgejo")},
+json.dump({v: {"file": f"{v}.asc", "fingerprints": [KEY]} for v in ("hashicorp", "forgejo", "keycloak")},
           open(os.path.join(KEYS, "keys.json"), "w"))
 MIRROR = os.path.join(W, "mirror")
 def put(url, data):
@@ -101,7 +103,10 @@ def put(url, data):
 def sign(path, armor=False):
     gpg("--yes", "--local-user", KEY, *(["--armor"] if armor else []), "--detach-sign", "-o",
         path + (".asc" if armor else ".sig"), path)
-fv, vv = bumped(own["forgejo"]), bumped(own["vault"])
+fv, vv, cv, kv = bumped(own["forgejo"]), bumped(own["vault"]), bumped(own["consul"]), bumped(own["keycloak"])
+curl_ = f"https://releases.hashicorp.com/consul/{cv}/consul_{cv}_SHA256SUMS"
+kurl = f"https://github.com/keycloak/keycloak/releases/download/{kv}/keycloak-{kv}.tar.gz"
+tarball = b"keycloak tarball"
 fbase = f"https://code.forgejo.org/forgejo/forgejo/releases/download/v{fv}/forgejo-{fv}-linux-amd64"
 vurl = f"https://releases.hashicorp.com/vault/{vv}/vault_{vv}_SHA256SUMS"
 binary = b"forgejo amd64 binary"
@@ -111,6 +116,8 @@ def mirror_good():
     sign(put(fbase + ".xz", lzma.compress(binary)), armor=True)
     sign(put(vurl, f"{'11' * 32}  vault_{vv}_darwin_amd64.zip\n{'22' * 32}  vault_{vv}_linux_arm64.zip\n"
                    f"{'33' * 32}  vault_{vv}_linux_amd64.zip\n"))
+    sign(put(curl_, f"{'66' * 32}  consul_{cv}_linux_arm64.zip\n{'77' * 32}  consul_{cv}_linux_amd64.zip\n"))
+    sign(put(kurl, tarball), armor=True)
 
 
 def fetch_run(versions, old=None):
@@ -138,6 +145,11 @@ check("forgejo and vault at new versions, no checksum kept: each read from what 
                        "vault_version": vv, "vault_checksums": {"amd64": "33" * 32}}))
 check("  the run's line names each service, the pinned ones so", (" (pinned)" in out, f"forgejo {fv} (pinned)" in out,
       f"consul {own['consul']} (pinned)" in out), (True, True, False))
+rc, text, out = fetch_run({**own, "consul": cv, "keycloak": kv})
+check("consul and keycloak at new versions: consul's amd64 line of its signed SHA256SUMS, keycloak's signed tarball's "
+      "hash - each under its pin's key", (rc, yaml.safe_load(text) if text else None),
+      (0, {"consul_version": cv, "consul_checksums": {"amd64": "77" * 32},
+           "keycloak_version": kv, "keycloak_sha256": hashlib.sha256(tarball).hexdigest()}))
 oldtext = yaml.safe_dump({"forgejo_version": "0.0.1", "forgejo_checksums": {"amd64": "cd" * 32}})
 for kept, label in (({"forgejo_version": fv}, "no checksum key"), ({"forgejo_version": fv, "forgejo_checksums": {"amd64": ""}},
                                                                          "an empty checksum")):

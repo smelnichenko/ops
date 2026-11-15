@@ -43,6 +43,12 @@ PINS = [
      "key": "vault_checksums", "arches": ["arm64", "amd64"], "vendor": "hashicorp", "product": "vault"},
     {"name": "forgejo", "file": "deploy/ansible/vars/forgejo.yml", "version": "forgejo_version", "shape": "map",
      "key": "forgejo_checksums", "arches": ["arm64", "amd64"], "vendor": "forgejo"},
+    {"name": "consul", "file": "deploy/ansible/playbooks/setup-consul.yml", "version": "consul_version", "shape": "map",
+     "key": "consul_checksums", "arches": ["arm64", "amd64"], "vendor": "hashicorp", "product": "consul"},
+    {"name": "keycloak", "file": "deploy/ansible/playbooks/setup-pi-services.yml", "version": "keycloak_version",
+     "shape": "single", "key": "keycloak_sha256", "arches": ["noarch"], "vendor": "keycloak"},
+    {"name": "gateway_api", "file": "deploy/ansible/playbooks/setup-kubeadm.yml", "version": "gateway_api_version",
+     "shape": "single", "key": "gateway_api_sha256", "arches": ["noarch"], "vendor": "gateway-api"},
     {"name": "helm", "file": "deploy/ansible/playbooks/setup-kubeadm.yml", "version": "helm_version", "shape": "single",
      "key": "helm_sha256", "arches": ["amd64"], "vendor": "helm", "renovate": False,
      "why": "a task's var behind creates: /usr/local/bin/helm - no host would take a new Helm, copy-unit proves none"},
@@ -64,6 +70,8 @@ PINS = [
 #   list   a checksum list naming each artifact - sig: its detached signature (the vendor signs the list)
 #   xz     the artifact, its sha256 file naming it, its .xz the vendor signs (.xz.asc): the .xz decompressed as it is
 #          hashed - a third of the download, the binary never on disk
+#   artifact  the artifact itself, downloaded and hashed - sig: its detached signature (the vendor signs the artifact
+#          and publishes no smaller signed list)
 #   each   one sha256 file per artifact
 #   index  a package index whose links carry #sha256=
 VENDORS = {
@@ -74,6 +82,10 @@ VENDORS = {
              "name": "helm-{v}-linux-{a}.tar.gz", "how": "signed: Helm"},
     "forgejo": {"xz": "https://code.forgejo.org/forgejo/forgejo/releases/download/v{v}/forgejo-{v}-linux-{a}",
                 "how": "signed: Forgejo"},
+    "keycloak": {"artifact": "https://github.com/keycloak/keycloak/releases/download/{v}/keycloak-{v}.tar.gz",
+                 "sig": "{artifact}.asc", "how": "signed: Keycloak"},
+    "gateway-api": {"artifact": "https://github.com/kubernetes-sigs/gateway-api/releases/download/{v}/standard-install.yaml",
+                    "how": "TLS alone: Gateway API signs no release"},
     "node_exporter": {"list": "https://github.com/prometheus/node_exporter/releases/download/v{v}/sha256sums.txt",
                       "name": "node_exporter-{v}.linux-{a}.tar.gz", "how": "TLS alone: Prometheus signs no release"},
     "versitygw": {"list": "https://github.com/versity/versitygw/releases/download/v{v}/checksums.txt",
@@ -288,6 +300,30 @@ def _from_xz(vd, vendor, fill, labels, fetch, keys):
     return out, signer
 
 
+def _sha256(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _from_artifact(vd, vendor, fill, labels, fetch, keys):
+    """The artifact itself hashed, its signature checked first where the vendor signs it."""
+    out, signer = {}, None
+    for a in labels:
+        url = fill(vd["artifact"], a=a)
+        sig = fetch.path(fill(vd["sig"], a=a, artifact=url)) if "sig" in vd else None
+        path = fetch.path(url)
+        try:
+            if sig:
+                signer = keys.verify(vendor, sig, path)
+            out[a] = _sha256(path)
+        finally:
+            os.remove(path)
+    return out, signer
+
+
 def _from_each(vd, vendor, fill, labels, fetch, keys):
     """One sha256 file per artifact."""
     return {a: first_hash(fetch.text(fill(vd["each"], a=a)), fill(vd["each"], a=a)) for a in labels}, None
@@ -307,7 +343,7 @@ def _from_index(vd, vendor, fill, labels, fetch, keys):
     return out, None
 
 
-READERS = {"list": _from_lists, "xz": _from_xz, "each": _from_each, "index": _from_index}
+READERS = {"list": _from_lists, "xz": _from_xz, "artifact": _from_artifact, "each": _from_each, "index": _from_index}
 
 
 def hashes(pin, version, labels, fetch, keys):

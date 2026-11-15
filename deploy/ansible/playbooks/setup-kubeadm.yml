@@ -60,6 +60,9 @@
     prometheus_operator_crds_chart_version: "32.0.1"  # operator v0.94.1
     # renovate: datasource=git-tags depName=https://github.com/kubernetes-sigs/gateway-api versioning=semver
     gateway_api_version: "v1.5.1"
+    # its standard-install.yaml - TLS alone, Gateway API signs no release (scripts/renovate-checksums.py - moved with the
+    # version, never by hand); an upgrade run (-e gateway_api_version) passes its sha256 beside it
+    gateway_api_sha256: "751002b3b91a87f7ae3bd2517c79a47a8d7ed6702901808a1cf9bd97d284f9b8"
     # renovate: datasource=docker depName=rancher/local-path-provisioner
     local_path_provisioner_version: "v0.0.37"
     # the provisioner's node paths - upstream's default, as ten runs (/opt/local-path-provisioner, on the NVMe root)
@@ -1025,6 +1028,17 @@
     # Phase 10: Install Gateway API CRDs
     # ================================================================
 
+    # the release's manifest checked against its pin before it is applied (kubectl -f <URL> checked nothing); fetched in
+    # a preview too - the file alone, nothing applied
+    - name: Download the Gateway API CRDs
+      check_mode: false
+      ansible.builtin.get_url:
+        url: "https://github.com/kubernetes-sigs/gateway-api/releases/download/{{ gateway_api_version }}/standard-install.yaml"
+        dest: "/var/cache/gateway-api-{{ gateway_api_version }}-standard-install.yaml"
+        checksum: "sha256:{{ gateway_api_sha256 }}"
+        mode: '0644'
+      tags: [gateway-api]
+
     - name: Install Gateway API CRDs
       # Server-side, as Gateway API's own upgrade instructions say: a client-side apply keeps the whole CRD in an
       # annotation, which the larger CRDs of later releases overflow. --force-conflicts takes over the fields an
@@ -1035,7 +1049,7 @@
       ansible.builtin.command: >-
         kubectl --kubeconfig /etc/kubernetes/admin.conf apply --server-side --force-conflicts
         {{ '--dry-run=server' if ansible_check_mode else '' }}
-        -f https://github.com/kubernetes-sigs/gateway-api/releases/download/{{ gateway_api_version }}/standard-install.yaml
+        -f /var/cache/gateway-api-{{ gateway_api_version }}-standard-install.yaml
       changed_when: not ansible_check_mode
       tags: [gateway-api]  # an upgrade runs just this: --tags gateway-api -e gateway_api_version=...
 
