@@ -145,16 +145,32 @@ case "$args" in
     esac ;;
   *"rev-parse --abbrev-ref HEAD"*) cat "$ST/branch" 2>/dev/null || echo main ;;
   *"status --porcelain"*) cat "$ST/dirty" 2>/dev/null ;;
-  *"fetch -q origin main +refs/heads/renovate/"*) f="$ST/fetchunit.$(basename "$dir").rc"; [ -e "$f" ] || f="$ST/fetchunit.rc"
+  *"fetch -q origin main +refs/heads/renovate/"*)
+    if [ -s "$ST/fetchunit.seq" ]; then rc=$(head -1 "$ST/fetchunit.seq"); sed -i 1d "$ST/fetchunit.seq"; exit "$rc"; fi  # one a call
+    f="$ST/fetchunit.$(basename "$dir").rc"; [ -e "$f" ] || f="$ST/fetchunit.rc"
     exit "$(cat "$f" 2>/dev/null || echo 0)" ;;
   *"fetch -q origin main"*) exit "$(cat "$ST/fetch.rc" 2>/dev/null || echo 0)" ;;
   *"ls-remote origin refs/heads/renovate/"*)  # a branch's tip: the head Forgejo shows unless the case says otherwise
     r=$(basename "$dir"); f="$ST/tip.$r"; if [ -e "$f" ]; then cat "$f"; else n=$(cat "$ST/heads.n" 2>/dev/null || echo 0)
       h="$ST/heads.$n"; [ -e "$h" ] || h="$ST/heads.last"; [ ! -e "$ST/heads.override" ] || h="$ST/heads.override"
       awk -v r="schnappy/$r" '$1 == r {print $3}' "$h"; fi ;;
-  *"cat-file blob"*) cat "$ST/blob" 2>/dev/null || echo "v: 2" ;;
-  *" diff --text"*) cat "$ST/blob" 2>/dev/null ;;
-  *"rev-list --no-merges"*) cat "$ST/sincenotice" 2>/dev/null; exit 0 ;;
+  *"rev-parse -q --verify refs/heads/renovate/"*)  # a checkout's branch: the head Forgejo shows unless the case says not
+    r=$(basename "$dir"); f="$ST/branchtip.$r"
+    if [ -s "$f.seq" ]; then head -1 "$f.seq"; [ "$(wc -l < "$f.seq")" -le 1 ] || sed -i 1d "$f.seq"  # one line a read
+    elif [ -e "$f" ]; then cat "$f"; else n=$(cat "$ST/heads.n" 2>/dev/null || echo 0)
+      h="$ST/heads.$n"; [ -e "$h" ] || h="$ST/heads.last"; [ ! -e "$ST/heads.override" ] || h="$ST/heads.override"
+      awk -v r="schnappy/$r" '$1 == r {print $3}' "$h"; fi ;;
+  *"cat-file blob"*) case "${*: -1}" in  # the proven head's file as it was; the fix's as the case gives it
+      aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:*|cccccccccccccccccccccccccccccccccccccccc:*) echo "v: 1" ;;
+      *) cat "$ST/blob" 2>/dev/null || echo "v: 2" ;; esac ;;
+  *" diff --text"*) cat "$ST/blob" 2>/dev/null; exit 0 ;;  # no blob: an empty diff (git's answer, exit 0)
+  *"merge-tree --write-tree origin/main "*)  # merging a head into main: one tree whatever the head - unless a commit came
+    # since the notice ($ST/sincenotice): then each head its own tree (the head now and the announced one differ)
+    if [ -s "$ST/sincenotice" ]; then echo "tree-of-${*: -1}"; else echo tree-the-announced-ones; fi ;;
+  *"diff --stat --no-renames origin/main..."*) [ ! -e "$ST/summary.fail" ] || exit 128; echo " clusters/production/x.yaml | 2 +-" ;;
+  *"log --format=%h %s origin/main.."*) printf 'abc1234 bump x to 2 \033[2J\n' ;;  # a subject with a terminal escape
+  *" commit-tree "*) case "$dir" in  # the runner's commit of the fix's tree: the agent's tip for the case's purposes
+      */ops) echo dddddddddddddddddddddddddddddddddddddddd ;; *) echo bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb ;; esac ;;
   *"rev-list origin/main --not"*)  # ops' main beyond the gate and the unit's ops head: the unit's merge alone
     if [ -e "$ST/opsextra" ]; then cat "$ST/opsextra"
     else n=0; seen=""; for a in "$@"; do [ -z "$seen" ] || n=$((n + 1)); [ "$a" != --not ] || seen=1; done
@@ -183,7 +199,7 @@ H1_UPDATED = "schnappy/infra 4 " + "5" * 40 + " " + "e" * 40 + "\nschnappy/ops 7
 H1_BASE_MOVED = "schnappy/infra 4 " + "a" * 40 + " " + "9" * 40 + "\nschnappy/ops 7 " + "c" * 40 + " " + "e" * 40 + "\n"
 CLEAN = "PASSES: correctness, security, architecture, reliability, tests\nVERDICT: CLEAN"
 def setup(pick, proofs=(0,), plan="test:copy:change INFRA_REF=renovate/x PLATFORM_REF=main\n", verdict=CLEAN, mem=30000,
-          files=None, heads=(H1,), records=(), inflight=False, proven=True, tries=0, journal=None):
+          files=None, heads=(H1,), records=(), inflight=False, proven=True, tries=0, journal=None, pending=None):
     for f in os.listdir(ST):
         os.remove(os.path.join(ST, f))
     for d in (".copy", "docs", ".upgrade-cycle"):
@@ -201,6 +217,10 @@ def setup(pick, proofs=(0,), plan="test:copy:change INFRA_REF=renovate/x PLATFOR
         os.makedirs(os.path.join(OPS, ".upgrade-cycle/tries"), exist_ok=True)
         key = ",".join(f"{l.split()[0]}#{l.split()[1]}" for l in heads[0].splitlines())
         open(os.path.join(OPS, ".upgrade-cycle/tries", pick.split()[1]), "w").write(f"{key} 2026-11-19T12:00:00Z a try\n" * tries)
+    if pending is not None:  # an earlier run's CI still running, on these heads ("same": the ones this run reads)
+        os.makedirs(os.path.join(OPS, ".upgrade-cycle/pending"), exist_ok=True)
+        key = "".join(" ".join(l.split()[:3]) + " " for l in heads[0].splitlines()) if pending == "same" else pending
+        open(os.path.join(OPS, ".upgrade-cycle/pending", pick.split()[1]), "w").write(key)
     open(os.path.join(ST, "pick"), "w").write(pick + "\n")
     open(os.path.join(ST, "proofs"), "w").write("".join(f"{p}\n" for p in proofs))
     open(os.path.join(ST, "plan"), "w").write(plan)
@@ -410,6 +430,23 @@ check("its CI still running after an hour (Woodpecker's queue): reported, nothin
       (rc, has(calls, "task"), notices(calls), has(calls, "upgrade-label.py wave-patches upgrade-blocked"),
        has(calls, "upgrade-label.py wave-patches --green"), os.path.exists(os.path.join(OPS, ".upgrade-cycle/tries/wave-patches"))),
       (1, [], ["upgrade-notice.sh blocked wave-patches"], [], ["upgrade-label.py wave-patches --green 3600"], False))
+def tries_now(unit="wave-patches"):
+    p = os.path.join(OPS, ".upgrade-cycle/tries", unit)
+    return len(open(p).read().splitlines()) if os.path.exists(p) else 0
+check("  the heads it was still running on recorded: the next run on the same heads counts one",
+      os.path.exists(os.path.join(OPS, ".upgrade-cycle/pending/wave-patches")), True)
+rc, calls = night("prove wave-patches patch", plan=PLAN, files={"green.rc": "1"}, pending="same")
+check("  still running on the same heads a run later (stuck in Woodpecker): a try counted, nothing built",
+      (rc, has(calls, "task"), tries_now(), [c for c in has(calls, "upgrade-notice.sh blocked") if "same heads a run later" in c] != []),
+      (1, [], 1, True))
+rc, calls = night("prove wave-patches patch", plan=PLAN, files={"green.rc": "1"}, pending="schnappy/infra 1 " + "f" * 40 + " ")
+check("  still running on other heads than a run before (they moved): no try, the new heads recorded",
+      (rc, tries_now(), open(os.path.join(OPS, ".upgrade-cycle/pending/wave-patches")).read().startswith("schnappy/infra 4 " + "a" * 40)),
+      (1, 0, True))
+rc, calls = night("prove wave-patches patch", plan=PLAN, files={"green.rc": "5"})
+check("no CI on its heads after an hour (no pipeline started - it never comes by itself): a try counted, nothing built",
+      (rc, has(calls, "task"), tries_now(), [c for c in has(calls, "upgrade-notice.sh blocked") if "no CI on its heads" in c] != []),
+      (1, [], 1, True))
 rc, calls = night("prove wave-patches patch", plan=PLAN, files={"green.rc": "4"}, tries=2)
 check("  the third try for the unit's pull requests (red CI, its heads moved between them): labelled upgrade-blocked (the "
       "queue goes on)", (rc, has(calls, "upgrade-label.py wave-patches upgrade-blocked")), (1, ["upgrade-label.py wave-patches upgrade-blocked"]))
@@ -443,8 +480,16 @@ check("  updated, Forgejo not showing the new heads yet: said, nothing built, no
       os.path.exists(os.path.join(OPS, ".upgrade-cycle/tries/wave-patches"))), (1, [], False))
 rc, calls = night("prove wave-patches patch", plan=PLAN, files={"stale": "1\n", "tip.infra": "\n"})
 check("  a tip not read (ls-remote failing): never taken for the new head - nothing built", (rc, has(calls, "task test:copy:build")), (1, []))
+rc, calls = night("prove wave-patches patch", plan=PLAN, files={"stale": "1\n", "tip.infra": "\n"},
+                  heads=("schnappy/infra 4\nschnappy/ops 7 " + "c" * 40 + " " + "e" * 40 + "\n",))
+check("  a tip not read and a head Forgejo did not give (both empty - equal): never an update shown - nothing built",
+      (rc, has(calls, "task test:copy:build")), (1, []))
 rc, calls = night("prove wave-patches patch", plan=PLAN, files={"stale": "1\n", "update.rc": "1"})
 check("  Forgejo's update refused (a conflict): a try", (rc, os.path.exists(os.path.join(OPS, ".upgrade-cycle/tries/wave-patches"))), (1, True))
+rc, calls = night("prove wave-patches patch", plan=PLAN, files={"fetchunit.seq": "0\n0\n1\n"})
+check("  its branches fetched before its CI, not after it (the second fetch failing alone): said, nothing built, no try",
+      (rc, has(calls, "task test:copy:build"), tries_now(),
+       [c for c in has(calls, "upgrade-notice.sh blocked") if "not fetched after their CI" in c] != []), (1, [], 0, True))
 rc, calls = night("prove wave-patches patch", plan=PLAN, files={"fetchunit.ops.rc": "1"})
 check("  ops' branch fetched too (its checkout's own fetch failing): said, nothing built", (rc, has(calls, "task test:copy:build")), (1, []))
 rc, calls = night("prove wave-patches patch", plan=PLAN, files={"fetchunit.rc": "1"})
@@ -536,6 +581,18 @@ rc, calls = night("prove istio minor", proofs=(1, 0), files={"fix.heads": H3, "f
 check("a fix whose second push is refused after the first went in: blocked - the unit labelled agent-fixed already (what "
       "went in waits for its notice)", (rc, len(pushes(calls)), bool(has(calls, "upgrade-label.py istio agent-fixed")), notices(calls)),
       (1, 2, True, ["upgrade-notice.sh blocked istio"]))
+rc, calls = night("prove wave-patches patch", plan=PLAN, files={"branchtip.infra": "9" * 40 + "\n"})
+check("a checkout's branch not the head its pull request names (Forgejo's record behind its git): nothing built, no try",
+      (rc, has(calls, "task"), tries_now(), [c for c in has(calls, "upgrade-notice.sh blocked") if "tips not the heads" in c] != []),
+      (1, [], 0, True))
+rc, calls = night("prove wave-patches patch", plan=PLAN, files={"branchtip.infra.seq": "a" * 40 + "\n" + "9" * 40 + "\n"})
+check("  the branch moved past its pull request's head during the proof (the copy fetched another commit): nothing applied",
+      (rc, merged(calls, "wave-patches"), [c for c in has(calls, "upgrade-notice.sh blocked") if "moved during its proof" in c] != []),
+      (1, False, True))
+rc, calls = night("prove istio minor", proofs=(1, 0), files={"fix.heads": ""})
+check("a try counted for the pull requests the run's first read named - a later read that came back empty no other key",
+      [l.split()[0] for l in open(os.path.join(OPS, ".upgrade-cycle/tries/istio")).read().splitlines()]
+      if os.path.exists(os.path.join(OPS, ".upgrade-cycle/tries/istio")) else None, ["schnappy/infra#4,schnappy/ops#7"])
 rc, calls = night("prove istio minor", proofs=(1, 0), files={"fix.heads": H2, "fix.unseen": ""})
 check("a fix pushed that Forgejo does not show on its pull requests: blocked, not proven on what it shows",
       (rc, len(has(calls, "task test:copy:build")), notices(calls)), (1, 1, ["upgrade-notice.sh blocked istio"]))
@@ -629,30 +686,49 @@ check("a major's first run: Renovate kept off its branches (stop-updating - a ne
       (rc, [words(c, 3) for c in calls if c.startswith(("upgrade-notice.sh veto", "upgrade-label.py centrifugo-7.x --comment",
                                                          "upgrade-label.py centrifugo-7.x stop-updating"))], merged(calls, "centrifugo-7.x")),
       (0, ["upgrade-label.py centrifugo-7.x stop-updating", "upgrade-notice.sh veto centrifugo-7.x", "upgrade-label.py centrifugo-7.x --comment"], False))
-check("  its details a summary of the unit (each repo's files, its commits, the review's verdict, the diff) - never the "
-      "run's log (hundreds of KB: over a mail's 100 KB, every major was blocked)",
-      open(os.path.join(ST, "notice.veto.details")).read().split("\n")[0] if os.path.exists(os.path.join(ST, "notice.veto.details")) else None,
-      "=== renovate/centrifugo-7.x: what it changes")
+check("  its details a summary of the unit (each repo's files, its commits - a subject's escape a '?' -, the review's "
+      "passes and verdict, the diff) - never the run's log (hundreds of KB: over a mail's 100 KB, every major was blocked)",
+      open(os.path.join(ST, "notice.veto.details")).read().split("\n") if os.path.exists(os.path.join(ST, "notice.veto.details")) else None,
+      ["=== renovate/centrifugo-7.x: what it changes",
+       "=== schnappy/infra", " clusters/production/x.yaml | 2 +-", "abc1234 bump x to 2 ?[2J",
+       "=== schnappy/ops", " clusters/production/x.yaml | 2 +-", "abc1234 bump x to 2 ?[2J",
+       "=== the review: PASSES: correctness, security, architecture, reliability, tests VERDICT: CLEAN ", "=== the diff", ""])
+check("  the summary read from the heads proven (never the branches' names - Forgejo's head may lag its branch)",
+      sorted({c.split("origin/main...")[1] for c in calls if "diff --stat --no-renames origin/main..." in c}), ["a" * 40, "c" * 40])
+check("  the summary's file gone at the run's end (mailed by then)",
+      [f for f in os.listdir(os.path.join(OPS, ".copy")) if f.startswith("upgrade-notice-")] if os.path.isdir(os.path.join(OPS, ".copy")) else [], [])
+rc2, calls2 = night("notice centrifugo-7.x major", files={"summary.fail": ""})
+check("  git failing on its summary: not noticed (no mail on what is not known), no try counted",
+      (rc2, notices(calls2), has(calls2, "upgrade-label.py centrifugo-7.x --comment"), tries_now("centrifugo-7.x")),
+      (1, ["upgrade-notice.sh blocked centrifugo-7.x"], [], 0))
+rc2, calls2 = night("notice centrifugo-7.x major", args=("--dry",))
+check("  a dry run: no summary made (nothing of git read for it)", [c for c in calls2 if "diff --stat" in c], [])
 check("  its comment carries what it announced (the heads proven): a later run applies those, or notices again",
       [c.split()[6] for c in has(calls, "upgrade-label.py centrifugo-7.x --comment")],
       ["heads=schnappy/infra@" + "a" * 40 + ",schnappy/ops@" + "c" * 40])
 rc, calls = night("notice centrifugo-7.x major", files={"blob": "+x: " + "y" * 200000 + "\n"})
 check("  a unit whose diff is over a mail's 100 KB (two repos of 200 KB): its summary cut to 100 KB, noticed all the same "
       "(upgrade-notice.sh refuses more - a unit never noticed, run after run)",
-      (rc, notices(calls), os.path.getsize(os.path.join(ST, "notice.veto.details")) if os.path.exists(os.path.join(ST, "notice.veto.details")) else None),
-      (0, ["upgrade-notice.sh veto centrifugo-7.x"], 102400))
+      (rc, notices(calls), os.path.getsize(os.path.join(ST, "notice.veto.details")) <= 102400 if os.path.exists(os.path.join(ST, "notice.veto.details")) else None,
+       open(os.path.join(ST, "notice.veto.details"), errors="replace").read().rstrip("\n").split("\n")[-1][:32] if os.path.exists(os.path.join(ST, "notice.veto.details")) else None),
+      (0, ["upgrade-notice.sh veto centrifugo-7.x"], True, "[cut: 102200 of 400320 bytes sho"))
 rc, calls = night("notice centrifugo-7.x major", env={"LABEL_FAIL": "stop-updating"})
 check("  stop-updating not set: no notice, no clock (Renovate would void it)", (rc, notices(calls), has(calls, "upgrade-label.py centrifugo-7.x --comment")),
       (1, [], []))
 ANNOUNCED = "2026-11-19T02:00:00Z schnappy/infra@" + "a" * 40 + ",schnappy/ops@" + "c" * 40 + "\n"
+rc, calls = night("apply centrifugo-7.x major", files={"noticed": ANNOUNCED}, heads=(H1.replace("a" * 40, "f" * 40),))
+check("a major whose notice ran out, its heads past the announced ones by main merged in alone (their merge into main the "
+      "announced ones' tree): applied", (rc, merged(calls, "centrifugo-7.x"), notices(calls)[-1:]),
+      (0, True, ["upgrade-notice.sh applied centrifugo-7.x"]))
 rc, calls = night("apply centrifugo-7.x major", files={"noticed": ANNOUNCED})
 check("a major whose notice ran out, its heads the ones announced: applied", (rc, merged(calls, "centrifugo-7.x"), notices(calls)[-1:]),
       (0, True, ["upgrade-notice.sh applied centrifugo-7.x"]))
-for files, why in (({"noticed": ANNOUNCED, "ancestor.rc": "1"}, "a head no longer descending from the one announced (a rebase, a newer release)"),
-                   ({"noticed": ANNOUNCED, "sincenotice": "d" * 40 + "\n"}, "a commit since the notice not main's (a fix, a newer release)"),
-                   ({"noticed": "2026-11-19T02:00:00Z schnappy/infra@" + "a" * 40 + "\n"}, "another set of repos than announced"),
-                   ({"noticed": "2026-11-19T02:00:00Z\n"}, "a notice with no heads (what it announced unknown)")):
-    rc, calls = night("apply centrifugo-7.x major", files=files)
+H_SINCE = H1.replace("a" * 40, "f" * 40)  # the infra head moved past the announced one
+for files, why, hs in (({"noticed": ANNOUNCED, "ancestor.rc": "1"}, "a head no longer descending from the one announced (a rebase, a newer release)", (H1,)),
+                       ({"noticed": ANNOUNCED, "sincenotice": "d" * 40 + "\n"}, "a commit since the notice, its merge into main another tree (a fix, a newer release)", (H_SINCE,)),
+                       ({"noticed": "2026-11-19T02:00:00Z schnappy/infra@" + "a" * 40 + "\n"}, "another set of repos than announced", (H1,)),
+                       ({"noticed": "2026-11-19T02:00:00Z\n"}, "a notice with no heads (what it announced unknown)", (H1,))):
+    rc, calls = night("apply centrifugo-7.x major", files=files, heads=hs)
     check(f"  {why}: noticed again (a new 24 h) - never applied on the old notice",
           (rc, merged(calls, "centrifugo-7.x"), [words(c, 3) for c in calls if c.startswith(("upgrade-notice.sh veto", "upgrade-label.py centrifugo-7.x --comment"))]),
           (0, False, ["upgrade-notice.sh veto centrifugo-7.x", "upgrade-label.py centrifugo-7.x --comment"]))
@@ -794,6 +870,10 @@ check("--dry: every step said, nothing run or written - no build, agent, merge, 
       (rc, [c for c in calls if c.startswith(("task", "claude", "vagrant", "upgrade-label.py")) or " clone " in c or " push " in c
             or c.startswith("git init") or "ls-remote" in c], inflight(), os.path.exists(WORK)), (0, [], False, False))
 # ── a test environment's unit ─────────────────────────────────────────────────────────────────────────────────────────
+rc, calls = night("test test-observability minor", tries=2, pending="same")
+check("a test unit applied and verified: its count of tries and its pending record start again",
+      (rc, os.path.exists(os.path.join(OPS, ".upgrade-cycle/tries/test-observability")),
+       os.path.exists(os.path.join(OPS, ".upgrade-cycle/pending/test-observability"))), (0, False, False))
 rc, calls = night("test test-observability minor")
 check("a test unit: one-way judged, its heads read, green, held read, merged at them, ops fast-forwarded, verified on the "
       "merge's commits - no copy, no agent",

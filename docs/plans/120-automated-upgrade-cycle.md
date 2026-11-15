@@ -3,7 +3,7 @@
 Status: **BUILDING** (operator 2026-11-14: "start building plan 120 meanwhile", "ensure renovate works with
 vagrant") - the review answered 2026-11-14 (below); plan 119's wave 1 done by hand (2026-11-14); rollout step 1 (the
 lookup) run - its findings fixed below, three questions open. 2026-11-15: one manual task, Kafka's operator first
-(decisions below); review rounds two to seven done - the applying runner waits for its first clean shadow proof.
+(decisions below); review rounds two to eight done - the applying runner waits for its first clean shadow proof.
 
 **Built 2026-11-14 (ops upgrade/wave-1 branch, each with its harness):**
 - Renovate: `renovate/upgrade-cycle.json` (the shared preset - units, groups, one minor at a time for Kubernetes/
@@ -124,6 +124,21 @@ Verify names a pod's owner by Kubernetes' name alphabet and counts a subject onc
 read strictly (its base64 validated, its labels a list); the etcd check reads each pod that succeeded until one says
 OK; the seed playbook's harness checks monitor's and masi's token is empty, never the cycle's, without
 `RENOVATE_APPS_TOKEN`.
+**Round eight (2026-11-15) - done:** a notice holds by what the merge makes: the announced head an ancestor of the head
+now, and `git merge-tree origin/main <head now>` the very tree `git merge-tree origin/main <announced>` makes - the
+checks it replaces (no commit of its own outside main, each merge's tree git's merge of its first two parents) let an
+octopus merge through whose third parent was main and whose tree dropped main's work (proven with real git: the merge
+reverted a hardening, no new notice; older than round seven). The agent's added lines are printable ASCII and tab (a
+no-break space indenting a key made it another key, the same in the mail; a look-alike letter the same) - lines it
+keeps stay as they were; the character classes of round seven gave way to it (every one they refused is outside it); its tree is pushed as one commit of the runner's on the proven head (its commits - a step in
+between with a CI file and a symlink, its words, its author - never reach Forgejo; fetched with fsck). A head with no
+CI status at all after an hour is a try (no pipeline started - it never comes by itself; the label script's exit 5),
+one still running on the same heads a run later a try; each checkout's branch must be the head its pull request names
+after the fetch and after the proof (Forgejo's record may lag); the notice's summary reads those heads, says where it
+was cut, and git failing on it stops the notice; tries keyed by the run's first read. Tests: the notice's summary
+asserted whole, the second fetch failing alone, the test path's count reset, verify's subjects with look-alike tails
+kept whole, the CI waiter's Postgres query read through a fake ssh (and against production's site pipeline 222 when
+asked, CI_WAIT_LIVE=1); Sonar's two (an unused name, a nested conditional) fixed.
 **The first real run:** `task upgrade RUNNER=false` - Renovate's branches and pull requests made, nothing applied; their
 labels read (the shadow week checked them). Then `task upgrade SHADOW=true` proves and reviews a unit on the copy,
 applying nothing - the cycle's first proof; until it ends clean (the runner's own record,

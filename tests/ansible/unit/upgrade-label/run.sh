@@ -287,6 +287,10 @@ r = subprocess.run([sys.executable, "scripts/upgrade-label.py", "wave-patches", 
 check("  still running at the wait's end: not green yet (exit 1)", (r.returncode, "not green yet" in r.stdout), (1, True))
 fixture(UNIT, {"a1": "success", "b1": "error", "c1": "success"})
 check("green: a CI that errored (no build ran) is red too (exit 4)", run("wave-patches", "--green")[0], 4)
+fixture(UNIT, {"a1": "success", "b1": "", "c1": "pending"})
+rc, out = run("wave-patches", "--green")
+check("green: a head no CI ever reported on (Forgejo's state \"\") at the wait's end: no CI (exit 5 - no pipeline started), named "
+      "- never 'running'", (rc, out.split("\n")[-1]), (5, "NO CI: no CI on: schnappy/platform#5"))
 fixture(UNIT, {})
 rc, out = run("wave-patches", "--update")
 check("update: a pull request whose compare is not read: refused (exit 1), nothing updated", (rc, writes()), (1, []))

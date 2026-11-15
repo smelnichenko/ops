@@ -173,9 +173,17 @@ TABLE = [("pod ns/monitor-7d9f8b6c4d-x2k9p unready: c", "pod ns/monitor"), ("pod
          ("pod ns/redis-6379-1 unready: c", "pod ns/redis-6379"), ("pod ns/pg15-7d9f8b6c4d-x2k9p unready: c", "pod ns/pg15"),
          ("pod ns/node-exporter-x7k2q unready: c", "pod ns/node-exporter"), ("pod ns/etcd-ten unready: c", "pod ns/etcd-ten"),
          ("app observability Synced Degraded -", "app observability"), ("app observability OutOfSync Healthy Running", "app observability"),
-         ("critical alert NodeDown", "critical alert NodeDown"), ("apps not read", "apps not read")]
+         ("critical alert NodeDown", "critical alert NodeDown"), ("apps not read", "apps not read"),
+         ("pod ns/api-6d4cf56d-x2k9p unready: c", "pod ns/api"), ("pod ns/node-exporter-zx7k2 unready: c", "pod ns/node-exporter"),
+         # a name of its own whose last part only looks generated - a vowel, a 0, a 1 or a 3 (never in Kubernetes'
+         # alphabet), four characters where it makes five: kept whole
+         ("pod ns/x-bcdfa unready: c", "pod ns/x-bcdfa"), ("pod ns/x-bcdf0 unready: c", "pod ns/x-bcdf0"),
+         ("pod ns/x-bcdf1 unready: c", "pod ns/x-bcdf1"), ("pod ns/x-bcdf3 unready: c", "pod ns/x-bcdf3"),
+         ("pod ns/x-cache unready: c", "pod ns/x-cache"), ("pod ns/web-6d4cf56d4-x2k9 unready: c", "pod ns/web-6d4cf56d4-x2k9"),
+         ("pod ns/web-bcdf unready: c", "pod ns/web-bcdf")]
 check("a complaint's subject: a ReplicaSet's pods by their name (a hash with no digit too), a StatefulSet's by theirs, a "
-      "DaemonSet's, a name of its own as it is; an app whatever its state; an alert by its name",
+      "DaemonSet's, a name of its own as it is (a part that only looks generated kept); an app whatever its state; an "
+      "alert by its name",
       [(l, subject(l), w) for l, w in TABLE if subject(l) != w], [])
 STALL = app("cert-manager", sync="OutOfSync")
 STALL["spec"]["syncPolicy"] = {"automated": {}}

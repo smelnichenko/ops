@@ -131,6 +131,37 @@ out=$(CI_WAIT_NONE_GRACE=1 CI_WAIT_PIPELINE_ROWS="$scratch/wp-errors" ci_wait o/
 grep -qE '^repo=.*timeout=\$\{3:-(10800|[0-9]{6,})\}|timeout=\$\{timeout:-(10800|[0-9]{6,})\}' "$here/forgejo-ci-wait" \
     && pass "the default timeout outlasts a queued pipeline" || fail "the default timeout outlasts a queued pipeline" "default is under 3 h"
 
+# the lookup itself (pipeline_rows - the stub above stands in for it): the command it sends to ten through ssh, read
+# by a fake ssh - the query's words, psql's form (-At: one JSON value, never a table json cannot read; ON_ERROR_STOP);
+# a repo or sha outside its alphabet never reaches the SQL
+rows_fn=$(sed -n '/^pipeline_rows() {/,/^}/p' "$here/forgejo-ci-wait")
+mkdir -p "$scratch/fakebin"
+printf '#!/bin/sh\nprintf "%%s\\n" "$@" > "%s/ssh.args"\necho "[]"\n' "$scratch" > "$scratch/fakebin/ssh"; chmod +x "$scratch/fakebin/ssh"
+rows() { rm -f "$scratch/ssh.args"; PATH="$scratch/fakebin:$PATH" bash -c "$rows_fn
+pipeline_rows \"\$@\"" _ "$@"; }
+rows schnappy/site a120cb9f45ae1a54274ccb64a929b8f5d6c5ab9d 1700000000 > /dev/null
+q=$(tail -n 1 "$scratch/ssh.args" 2> /dev/null)
+ok=1
+for want in "psql -At -d woodpecker -v ON_ERROR_STOP=1" "r.full_name = 'schnappy/site'" "p.commit = 'a120cb9f45ae1a54274ccb64a929b8f5d6c5ab9d'" \
+            "p.status = 'error'" "p.created >= 1700000000" "kubectl -n woodpecker exec woodpecker-postgres-1" "json_agg"; do
+  [[ $q == *"$want"* ]] || { ok=""; fail "the lookup's query: $want" "$q"; }
+done
+[ -n "$ok" ] && pass "the lookup sends its query to Woodpecker's Postgres: the repo, the sha, errored, since the wait began; psql -At, ON_ERROR_STOP"
+for bad in "schnappy/site' or '1'='1 a120cb9f 1" "schnappy/site a120cb9f' or '1 1" "schnappy/site --exec=x 1" "schnappy/site a120cb9f 1;drop"; do
+  read -r r c t <<< "$bad"
+  rows "$r" "$c" "$t" > /dev/null
+  [ ! -e "$scratch/ssh.args" ] && pass "a repo, sha or time outside its alphabet never sent: $bad" || fail "a repo, sha or time outside its alphabet never sent" "$bad"
+done
+# the real lookup against production's database - only when asked (CI_WAIT_LIVE=1: ten reachable over ssh): site's
+# pipeline 222 errored on its YAML (2026-11) and must be found
+if [ "${CI_WAIT_LIVE:-}" = 1 ]; then
+  out=$(bash -c "$(sed -n '/^pipeline_rows() {/,/^}/p;/^pipeline_errors() {/,/^}/p' "$here/forgejo-ci-wait")
+pipeline_errors schnappy/site a120cb9f45ae1a54274ccb64a929b8f5d6c5ab9d 0")
+  [[ $out == "pipeline 222 error: go-yaml load error"* ]] && pass "live: site's pipeline 222 found with its error" || fail "live: site's pipeline 222" "$out"
+else
+  echo "skip live: site's pipeline 222 in production's database (CI_WAIT_LIVE=1 runs it)"
+fi
+
 echo
 (( fails == 0 )) && echo "all passed" || echo "$fails failed"
 exit $(( fails > 0 ))

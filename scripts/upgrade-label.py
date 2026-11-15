@@ -8,8 +8,9 @@ and ops), as the renovate-bot:
                       what the runner proves
   UNIT --green [SECONDS]
                       each head's CI status, "<repo>#<number> <state>" a line; exit 0 every one success, 4 one red
-                      (failure, error: the unit breaks its own checks), 1 else - a running one waited for up to SECONDS
-                      (default 0) (a red or running CI is hours of proof for a merge that is refused)
+                      (failure, error: the unit breaks its own checks), 5 one with no CI status at all at the wait's
+                      end (no pipeline started for it), 1 else - a running one waited for up to SECONDS (default 0) (a
+                      red or running CI is hours of proof for a merge that is refused)
   UNIT --update       each pull request whose base moved past it: main merged into its branch (Forgejo's update, as the
                       bot) - a unit Renovate no longer rebases (stop-updating) brought onto main for its proof
   UNIT --merge --expect FILE
@@ -140,6 +141,10 @@ class Red(Exception):
     """A head's CI finished red: the unit breaks its own checks."""
 
 
+class NoCI(Exception):
+    """A head with no CI status at all at the wait's end: no pipeline was started for it (a webhook lost)."""
+
+
 def green(unit, wait=0):
     """Every head's CI success - a running one waited for (up to wait seconds), a red one at once."""
     deadline = time.monotonic() + wait
@@ -154,6 +159,9 @@ def green(unit, wait=0):
             return
         if time.monotonic() >= deadline:
             print("\n".join(f"{n} {st}" for n, st in states))
+            none = [n for n, st in states if st == "none"]
+            if none:  # Forgejo's answer for a commit no CI ever reported on: state "", no statuses
+                raise NoCI(f"no CI on: {', '.join(none)}")
             raise Refused(f"not green yet: {', '.join(n for n, st in states if st != 'success')}")
         time.sleep(float(os.environ.get("UPGRADE_GREEN_POLL", "60")))
 
@@ -244,7 +252,7 @@ def read_expected(path):
 def ready(repo, pr, proven):
     """The pull request as it was proven: its head the proven commit, green, mergeable, its base the proven one (or
     moved by CD's promotions alone) - refused else, nothing merged."""
-    number, head, proven_base = proven
+    _, head, proven_base = proven
     sha = pr["head"]["sha"]
     if sha != head:
         raise Refused(f"{repo}#{pr['number']} moved since its proof ({head[:12]} proven, {sha[:12]} now) - nothing merged")
@@ -361,6 +369,9 @@ def main(argv):
     except Red as e:
         print(f"RED: {e}")
         return 4
+    except NoCI as e:
+        print(f"NO CI: {e}")
+        return 5
     except Refused as e:
         print(f"REFUSED: {e}")
         return 1

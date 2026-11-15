@@ -21,17 +21,19 @@
 #   2. prove    the unit's heads read (and its bases); its branches, in every repo, on main but for CD's promotions
 #               (Renovate rebases only on a conflict: a unit behind brought up to date by Forgejo first, its new heads
 #               waited for - an empty answer never a head; never read as the unit's defect); then its CI green (a
-#               running one waited for an hour - still running: said, no try; a red one a try) and main read again (it
-#               moved meanwhile: said, no try); task test:copy:build (a copy that does not build ends the run - the unit
+#               running one waited for an hour - still running: said, no try, the same heads still so a run later a
+#               try; a red one a try, none at all a try) and main read again (it moved meanwhile: said, no try), each
+#               checkout's branch the head its pull request names (Forgejo's record may lag); task test:copy:build (a copy that does not build ends the run - the unit
 #               untouched), task test:copy:unit UNIT=<it>; red: the agent's fix - it commits in clones of the proven
 #               commits outside every checkout; the runner fetches its commits into a repository of its own (the
 #               agent's hooks and config never run), keeps them only on top of the proven head, inside the unit's own
 #               kind of files (infra's clusters/, platform's helm/, ops' Ansible vars and playbooks - never CI,
 #               scripts, tasks or an agent's instructions), plain UTF-8 text files alone (no symlink, no submodule, no
-#               binary; no control, format, separator, private or unassigned character but tab and newline - a NEL or a
-#               U+2028 is a line break to YAML and none to git), no merge commit - every repo judged before any is
-#               pushed; the fix kept on record (.upgrade-cycle/fixes/<unit>.diff), the unit
-#               labelled agent-fixed and stop-updating, then pushed as the bot; Forgejo read until it shows them, their
+#               binary), each line it adds printable ASCII and tab (a NEL or a U+2028 is a line break to YAML and none
+#               to git; a no-break space indenting a key, a look-alike letter: another key that reads the same), no
+#               merge commit - every repo judged before any is pushed; the fix kept on record (.upgrade-cycle/fixes/<unit>.diff), the unit
+#               labelled agent-fixed and stop-updating, then its tree pushed as the bot - one commit of the runner's on
+#               the proven head (the agent's own commits - a step in between, its words, its author - never on Forgejo); Forgejo read until it shows them, their
 #               CI waited for, proven again; red again, or no fix: blocked (labelled upgrade-blocked only on a verdict
 #               - the agent's NO FIX); the heads after the proof the ones proven. A failure with no verdict (CI red, a
 #               review or fix that did not finish, Forgejo refusing the update) counts a try for the unit's pull
@@ -44,11 +46,12 @@
 #   4. gate     patch/minor: on; a major's first run, or any unit carrying the agent's fix (this run's or an earlier
 #               one's - its diff on record, under 100 KB, or blocked): labelled stop-updating (a newer release pushed
 #               by Renovate would void the notice), its notice mailed (what it changes: each repo's stat, its commits,
-#               the review's passes and verdict, the diff - 100 KB in all; a fix's whole diff), then its UPGRADE
-#               NOTICE comment with the heads proven (the clock); a major or fixed unit whose notice ran out unvetoed:
-#               on - when its heads are the ones announced, main merged in alone (git judges it: no commit of its own
-#               outside main, each merge's tree the one git's own merge makes); a newer release, a fix since, an evil
-#               merge, a rebase: noticed again
+#               the review's passes and verdict, the diff of the heads proven - 100 KB in all, the cut said; git
+#               failing: no notice; a fix's whole diff), then its UPGRADE NOTICE comment with the heads proven (the
+#               clock); a major or fixed unit whose notice ran out unvetoed: on - when its heads are the ones announced,
+#               main merged in alone (git judges it: the announced head an ancestor of the head now, and merging the
+#               head now into main the very tree merging the announced one makes); a newer release, a fix since, an
+#               evil or octopus merge, a rebase, main's work dropped: noticed again
 #   5. plan     its production commands read from the proof's plan - a step with none, or a version that is none,
 #               refuses the unit, nothing merged; a one-way change with no backup path blocked
 #   6. apply    the gates again; the backup a one-way change needs (an etcd snapshot before Kubernetes) - failing,
@@ -269,20 +272,46 @@ dirs=(); built=""
 cleanup() {  # however the run ends: the copy destroyed when it was built (the radar may start), the clones gone
   [ -z "$built" ] || run vagrant destroy -f || say "THE COPY NOT DESTROYED - the radar stays off: vagrant destroy -f by hand"
   [ -n "$dry" ] || { chmod -R u+w "${dirs[@]}" 2> /dev/null; rm -rf "${dirs[@]}" "$heads" "$heads.after" "$heads.expected"; }
+  [ -z "${notice_summary:-}" ] || rm -f "$notice_summary"  # mailed by then (the details of a veto go whole)
 }
 trap cleanup EXIT
-read_heads() {  # the unit's pull requests' heads and bases, "<repo> <number> <head> <base>" a line (into $1)
+tries_key=""
+read_heads() {  # the unit's pull requests' heads and bases, "<repo> <number> <head> <base>" a line (into $1); the first
+                # read names the pull requests a try is counted for (a later read that fails leaves the file empty)
   [ -n "$dry" ] && { say "RUN scripts/upgrade-label.py $unit --heads"; : > "$1"; return 0; }
-  scripts/upgrade-label.py "$unit" --heads > "$1" 2>> "$log"
+  scripts/upgrade-label.py "$unit" --heads > "$1" 2>> "$log" || return 1
+  [ -n "$tries_key" ] || tries_key=$(awk '{printf "%s%s#%s", (NR > 1 ? "," : ""), $1, $2}' "$1")
+}
+# each checkout's branch (fetch_unit's, the proof's own fetch) the head its pull request names: Forgejo's record of a
+# pull request may lag its branch - the proof would prove one commit, the review and the merge another
+branches_are_heads() {
+  local repo head
+  [ -z "$dry" ] || return 0
+  while read -r repo _ head _ <&3; do
+    [ "$(git -C "$(repo_dir "$repo")" rev-parse -q --verify "refs/heads/renovate/$unit" < /dev/null 2>> "$log")" = "$head" ] || return 1
+  done 3< "$heads"
 }
 green() {  # every head's CI success - a running one waited for (an hour: Renovate's run just pushed it), a red one a
-           # try (its third blocks); hours of proof for a merge that refuses either are spent on nothing
+           # try (its third blocks), none at all a try (no pipeline started: a webhook lost - it never comes by itself);
+           # hours of proof for a merge that refuses either are spent on nothing
   run scripts/upgrade-label.py "$unit" --green 3600
   case $? in
     0) ;;
     4) retry "its CI is red (the update breaking its own checks, or Woodpecker failing) - nothing proven" ;;
-    *) notice blocked "$unit" "its CI still running after an hour (Woodpecker's queue), or not read - nothing proven, no try counted" "$log"; exit 1 ;;
+    5) retry "no CI on its heads after an hour (no pipeline started for them - a webhook lost?) - nothing proven" ;;
+    *) still_running ;;
   esac
+}
+still_running() {  # its CI still running after an hour (Woodpecker's queue), or not read: no try - but the same heads so
+                   # a run later are stuck, a try (the queue run after run behind one unit else)
+  local key
+  key=$(cut -d' ' -f1-3 "$heads" 2> /dev/null | tr '\n' ' ')
+  if [ -n "$key" ] && [ "$(cat "$state/pending/$unit" 2> /dev/null)" = "$key" ]; then
+    retry "its CI still not finished on the same heads a run later (stuck in Woodpecker) - nothing proven"
+  fi
+  [ -n "$dry" ] || { mkdir -p "$state/pending"; printf '%s' "$key" > "$state/pending/$unit"; }
+  notice blocked "$unit" "its CI still running after an hour (Woodpecker's queue), or not read - nothing proven, no try counted (the same heads so at the next run count one)" "$log"
+  exit 1
 }
 # its branches on main as it stands but for CD's promotions (the proof refuses them else - never the unit's defect):
 # Renovate rebases a branch only on a conflict, so the runner brings the unit it picked onto main itself - Forgejo's
@@ -325,6 +354,7 @@ fresh_or_end() {
   green
   fetch_unit || { notice blocked "$unit" "its branches not fetched after their CI (git) - nothing proven, no try counted" "$log"; exit 1; }
   fresh || { notice blocked "$unit" "main moved again while its CI ran (other work's pushes) - nothing proven, no try counted" "$log"; exit 1; }
+  branches_are_heads || { notice blocked "$unit" "its branches' tips not the heads its pull requests name (Forgejo's record behind its git) - nothing proven, no try counted" "$log"; exit 1; }
 }
 
 # one-way with no backup path: Renovate's label (renovate/upgrade-cycle.json's rules) - the names a second net, failing
@@ -354,10 +384,9 @@ held_now() {  # a veto, upgrade-blocked or the kill switch set since the pick: r
 # never the head of the queue run after run; a run that gets it further (noticed, shadow-proven, applied, the test
 # environment's merged) starts the count again
 retry() {
-  local n key
-  key=$(awk '{printf "%s%s#%s", (NR > 1 ? "," : ""), $1, $2}' "$heads" 2> /dev/null)
-  [ -n "$dry" ] || { mkdir -p "$state/tries"; echo "${key:-none} $(date -u +%FT%TZ) $1" >> "$state/tries/$unit"; }
-  n=$(awk -v k="${key:-none}" '$1 == k' "$state/tries/$unit" 2> /dev/null | wc -l)
+  local n key=${tries_key:-none}
+  [ -n "$dry" ] || { mkdir -p "$state/tries"; echo "$key $(date -u +%FT%TZ) $1" >> "$state/tries/$unit"; }
+  n=$(awk -v k="$key" '$1 == k' "$state/tries/$unit" 2> /dev/null | wc -l)
   if [ "${n:-0}" -ge 3 ]; then
     run scripts/upgrade-label.py "$unit" upgrade-blocked || say "NOT LABELLED upgrade-blocked - the next run tries it again"
     notice blocked "$unit" "$1 - its third try in a row: blocked (upgrade-blocked) for the operator" "${2:-$log}"
@@ -366,7 +395,7 @@ retry() {
   fi
   exit 1
 }
-progress() { [ -n "$dry" ] || rm -f "$state/tries/$unit"; }
+progress() { [ -n "$dry" ] || rm -f "$state/tries/$unit" "$state/pending/$unit"; }
 # the apply's journal: what a run that stops mid-apply leaves for the next one (and the operator) - how far it got
 journal() { [ -n "$dry" ] || echo "$(date -u +%FT%TZ) $*" >> "$state/inflight"; }
 start_journal() {
@@ -507,21 +536,33 @@ allowed() {  # allowed <repo> <path>
   esac
   return 1
 }
-# a file of the agent's: UTF-8 text alone - no NUL, no control, format or separator character but tab and newline (a
-# carriage return or a U+2028 hid a YAML key from the mail and the review; a binary showed as "Binary files differ")
-plain_text() {
-  python3 -I -c '
-import sys, unicodedata
+# a file of the agent's: UTF-8 text (a binary showed as "Binary files differ"), each line it adds printable ASCII and
+# tab alone - a carriage return, a NEL or a U+2028 is a line break to YAML and none to git (a key hidden from the mail
+# and the review), a no-break space indenting a key made it another key that read the same, a zero-width or bidi
+# character, a look-alike letter the same; a line it keeps stays as it was
+plain_fix() {  # plain_fix <repository> <proven> <tip> <path>
+  python3 -I - "$@" <<'PY'
+import collections, subprocess, sys
+repo, proven, tip, path = sys.argv[1:]
+def blob(rev):
+    r = subprocess.run(["git", "-C", repo, "cat-file", "blob", f"{rev}:{path}"], capture_output=True, stdin=subprocess.DEVNULL)
+    return r.stdout if r.returncode == 0 else None
+new = blob(tip)
 try:
-    text = sys.stdin.buffer.read().decode("utf-8")
-except UnicodeDecodeError:
+    text = new.decode("utf-8")
+except (AttributeError, UnicodeDecodeError):  # not there, or not UTF-8
     sys.exit(1)
-# no control, format, line or paragraph separator, private or unassigned character - a NEL, U+2028 or U+2029 is a line
-# break to YAML and none to git or a diff; a bidi override or a zero-width one hides what a reader sees
-sys.exit(any(unicodedata.category(c) in ("Cc", "Cf", "Zl", "Zp", "Co", "Cn") and c not in "\t\n" for c in text))'
+kept = collections.Counter((blob(proven) or b"").decode("utf-8", "replace").split("\n"))
+for line in text.split("\n"):
+    if kept[line] > 0:
+        kept[line] -= 1
+    elif any(c != "\t" and not " " <= c <= "~" for c in line):
+        sys.exit(1)
+PY
 }
 # the agent's commits, checked, pushed by the runner: fetched from its clone into a repository of the runner's own (its
-# hooks and config - the agent's - never run), on top of the proven head, inside allowed() - every repo judged before
+# hooks and config - the agent's - never run), on top of the proven head, inside allowed(), their tree pushed as one
+# commit of the runner's on the proven head - every repo judged before
 # any is pushed (half a fix pushed, unlabelled, was a fix a later run would apply with no notice); the unit labelled
 # agent-fixed (and stop-updating) before the first push; pushed as the bot to Forgejo's URL itself; their diff kept
 # for the veto notice. The heads file read on a descriptor of its own: nothing in the loop reads it away
@@ -536,7 +577,7 @@ push_fix() {
     tip=$sha
     [ -d "$clone" ] || { say "the agent's clone of $repo is gone - not pushed"; return 1; }
     rm -rf "$mirror"; git init -q --bare "$mirror" < /dev/null
-    git -C "$mirror" fetch -q --no-tags "$clone" "+refs/heads/renovate/$unit:refs/fix" < /dev/null >> "$log" 2>&1 \
+    git -C "$mirror" -c fetch.fsckObjects=true fetch -q --no-tags "$clone" "+refs/heads/renovate/$unit:refs/fix" < /dev/null >> "$log" 2>&1 \
       || { say "the fix left $repo without its branch renovate/$unit - not pushed"; return 1; }
     tip=$(git -C "$mirror" rev-parse refs/fix < /dev/null)
     if [ "$tip" != "$sha" ]; then
@@ -547,12 +588,19 @@ push_fix() {
       bad=$(git -C "$mirror" diff --raw --no-renames "$sha" "$tip" < /dev/null | while IFS=$'\t' read -r meta f; do
               mode=$(cut -d' ' -f2 <<< "$meta")
               { [[ $mode =~ ^(100644|100755|000000)$ ]] && allowed "$repo" "$f" \
-                && { [ "$mode" = 000000 ] || git -C "$mirror" cat-file blob "$tip:$f" < /dev/null | plain_text; }; } || echo "$f"
+                && { [ "$mode" = 000000 ] || plain_fix "$mirror" "$sha" "$tip" "$f" < /dev/null; }; } || echo "$f"
             done)
       [ -z "$bad" ] || { say "the fix changed what it may not in $repo: $(echo $bad) - nothing pushed"; return 1; }
       { echo "=== $repo"; git -C "$mirror" diff --stat --no-renames "$sha" "$tip"; } < /dev/null >> "$fixdiff.stat"
       { echo "=== $repo"; git -C "$mirror" log --format='%h %s' "$sha..$tip" | LC_ALL=C tr -c '[:print:]\n' '?' | cut -c1-200
         git -C "$mirror" diff --text --no-renames "$sha" "$tip"; } < /dev/null >> "$fixdiff"
+      # pushed as one commit of the runner's on the proven head - its tree the one judged: the agent's own commits (a
+      # step in between with files it may not touch, its words - a closing keyword on the dashboard -, an author
+      # it chose) never reach Forgejo
+      tip=$(env GIT_AUTHOR_NAME="Upgrade Fix Agent" GIT_AUTHOR_EMAIL=upgrade-fix@pmon.dev GIT_COMMITTER_NAME="Upgrade Fix Agent" \
+              GIT_COMMITTER_EMAIL=upgrade-fix@pmon.dev git -C "$mirror" commit-tree "$tip^{tree}" -p "$sha" \
+              -m "upgrade-fix: renovate/$unit - the agent's fix, judged and committed by the upgrade runner" < /dev/null) \
+        || { say "the fix's commit not made in $repo - nothing pushed"; return 1; }
       push+=("$repo $tip")
     fi
     echo "$repo $n $tip" >> "$heads.expected"
@@ -632,8 +680,9 @@ if ! run task test:copy:unit UNIT="$unit"; then
 fi
 # what was proven is what is merged: the heads after the proof the ones read before it
 read_heads "$heads.after" || { notice blocked "$unit" "its pull requests not read after its proof - nothing applied" "$log"; exit 1; }
-cmp -s <(cut -d' ' -f1-3 "$heads") <(cut -d' ' -f1-3 "$heads.after") \
-  || { notice blocked "$unit" "its branches moved during its proof - nothing applied (the next run proves them)" "$log"; exit 1; }
+if ! { cmp -s <(cut -d' ' -f1-3 "$heads") <(cut -d' ' -f1-3 "$heads.after") && branches_are_heads; }; then
+  notice blocked "$unit" "its branches moved during its proof - nothing applied (the next run proves them)" "$log"; exit 1
+fi
 
 # 3. the review - from clones of the proven commits; CLEAN and every pass named, nothing else
 review=$ops/.copy/upgrade-review-$unit-$(date +%s)-$$.txt
@@ -679,27 +728,42 @@ fi
 
 # a major's notice: what it changes, bounded - each repo's files and commits, the diff itself (its first 80 KB), the
 # review's verdict (the run's log is hundreds of KB: a mail carries what the operator reads)
-summary() {
-  local out=$1 repo dir
+summary() {  # summary <file>: what the unit changes, for its notice's mail - each repo's files and commits (the heads
+             # read: the ones proven), the review's passes and verdict, the diff; 100 KB in all (upgrade-notice.sh refuses
+             # more: a unit never noticed), the cut said in the mail; git failing: no summary (no notice on what is not known)
+  local out=$1 repo head dir ok=1 size limit=102400
   [ -z "$dry" ] || { : > "$out"; return 0; }
   { echo "=== renovate/$unit: what it changes"
-    while read -r repo _ _ _ <&3; do
+    while read -r repo _ head _ <&3; do
       dir=$(repo_dir "$repo")
-      echo "=== $repo"; git -C "$dir" diff --stat --no-renames "origin/main...renovate/$unit" < /dev/null 2>&1
-      git -C "$dir" log --format='%h %s' "origin/main..renovate/$unit" < /dev/null 2>&1 | LC_ALL=C tr -c '[:print:]\n' '?' | cut -c1-200
+      echo "=== $repo"; git -C "$dir" diff --stat --no-renames "origin/main...$head" < /dev/null 2>> "$log" || ok=""
+      git -C "$dir" log --format='%h %s' "origin/main..$head" < /dev/null 2>> "$log" | LC_ALL=C tr -c '[:print:]\n' '?' | cut -c1-200
+      [ "${PIPESTATUS[0]}" = 0 ] || ok=""
     done 3< "$heads"
     echo "=== the review: $(grep -E '^(PASSES|VERDICT): ' "$review" 2> /dev/null | tr '\n' ' ')"
     echo "=== the diff"
-    while read -r repo _ _ _ <&3; do
-      git -C "$(repo_dir "$repo")" diff --text --no-renames "origin/main...renovate/$unit" < /dev/null 2>&1
+    while read -r repo _ head _ <&3; do
+      git -C "$(repo_dir "$repo")" diff --text --no-renames "origin/main...$head" < /dev/null 2>> "$log" || ok=""
     done 3< "$heads"
-  } | head -c 102400 > "$out"  # a mail's 100 KB whole (upgrade-notice.sh refuses more: a unit never noticed) - the diff cut first
+  } > "$out.whole"
+  [ -n "$ok" ] || { rm -f "$out.whole"; return 1; }
+  size=$(wc -c < "$out.whole")
+  if [ "$size" -le "$limit" ]; then
+    mv "$out.whole" "$out"
+  else
+    { head -c $((limit - 200)) "$out.whole"
+      printf '\n[cut: %s of %s bytes shown - the whole: git diff origin/main...<head> in each repo above]\n' $((limit - 200)) "$size"
+    } > "$out"
+    rm -f "$out.whole"
+  fi
 }
 # a major (or a unit carrying the agent's fix) applies only what its notice announced: the heads on its comment, each
-# an ancestor of the head proven now, nothing between them but main's own commits merged in (Forgejo's update) - a
-# newer release, a fix since, a rebase: noticed again
+# an ancestor of the head proven now, and merging the head now into main makes the very tree merging the announced one
+# makes - main merged in since (Forgejo's update) changes nothing of it; a newer release, a fix since, a rebase, an evil
+# or octopus merge (git judges only two parents of a merge - one that took an old main as its second dropped main's
+# work), main's work dropped: noticed again
 notice_holds() {
-  local line announced repo sha cur dir extra merges m pair
+  local line announced repo sha cur dir tree_now tree_announced pair
   [ -z "$dry" ] || return 0
   line=$(scripts/upgrade-units.py noticed "$unit" 2>> "$log") || return 1
   announced=$(awk '{print $2}' <<< "$line")
@@ -710,14 +774,10 @@ notice_holds() {
     [[ $sha =~ ^[0-9a-f]{40}$ ]] || return 1
     cur=$(awk -v r="$repo" '$1 == r {print $3}' "$heads"); dir=$(repo_dir "$repo")
     git -C "$dir" merge-base --is-ancestor "$sha" "$cur" 2>> "$log" || return 1
-    extra=$(git -C "$dir" rev-list --no-merges "$sha..$cur" --not origin/main 2>> "$log") || return 1
-    [ -z "$extra" ] || return 1
-    merges=$(git -C "$dir" rev-list --merges "$sha..$cur" --not origin/main 2>> "$log") || return 1
-    # each merge's tree the one git's own merge of its parents makes (Forgejo's update): with no commit of its own
-    # outside main above, nothing but main's content can come in - a merge of anything else holds such a commit
-    for m in $merges; do
-      [ "$(git -C "$dir" merge-tree --write-tree "$m^1" "$m^2" 2>> "$log")" = "$(git -C "$dir" rev-parse "$m^{tree}")" ] || return 1
-    done
+    # each merge clean (a conflict prints more than a tree and exits 1) and the same tree
+    tree_now=$(git -C "$dir" merge-tree --write-tree origin/main "$cur" 2>> "$log") || return 1
+    tree_announced=$(git -C "$dir" merge-tree --write-tree origin/main "$sha" 2>> "$log") || return 1
+    [ "$tree_now" = "$tree_announced" ] || return 1
   done
 }
 
@@ -726,8 +786,8 @@ notice_holds() {
 again=""
 [ "$action" != apply ] || notice_holds || { again=1; say "its notice does not hold for the heads proven now (a newer release, a fix since) - noticed again"; }
 if [ "$action" = notice ] || [ -n "$fixed" ] || [ -n "$again" ]; then
-  why="major $unit proven and reviewed"; details=$ops/.copy/upgrade-notice-$unit-$$.txt
-  summary "$details"
+  why="major $unit proven and reviewed"; notice_summary=$ops/.copy/upgrade-notice-$unit-$$.txt; details=$notice_summary
+  summary "$details" || { notice blocked "$unit" "its summary not made (git failing - see the log) - not noticed, no try counted" "$log"; exit 1; }
   if [ -n "$fixed" ] || [[ ,$unit_labels, == *,agent-fixed,* ]]; then
     # the agent's fix, whichever run pushed it: its whole diff on record, or no notice (no clock without its evidence)
     details=$state/fixes/$unit.diff

@@ -259,7 +259,11 @@ def show_noticed(name):  # its time and the heads it announced
         print(f"NO UNIT {name}")
         return 1
     n = noticed(name, u)
-    print(n[0].strftime("%Y-%m-%dT%H:%M:%SZ") + (f" {n[1]}" if n[1] else "") if n else "NONE")
+    if not n:
+        print("NONE")
+        return 0
+    when, heads = n
+    print(when.strftime("%Y-%m-%dT%H:%M:%SZ") + (f" {heads}" if heads else ""))
     return 0
 
 
