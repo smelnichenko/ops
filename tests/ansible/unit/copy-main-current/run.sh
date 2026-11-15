@@ -2,7 +2,7 @@
 # scripts/copy-main-current.sh on a git fixture (an origin and a clone): main equal to origin/main passes; behind or
 # ahead refused; a change's ref containing origin/main passes, one cut from an older main refused, a ref not there
 # refused; each repo judged, the run failing on any; behind by CD's app promotions alone (their author, their files, a
-# change touching none of them) passes - anything else in between refused.
+# change editing CD's file too) passes - anything else in between refused.
 set -u
 cd "$(dirname "$0")/../../../.." || exit 1
 S=$PWD/scripts/copy-main-current.sh
@@ -48,8 +48,8 @@ out=$(bash "$S" "$W/repo:change2" 2>&1); rc=$?
 check "  production's main moved 1 commit since the build: passes, warned" \
   "$rc $(grep -c "moved 1 commit(s) since the copy was built" <<< "$out")" "0 1"
 unset COPY_BUILT_FILE
-# CD's app promotions alone since (its author, its files): no stale base - a main, or a change touching none of their
-# files, passes; anything else in between, another author, another file, or a change touching CD's file: refused
+# CD's app promotions alone since (its author, its files): no stale base - a main, or a change (one editing CD's file
+# too), passes; anything else in between, another author, another file: refused
 export COPY_CD_FILE=$W/cd.json
 printf '{"author": "cd@x", "paths": {"repo": ["apps.yaml"]}}' > "$W/cd.json"
 cdc() {  # cdc <author> <file> <message>: a commit on origin/main
@@ -69,7 +69,8 @@ check "a change behind origin/main by CD's promotions alone, their file untouche
   "$rc $(grep -c 'by 2 CD promotion(s) alone' <<< "$out")" "0 1"
 g -C "$W/repo" branch -q -f unit-apps unit && g -C "$W/repo" checkout -q unit-apps && echo mine > "$W/repo/apps.yaml" \
   && g -C "$W/repo" add apps.yaml && g -C "$W/repo" commit -q -m touches && g -C "$W/repo" checkout -q main
-check "  a change touching CD's file itself: refused" "$(run "$W/repo:unit-apps")" 1
+check "  a change editing CD's file itself (another line - k6's image beside the tags): passes (the merge judges where they meet)" \
+  "$(run "$W/repo:unit-apps")" 0
 cdc cd@x other.yaml "promote(prod): not only tags"
 g -C "$W/repo" fetch -q origin
 check "  a CD commit touching another file: refused (main and change)" "$(run "$W/repo") $(run "$W/repo:unit")" "1 1"

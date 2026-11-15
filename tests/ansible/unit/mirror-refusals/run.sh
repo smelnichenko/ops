@@ -1,7 +1,8 @@
 #!/bin/bash
 # scripts/vagrant-gitops-mirror.py's two refusals that keep the copy off production: a --forgejo outside the Vagrant
 # network refused before any API call; a production address the rewrite left (a gap in its map, simulated) stops the
-# push. Each with its control: a Vagrant Forgejo goes on to the API, a full map leaves the Vagrant address.
+# push; a ref holding a symlink refused before its tree is read or rewritten. Each with its control: a Vagrant Forgejo
+# goes on to the API, a full map leaves the Vagrant address, plain files go on.
 set -u
 cd "$(dirname "$0")/../../../.." || exit 1
 exec python3 - "$PWD" <<'PY_MIRROR_REFUSALS'
@@ -67,6 +68,23 @@ def rewrite(gap):
         m.ADDRESS_MAP, m.PROD_LAN_PREFIX = saved
 check("a production address the rewrite missed: stopped, said", rewrite(True), ("stopped", True))
 check("control: the full map rewrites it", rewrite(False), ("rewritten", "vault: https://192.168.56.9:8200"))
+def links(kind):
+    t = tempfile.mkdtemp()
+    g = lambda *a: subprocess.run(["git", "-C", t, *a], check=True, capture_output=True)
+    g("init", "-q")
+    os.makedirs(os.path.join(t, "clusters"))
+    open(os.path.join(t, "clusters", "values.yaml"), "w").write("a: 1\n")
+    if kind == "symlink":
+        os.symlink("/home/sm/.ssh/config", os.path.join(t, "clusters", "x.yaml"))
+    g("add", "-A")
+    try:
+        m.refuse_links("infra", t)
+        return "on"
+    except SystemExit as e:
+        return "REFUSED" if "REFUSED" in str(e.code) and "clusters/x.yaml" in str(e.code) else f"exit {e.code}"
+check("a ref holding a symlink (under clusters/): refused before any rewrite - never written through as the operator",
+      links("symlink"), "REFUSED")
+check("control: plain files go on", links("plain"), "on")
 print("mirror-refusals: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 PY_MIRROR_REFUSALS

@@ -26,8 +26,8 @@ the most suspicion - a fix may only move the unit's own values and charts.
 - tests - the `test-quality-reviewer` agent, given the diff, reading only (you cannot revert and run here): whether the
   copy's proof covers what the unit moves.
 
-A pass you could not run is no pass: leave it off the PASSES line and give `VERDICT: CRITICAL <the pass that did not
-run>` - never CLEAN on fewer passes.
+A pass you could not run is no pass: leave it off the PASSES line and give `VERDICT: INCOMPLETE <the pass that did not
+run>` - never CLEAN on fewer passes (the runner reviews the unit again on its next run; CRITICAL is for what you found).
 
 ## The verdict
 
@@ -37,4 +37,4 @@ less (style, a follow-up) goes in the text above the verdict, not into it. End w
     PASSES: correctness, security, architecture, reliability, tests
     VERDICT: CLEAN
 
-or `VERDICT: CRITICAL <what, where>`.
+or `VERDICT: CRITICAL <what, where>`, or `VERDICT: INCOMPLETE <the pass that did not run>`.

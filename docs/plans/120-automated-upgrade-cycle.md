@@ -75,6 +75,23 @@ aside; one thing wrong for 5 looks in a row fails the hold); a closed terminal s
 holds the run's lock; Renovate refuses to run beside a runner. Notices: a veto mailed straight out too; the kill switch
 fails closed (no dashboard issue: not read) and a pause makes the issue where none is open; platform's CI Alertmanager
 image moved with the chart's (one Renovate branch).
+**Round five (2026-11-15) - done:** an agent's fix is judged in every repo before any of it is pushed (half a fix,
+unlabelled, would have applied with no notice later), the unit labelled agent-fixed before the first push, plain files
+alone (no symlink or submodule - the copy's mirror refuses them too); the fix kept on record (`.upgrade-cycle/fixes/`)
+and mailed whole with its notice whichever run gives it (over 100 KB: no notice, no clock); the trusted checksum copy
+read-only and `git --output` denied; copy-unit refuses task changes in setup-argocd and setup-host-hardening too and
+checks every setup-kubeadm value. A notice holds only for the diff it announced (`diff=<hash>` on its comment,
+`upgrade-label.py --diff-hash`: changed lines, no context) - a newer release noticed again; notices are comments that
+start as one. The kill switch read on all three repos' dashboards (Renovate's title exactly, the bot's issue). Liveness:
+Renovate opens three pull requests a repo at most, in the cycle's order (prConcurrentLimit, prPriority); green waits an
+hour for a running CI and labels a red one; a unit behind main is never read as its defect (stop-updating units
+brought up to date by Forgejo); a failure with no verdict counts a try, the third blocks; CD's file editable by a unit in
+other lines (k6's image: Forgejo's mergeable judges). The apply: a 5xx on a merge is not a refusal (read again, its head
+on main counts as merged); any merge exit but Forgejo's refusal pages; ops' main must hold the gate's and the unit's
+merge alone; the journal holds the etcd snapshot's name and the pull requests merged, and one ending verified is a
+record to push, not a page; verify compares each app against its spec, says a stalled one, leaves preview environments'
+pods and alerts out, wants two clean looks when it waits for Argo and a streak of 10 in the hold; the spans 210 (the
+apply's own waits) and 330 at the start; the etcd check reads the pod that succeeded.
 **The first real run:** `task upgrade RUNNER=false` - Renovate's branches and pull requests made, nothing applied; their
 labels read (the shadow week checked them). Then `task upgrade SHADOW=true` proves and reviews a unit on the copy,
 applying nothing - the cycle's first proof; until it ends clean (the runner's own record,

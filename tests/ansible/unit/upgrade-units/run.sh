@@ -20,6 +20,8 @@ class H(http.server.BaseHTTPRequestHandler):
         q = urllib.parse.parse_qs(u.query)
         fx = json.load(open(os.path.join(W, "fixture.json")))
         data = fx.get(u.path.removeprefix("/api/v1"))
+        if u.path.endswith(".diff") and isinstance(data, str):
+            body = data.encode(); self.send_response(200); self.end_headers(); self.wfile.write(body); return
         if data is None:
             self.send_response(404); self.end_headers(); self.wfile.write(b'{"message":"not found"}'); return
         if isinstance(data, list):
@@ -47,14 +49,19 @@ def pr(number, unit, *labels, user="renovate-bot", fork=False):
     # the repository's own branch unless fork (head.repo filled in by fixture() for its repo)
     return {"number": number, "head": {"ref": f"renovate/{unit}", "repo": "FORK" if fork else None},
             "user": {"login": user}, "labels": [{"name": x} for x in labels]}
-def fixture(infra=(), platform=(), ops=(), comments=None, dashboard_labels=(), dashboard=True, others=1):
+DASH_TITLE = json.load(open("renovate/upgrade-cycle.json"))["dependencyDashboardTitle"]
+def fixture(infra=(), platform=(), ops=(), comments=None, dashboard_labels=(), dashboard=True, others=1, infra_dash=(),
+            dash_user="renovate-bot", dash_title=None, diffs=None):
     # the dashboard behind other open issues (one labelled upgrades-paused itself: the title, not the first issue, decides)
-    issues = [{"title": f"an issue {i}", "labels": [{"name": "upgrades-paused"}]} for i in range(others)]
+    issues = [{"title": f"an issue {i}", "labels": [{"name": "upgrades-paused"}], "user": {"login": "renovate-bot"}} for i in range(others)]
     if dashboard:
-        issues.append({"title": "Upgrade cycle - Renovate's dashboard (label upgrades-paused: the cycle stops)",
-                       "labels": [{"name": x} for x in dashboard_labels]})
+        issues.append({"title": dash_title or DASH_TITLE, "user": {"login": dash_user}, "labels": [{"name": x} for x in dashboard_labels]})
     fx = {"/repos/schnappy/infra/pulls": list(infra), "/repos/schnappy/platform/pulls": list(platform),
-          "/repos/schnappy/ops/pulls": list(ops), "/repos/schnappy/ops/issues": issues}
+          "/repos/schnappy/ops/pulls": list(ops), "/repos/schnappy/ops/issues": issues, "/repos/schnappy/platform/issues": [],
+          "/repos/schnappy/infra/issues": [{"title": DASH_TITLE, "user": {"login": "renovate-bot"},
+                                            "labels": [{"name": x} for x in infra_dash]}]}
+    for (repo, n), text in (diffs or {}).items():
+        fx[f"/repos/schnappy/{repo}/pulls/{n}.diff"] = text
     # a comment: its body (the bot's), or (author, body)
     for (repo, n), bodies in (comments or {}).items():
         fx[f"/repos/schnappy/{repo}/issues/{n}/comments"] = [
@@ -66,6 +73,17 @@ def fixture(infra=(), platform=(), ops=(), comments=None, dashboard_labels=(), d
             fx.setdefault(f"/repos/schnappy/{repo}/issues/{p['number']}/comments", [])
     json.dump(fx, open(os.path.join(W, "fixture.json"), "w"))
 NOW = "2026-11-20T03:00:00Z"
+import hashlib  # noqa: E402
+PGDIFF = "diff --git a/v b/v\n--- a/v\n+++ b/v\n@@ -1 +1 @@\n-pg: 18\n+pg: 19\n"
+def hof(*diffs):  # the hash upgrade-label.py --diff-hash gives these (infra's, the unit's one pull request)
+    h = hashlib.sha256()
+    for repo, d in diffs:
+        h.update(repo.encode() + b"\n")
+        for line in d.splitlines():
+            if line.startswith(("+++ ", "--- ")) or (line[:1] in "+-" and line[:1]):
+                h.update(line.encode() + b"\n")
+    return h.hexdigest()
+PGH = hof(("schnappy/infra", PGDIFF))
 def run(*args, url=None):
     env = {**os.environ, "UPGRADE_FORGEJO_URL": url or f"http://127.0.0.1:{PORT}/api/v1", "UPGRADE_FORGEJO_TOKEN": "t",
            "UPGRADE_NOW": NOW}
@@ -119,10 +137,22 @@ check("noticed: none yet", run("noticed", "postgresql-19.x"), (0, "NONE"))
 fixture(infra=[pr(3, "postgresql-19.x", "major")], comments={("infra", 3): ["looks fine", "UPGRADE NOTICE 2026-11-19T04:00:00Z - applies after"]})
 check("a major noticed 23 h ago: still in its 24 h - nothing", run("pick"), (0, "NOTHING"))
 check("noticed: the notice's time", run("noticed", "postgresql-19.x"), (0, "2026-11-19T04:00:00Z"))
-fixture(infra=[pr(3, "postgresql-19.x", "major")], comments={("infra", 3): ["UPGRADE NOTICE 2026-11-19T02:59:00Z"]})
-check("a major noticed 24 h ago, unvetoed: applied", run("pick"), (0, "apply postgresql-19.x major"))
-fixture(infra=[pr(3, "postgresql-19.x", "major")], comments={("infra", 3): ["UPGRADE NOTICE 2026-11-19T03:00:00Z"]})
+
+fixture(infra=[pr(3, "postgresql-19.x", "major")], comments={("infra", 3): [f"UPGRADE NOTICE 2026-11-19T02:59:00Z diff={PGH} - x"]},
+        diffs={("infra", 3): PGDIFF})
+check("a major noticed 24 h ago, unvetoed, still what its notice announced (its diff): applied", run("pick"), (0, "apply postgresql-19.x major"))
+fixture(infra=[pr(3, "postgresql-19.x", "major")], comments={("infra", 3): [f"UPGRADE NOTICE 2026-11-19T03:00:00Z diff={PGH}"]},
+        diffs={("infra", 3): PGDIFF})
 check("a major noticed exactly 24 h ago: its 24 h over - applied", run("pick"), (0, "apply postgresql-19.x major"))
+fixture(infra=[pr(3, "postgresql-19.x", "major")], comments={("infra", 3): [f"UPGRADE NOTICE 2026-11-19T02:00:00Z diff={PGH}"]},
+        diffs={("infra", 3): PGDIFF.replace("+pg: 19", "+pg: 19.1")})
+check("a major whose branch moved to a newer release since its notice (another diff): noticed again, never applied on the "
+      "old notice", run("pick"), (0, "notice postgresql-19.x major"))
+fixture(infra=[pr(3, "postgresql-19.x", "major")], comments={("infra", 3): ["UPGRADE NOTICE 2026-11-19T02:00:00Z - an old notice"]},
+        diffs={("infra", 3): PGDIFF})
+check("a notice with no diff of its own (what it announced unknown): noticed again", run("pick"), (0, "notice postgresql-19.x major"))
+fixture(infra=[pr(3, "postgresql-19.x", "major")], comments={("infra", 3): [f"UPGRADE NOTICE 2026-11-19T02:00:00Z diff={PGH}"]})
+check("its diff not read: not read (exit 1), never applied", run("pick")[0], 1)
 fixture(infra=[pr(3, "postgresql-19.x", "major")], ops=[pr(5, "postgresql-19.x", "major")],
         comments={("infra", 3): ["UPGRADE NOTICE 2026-11-19T10:00:00Z", "UPGRADE NOTICE 2026-11-19T08:00:00Z"],
                   ("ops", 5): ["UPGRADE NOTICE 2026-11-19T09:00:00Z"]})
@@ -137,18 +167,22 @@ check("a minor carrying the agent's fix: waits for its notice - the next minor p
       (0, "prove observability minor"))
 fixture(infra=[pr(1, "istio-1.32", "agent-fixed")])
 check("  alone: its notice (kind kept)", run("pick"), (0, "notice istio-1.32 minor"))
-fixture(infra=[pr(1, "istio-1.32", "agent-fixed")], comments={("infra", 1): ["UPGRADE NOTICE 2026-11-19T02:00:00Z"]})
-check("  noticed 25 h ago, unvetoed: applied (kind kept)", run("pick"), (0, "apply istio-1.32 minor"))
+fixture(infra=[pr(1, "istio-1.32", "agent-fixed")], comments={("infra", 1): [f"UPGRADE NOTICE 2026-11-19T02:00:00Z diff={PGH}"]},
+        diffs={("infra", 1): PGDIFF})
+check("  noticed 25 h ago, unvetoed, its diff the one announced: applied (kind kept)", run("pick"), (0, "apply istio-1.32 minor"))
 fixture(infra=[pr(1, "wave-patches", "agent-fixed")], comments={("infra", 1): ["UPGRADE NOTICE 2026-11-19T20:00:00Z"]})
 check("  a patch wave with the agent's fix in its 24 h: nothing", run("pick"), (0, "NOTHING"))
+AD, ZD = PGDIFF.replace("pg", "aaa"), PGDIFF.replace("pg", "zzz")
 fixture(infra=[pr(3, "aaa-5.x", "major"), pr(4, "zzz-2.x", "major")],
-        comments={("infra", 3): ["UPGRADE NOTICE 2026-11-18T02:00:00Z"], ("infra", 4): ["UPGRADE NOTICE 2026-11-17T02:00:00Z"]})
+        comments={("infra", 3): [f"UPGRADE NOTICE 2026-11-18T02:00:00Z diff={hof(('schnappy/infra', AD))}"],
+                  ("infra", 4): [f"UPGRADE NOTICE 2026-11-17T02:00:00Z diff={hof(('schnappy/infra', ZD))}"]},
+        diffs={("infra", 3): AD, ("infra", 4): ZD})
 check("two majors past their 24 h: the one noticed first applied first (not the first by name)", run("pick"),
       (0, "apply zzz-2.x major"))
 fixture(infra=[pr(3, "postgresql-19.x", "major", "veto")], comments={("infra", 3): ["UPGRADE NOTICE 2026-11-18T00:00:00Z"]})
 check("a vetoed major: never applied", run("pick"), (0, "NOTHING"))
 fixture(infra=[pr(3, "postgresql-19.x", "major"), pr(4, "kafka-5.x", "major")],
-        comments={("infra", 3): ["UPGRADE NOTICE 2026-11-18T00:00:00Z"]})
+        comments={("infra", 3): [f"UPGRADE NOTICE 2026-11-18T00:00:00Z diff={PGH}"]}, diffs={("infra", 3): PGDIFF})
 check("a waiting major applied before a new notice", run("pick"), (0, "apply postgresql-19.x major"))
 fixture(infra=[pr(3, "postgresql-19.x", "major"), pr(4, "kafka-5.x", "major")],
         comments={("infra", 3): ["UPGRADE NOTICE 2026-11-19T20:00:00Z"]})
@@ -171,6 +205,13 @@ check("the dashboard on the second page of issues: its kill switch read there", 
 fixture(infra=[pr(1, "wave-patches")], dashboard=False)
 check("no dashboard issue open (closed, renamed): the kill switch not read - pick and held fail closed (exit 1), never "
       "'not paused'", (run("pick")[0], run("held", "wave-patches")[0]), (1, 1))
+fixture(infra=[pr(1, "wave-patches")], infra_dash=["upgrades-paused"])
+check("the kill switch pulled on infra's dashboard (every repo has one, the same title): paused", (run("pick"), run("held", "wave-patches")),
+      ((0, "PAUSED"), (0, "paused")))
+fixture(infra=[pr(1, "wave-patches")], dashboard_labels=["upgrades-paused"], dash_user="mallory")
+check("an issue of another account's under the dashboard's title: not the dashboard (ops' then missing: not read)", run("pick")[0], 1)
+fixture(infra=[pr(1, "wave-patches")], dashboard_labels=["upgrades-paused"], dash_title="Upgrade cycle - Renovate's dashboard (old)")
+check("a title only starting like it: not the dashboard (not read)", run("pick")[0], 1)
 check("held: Forgejo unreachable - not read (exit 1), never 'nothing holds it'",
       run("held", "wave-patches", url="http://127.0.0.1:1/api/v1")[0], 1)
 fixture(infra=[pr(1, "wave-patches", user="mallory"), pr(2, "istio", fork=True), pr(3, "observability")])
@@ -180,6 +221,13 @@ fixture(infra=[pr(3, "postgresql-19.x", "major")],
         comments={("infra", 3): [("mallory", "UPGRADE NOTICE 2026-11-01T00:00:00Z - backdated")]})
 check("a notice comment by anyone but the bot: no notice (a backdated one skipped the 24 h)",
       (run("noticed", "postgresql-19.x"), run("pick")), ((0, "NONE"), (0, "notice postgresql-19.x major")))
+fixture(infra=[pr(3, "postgresql-19.x", "major")],
+        comments={("infra", 3): ["Renovate: release notes\n\nUPGRADE NOTICE 2026-11-01T00:00:00Z - quoted from somewhere"]})
+check("a line inside another comment of the bot's (Renovate posts as the same account): no notice - a notice is a comment "
+      "that starts as one", (run("noticed", "postgresql-19.x"), run("pick")), ((0, "NONE"), (0, "notice postgresql-19.x major")))
+fixture(infra=[pr(1, "test-istio-1.32", "agent-fixed")])
+check("a test environment's unit labelled agent-fixed (by a hand - the test path has no fix): merged at once as a test "
+      "unit (the test environment its own proof; the 24 h notice is its production twin's)", run("pick"), (0, "test test-istio-1.32 minor"))
 print("upgrade-units: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 PYCHECK

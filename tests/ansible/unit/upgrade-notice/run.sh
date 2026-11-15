@@ -68,8 +68,9 @@ rc2, _, posts2 = run("applied", "wave-patches", SUMMARY, details)
 check("a second notice of a kind for a unit: a notice label of its own (one label set the same was deduplicated)",
       posts2[0][0]["labels"]["notice"] != a["labels"]["notice"], True)
 rc, out, posts = run("veto", "postgres-19", "PostgreSQL 19 applies in 24 h unless vetoed")
-check("veto: warning, lasts the 24 h notice", (rc, posts[0][0]["labels"]["severity"], hours_from_now(posts[0][0]["endsAt"])),
-      (0, "warning", 24))
+check("veto: warning, lasts the 24 h notice - posted, but no direct mail (no key): not sent (exit 1 - no clock without "
+      "the mail that carries its evidence whole)", (rc, posts[0][0]["labels"]["severity"], hours_from_now(posts[0][0]["endsAt"]),
+      "NOT SENT: no RESEND_API_KEY" in out), (1, "warning", 24, True))
 rc, out, posts = run("blocked", "istio", "red after its fix")
 check("blocked: warning, an hour, no page recorded", (rc, posts[0][0]["labels"]["severity"], hours_from_now(posts[0][0]["endsAt"]),
                                                      os.path.exists(PAGES)), (0, "warning", 1, False))
@@ -219,6 +220,25 @@ check("a page's direct mail: to the admin, '[UpgradeCycle] <kind>: <unit> - <sum
             "BODY": "it broke\n\nrestore: step one", "RESEND_API_KEY": "the-key"}]))
 rc, out, mails = via_copy("veto", "pg-19.x", "applies in 24 h")
 check("a veto: mailed straight out too", (rc, [m["SUBJECT"] for m in mails]), (0, ["[UpgradeCycle] veto: pg-19.x - applies in 24 h"]))
+big = os.path.join(W, "fix.diff")
+open(big, "w").write("=== the agent's fix - files:\n clusters/a.yaml | 2 +-\n" + "".join(f"+line {i}\n" for i in range(800)) + "the very end\n")
+rc, out, mails = via_copy("veto", "istio", "applies in 24 h", big)
+d = posts_last = None
+check("a veto with a long diff: the direct mail carries it WHOLE (every line, its start and its end)",
+      (rc, len(mails), mails[0]["BODY"].endswith(open(big).read().rstrip("\n")) if mails else None), (0, 1, True))
+rc, out, posts = run("veto", "istio", "s", big, RESEND_API_KEY="k", UPGRADE_NOTICE_INFRA_VALUES=values)
+desc = posts[0][0]["annotations"]["description"] if posts else ""
+check("  Alertmanager's annotation: its start (the files changed) and its end, the cut said",
+      (desc.startswith("=== the agent's fix - files:"), desc.rstrip().endswith("the very end"), "[... the whole in the direct mail ...]" in desc,
+       len(desc) < 3100), (True, True, True, True))
+open(big, "w").write("x" * 103000)
+rc, out, mails = via_copy("veto", "istio", "s", big)
+check("a veto whose details are over a mail's 100 KB: not sent, no mail, exit 1 (no notice on half its evidence)",
+      (rc, mails, "over a mail's 100 KB" in out), (1, [], True))
+open(os.path.join(W, "ssh.fail"), "w").write("")
+rc, out, mails = via_copy("veto", "istio", "s")
+check("a veto, Alertmanager unreachable, the direct mail sent: exit 0 (the mail is what it needs)", (rc, len(mails)), (0, 1))
+os.remove(os.path.join(W, "ssh.fail"))
 rc, out, mails = via_copy("applied", "u", "s")
 check("an applied notice: Alertmanager's alone (no direct mail)", (rc, mails), (0, []))
 open(os.path.join(W, "ssh.fail"), "w").write("")

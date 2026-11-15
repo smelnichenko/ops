@@ -177,4 +177,18 @@ values = "alertmanager:\n  enabled: true\n  image: prom/alertmanager:v0.34.1\n"
 print(found(".woodpecker/ci.yaml", ci), found("helm/schnappy-observability/values.yaml", values))
 PYPRESET
 )" "[('prom/alertmanager', 'v0.34.1')] [('prom/alertmanager', 'v0.34.1')]"
+# a run rebases what is open: at most three a repo (Woodpecker builds one at a time - every branch rebased was a queue
+# of builds ahead of the apps' deploys), opened in the cycle's own order
+check "the preset: three pull requests a repo at most, the test environment's first, the patch wave next, majors last" \
+  "$("$PY" - <<'PYLIMIT'
+import json
+d = json.load(open("renovate/upgrade-cycle.json"))
+pri = {}
+for r in d["packageRules"]:
+    if "prPriority" in r:
+        key = "test" if any("schnappy-test" in f for f in r.get("matchFileNames", [])) else r.get("groupSlug") or ",".join(r.get("matchUpdateTypes", []))
+        pri[key] = r["prPriority"]
+print(d.get("prConcurrentLimit"), d.get("branchConcurrentLimit"), pri.get("test", 0) > pri.get("wave-patches", 0) > 0 > pri.get("major", 0))
+PYLIMIT
+)" "3 3 True"
 if [ "$fails" = 0 ]; then echo "upgrade-renovate: ALL-PASS"; else echo "upgrade-renovate: $fails FAILED"; exit 1; fi

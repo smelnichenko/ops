@@ -146,6 +146,9 @@ for path in changed:
         old, new = play_vars(show("main", path) or ""), play_vars(show(BRANCH, path) or "")
         if without_vars(show("main", path)) != without_vars(show(BRANCH, path)):
             refused.append(f"{path} (its tasks)")  # main's tasks are what the copy runs: a changed task is unproven
+        # every value it changes is handed to Ansible somewhere (a FOLLOW value by no-downgrade's loop, run on each
+        # tag): a version or a hash, whether or not this proof runs it
+        refused += pins(old, new, path)
         for k in sorted(set(old) | set(new)):
             if old.get(k) == new.get(k):
                 continue
@@ -160,7 +163,9 @@ for path in changed:
     elif path == "deploy/ansible/playbooks/setup-argocd.yml":
         old, new = play_vars(show("main", path) or ""), play_vars(show(BRANCH, path) or "")
         moved = sorted(k for k in set(old) | set(new) if old.get(k) != new.get(k))
-        if not moved or set(moved) - ARGOCD:
+        if without_vars(show("main", path)) != without_vars(show(BRANCH, path)):
+            refused.append(f"{path} (its tasks)")  # main's tasks are what the copy runs: a changed task is unproven
+        elif not moved or set(moved) - ARGOCD:
             refused.append(f"{path} {' '.join(sorted(set(moved) - ARGOCD)) or '(its tasks)'}")
         else:
             version(new["argocd_chart_default"])
@@ -171,7 +176,9 @@ for path in changed:
     elif path == "deploy/ansible/playbooks/setup-host-hardening.yml":
         old, new = play_vars(show("main", path) or ""), play_vars(show(BRANCH, path) or "")
         moved = sorted(k for k in set(old) | set(new) if old.get(k) != new.get(k))
-        if not moved or set(moved) - NODE_EXPORTER:
+        if without_vars(show("main", path)) != without_vars(show(BRANCH, path)):
+            refused.append(f"{path} (its tasks)")
+        elif not moved or set(moved) - NODE_EXPORTER:
             refused.append(f"{path} {' '.join(sorted(set(moved) - NODE_EXPORTER)) or '(its tasks)'}")
         else:
             version(new["node_exporter_version"])

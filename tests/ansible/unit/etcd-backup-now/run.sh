@@ -19,7 +19,9 @@ case "$*" in
     st=$(sed -n "${n}p" "$W/states"); [ -n "$st" ] || st=$(tail -1 "$W/states")
     [ "$st" != FAIL ] || exit 255
     printf '%s' "$st" ;;
-  *"-c upload"*) cat "$W/upload.log" ;;
+  *"field-selector=status.phase=Succeeded"*) [ -e "$W/nopod" ] || echo "pod/etcd-backup-now-x-ok" ;;
+  *"logs pod/etcd-backup-now-x-ok -c upload"*) cat "$W/upload.log" ;;
+  *"-c upload"*) echo "the failed pod's log: no OK line" ;;
   *"--all-containers"*) echo "pod etcd-backup-now-x: upload: connection refused" ;;
 esac
 STUB
@@ -46,6 +48,10 @@ run 'True/' > /dev/null; : > "$W/upload.log"
 PATH="$W/bin:$PATH" W="$W" ETCD_BACKUP_POLL=0 bash scripts/etcd-backup-now.sh > "$W/out" 2>&1; rc=$?
 check "Complete but no OK line in the upload's log: not taken as proof (exit 1)" "$rc $(grep -c 'not taken as proof' "$W/out")" "1 1"
 check "a read failing once (ten's ssh): read again, then taken" "$(run $'/\nFAIL\nTrue/')" "0 3"
+check "  the OK line read from the pod that succeeded (a retried Job's failed pod beside it never read)" \
+  "$(grep -c 'logs pod/etcd-backup-now-x-ok -c upload' "$W/calls")" "1"
+touch "$W/nopod"; r=$(run 'True/'); rm -f "$W/nopod"
+check "Complete, its succeeded pod not found: not taken as proof (exit 1)" "$r $(grep -c 'succeeded pod not found' "$W/out")" "1 1 1"
 check "reads failing 3 times, never twice in a row: read on, then taken (a good read starts the count again)" \
   "$(run $'FAIL\n/\nFAIL\n/\nFAIL\nTrue/')" "0 6"
 r=$(run $'/\nFAIL\nFAIL\nFAIL\nTrue/'); check "reads failing 3 times in a row: given up (exit 1), said" \

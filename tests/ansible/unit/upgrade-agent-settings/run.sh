@@ -43,6 +43,7 @@ MUST_DENY = ["Bash(task *)", "Bash(ssh *)", "Bash(scp *)", "Bash(curl *)", "Bash
              "Bash(ansible*)", "Bash(sudo *)", "Bash(docker *)", "Bash(git push*)", "Bash(git -C * push*)",
              "Bash(git branch*)", "Bash(git checkout*)", "Bash(git switch*)", "Bash(git remote*)", "Bash(git config*)",
              "Bash(git fetch*)", "Bash(git reset*)", "Bash(git *--no-index*)", "Bash(git *-c *)", "Bash(vagrant *)",
+             "Bash(git *--output*)",
              "Read(~/.git-credentials)", "Read(~/.kube/**)", "Read(~/.ssh/**)", "Read(~/.claude/.credentials.json)",
              "Read(//home/sm/src/ops/.env)", "WebSearch"]
 for name, d in (("fix", fix), ("review", review)):
@@ -55,7 +56,7 @@ for name, d in (("fix", fix), ("review", review)):
               "git -c core.pager=sh diff", "task --yes deploy:argocd", "ssh ten true",
               "kubectl get secret -A", "curl https://evil", "vagrant ssh pi1", "git branch -m main", "git checkout main",
               "cat ~/.git-credentials", "python3 -c x", "python3 -I scripts/renovate-checksums.py --changed --base origin/main",
-              "bash -c x", "sh -c x", "env x"]  # (git diff --no-index: the deny list's, git diff * matches its form)
+              "bash -c x", "sh -c x", "env x"]  # (git log --output: the deny list's - git log * matches its form)  # (git diff --no-index: the deny list's, git diff * matches its form)
     granted = [p for p in probes for r in allow if r.startswith("Bash(") and fnmatch.fnmatchcase(p, r[5:-1])]
     check(f"{name}: no allow grants a push (forced, through -C), a deploy, ssh, kubectl, curl, vagrant, a branch, a remote "
           "or config, a credential read, an interpreter of its own or the clone's own checksum script (one the agent "

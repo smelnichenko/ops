@@ -19,8 +19,10 @@ grouped by branch (renovate/<unit> - the same name in each repo).
                  major's notice before a new one's. Left out:
                  a unit labelled upgrade-blocked (red after its fix) or veto, a major in its 24 h; everything while the
                  dashboard issue carries upgrades-paused (the kill switch) - and no dashboard issue open: not read (exit 1)
-  noticed UNIT   when the unit's veto notice was posted (the runner's latest "UPGRADE NOTICE <iso>" comment: a fix
-                 noticed again starts its 24 h again), or "NONE"
+  noticed UNIT   when the unit's veto notice was posted (the runner's latest "UPGRADE NOTICE <iso> diff=<hash>"
+                 comment: a fix noticed again starts its 24 h again), or "NONE"; a notice holds only while the unit
+                 changes what it announced (its diff hash: upgrade-label.py --diff-hash) - a newer release Renovate
+                 moved the branch to since is noticed again
   held UNIT      what holds the unit now, one a line - upgrade-blocked, veto (on any of its pull requests), paused (the
                  dashboard's upgrades-paused); nothing when nothing does: the runner asks again right before a merge
                  (a veto or the kill switch set during the proof and the review was not seen at the pick's time)
@@ -50,8 +52,11 @@ FAMILIES = ("istio", "kubernetes", "cilium", "observability", "data-operators", 
 # a unit moved one minor at a time is named for its minor (renovate/upgrade-cycle.json: istio-1.32, scylladb-2026.3)
 VERSIONED = re.compile(r"(?P<base>[a-z0-9][a-z0-9.-]*?)-(?P<major>\d+)\.(?P<minor>\d+)")
 VETO_HOURS = 24
-NOTICE = re.compile(r"^UPGRADE NOTICE (\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ)\b", re.M)
-DASHBOARD = "Upgrade cycle - Renovate's dashboard"
+# the runner's comment starts with it - a line inside another comment of the bot's (Renovate posts as the same account,
+# release notes quoted) is no notice
+NOTICE = re.compile(r"UPGRADE NOTICE (\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ)(?: diff=([0-9a-f]{64}))?\b")
+# renovate/upgrade-cycle.json's dependencyDashboardTitle - each repo's dashboard (all three extend the preset)
+DASHBOARD = "Upgrade cycle - Renovate's dashboard (label upgrades-paused: the cycle stops)"
 
 
 class NotRead(Exception):
@@ -118,26 +123,47 @@ def twin(name):
 
 
 def noticed(_name, u):
-    """The latest runner notice on any of the unit's pull requests - a unit noticed again (its agent's fix, after its
-    first notice) waits its 24 h from then: what was noticed first is not what applies."""
-    times = []
+    """The latest runner notice on any of the unit's pull requests, (its time, the diff hash it announced) - a unit
+    noticed again (its agent's fix, after its first notice) waits its 24 h from then: what was noticed first is not
+    what applies."""
+    found = []
     for repo, number in u["repos"].items():
         for c in get(f"/repos/{repo}/issues/{number}/comments"):
             if (c.get("user") or {}).get("login") != BOT:
                 continue
-            m = NOTICE.search(c.get("body") or "")
+            m = NOTICE.match(c.get("body") or "")
             if m:
-                times.append(datetime.datetime.fromisoformat(m.group(1).replace("Z", "+00:00")))
-    return max(times) if times else None
+                found.append((datetime.datetime.fromisoformat(m.group(1).replace("Z", "+00:00")), m.group(2) or ""))
+    return max(found) if found else None
+
+
+def current_hash(name):
+    """What the unit changes now - upgrade-label.py's own hash (one definition of it, never two)."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("upgrade_label", os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                                                               "upgrade-label.py"))
+    label = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(label)
+    try:
+        return label.unit_diff_hash(name)
+    except label.Refused as e:
+        raise NotRead(f"{name}'s diff: {e}") from None
 
 
 def paused():
-    """The kill switch: the dashboard issue's upgrades-paused. No dashboard is not "not paused" - the switch is gone (the
-    issue closed, renamed, Renovate's config changed), so nothing is read: the pick and held fail closed."""
-    for issue in get("/repos/schnappy/ops/issues", state="open", type="issues"):
-        if (issue.get("title") or "").startswith(DASHBOARD):
-            return "upgrades-paused" in {lb["name"] for lb in issue.get("labels") or []}
-    raise NotRead(f"no open issue titled {DASHBOARD!r} in schnappy/ops - the kill switch not read")
+    """The kill switch: upgrades-paused on any of the three repos' dashboards (Renovate's issue: its title, the bot's).
+    No dashboard in ops is not "not paused" - the switch is gone (the issue closed, renamed, Renovate's config changed),
+    so nothing is read: the pick and held fail closed."""
+    ops_seen = False
+    for repo in REPOS:
+        for issue in get(f"/repos/{repo}/issues", state="open", type="issues"):
+            if issue.get("title") == DASHBOARD and (issue.get("user") or {}).get("login") == BOT:
+                ops_seen |= repo == "schnappy/ops"
+                if "upgrades-paused" in {lb["name"] for lb in issue.get("labels") or []}:
+                    return True
+    if not ops_seen:
+        raise NotRead(f"no open issue titled {DASHBOARD!r} by {BOT} in schnappy/ops - the kill switch not read")
+    return False
 
 
 def family(name):
@@ -175,19 +201,20 @@ def pick():
     for name in sorted((n for n, u in open_units.items() if not waits_notice(u)), key=lambda n: order(n, open_units[n])):
         return f"prove {name} {open_units[name]['kind']}"
     majors = sorted(n for n, u in open_units.items() if waits_notice(u))
-    waiting = []
+    waiting, again = [], []
     for name in majors:
-        t = noticed(name, open_units[name])
-        if t is None:
+        n = noticed(name, open_units[name])
+        if n is None:
             continue
+        t, announced = n
         if now() - t >= datetime.timedelta(hours=VETO_HOURS):
-            waiting.append((t, name))
+            # what applies is what was announced, or it is noticed again (a newer release, another fix since)
+            (waiting if announced and announced == current_hash(name) else again).append((t, name))
     if waiting:
         name = min(waiting)[1]
         return f"apply {name} {open_units[name]['kind']}"
-    for name in majors:
-        if noticed(name, open_units[name]) is None:
-            return f"notice {name} {open_units[name]['kind']}"
+    for name in [n for _, n in sorted(again)] + [n for n in majors if noticed(n, open_units[n]) is None]:
+        return f"notice {name} {open_units[name]['kind']}"
     return "NOTHING"
 
 
@@ -210,13 +237,13 @@ def main(argv):
             if paused():
                 print("paused")
             return 0
-        if len(argv) == 2 and argv[0] == "noticed":
+        if len(argv) == 2 and argv[0] == "noticed":  # its time
             u = units().get(argv[1])
             if u is None:
                 print(f"NO UNIT {argv[1]}")
                 return 1
-            t = noticed(argv[1], u)
-            print(t.strftime("%Y-%m-%dT%H:%M:%SZ") if t else "NONE")
+            n = noticed(argv[1], u)
+            print(n[0].strftime("%Y-%m-%dT%H:%M:%SZ") + (f" diff={n[1]}" if n[1] else "") if n else "NONE")
             return 0
     except NotRead as e:
         print(f"NOT READ: Forgejo's answer - {e}")

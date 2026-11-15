@@ -108,7 +108,9 @@
       "Read(//home/sm/src/ops/.env)",
       "Read(//home/sm/src/infra/.env)",
       "Read(//home/sm/src/platform/.env)",
-      "Read(~/.pgpass)"
+      "Read(~/.pgpass)",
+      "Bash(git *--output*)",
+      "Bash(git *--output-directory*)"
     ]
   }
 }

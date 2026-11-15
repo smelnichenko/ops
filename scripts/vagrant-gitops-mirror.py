@@ -238,6 +238,16 @@ def drop(repo, name, rels):
             sys.exit(f"{name} overlay: {rel} does not exist in {name} main - the drop list is stale")
 
 
+def refuse_links(name, repo):
+    """A symlink or a submodule in a ref: refused before anything reads or rewrites the tree - this script runs as the
+    operator, and a link committed under clusters/ would have it rewrite whatever file the link names."""
+    staged = subprocess.run(["git", "-C", repo, "ls-files", "-s"], capture_output=True, text=True, check=True).stdout
+    links = [line.split("\t", 1)[1] for line in staged.splitlines() if line.startswith(("120000 ", "160000 "))]
+    if links:
+        sys.exit(f"REFUSED: {name} holds a symlink or submodule ({', '.join(links[:5])}) - the copy rewrites its tree "
+                 "as the operator; never through a link")
+
+
 def isolate_from_production(repo):
     """Rewrite every production LAN address to its Vagrant counterpart; abort if one is left."""
     files = subprocess.run(["git", "-C", repo, "ls-files"], capture_output=True, text=True, check=True).stdout.split()
@@ -249,6 +259,8 @@ def isolate_from_production(repo):
 
 
 def rewrite_addresses(p):
+    if os.path.islink(p):
+        return  # refuse_links refused a tracked one; never written through
     try:
         text = open(p, encoding="utf-8").read()
     except (UnicodeDecodeError, IsADirectoryError, FileNotFoundError):
@@ -323,6 +335,7 @@ def main():
             run("git", "clone", "-q", "--branch", ref, "--single-branch", os.path.abspath(src), repo)
             head = subprocess.run(["git", "-C", repo, "rev-parse", "--short", "HEAD"],
                                   capture_output=True, text=True, check=True).stdout.strip()
+            refuse_links(name, repo)
             if name == "infra":
                 overlay_infra(repo, a.forgejo)
             else:

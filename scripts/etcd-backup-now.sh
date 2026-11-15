@@ -21,7 +21,10 @@ for _ in $(seq "$tries"); do
     failed_reads=0
     case "$st" in
       True/*)
-        ok=$(on "kubectl -n kube-system logs job/$job -c upload" | grep -m1 '^etcd-backup OK: ')
+        # the pod that succeeded (a retried Job has a failed one beside it: logs job/<it> may read that one)
+        pod=$(on "kubectl -n kube-system get pods -l job-name=$job --field-selector=status.phase=Succeeded -o name" | head -n 1)
+        [ -n "$pod" ] || { echo "ETCD SNAPSHOT $job: the Job Complete, its succeeded pod not found - not taken as proof"; exit 1; }
+        ok=$(on "kubectl -n kube-system logs $pod -c upload" | grep -m1 '^etcd-backup OK: ')
         [ -n "$ok" ] || { echo "ETCD SNAPSHOT $job: the Job Complete, its upload's OK line not read - not taken as proof"; exit 1; }
         echo "$ok"; echo "ETCD SNAPSHOT $job: taken"; exit 0 ;;
       */True)

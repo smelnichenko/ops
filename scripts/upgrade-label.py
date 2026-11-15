@@ -6,8 +6,14 @@ and ops), as the renovate-bot:
   UNIT --comment TEXT the comment on each (the veto notice: "UPGRADE NOTICE <iso> ...")
   UNIT --heads        each pull request's head and its base branch's commit, "<repo> <number> <head> <base>" a line -
                       what the runner proves
-  UNIT --green        each head's CI status, "<repo>#<number> <state>" a line; exit 0 every one success, 1 else (a
-                      red or running CI is hours of proof for a merge that is refused)
+  UNIT --green [SECONDS]
+                      each head's CI status, "<repo>#<number> <state>" a line; exit 0 every one success, 4 one red
+                      (failure, error: the unit breaks its own checks), 1 else - a running one waited for up to SECONDS
+                      (default 0) (a red or running CI is hours of proof for a merge that is refused)
+  UNIT --update       each pull request whose base moved past it: main merged into its branch (Forgejo's update, as the
+                      bot) - a unit Renovate no longer rebases (stop-updating) brought onto main for its proof
+  UNIT --diff-hash    a hash of what the unit changes (each pull request's changed lines and files, no context or
+                      positions): its notice holds for this - a rebase onto a newer main keeps it, a newer release not
   UNIT --merge --expect FILE
                       each merged - infra, platform, then ops - only when every one's head is green (its CI's status
                       success), mergeable and still the commit FILE (--heads' lines) says was proven, its base branch
@@ -25,7 +31,7 @@ fork, named renovate/<unit> all the same, is never labelled, commented on or mer
 
 Env: UPGRADE_FORGEJO_URL (default https://git.pmon.dev/api/v1), UPGRADE_FORGEJO_TOKEN (the bot's PAT),
      UPGRADE_MERGE_READS (12) and UPGRADE_MERGE_WAIT (10 s): a lost merge answer read again that often, that far apart.
-Exit 0 done, 1 refused or Forgejo's answer not read (nothing merged), 3 a merge partly done or not known.
+Exit 0 done, 1 refused or Forgejo's answer not read (nothing merged), 3 a merge partly done or not known, 4 red CI.
 """
 import http.client
 import json
@@ -67,7 +73,8 @@ def call(method, path, body=None):
             raw = r.read()
             return json.loads(raw) if raw.strip() else None
     except urllib.error.HTTPError as e:
-        raise Refused(f"{method} {path}: {e.code} {e.read()[:200]!r}", definite=True) from None
+        # a 4xx is Forgejo's own no; a 5xx is a gateway or Forgejo failing - the request may have gone through
+        raise Refused(f"{method} {path}: {e.code} {e.read()[:200]!r}", definite=400 <= e.code < 500) from None
     except (OSError, ValueError, http.client.HTTPException) as e:  # URLError is an OSError; a cut body HTTPException
         raise Refused(f"{method} {path}: {e}") from None
 
@@ -131,20 +138,67 @@ def state(repo, sha):
     return (call("GET", f"/repos/{repo}/commits/{sha}/status") or {}).get("state")
 
 
-def green(unit):
-    bad = []
+class Red(Exception):
+    """A head's CI finished red: the unit breaks its own checks."""
+
+
+def green(unit, wait=0):
+    """Every head's CI success - a running one waited for (up to wait seconds), a red one at once."""
+    deadline = time.monotonic() + wait
+    while True:
+        states = [(f"{repo}#{pr['number']}", state(repo, pr["head"]["sha"]) or "none") for repo, pr in prs(unit)]
+        red = [n for n, st in states if st in ("failure", "error")]
+        if red:
+            print("\n".join(f"{n} {st}" for n, st in states))
+            raise Red(f"red: {', '.join(red)}")
+        if all(st == "success" for _, st in states):
+            print("\n".join(f"{n} {st}" for n, st in states))
+            return
+        if time.monotonic() >= deadline:
+            print("\n".join(f"{n} {st}" for n, st in states))
+            raise Refused(f"not green yet: {', '.join(n for n, st in states if st != 'success')}")
+        time.sleep(float(os.environ.get("UPGRADE_GREEN_POLL", "60")))
+
+
+def diff_hash(unit):
+    print(unit_diff_hash(unit))
+
+
+def update(unit):
+    """Each pull request whose base moved past it brought up to date - main merged into its branch, by Forgejo, as the
+    bot (a unit Renovate no longer rebases: stop-updating, the agent's fix on it). What it changes stays (its diff)."""
     for repo, pr in prs(unit):
-        st = state(repo, pr["head"]["sha"])
-        print(f"{repo}#{pr['number']} {st or 'none'}")
-        if st != "success":
-            bad.append(f"{repo}#{pr['number']}")
-    if bad:
-        raise Refused(f"not green: {', '.join(bad)}")
+        ref = (pr.get("base") or {}).get("ref") or "main"
+        behind = (call("GET", f"/repos/{repo}/compare/{pr['head']['sha']}...{ref}") or {}).get("total_commits")
+        if behind:
+            call("POST", f"/repos/{repo}/pulls/{pr['number']}/update?style=merge")
+            print(f"UPDATED {repo}#{pr['number']} ({behind} commit(s) of {ref} merged in)")
+
+
+def unit_diff_hash(unit):
+    """What the unit changes, independent of where its bases stand: each pull request's diff, its changed lines and
+    file names alone (no context, no hunk positions), hashed - a notice holds for this, and for nothing else."""
+    import hashlib
+    h = hashlib.sha256()
+    for repo, pr in sorted(prs(unit), key=lambda x: REPOS.index(x[0])):
+        req = urllib.request.Request(f"{API}/repos/{repo}/pulls/{pr['number']}.diff")
+        req.add_unredirected_header("Authorization", f"token {TOKEN}")
+        try:
+            with urllib.request.urlopen(req, timeout=60) as r:
+                text = r.read().decode("utf-8", "replace")
+        except (OSError, http.client.HTTPException) as e:
+            raise Refused(f"{repo}#{pr['number']}'s diff: {e}") from None
+        h.update(repo.encode() + b"\n")
+        for line in text.splitlines():
+            if line.startswith(("+++ ", "--- ")) or (line[:1] in "+-" and line[:1]):
+                h.update(line.encode() + b"\n")
+    return h.hexdigest()
 
 
 def cd_only(repo, pr, proven_base, base):
-    """The base branch moved since the proof by CD's app promotions alone (each commit its author's, its files CD's) -
-    files the unit does not touch: the merged tree is the proven one plus app image tags production gets anyway."""
+    """The base branch moved since the proof by CD's app promotions alone (each commit its author's, its files CD's):
+    the merged tree is the proven one plus app image tags production gets anyway - a unit that changes another line of
+    CD's file merges beside them (Forgejo's mergeable, already required, says whether the two meet)."""
     try:
         with open(CD_FILE, encoding="utf-8") as f:
             cd = json.load(f)
@@ -161,18 +215,22 @@ def cd_only(repo, pr, proven_base, base):
         files = {f.get("filename") for f in c.get("files") or []}
         if ((c.get("commit") or {}).get("author") or {}).get("email") != cd.get("author") or not files or files - paths:
             return False
-    return not ({f.get("filename") for f in every(f"/repos/{repo}/pulls/{pr['number']}/files")} & paths)
+    return True
 
 
-def went_in(repo, number, definite):
-    """A merge whose POST failed: merged after all (True), not (False: Forgejo answered no, and says so), or not
-    known (None: its answer lost and the pull request not merged after waiting, or not read)."""
+def went_in(repo, number, definite, head="", base_ref="main"):
+    """A merge whose POST failed: merged after all (True: the pull request says so, or its head is on the base branch
+    already - a failure after the merge commit), not (False: Forgejo answered no, a 4xx, and both say so), or not
+    known (None: its answer lost, or a 5xx, and it not merged after waiting, or not read)."""
     reads = 1 if definite else max(1, int(os.environ.get("UPGRADE_MERGE_READS", "12")))
     for i in range(reads):
         if i:
             time.sleep(float(os.environ.get("UPGRADE_MERGE_WAIT", "10")))
         try:
             if (call("GET", f"/repos/{repo}/pulls/{number}") or {}).get("merged"):
+                return True
+            # a 4xx refused it before anything moved; after a 5xx or no answer, its head on the base is a merge too
+            if not definite and head and (call("GET", f"/repos/{repo}/compare/{base_ref}...{head}") or {}).get("total_commits") == 0:
                 return True
         except Refused:
             continue
@@ -229,7 +287,7 @@ def merge(unit, expected):
                      {"Do": "merge", "delete_branch_after_merge": True, "head_commit_id": expected[repo][1]})
             except Refused as e:
                 # its answer lost (a timeout, Forgejo restarting) is no proof it did not merge: read it again
-                went = went_in(repo, pr["number"], e.definite)
+                went = went_in(repo, pr["number"], e.definite, expected[repo][1], (pr.get("base") or {}).get("ref") or "main")
                 if went:
                     merged.append(f"{repo}#{pr['number']}")
                     print(f"MERGED {repo}#{pr['number']} (its answer lost: {e})")
@@ -252,7 +310,8 @@ def pause(text):
         have["upgrades-paused"] = call("POST", "/repos/schnappy/ops/labels",
                                        {"name": "upgrades-paused", "color": "#b60205"})["id"]
     for issue in every("/repos/schnappy/ops/issues?state=open&type=issues"):
-        if (issue.get("title") or "").startswith(DASHBOARD):
+        # the dashboard upgrade-units.py reads: Renovate's title exactly, the bot's issue - a label on another is unread
+        if issue.get("title") == DASHBOARD_TITLE and (issue.get("user") or {}).get("login") == BOT:
             number = issue["number"]
             call("POST", f"/repos/schnappy/ops/issues/{number}/labels", {"labels": [have["upgrades-paused"]]})
             break
@@ -264,8 +323,8 @@ def pause(text):
     print(f"PAUSED schnappy/ops#{number}")
 
 
-USAGE = ("usage: upgrade-label.py UNIT LABEL | UNIT --comment TEXT | UNIT --heads | UNIT --green | "
-         "UNIT --merge --expect FILE | --pause TEXT")
+USAGE = ("usage: upgrade-label.py UNIT LABEL | UNIT --comment TEXT | UNIT --heads | UNIT --green [SECONDS] | UNIT --diff-hash | "
+         "UNIT --update | UNIT --merge --expect FILE | --pause TEXT")
 
 
 def main(argv):
@@ -283,8 +342,12 @@ def main(argv):
     try:
         if argv[1:] == ["--heads"]:
             heads(unit)
-        elif argv[1:] == ["--green"]:
-            green(unit)
+        elif argv[1:2] == ["--green"] and len(argv) <= 3 and all(x.isdigit() for x in argv[2:]):
+            green(unit, int(argv[2]) if len(argv) == 3 else 0)
+        elif argv[1:] == ["--diff-hash"]:
+            diff_hash(unit)
+        elif argv[1:] == ["--update"]:
+            update(unit)
         elif len(argv) == 4 and argv[1:3] == ["--merge", "--expect"]:
             merge(unit, read_expected(argv[3]))
         elif argv[1] == "--comment" and len(argv) == 3 and argv[2]:
@@ -297,6 +360,9 @@ def main(argv):
     except Partial as e:
         print(f"PARTIAL: {e}")
         return 3
+    except Red as e:
+        print(f"RED: {e}")
+        return 4
     except Refused as e:
         print(f"REFUSED: {e}")
         return 1

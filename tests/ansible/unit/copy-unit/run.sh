@@ -85,6 +85,17 @@ unit ops forgejo-hash-jinja 's/: cdcd[c-d]*$/: "{{ x }}"/' deploy/ansible/vars/f
 unit ops forgejo-vault-tag 's/"15.0.11"/!vault |\n  $ANSIBLE_VAULT;1.1;AES256/' deploy/ansible/vars/forgejo.yml
 unit ops argocd-pin-jinja 's/v3.4.10/"{{ lookup('"'"'env'"'"', '"'"'HOME'"'"') }}"/' deploy/ansible/playbooks/setup-argocd.yml
 unit ops kubeadm-task 's/tasks: \[\]/tasks: [{name: x, command: id, tags: [cilium]}]/; s/"1.20.4"/"1.21.0"/' deploy/ansible/playbooks/setup-kubeadm.yml
+unit ops kubeadm-follow-jinja 's/"v1.21.3"/"{{ lookup('"'"'pipe'"'"', '"'"'id'"'"') }}"/; s/"1.20.4"/"1.21.0"/' deploy/ansible/playbooks/setup-kubeadm.yml
+unit ops argocd-task 's/"10.9.7"/"10.18.0"/; s/tasks: \[\]/tasks: [{name: x, command: id}]/' deploy/ansible/playbooks/setup-argocd.yml
+unit ops node-exporter-task 's/"1.12.1"/"1.13.0"/; s/tasks: \[\]/tasks: [{name: x, command: id}]/' deploy/ansible/playbooks/setup-host-hardening.yml
+# a vars file as production's is: its unchanged values no versions (an arch, a host name) - its version moved alone
+(cd "$W/src/ops" && printf 'vault_version: "1.21.4"\nvault_arch: "arm64"\nvault_pi_dns: "vault.schnappy.io"\nvault_checksums:\n  arm64: %s\n  amd64: %s\nvault_unseal_shares: 3\nvault_tls: true\nvault_peers: ["1.0.0", "1.0.1"]\n' "$(printf 'aa%.0s' $(seq 32))" "$(printf 'bb%.0s' $(seq 32))" > deploy/ansible/vars/vault.yml \
+  && g commit -qam "vault vars as production's" && g push -q origin main 2> /dev/null)
+unit ops vault-real 's/"1.21.4"/"1.21.5"/; s/  arm64: aa*$/  arm64: '"$(printf 'cc%.0s' $(seq 32))"'/' deploy/ansible/vars/vault.yml
+unit ops vault-flag 's/vault_tls: true/vault_tls: false/; s/"1.21.4"/"1.21.5"/' deploy/ansible/vars/vault.yml
+unit ops vault-list 's/\["1.0.0", "1.0.1"\]/["1.0.0", "1.0.2"]/; s/"1.21.4"/"1.21.5"/' deploy/ansible/vars/vault.yml
+unit ops vault-list-jinja 's/\["1.0.0", "1.0.1"\]/["1.0.0", "{{ x }}"]/' deploy/ansible/vars/vault.yml
+unit ops vault-nested-jinja 's/  amd64: bb*$/  amd64: "{{ lookup('"'"'pipe'"'"', '"'"'id'"'"') }}"/' deploy/ansible/vars/vault.yml
 (cd "$W/src/ops" && g switch -q -c renovate/pis && sed -i 's/15.0.11/15.0.12/' deploy/ansible/vars/forgejo.yml \
   && sed -i 's/4.1.5/4.1.6/' deploy/ansible/vars/patroni.yml && sed -i 's/1.36.6-1.1/1.36.7-1.1/' deploy/ansible/playbooks/setup-kubeadm.yml \
   && g commit -qam pis && g push -q origin renovate/pis 2> /dev/null && g switch -q main && g branch -q -D renovate/pis)
@@ -155,6 +166,26 @@ done
 out=$(plan kubeadm-task); rc=$?
 check "setup-kubeadm's tasks changed beside its Cilium version (main's tasks are what the copy runs): refused" \
   "$rc $(grep -c 'REFUSED.*setup-kubeadm.yml (its tasks)' <<< "$out")" "1 1"
+for u in argocd-task node-exporter-task; do
+  out=$(plan "$u"); rc=$?
+  check "  $u: its playbook's tasks changed beside its version (production would run them, the copy main's): refused" \
+    "$rc $(grep -c '(its tasks)' <<< "$out")" "1 1"
+done
+out=$(plan kubeadm-follow-jinja); rc=$?
+check "a value production's charts carry (no proof of its own) made a template beside a Cilium bump: refused (no-downgrade's loop renders every value)" \
+  "$rc $(grep -c 'REFUSED' <<< "$out")" "1 1"
+out=$(plan vault-real)
+check "a vars file as production's (an arch, a host name, a count, a flag, a list unchanged): its version and hash moved - proven" \
+  "$(grep -c '^test:copy:playbook PLAYBOOK=upgrade-vault.yml' <<< "$out")" "1"
+for u in vault-flag vault-list; do
+  out=$(plan "$u")
+  check "  $u: a flag flipped / a list of versions changed beside it - proven (no template in either)" \
+    "$(grep -c '^test:copy:playbook PLAYBOOK=upgrade-vault.yml' <<< "$out")" "1"
+done
+for u in vault-list-jinja vault-nested-jinja; do
+  out=$(plan "$u"); rc=$?
+  check "  $u: a template inside a list / inside a nested value: refused" "$rc $(grep -c '^REFUSED' <<< "$out")" "1 1"
+done
 out=$(plan node-exporter-port); rc=$?
 check "  another of its values (its port): refused, no known proof" "$rc $(grep -c 'node_exporter_port' <<< "$out")" "1 1"
 out=$(plan vault-keyed); rc=$?

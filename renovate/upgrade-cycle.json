@@ -8,7 +8,8 @@
     "(istio, kubernetes, cilium); renovate/<family> for the other families' minors (observability, data-operators, argocd,",
     "pi-services); each other minor and every major on a branch of its own (Renovate's own name). Label one-way: a change",
     "whose stores have no backup path in the cycle yet - the runner leaves it for the operator.",
-    "A test environment's files: renovate/test-<unit>, merged before its production twin."
+    "A test environment's files: renovate/test-<unit>, merged before its production twin.",
+    "At most three pull requests open in each repo (prConcurrentLimit, branches with them), in the cycle's own order (prPriority): the test environment's, the patch wave, the minors, majors last - a run rebases those three alone, never a queue of CI builds ahead of the apps' deploys."
   ],
   "extends": [
     "config:recommended",
@@ -24,9 +25,9 @@
   "separateMajorMinor": true,
   "separateMultipleMajor": true,
   "rebaseWhen": "behind-base-branch",
-  "prConcurrentLimit": 0,
+  "prConcurrentLimit": 3,
   "prHourlyLimit": 0,
-  "branchConcurrentLimit": 0,
+  "branchConcurrentLimit": 3,
   "branchPrefix": "renovate/",
   "labels": [
     "upgrade-cycle"
@@ -152,7 +153,8 @@
       "groupSlug": "wave-patches",
       "group": {
         "branchTopic": "wave-patches"
-      }
+      },
+      "prPriority": 5
     },
     {
       "description": "Istio and its Gateway API: their minors together, one minor at a time - renovate/istio-<X.Y>",
@@ -365,7 +367,8 @@
         "clusters/production/argocd/apps/schnappy-test.yaml",
         "helm/schnappy-test/**"
       ],
-      "additionalBranchPrefix": "test-"
+      "additionalBranchPrefix": "test-",
+      "prPriority": 10
     },
     {
       "description": "ops' pinned build hashes move with their version, each read from what its vendor signs (scripts/renovate-checksums.py): a signature that does not check fails the task and leaves the old pins - copy-unit.sh's --check then refuses the unit, never a download unchecked. Once a branch, on every ops update: a branch's settings are its first update's (any of ops'), and per update each run would read every pin the branch moved again",
@@ -381,6 +384,13 @@
         ],
         "executionMode": "branch"
       }
+    },
+    {
+      "description": "majors after everything else: one waits out its 24 h notice holding a pull request of the three (prConcurrentLimit)",
+      "matchUpdateTypes": [
+        "major"
+      ],
+      "prPriority": -5
     }
   ],
   "ignorePresets": [

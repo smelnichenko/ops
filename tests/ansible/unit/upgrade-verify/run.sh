@@ -36,14 +36,22 @@ def check(name, got, want):
     global fails
     fails += got != want
     print(("PASS " if got == want else "FAIL ") + name + ("" if got == want else f": got {got!r}, want {want!r}"))
-def app(name, sync="Synced", health="Healthy", op="Succeeded", sources=None, revisions=None, labels=None):
+def app(name, sync="Synced", health="Healthy", op="Succeeded", sources=None, revisions=None, labels=None, single=False,
+        compared=None, namespace=None):
     st = {"sync": {"status": sync}, "health": {"status": health}}
     if op is not None:
         st["operationState"] = {"phase": op}
     a = {"metadata": {"name": name, "labels": labels or {}}, "status": st, "spec": {}}
-    if sources is not None:  # [(repoURL, targetRevision)], their synced commits in revisions
-        a["spec"]["sources"] = [{"repoURL": u, "targetRevision": t} for u, t in sources]
-        st["sync"]["revisions"] = revisions
+    if namespace:
+        a["spec"]["destination"] = {"namespace": namespace}
+    if sources is not None:  # [(repoURL, targetRevision)], their synced commits in revisions; compared as specified
+        srcs = [{"repoURL": u, **({"targetRevision": t} if t is not None else {})} for u, t in sources]
+        if single:  # the common shape: spec.source and sync.revision
+            a["spec"]["source"] = srcs[0]; st["sync"]["revision"] = revisions[0]
+            st["sync"]["comparedTo"] = {"source": compared[0] if compared else srcs[0]}
+        else:
+            a["spec"]["sources"] = srcs; st["sync"]["revisions"] = revisions
+            st["sync"]["comparedTo"] = {"sources": compared if compared else srcs}
     return a
 def pod(ns, name, phase="Running", ready=(True,)):
     return {"metadata": {"namespace": ns, "name": name},
@@ -105,14 +113,31 @@ rc, out = run(OK_APPS, OK_PODS, alerts=CRIT, alert_after=0, hold="0")
 check("hold 0 (the gate's look), a critical alert firing: not settled, named - never applied on top of it",
       (rc, "critical alert PostgresDown" in out), (1, True))
 rc, out = run(OK_APPS, OK_PODS, hold="0")
-check("hold 0, nothing firing: settled and quiet in one look", (rc, out.strip()), (0, "SETTLED AND QUIET (one look)"))
+check("hold 0, nothing firing: settled and quiet in one look", (rc, out.strip()), (0, "SETTLED AND QUIET (1 look)"))
+rc, out = run(OK_APPS, OK_PODS, hold="0", settle="5")
+check("hold 0 while waiting for Argo (settle > 0): two clean looks in a row (a look between a compare and its sync is no "
+      "settle)", (rc, out.strip(), int(open(os.path.join(W, "looks")).read())), (0, "SETTLED AND QUIET (2 looks in a row)", 2))
 rc, out = run(OK_APPS + [app("pr-42-monitor", health="Degraded", labels={"preview-env": "true"})], OK_PODS)
 check("a preview environment's app broken (a pull request's): no part of production - settled", rc, 0)
-rc, out = run(OK_APPS, OK_PODS, alerts=[{"labels": {"alertname": "Watchdog", "severity": "critical"}}], alert_after=0)
-check("Watchdog firing (it always does): still quiet", rc, 0)
+rc, out = run(OK_APPS, OK_PODS, alerts=[{"labels": {"alertname": "Watchdog", "severity": "critical"}}], alert_after=0, streak="1")
+check("Watchdog firing (it always does), one look in a row enough: still quiet", (rc, "critical alert" in out), (0, False))
 rc, out = run(OK_APPS, OK_PODS, alerts=[{"labels": {"alertname": "UpgradeCycle", "kind": "one-way-failed", "severity": "critical"}}],
-              alert_after=0)
-check("the cycle's own UpgradeCycle page (an earlier unit's one-way failure): not this apply's - still quiet", rc, 0)
+              alert_after=0, streak="1")
+check("the cycle's own UpgradeCycle page (an earlier unit's one-way failure), one look enough: not this apply's - still quiet",
+      (rc, "critical alert" in out), (0, False))
+PREVIEW = app("pr-42-monitor", health="Degraded", labels={"preview-env": "true"}, namespace="schnappy-pr-42")
+rc, out = run(OK_APPS + [PREVIEW], OK_PODS + [pod("schnappy-pr-42", "monitor-0", ready=(False,))],
+              alerts=[{"labels": {"alertname": "PodCrashLooping", "severity": "critical", "namespace": "schnappy-pr-42"}}],
+              alert_after=0, streak="1")
+check("a preview environment's pod crash-looping and its alert firing (its namespace a preview app's): no part of production",
+      (rc, out.strip().splitlines()[-1]), (0, "SETTLED AND QUIET for 2 min"))
+rc, out = run(OK_APPS + [PREVIEW], [pod("schnappy-production", "monitor-0", ready=(False,))])
+check("  control: the same pod in production's namespace - not settled", (rc, "pod schnappy-production/monitor-0" in out), (1, True))
+STALL = app("cert-manager", sync="OutOfSync")
+STALL["spec"]["syncPolicy"] = {"automated": {}}
+STALL["status"]["operationState"] = {"phase": "Succeeded", "operation": {"initiatedBy": {"automated": True}}}
+rc, out = run([STALL], OK_PODS)
+check("an app stalled (an automated sync Argo will not start again): not settled, said as STALLED", (rc, "STALLED" in out), (1, True))
 rc, out = run(OK_APPS, OK_PODS, down=True)
 check("ten unreachable: not settled, said", (rc, "apps not read" in out), (1, True))
 # production's list: 300 pods with long names and labels - over the 128 KiB one environment variable may hold (the
@@ -150,6 +175,36 @@ for rev, why in ((c[1], "on the merge's commit"), (c[2], "on a later one (CD mov
 check("an app tracking a tag of infra, not its main: not judged by the merge", run([tracking(c[0], "v1")], OK_PODS,
                                                                                    revs=f"infra={c[1]}")[0], 0)
 check("no revisions given (the gate before an apply): not judged", run([tracking(c[0])], OK_PODS)[0], 0)
+first = app("observability", sources=[(INFRA, "HEAD"), ("https://charts.example", "1.2.3")], revisions=[c[0], "1.2.3"])
+check("infra the FIRST of two sources, still before the merge: not settled (each source's own revision, by its place)",
+      run([first], OK_PODS, revs=f"infra={c[1]}")[0], 1)
+first_at = app("observability", sources=[(INFRA, "HEAD"), ("https://charts.example", "1.2.3")], revisions=[c[1], "1.2.3"])
+check("  infra the first source, at the merge (the chart's revision after it): settled - its own revision read, not the last",
+      run([first_at], OK_PODS, revs=f"infra={c[1]}")[0], 0)
+one = app("cluster-config", sources=[(INFRA, None)], revisions=[c[0]], single=True)
+check("a single-source app (spec.source, sync.revision), its targetRevision unset (main), still before the merge: not settled",
+      run([one], OK_PODS, revs=f"infra={c[1]}")[0], 1)
+check("  at the merge: settled", run([app("cluster-config", sources=[(INFRA, None)], revisions=[c[1]], single=True)], OK_PODS,
+                                    revs=f"infra={c[1]}")[0], 0)
+older = app("observability", sources=[(INFRA, "HEAD")], revisions=[c[1]], compared=[{"repoURL": INFRA, "targetRevision": "HEAD",
+                                                                                       "helm": {"valuesObject": {"v": 1}}}])
+rc, out = run([older], OK_PODS, revs=f"infra={c[1]}")
+check("an app compared against an older spec (its chart moved by the merge, not yet compared again): not settled, said",
+      (rc, "compared against an older spec" in out), (1, True))
+# the merge's commit fetched when the checkout lacks it (an origin with it, a clone without)
+origin = os.path.join(W, "repos-origin"); other = os.path.join(W, "repos-other")
+subprocess.run(["git", "clone", "-q", "--bare", repo, origin], check=True)
+subprocess.run(["git", "clone", "-q", origin, other], check=True)
+subprocess.run(["git", "-C", other, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "c3"], check=True)
+subprocess.run(["git", "-C", other, "push", "-q", "origin", "HEAD:main"], check=True, capture_output=True)
+c3 = subprocess.run(["git", "-C", origin, "rev-parse", "main"], capture_output=True, text=True, check=True).stdout.strip()
+g("remote", "add", "origin", origin)
+gc = subprocess.run(["git", "-C", repo, "cat-file", "-e", c3 + "^{commit}"], capture_output=True).returncode
+check("  (the checkout lacks the app's commit before the look)", gc != 0, True)
+check("an app on a commit the checkout lacks (CD moved main since its last fetch): fetched, then judged - settled",
+      run([tracking(c3)], OK_PODS, revs=f"infra={c[1]}")[0], 0)
+g("remote", "set-url", "origin", os.path.join(W, "nowhere"))
+check("  an app on a commit nowhere to be fetched: not settled", run([tracking("9" * 40)], OK_PODS, revs=f"infra={c[1]}")[0], 1)
 r = subprocess.run(["bash", "scripts/upgrade-verify.sh"], capture_output=True, text=True,
                    env={**os.environ, "UPGRADE_VERIFY_REVISIONS": "infra=main"})
 check("revisions that are no commits: refused", r.returncode, 2)

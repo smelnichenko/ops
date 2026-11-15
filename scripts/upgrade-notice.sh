@@ -3,9 +3,10 @@
 # summary, and the notice was lost) as an UpgradeCycle alert, which its own route mails to the single admin address,
 # with no "resolved" mail (platform: alertmanager-configmap's email-notice). A kind is a severity and a lifetime:
 #   applied         info      1 h   a patch or minor applied (the operator asked for one after each)
-#   veto            warning  24 h   a major's notice: what, the proof, when it applies - a veto stops it; mailed
-#                                   straight out too (its 24 h starts at its comment: a restart of Alertmanager within
-#                                   its group's 30 s lost the mail, never the clock)
+#   veto            warning  24 h   a major's notice (or a unit carrying the agent's fix): what, the proof, when it
+#                                   applies - a veto stops it; mailed straight out too, its details WHOLE (the agent's
+#                                   diff is the operator's evidence - never cut; over 100 KB, not sent) - sent only when
+#                                   that mail went (its 24 h starts at its comment: never a clock on half the evidence)
 #   blocked         warning   1 h   a unit red after its fix, or a run that could not go on: said, the unit waits
 #   one-way-failed  critical  7 d   a one-way change failed: its backup and restore steps - a PAGE: Alertmanager
 #                                   repeats it hourly while it holds it (alerts live in its memory: a restart drops
@@ -60,7 +61,7 @@ direct() {  # the same sender and address Alertmanager uses, not through it
   [ -n "${RESEND_API_KEY:-}" ] || { echo "NOT SENT: no RESEND_API_KEY for the direct mail"; return 1; }
   to=$(sed -n "s/^  alertEmailTo: *//p" "$values" 2> /dev/null | tr -d "\"'") || to=""
   [[ $to =~ ^[^@[:space:]]+@[^@[:space:]]+$ ]] || { echo "NOT SENT: no admin address in $values (alertEmailTo)"; return 1; }
-  TO="$to" SUBJECT="[UpgradeCycle] $kind: $unit - $summary" BODY="$summary"$'\n\n'"$details" \
+  TO="$to" SUBJECT="[UpgradeCycle] $kind: $unit - $summary" BODY="$summary"$'\n\n'"$mail_details" \
     python3 -I "$ops/scripts/upgrade-mail.py"
 }
 
@@ -112,10 +113,18 @@ case "$kind" in
 esac
 valid_unit "$unit"
 [ -n "$summary" ] || { echo "REFUSED: a notice says what it is about (its summary)"; exit 2; }
-details=""
+details=""; mail_details=""
 if [ -n "$details_file" ]; then
   [ -r "$details_file" ] || { echo "REFUSED: $details_file not readable"; exit 2; }
-  details=$(tail -c 3000 "$details_file")  # a log's end: where it failed (its start is the window and the pick)
+  if [ "$kind" = veto ]; then
+    # Alertmanager's annotation: its start (the files changed) and its end; the direct mail: the whole of it
+    if [ "$(wc -c < "$details_file")" -le 3000 ]; then details=$(cat "$details_file")
+    else details="$(head -c 1500 "$details_file")"$'\n[... the whole in the direct mail ...]\n'"$(tail -c 1500 "$details_file")"; fi
+    [ "$(wc -c < "$details_file")" -le 102400 ] && mail_details=$(cat "$details_file")
+  else
+    details=$(tail -c 3000 "$details_file")  # a log's end: where it failed (its start is the window and the pick)
+    mail_details=$details
+  fi
 fi
 json=$(A_NAME=UpgradeCycle A_KIND="$kind" A_UNIT="$unit" A_SEVERITY="$severity" \
        A_NOTICE="$(date -u +%Y%m%dT%H%M%SZ)-$$" A_SUMMARY="$summary" A_DETAILS="$details" \
@@ -127,8 +136,12 @@ if [ "$kind" = one-way-failed ] || [ "$kind" = veto ]; then
   posted=0; mailed=0
   if post <<< "$json"; then echo "POSTED $kind $unit (Alertmanager mails it$([ "$kind" = veto ] || echo ", hourly"))"; posted=1
   else echo "Alertmanager not reached through $host"; fi
-  direct && mailed=1
-  [ "$posted$mailed" != 00 ] || exit 1
+  if [ "$kind" = veto ] && [ -n "$details_file" ] && [ -z "$mail_details" ]; then
+    echo "NOT SENT: the details ($(wc -c < "$details_file") bytes) are over a mail's 100 KB - no notice on half its evidence"
+  else
+    direct && mailed=1
+  fi
+  if [ "$kind" = veto ]; then [ "$mailed" = 1 ] || exit 1; else [ "$posted$mailed" != 00 ] || exit 1; fi
   exit 0
 fi
 if post <<< "$json"; then
