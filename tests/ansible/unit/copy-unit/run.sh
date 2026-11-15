@@ -40,6 +40,15 @@ cat > "$W/src/ops/deploy/ansible/playbooks/setup-argocd.yml" <<'Y'
     argocd_namespace: argocd
   tasks: []
 Y
+cat > "$W/src/ops/deploy/ansible/playbooks/setup-host-hardening.yml" <<'Y'
+- name: hardening
+  hosts: target
+  vars:
+    node_exporter_version: "1.12.1"
+    node_exporter_sha256: "b51d8a76aa2a9156a55d501aca6276fae09e262259a5e4e831d2c2222f084e63"
+    node_exporter_port: 9100
+  tasks: []
+Y
 printf 'forgejo_version: "15.0.11"\n' > "$W/src/ops/deploy/ansible/vars/forgejo.yml"
 printf 'vault_version: "1.21.4"\n' > "$W/src/ops/deploy/ansible/vars/vault.yml"
 printf 'patroni_version: "4.1.5"\n' > "$W/src/ops/deploy/ansible/vars/patroni.yml"
@@ -65,11 +74,17 @@ unit ops argocd-pin 's/v3.4.10/v3.4.11/' deploy/ansible/playbooks/setup-argocd.y
 unit ops argocd-ns 's/argocd_namespace: argocd/argocd_namespace: elsewhere/' deploy/ansible/playbooks/setup-argocd.yml
 unit ops argocd-tasks 's/tasks: \[\]/tasks: [{debug: {msg: x}}]/' deploy/ansible/playbooks/setup-argocd.yml
 unit ops argocd-bad 's/"10.9.7"/"10.18.0 -e x=y"/' deploy/ansible/playbooks/setup-argocd.yml
+unit ops node-exporter 's/"1.12.1"/"1.13.0"/; s/b51d8a76aa2a9156a55d501aca6276fae09e262259a5e4e831d2c2222f084e63/'"$(printf 'ab%.0s' $(seq 32))"'/' deploy/ansible/playbooks/setup-host-hardening.yml
+unit ops node-exporter-port 's/node_exporter_port: 9100/node_exporter_port: 9101/' deploy/ansible/playbooks/setup-host-hardening.yml
 (cd "$W/src/ops" && g switch -q -c renovate/pis && sed -i 's/15.0.11/15.0.12/' deploy/ansible/vars/forgejo.yml \
   && sed -i 's/4.1.5/4.1.6/' deploy/ansible/vars/patroni.yml && sed -i 's/1.36.6-1.1/1.36.7-1.1/' deploy/ansible/playbooks/setup-kubeadm.yml \
   && g commit -qam pis && g push -q origin renovate/pis 2> /dev/null && g switch -q main && g branch -q -D renovate/pis)
 (cd "$W/src/ops" && g switch -q -c renovate/docs-only && echo x > README && g add README && g commit -qm d \
   && g push -q origin renovate/docs-only 2> /dev/null && g switch -q main && g branch -q -D renovate/docs-only)
+# a unit that also changes what vouches for the build hashes (a vendor's key) - the operator's, never a unit's
+(cd "$W/src/ops" && g switch -q -c renovate/vault-keyed && sed -i 's/1.21.4/1.21.5/' deploy/ansible/vars/vault.yml \
+  && mkdir -p renovate/keys && echo key > renovate/keys/hashicorp.asc && g add -A && g commit -qm k \
+  && g push -q origin renovate/vault-keyed 2> /dev/null && g switch -q main && g branch -q -D renovate/vault-keyed)
 fails=0
 check() { if [ "$2" = "$3" ]; then echo "PASS $1"; else echo "FAIL $1"; echo "    got:  $2"; echo "    want: $3"; fails=$((fails + 1)); fi; }
 plan() { COPY_UNIT_SRC="$W/src" bash "$OPS/scripts/copy-unit.sh" "$1" --plan 2>&1; }
@@ -114,6 +129,31 @@ out=$(plan no-such); rc=$?
 check "no branch anywhere: refused, no such unit" "$rc $(grep -c 'no such unit' <<< "$out")" "1 1"
 out=$(plan 'Bad/Name'); rc=$?
 check "a name that is no unit's: refused before anything" "$rc $(grep -c '^REFUSED' <<< "$out")" "2 1"
+check "node_exporter's version and its hash: production's setup-host-hardening on the copy" "$(plan node-exporter)" \
+  "test:copy:playbook PLAYBOOK=setup-host-hardening.yml ARGS=''"
+out=$(plan node-exporter-port); rc=$?
+check "  another of its values (its port): refused, no known proof" "$rc $(grep -c 'node_exporter_port' <<< "$out")" "1 1"
+out=$(plan vault-keyed); rc=$?
+check "a unit changing the vendors' keys (renovate/keys): refused, never proven" \
+  "$rc $(grep -c 'changes what vouches for the build hashes (renovate/keys/hashicorp.asc)' <<< "$out")" "1 1"
+# run mode: the branch's build hashes checked (COPY_UNIT_PINS, a stub saying its arguments) before any proof step; a
+# check that fails refuses the unit, nothing proven (task, a stub saying what it was asked)
+mkdir -p "$W/bin"
+printf '#!/bin/bash\necho "task $*" >> "$W/ran"\n' > "$W/bin/task"
+printf '#!/bin/bash\necho "pins $*" >> "$W/ran"\nexit "${PINS_RC:-0}"\n' > "$W/bin/pins"
+chmod +x "$W/bin/task" "$W/bin/pins"
+runit() { rm -f "$W/ran"; PATH="$W/bin:$PATH" W="$W" COPY_UNIT_SRC="$W/src" COPY_UNIT_PINS="$W/bin/pins" \
+  bash "$OPS/scripts/copy-unit.sh" "$1" > "$W/run.out" 2>&1; echo $?; }
+rc=$(runit vault)
+check "run: the build hashes checked first - the branch's changed pins (--check --changed --base main --ref renovate/vault) against main's keys - then the proof; proven" \
+  "$rc $(head -1 "$W/ran") | $(sed -n 2p "$W/ran" | cut -d' ' -f1-2) | $(grep -c 'PROVEN' "$W/run.out")" \
+  "0 pins --check --changed --base main --ref renovate/vault --root $W/src/ops --keys $OPS/renovate/keys | task test:copy:playbook | 1"
+rc=$(PINS_RC=1 runit vault)
+check "run: a build-hash check that fails refuses the unit - no proof step run" \
+  "$rc $(grep -c '^task' "$W/ran") $(grep -c "REFUSED: renovate/vault's build hashes" "$W/run.out")" "1 0 1"
+rc=$(runit wave-patches)
+check "run: a unit with no ops branch: no build-hash check (infra's and platform's charts carry no ops pin)" \
+  "$rc $(grep -c '^pins' "$W/ran")" "0 0"
 check "the clones stay on main (the unit's branches fetched beside, never checked out)" \
   "$(for r in infra platform ops; do git -C "$W/src/$r" branch --show-current; done | sort -u)" "main"
 echo "copy-unit: $([ $fails -eq 0 ] && echo ALL-PASS || echo "$fails FAILED")"

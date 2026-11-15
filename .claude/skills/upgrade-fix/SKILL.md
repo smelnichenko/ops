@@ -16,8 +16,10 @@ runner proves the unit once more after you; red again, it is blocked for the ope
   (author: Renovate Bot <renovate-bot@pmon.dev>), push it to `renovate/<unit>`. Then label each of the unit's pull
   requests `stop-updating` (`scripts/upgrade-label.py <unit> stop-updating`) so Renovate leaves the branch as you left
   it. Switch each repo back to the branch it was on.
-- Typical fixes: a value Renovate cannot move with its version (an image's paired `version:`, a checksum map -
-  `deploy/ansible/vars/*.yml`, from the release's own checksums), a renamed chart value, a CRD applied first, a
+- Typical fixes: a value Renovate cannot move with its version (an image's paired `version:`; a pinned build hash -
+  only by `python3 -I scripts/renovate-checksums.py --changed --base origin/main` on the unit's branch, which reads it
+  from what the vendor signs - it says which pins it read, or that none moved), a renamed
+  chart value, a CRD applied first, a
   Kubernetes minor's apt repository (`k8s_version`), a test or overlay value the new version needs on the copy.
 
 ## What you never do
@@ -27,6 +29,9 @@ runner proves the unit once more after you; red again, it is blocked for the ope
 - Weaken what failed: skip a check, widen an allow-list, lower a guard, add a retry that hides the fault, mark a test
   flaky. A real defect in the new version is reported, not hidden - say so and stop.
 - Touch another unit's branch, the copy's guard or its memory reserve, the radar.
+- Write a build hash yourself (a `*_checksums` / `*_sha256` pin): never the sha256 of a file you downloaded, never one
+  copied from a release page - `scripts/renovate-checksums.py` checks the vendor's signature first. When it refuses
+  (a signature that does not check, a key not pinned, an artifact missing), say so and stop: that is the finding.
 
 ## What you say
 

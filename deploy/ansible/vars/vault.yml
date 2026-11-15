@@ -10,7 +10,8 @@
 # renovate: datasource=docker depName=hashicorp/vault versioning=semver
 vault_version: "1.21.4"
 vault_arch: "arm64"            # arm64 for Pi, amd64 for Vagrant/x86_64
-# the release's own SHA256SUMS (releases.hashicorp.com, read 2026-10-05)
+# the zips' lines of HashiCorp's signed SHA256SUMS (scripts/renovate-checksums.py - moved with the version, never by
+# hand)
 vault_checksums:
   arm64: 1104ef701aad16e104e2e7b4d2a02a6ec993237559343f3097ac63a00b42e85d
   amd64: 889b681990fe221b884b7932fa9c9dd0ee9811b9349554f1aa287ab63c9f3dae

@@ -589,9 +589,10 @@
     # Phase 5b: Install Helm
     # ================================================================
 
-    # a pinned release - ten's own (its binary's sha256 read on ten 2026-10-08, equal to this release's) - its sum
-    # checked before anything is installed: get-helm-3 from main piped to bash gave the copy's kubeadm VM, made at each
-    # full run, whatever Helm it installed, unchecked
+    # a pinned release, its sum checked before anything is installed: get-helm-3 from main piped to bash gave the copy's
+    # kubeadm VM, made at each full run, whatever Helm it installed, unchecked. helm_sha256: the tarball's line of the
+    # .sha256sum a key in Helm's KEYS signs (scripts/renovate-checksums.py: run it after moving helm_version - Renovate
+    # does not: behind creates: no host would take a new Helm, and the cycle's copy-unit proves none)
     - name: Install Helm
       vars:
         helm_version: v3.20.0

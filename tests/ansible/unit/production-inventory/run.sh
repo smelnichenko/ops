@@ -8,7 +8,7 @@ ROOT=$(cd "$(dirname "$0")/../../../.." && pwd)
 T=$(mktemp -d)
 trap 'rm -rf "$T"' EXIT
 mkdir -p "$T/scripts" "$T/deploy/ansible/playbooks/tasks" "$T/tests/ansible/copy" "$T/bin"
-cp "$ROOT"/scripts/{production-inventory.sh,pi-versions.py,version-inventory.sh,version-inventory-pi.sh} "$T/scripts/"
+cp "$ROOT"/scripts/{production-inventory.sh,pi-versions.py,renovate-checksums.py,version-inventory.sh,version-inventory-pi.sh} "$T/scripts/"
 cp -r "$ROOT/deploy/ansible/vars" "$T/deploy/ansible/"
 cp "$ROOT"/deploy/ansible/playbooks/{setup-consul,setup-pi-services,setup-caddy}.yml "$T/deploy/ansible/playbooks/"
 cp "$ROOT/deploy/ansible/playbooks/tasks/versitygw.yml" "$T/deploy/ansible/playbooks/tasks/"

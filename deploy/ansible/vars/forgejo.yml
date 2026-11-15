@@ -1,7 +1,7 @@
 ---
-# Forgejo's release on the Pis, and its binaries' sha256 per architecture (the release's own .sha256 files, read
-# 2026-11-14, the same on code.forgejo.org and codeberg.org). setup-pi-services.yml installs it where Forgejo is
-# missing; upgrade-forgejo.yml moves a running one to it.
+# Forgejo's release on the Pis, and its binaries' sha256 per architecture - each binary's .asc checked against
+# Forgejo's release key, its own .sha256 agreeing (scripts/renovate-checksums.py - moved with the version, never by
+# hand). setup-pi-services.yml installs it where Forgejo is missing; upgrade-forgejo.yml moves a running one to it.
 # 15 is the LTS line (to 2027-07-15): patches only until the next LTS (19, 2027-04) - operator 2026-10-05.
 # renovate: datasource=forgejo-releases depName=forgejo/forgejo registryUrl=https://codeberg.org
 forgejo_version: "15.0.11"

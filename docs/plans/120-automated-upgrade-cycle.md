@@ -95,10 +95,10 @@ comparison 2026-11-13). Runs as a Woodpecker cron in ops (`.woodpecker/renovate.
   groups `istio` (the three Argo apps + ops `istio_version` + Gateway API), `observability`, `data-operators` (Strimzi
   + Kafka, Scylla), `argocd`, `pi-services`; each major its own branch.
 - Custom managers: annotated Ansible vars (`# renovate: datasource=... depName=...` above each version var - Cilium,
-  cert-manager, chart versions, Kubernetes, containerd.io via Docker's apt repo, Keycloak, Caddy, versitygw, Patroni
-  via PyPI, Forgejo via forgejo-releases, Vault/Consul via GitHub releases); CNPG `imageName: tag@sha256:digest`;
-  a post-upgrade script (`deploy/ansible/scripts/renovate-checksums.sh`, the only allowed command) that rewrites the
-  per-arch sha256 maps from each release's own checksums.
+  cert-manager, chart versions, Kubernetes via registry.k8s.io, containerd.io via Docker's apt repo, Keycloak via
+  quay, Caddy, Vault and Consul via Docker Hub, Gateway API and Helm via git tags, node_exporter via Docker Hub,
+  Patroni via PyPI, Forgejo via forgejo-releases); CNPG `imageName: tag@sha256:digest`; a post-upgrade script
+  (`scripts/renovate-checksums.py`, the only allowed command) that rewrites the pinned build hashes - part 4.
 - Not seen by Renovate, covered beside it: Debian host packages (an `apt_info.py` node_exporter textfile collector on
   ten and the Pis + an alert, and an apt-upgrade playbook the cycle runs as a unit), the Pis' drift from their pins
   (`task test:copy:inventory`), `argocd_image_pins` (by hand), deprecated APIs before a Kubernetes minor (Pluto on the
@@ -137,6 +137,44 @@ Manager - `check:production:scylla-backup`), Kafka, ClickHouse, Grafana, OpenSea
 Wave 0 backups - `upgrade-backup.yml` and its rehearsal, in git history before plan 117 - come back as the pre-change
 backup, each store's restore proven on the copy), the Pis (Consul snapshot, Forgejo's own pg_dump, Patroni's base
 backup - their upgrade playbooks take them).
+
+**4. Build hashes, verified (operator 2026-11-15: "yes" - with option B's lookups).** A version Renovate moves takes
+its pinned hashes with it, each read from what the vendor signs - never from the file it guards:
+- **The writer**: Renovate's post-upgrade task, once a branch on every ops update (`scripts/renovate-checksums.py
+  --changed`, the one command `renovate/allowed-commands.json` allows - the pipeline reads that file, the manual task
+  will) rewrites the pins of each version the branch moved. The upgrade-fix skill moves a pin only with `--changed --base origin/main` on the unit's
+  branch, never writing a hash itself.
+- **The gates**: `scripts/copy-unit.sh`, before a unit's proof, checks the branch's moved pins against main's keys
+  (`--check --changed --base main --ref renovate/<unit>`) and refuses a unit that changes the keys, the checker or the
+  allowed command; ops CI (`build-hashes`, `scripts/ci-build-hashes.sh`) checks each pin a change moves - every pin
+  when the checker or the keys change - on pull requests and pushes to main alike.
+- **Signed by the vendor**, the signature checked by gpg in a keyring holding the vendor's key alone, its primary
+  fingerprint pinned (`renovate/keys/keys.json`, each key file and fingerprint from the vendor's own page): HashiCorp's
+  SHA256SUMS + `.sig` (Vault - C874 011F 0AB4 0511 0D02 1055 3436 5D94 72D7 468F); Helm's `.sha256sum` + its `.asc`
+  (its KEYS, the expired key left out); Forgejo's `.xz` + `.xz.asc` (EB114F5E6C0DC2BCDD183550A4B61A2DC5923710) -
+  decompressed as it is hashed, a third of the binary's download - its `.sha256` naming the binary and agreeing (a
+  signature binds bytes, not a version: an older signed artifact under a new name is refused).
+- **TLS alone** (the vendor signs nothing - each pin's comment says so): node_exporter's sha256sums.txt, Nexus's
+  `.sha256`, versitygw's checksums.txt (a map per version: a new version adds its entry, every entry verified),
+  PyTorch's cpu index (the wheels' `#sha256=`); a redirect off https refused. Caddy is built from source (xcaddy; Go's
+  checksum database checks every module).
+- **Keys age**: each run warns when a vendor's newest signing key expires within 60 days; `--refresh-keys` takes a
+  vendor's key file again from its url only while every pinned primary is still in it (Forgejo's current signer, its
+  2027-06-09 subkey; its 2027-01-10 subkey signs no release).
+- **Moved by Renovate**: Vault, Forgejo, node_exporter (prom/node-exporter - copy-unit proves it with production's
+  setup-host-hardening.yml); by hand, verified all the same: Helm (a task's var behind `creates:` - no host would
+  take a new one, nothing proves it), Nexus (its download names are no registry's tags), versitygw (a set_fact's
+  default), the PyTorch wheels (kept in step with target-scorer's requirements). scripts/pi-versions.py reads the
+  copy's Vault and Forgejo pins through the same script.
+Step 1 DONE 2026-11-15 (seven pins, every one ok against the vendors; harnesses `renovate-checksums` - each playbook
+downloading the artifact the script hashes - `copy-unit`, `pi-versions`; full review and a simplify pass - their
+findings fixed). Rollout: the first real Renovate run's Vault or Forgejo branch shows its
+hashes rewritten and no artifact failure (postUpgradeTasks never run in lookup mode). Step 2, pins added where there
+were none - Consul's zip (HashiCorp's signed SHA256SUMS), Keycloak's tarball (its `.asc`), Gateway API's manifest,
+Patroni's requirements (`pip --require-hashes`) - each playbook's download `checksum:`-checked, proven on the copy. A
+post-upgrade task runs with the bot's Forgejo token and the GitHub token in its environment: Patroni's hashes come from
+PyPI's JSON digests, never `pip download` or `pip-compile` (an sdist's setup.py would run with them); Keycloak's
+tarball is hashed, never unpacked.
 
 ## Guardrails
 

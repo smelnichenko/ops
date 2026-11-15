@@ -41,6 +41,8 @@
     nexus_gid: 901
     nexus_port: 8081
     nexus_docker_port: 8082
+    # the tarball's .sha256 per arch - TLS alone, Sonatype signs no Nexus tarball (scripts/renovate-checksums.py: run
+    # it after moving nexus_version - Renovate does not, its download names are no registry's tags)
     nexus_checksums:
       aarch_64: "sha256:e8aa707821fdf09838b1db5826b21753d926c1f9c692012fe061fba544241ae6"
       x86_64: "sha256:6f3240f34bb46b99d93b2c512333651ea227b4c65248c8154ae275933c320556"

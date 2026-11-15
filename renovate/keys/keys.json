@@ -1,0 +1,35 @@
+{
+  "_": "Vendor release-signing keys for scripts/renovate-checksums.py. A signature counts only when gpg's VALIDSIG names one of a vendor's primary fingerprints below; each key file and fingerprint taken from the vendor's own page (source), 2026-11-15. url: where --refresh-keys reads the key file again (kept only when every pinned fingerprint is still in it).",
+  "hashicorp": {
+    "file": "hashicorp.asc",
+    "fingerprints": [
+      "C874011F0AB405110D02105534365D9472D7468F"
+    ],
+    "source": "https://www.hashicorp.com/.well-known/pgp-key.txt (HashiCorp Security, expires 2030-03-01)",
+    "url": "https://www.hashicorp.com/.well-known/pgp-key.txt"
+  },
+  "forgejo": {
+    "file": "forgejo.asc",
+    "fingerprints": [
+      "EB114F5E6C0DC2BCDD183550A4B61A2DC5923710"
+    ],
+    "source": "https://forgejo.org/download/ names the fingerprint; the key from keys.openpgp.org by it",
+    "url": "https://keys.openpgp.org/vks/v1/by-fingerprint/EB114F5E6C0DC2BCDD183550A4B61A2DC5923710"
+  },
+  "helm": {
+    "file": "helm.asc",
+    "fingerprints": [
+      "672C657BE06B4B30969C4A57461449C25E36B98E",
+      "F1261BDE929012C8FF2E501D6EA5D7598529A53E",
+      "967F8AC5E2216F9F4FD270AD92AA783CBAAE8E3B",
+      "49D09C86C3DC8DA3F0A076221EF612347F8A9958",
+      "ABA2529598F6626C420D335B62F49E747D911B60",
+      "4AB45F1CB0D292975C6371436E2A23D806B6E6DD",
+      "208DD36ED5BB3745A16743A4C7C6FBB5B91C1155",
+      "7FEC81FACC7FFB2A010ADD13C2D40F4D8196E874",
+      "BF888333D96A1C18E2682AAED79D67C9EC016739"
+    ],
+    "source": "https://raw.githubusercontent.com/helm/helm/main/KEYS (the maintainers' keys; 3.20.0 signed by 208DD36ED5BB3745A16743A4C7C6FBB5B91C1155); the KEYS file's expired key (76939899..., expired 2022-08-07) not pinned",
+    "url": "https://raw.githubusercontent.com/helm/helm/main/KEYS"
+  }
+}

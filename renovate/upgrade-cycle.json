@@ -355,6 +355,21 @@
         "helm/schnappy-test/**"
       ],
       "additionalBranchPrefix": "test-"
+    },
+    {
+      "description": "ops' pinned build hashes move with their version, each read from what its vendor signs (scripts/renovate-checksums.py): a signature that does not check fails the task and leaves the old pins - copy-unit.sh's --check then refuses the unit, never a download unchecked. Once a branch, on every ops update: a branch's settings are its first update's (any of ops'), and per update each run would read every pin the branch moved again",
+      "matchRepositories": [
+        "schnappy/ops"
+      ],
+      "postUpgradeTasks": {
+        "commands": [
+          "python3 -I scripts/renovate-checksums.py --changed"
+        ],
+        "fileFilters": [
+          "deploy/ansible/**"
+        ],
+        "executionMode": "branch"
+      }
     }
   ],
   "ignorePresets": [

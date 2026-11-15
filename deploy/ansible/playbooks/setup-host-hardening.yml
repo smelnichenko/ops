@@ -61,7 +61,9 @@
     smartctl_exporter_archive_name: "smartctl_exporter-{{ smartctl_exporter_version }}.linux-amd64.tar.gz"
     # node_exporter - the host's filesystems, memory, CPU and network to Prometheus: until it ran, nothing watched ten's
     # disk (the kubelet evicts pods at 15 % free on /, where containerd's images are, and no alert said so before). Bound like smartctl's, scraped by the
-    # schnappy-observability chart's ScrapeConfig. The checksum is the release's sha256sums.txt line
+    # schnappy-observability chart's ScrapeConfig. node_exporter_sha256: the release's sha256sums.txt line - TLS alone,
+    # Prometheus signs no release (scripts/renovate-checksums.py - moved with the version, never by hand)
+    # renovate: datasource=docker depName=prom/node-exporter versioning=semver
     node_exporter_version: "1.12.1"
     node_exporter_sha256: "b51d8a76aa2a9156a55d501aca6276fae09e262259a5e4e831d2c2222f084e63"
     node_exporter_port: 9100

@@ -10,7 +10,8 @@
 # PyPI proxy asks for <remote>/simple/<name>/, which download.pytorch.org
 # answers with 403. So the wheels CI needs live in a hosted repository inside
 # pypi-public, which merges both members' indexes. Keep this list in step with
-# target-scorer's requirements/ci.txt.
+# target-scorer's requirements/ci.txt. Each sha256: PyTorch's cpu index (#sha256= on its href) - TLS alone, PyTorch
+# signs no wheel (scripts/renovate-checksums.py writes and verifies them).
 
 - name: The PyTorch CPU wheels pytorch-cpu holds
   ansible.builtin.set_fact:

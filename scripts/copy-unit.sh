@@ -7,6 +7,7 @@
 #
 # Usage: scripts/copy-unit.sh <unit> [--plan]     --plan: what it would run, one task a line; runs nothing
 # Env:   COPY_UNIT_SRC (the directory holding infra, platform and ops - default this repo's parent; the harness's own)
+#        COPY_UNIT_PINS (the build-hash check's command - default scripts/renovate-checksums.py; the harness's stub)
 set -euo pipefail
 export LC_ALL=C
 unit=${1:-}
@@ -36,6 +37,17 @@ ops_ref=$(ref_of "$ops_repo")
 if [ "$infra_ref" = main ] && [ "$platform_ref" = main ] && [ "$ops_ref" = main ]; then
   echo "REFUSED: no branch $branch in infra, platform or ops - no such unit"
   exit 1
+fi
+
+# what vouches for the build hashes - the vendors' keys, the script that checks them, the one command Renovate may run -
+# is the operator's: a unit's branch that changes it is refused, never proven
+if [ "$ops_ref" != main ]; then
+  trust=$(git -C "$ops_repo" diff --name-only "main...$branch" -- renovate/keys scripts/renovate-checksums.py \
+    renovate/allowed-commands.json)
+  if [ -n "$trust" ]; then
+    echo "REFUSED: $branch changes what vouches for the build hashes ($(echo $trust)) - the operator's, never a unit's"
+    exit 1
+  fi
 fi
 
 steps=()
@@ -77,7 +89,9 @@ VARS_FILES = {  # a vars file -> its playbook and the arguments production's tas
     "deploy/ansible/vars/forgejo.yml": ("upgrade-forgejo.yml", ""),
 }
 ORDER = {"upgrade-kubeadm.yml": 0, "setup-kubeadm.yml": 1, "setup-argocd.yml": 2, "upgrade-patroni.yml": 3,
-         "upgrade-vault.yml": 4, "upgrade-forgejo.yml": 5}
+         "upgrade-vault.yml": 4, "upgrade-forgejo.yml": 5, "setup-host-hardening.yml": 6}
+# node_exporter on ten: its version and the hash that moves with it - production's setup-host-hardening.yml on the copy
+NODE_EXPORTER = {"node_exporter_version", "node_exporter_sha256"}
 # Argo CD itself (no Argo app holds it): its chart default and the image pinned on a chart - setup-argocd.yml on the copy
 # with the copy's Vault values (as test:copy:build installs it), its pods restarting
 ARGOCD = {"argocd_chart_default", "argocd_image_pins"}
@@ -105,6 +119,14 @@ for path in changed:
         else:
             version(new["argocd_chart_default"])
             steps.append(("setup-argocd.yml", "-e @vars/vault-vagrant.yml", True))
+    elif path == "deploy/ansible/playbooks/setup-host-hardening.yml":
+        old, new = play_vars(show("main", path) or ""), play_vars(show(BRANCH, path) or "")
+        moved = sorted(k for k in set(old) | set(new) if old.get(k) != new.get(k))
+        if not moved or set(moved) - NODE_EXPORTER:
+            refused.append(f"{path} {' '.join(sorted(set(moved) - NODE_EXPORTER)) or '(its tasks)'}")
+        else:
+            version(new["node_exporter_version"])
+            steps.append(("setup-host-hardening.yml", "", False))
     elif path in VARS_FILES:
         text = show(BRANCH, path)
         if text is None:
@@ -132,6 +154,13 @@ if [ "${#steps[@]}" -eq 0 ]; then
 fi
 for s in "${steps[@]}"; do echo "$s"; done
 [ "$mode" = run ] || exit 0
+# the branch's build hashes, each what its vendor signs, checked against main's keys before anything is proven (a
+# Renovate post-upgrade task that failed left the old pins: refused here, by name)
+if [ "$ops_ref" != main ]; then
+  echo "=== UNIT $unit: its build hashes"
+  ${COPY_UNIT_PINS:-python3 -I $ops/scripts/renovate-checksums.py} --check --changed --base main --ref "$branch" \
+    --root "$ops_repo" --keys "$ops/renovate/keys" || { echo "REFUSED: $branch's build hashes - not proven"; exit 1; }
+fi
 for s in "${steps[@]}"; do
   echo "=== UNIT $unit: task $s"
   eval "task $s"

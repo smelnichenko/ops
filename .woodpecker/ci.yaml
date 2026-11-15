@@ -58,6 +58,18 @@ steps:
           requests: { memory: 64Mi }
           limits: { memory: 256Mi }
 
+  # each build-hash pin the change moves, what its vendor signs (every pin when the checker or the keys change): the
+  # hashes Renovate's post-upgrade task writes - or a hand - checked where ops lands
+  - name: build-hashes
+    image: git.pmon.dev/schnappy/ansible-lint:latest
+    commands:
+      - bash scripts/ci-build-hashes.sh
+    backend_options:
+      kubernetes:
+        resources:
+          requests: { memory: 128Mi }
+          limits: { memory: 512Mi }
+
   - name: skills
     image: git.pmon.dev/schnappy/ansible-lint:latest
     commands:

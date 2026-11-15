@@ -3,7 +3,7 @@
 # another - each of the six services the playbooks install at a version of their own (Forgejo, Patroni, Vault, Consul,
 # Keycloak, versitygw), the pin read from where the playbooks hold it (vars file, play vars, a task file's default), so
 # a bump there is followed; Forgejo's and Vault's checksum kept from the pins file when the version is unchanged
-# (nothing fetched: every fetch here fails - a proxy that is not there); refused: two Pis at two versions, a service on
+# (nothing fetched: every fetch here fails - a proxy that is not there), else read from what the vendor signs; refused: two Pis at two versions, a service on
 # neither, versitygw at a version its task file has no checksums for. The extra vars outrank the playbooks' own.
 # And Debian's packages the Pis report, as pi_apt_versions, run by the copy's pi-apt-versions.yml in the build.
 set -u
@@ -74,28 +74,46 @@ for name in ("forgejo", "vault"):
     old = {f"{name}_version": v, f"{name}_checksums": {"amd64": "ab" * 32}}
     check(f"{name} pinned, its checksum kept from the file (nothing fetched)",
           run({**own, name: v}, old=old)[:2], (0, old))
-# the fetch itself, urlopen stubbed in the script's own process: the release's checksum parsed - Forgejo's .sha256
-# (its first field), Vault's SHA256SUMS line of linux_amd64 (other systems' lines first); a failed fetch refuses and
-# leaves the pins file as it was; a SHA256SUMS without linux_amd64 refuses
-FETCHER = """
-import io, runpy, sys, urllib.error, urllib.request
-answers = {a.split(' ', 1)[0]: a.split(' ', 1)[1].replace('\\\\n', '\\n') for a in sys.argv[3:]}
-asked = []
-def urlopen(url, timeout=None):
-    asked.append(url)
-    if url not in answers:
-        raise urllib.error.URLError('no network in a unit test')
-    return io.BytesIO(answers[url].encode())
-urllib.request.urlopen = urlopen
-sys.argv = ['pi-versions.py', sys.argv[1], sys.argv[2]]
-try:
-    runpy.run_path('scripts/pi-versions.py', run_name='__main__')
-finally:
-    print('ASKED ' + ' '.join(asked), file=sys.stderr)
-"""
+# the fetch itself: what the vendor signs (renovate-checksums.py's reading) - a mirror of the vendors (PI_VERSIONS_MIRROR)
+# signed by a throwaway key pinned in a keys file of the harness's own (PI_VERSIONS_KEYS): Vault's line of its signed
+# SHA256SUMS (other systems' lines first), Forgejo's binary through its signed .xz, its .sha256 agreeing; refused, the
+# pins file as it was: a fetch failing, a SHA256SUMS without linux_amd64, a signature that does not check
+import hashlib, json, lzma
+G = os.path.join(W, "gnupg")
+os.makedirs(G, mode=0o700)
+def gpg(*a):
+    return subprocess.run(["gpg", "--homedir", G, "--batch", "--no-tty", "--quiet", *a], capture_output=True, check=True)
+gpg("--passphrase", "", "--quick-gen-key", "Vendor <v@test>", "ed25519", "sign", "never")
+KEY = next(l.split(":")[9] for l in gpg("--with-colons", "--list-keys", "Vendor <v@test>").stdout.decode().splitlines()
+           if l.startswith("fpr:"))
+KEYS = os.path.join(W, "keys")
+os.makedirs(KEYS)
+for v in ("hashicorp", "forgejo"):
+    open(os.path.join(KEYS, f"{v}.asc"), "wb").write(gpg("--armor", "--export", KEY).stdout)
+json.dump({v: {"file": f"{v}.asc", "fingerprints": [KEY]} for v in ("hashicorp", "forgejo")},
+          open(os.path.join(KEYS, "keys.json"), "w"))
+MIRROR = os.path.join(W, "mirror")
+def put(url, data):
+    path = os.path.join(MIRROR, url.split("://", 1)[1])
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    open(path, "wb").write(data if isinstance(data, bytes) else data.encode())
+    return path
+def sign(path, armor=False):
+    gpg("--yes", "--local-user", KEY, *(["--armor"] if armor else []), "--detach-sign", "-o",
+        path + (".asc" if armor else ".sig"), path)
+fv, vv = bumped(own["forgejo"]), bumped(own["vault"])
+fbase = f"https://code.forgejo.org/forgejo/forgejo/releases/download/v{fv}/forgejo-{fv}-linux-amd64"
+vurl = f"https://releases.hashicorp.com/vault/{vv}/vault_{vv}_SHA256SUMS"
+binary = b"forgejo amd64 binary"
+def mirror_good():
+    shutil.rmtree(MIRROR, ignore_errors=True)
+    put(fbase + ".sha256", f"{hashlib.sha256(binary).hexdigest()}  forgejo-{fv}-linux-amd64\n")
+    sign(put(fbase + ".xz", lzma.compress(binary)), armor=True)
+    sign(put(vurl, f"{'11' * 32}  vault_{vv}_darwin_amd64.zip\n{'22' * 32}  vault_{vv}_linux_arm64.zip\n"
+                   f"{'33' * 32}  vault_{vv}_linux_amd64.zip\n"))
 
 
-def fetch_run(versions, answers, old=None):
+def fetch_run(versions, old=None):
     inv, pins = f"{W}/inventory.txt", f"{W}/pins.yml"
     with open(inv, "w") as f:
         for host in ("pi1", "pi2"):
@@ -106,43 +124,47 @@ def fetch_run(versions, answers, old=None):
             os.remove(pins)
     else:
         open(pins, "w").write(old)
-    r = subprocess.run([sys.executable, "-c", FETCHER, inv, pins, *[f"{u} {t}" for u, t in answers.items()]],
-                       capture_output=True, text=True, timeout=120)
-    asked = next((l[6:].split() for l in r.stderr.splitlines() if l.startswith("ASKED")), [])
-    return r.returncode, (open(pins).read() if os.path.exists(pins) else None), asked, r.stdout + r.stderr
+    r = subprocess.run([sys.executable, "scripts/pi-versions.py", inv, pins], capture_output=True, text=True, timeout=120,
+                       env=dict(os.environ, PI_VERSIONS_MIRROR=MIRROR, PI_VERSIONS_KEYS=KEYS))
+    return r.returncode, (open(pins).read() if os.path.exists(pins) else None), r.stdout + r.stderr
 
 
-fv, vv = bumped(own["forgejo"]), bumped(own["vault"])
-furl = f"https://codeberg.org/forgejo/forgejo/releases/download/v{fv}/forgejo-{fv}-linux-amd64.sha256"
-vurl = f"https://releases.hashicorp.com/vault/{vv}/vault_{vv}_SHA256SUMS"
-sums = (f"{'11' * 32}  vault_{vv}_darwin_amd64.zip\\n{'22' * 32}  vault_{vv}_linux_arm64.zip\\n"
-        f"{'33' * 32}  vault_{vv}_linux_amd64.zip\\n")
-rc, text, asked, out = fetch_run({**own, "forgejo": fv, "vault": vv},
-                                 {furl: f"{'44' * 32}  forgejo-{fv}-linux-amd64", vurl: sums})
+fhash = hashlib.sha256(binary).hexdigest()
+mirror_good()
+rc, text, out = fetch_run({**own, "forgejo": fv, "vault": vv})
 body = yaml.safe_load(text) if text else None
-check("forgejo and vault at new versions, no checksum kept: each fetched from its release, its amd64 checksum parsed",
-      (rc, sorted(asked), body), (0, sorted([furl, vurl]), {
-          "forgejo_version": fv, "forgejo_checksums": {"amd64": "44" * 32},
-          "vault_version": vv, "vault_checksums": {"amd64": "33" * 32}}))
+check("forgejo and vault at new versions, no checksum kept: each read from what its vendor signs, its amd64 hash",
+      (rc, body), (0, {"forgejo_version": fv, "forgejo_checksums": {"amd64": fhash},
+                       "vault_version": vv, "vault_checksums": {"amd64": "33" * 32}}))
 check("  the run's line names each service, the pinned ones so", (" (pinned)" in out, f"forgejo {fv} (pinned)" in out,
       f"consul {own['consul']} (pinned)" in out), (True, True, False))
 oldtext = yaml.safe_dump({"forgejo_version": "0.0.1", "forgejo_checksums": {"amd64": "cd" * 32}})
 for kept, label in (({"forgejo_version": fv}, "no checksum key"), ({"forgejo_version": fv, "forgejo_checksums": {"amd64": ""}},
                                                                          "an empty checksum")):
-    rc, text, asked, out = fetch_run({**own, "forgejo": fv}, {furl: f"{'55' * 32}  x"}, old=yaml.safe_dump(kept))
-    check(f"  forgejo pinned at the file's version with {label}: fetched, not crashed",
-          (rc, asked, (yaml.safe_load(text) or {}).get("forgejo_checksums") if text else None),
-          (0, [furl], {"amd64": "55" * 32}))
-rc, text, asked, out = fetch_run({**own, "forgejo": fv}, {}, old=oldtext)
+    rc, text, out = fetch_run({**own, "forgejo": fv}, old=yaml.safe_dump(kept))
+    check(f"  forgejo pinned at the file's version with {label}: read from its vendor, not crashed",
+          (rc, (yaml.safe_load(text) or {}).get("forgejo_checksums") if text else None), (0, {"amd64": fhash}))
+shutil.rmtree(MIRROR)
+os.makedirs(MIRROR)
+rc, text, out = fetch_run({**own, "forgejo": fv}, old=oldtext)
 check("  forgejo at a version the file has no checksum for, its fetch failing: refused, the pins file as it was",
-      (rc != 0, asked, text), (True, [furl], oldtext))
-rc, text, asked, out = fetch_run({**own, "vault": vv}, {vurl: f"{'11' * 32}  vault_{vv}_darwin_amd64.zip\\n"})
-check("  vault's SHA256SUMS without linux_amd64: refused, said", (rc != 0, "no linux_amd64 checksum" in out), (True, True))
-rc, text, asked, out = fetch_run(own, {}, old="")
+      (rc != 0, "not found" in out, text), (True, True, oldtext))
+mirror_good()
+sign(put(vurl, f"{'11' * 32}  vault_{vv}_darwin_amd64.zip\n"))
+rc, text, out = fetch_run({**own, "vault": vv}, old=oldtext)
+check("  vault's signed SHA256SUMS without linux_amd64: refused, said, the pins file as it was",
+      (rc != 0, f"vault_{vv}_linux_amd64.zip: not in" in out, text), (True, True, oldtext))
+mirror_good()
+put(vurl, f"{'99' * 32}  vault_{vv}_linux_amd64.zip\n")  # changed after it was signed
+rc, text, out = fetch_run({**own, "vault": vv}, old=oldtext)
+check("  vault's SHA256SUMS changed after signing: refused (the signature does not check), the pins file as it was",
+      (rc != 0, "does not check" in out, text), (True, True, oldtext))
+mirror_good()
+rc, text, out = fetch_run(own, old="")
 check("an empty pins file: read as none, nothing pinned", (rc, yaml.safe_load(text) if text else None), (0, {}))
-rc, text, asked, out = fetch_run({**own, "forgejo": fv}, {furl: f"{'44' * 32}  x"}, old="")
-check("  an empty pins file and a version to fetch: fetched, pinned", (rc, (yaml.safe_load(text) or {}).get(
-      "forgejo_checksums") if text else None), (0, {"amd64": "44" * 32}))
+rc, text, out = fetch_run({**own, "forgejo": fv}, old="")
+check("  an empty pins file and a version to fetch: read from its vendor, pinned", (rc, (yaml.safe_load(text) or {}).get(
+      "forgejo_checksums") if text else None), (0, {"amd64": fhash}))
 rc, body, err = run({**own, "consul-template": "9.9.9"})
 check("another service whose name starts with one of them (consul-template): not read as it", (rc, body), (0, {}))
 check("versitygw at the default: nothing pinned; at a version the task file has checksums for: pinned",

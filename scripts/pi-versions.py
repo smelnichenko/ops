@@ -2,17 +2,26 @@
 """pi-versions.py <inventory> <pins file> - the Pis' service versions production runs (its inventory's `pi <host>
 <service> <version>` lines), written as extra vars where the playbooks pin another version, so the Vagrant copy
 installs production's (scripts/production-inventory.sh calls it after reading production). Forgejo and Vault carry
-their amd64 checksum (kept from the pins file when the version is unchanged, else read from the release); versitygw
+their amd64 checksum (kept from the pins file when the version is unchanged, else read from what the vendor signs -
+scripts/renovate-checksums.py's own reading; PI_VERSIONS_MIRROR / PI_VERSIONS_KEYS: the harness's); versitygw
 only at a version its task file has checksums for. And Debian's packages the Pis report (scripts/version-inventory-pi.sh
 lists them) at the versions they run, as pi_apt_versions - Debian's archive serves only the newest, so the copy moves
 its own to these (tests/ansible/copy/pi-apt-versions.yml). Refuses: a service or package the Pis run at two versions,
 or on one Pi only, or at what is no version.
 """
+import importlib.util
+import os
 import re
 import sys
-import urllib.request
+import tempfile
 
 import yaml
+
+# the build hashes read as renovate-checksums.py reads them: from what each vendor signs, never a list over TLS alone
+_spec = importlib.util.spec_from_file_location(
+    "renovate_checksums", os.path.join(os.path.dirname(os.path.abspath(__file__)), "renovate-checksums.py"))
+rc = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(rc)
 
 inventory, pins_path = sys.argv[1], sys.argv[2]
 lines = open(inventory).read().splitlines()
@@ -74,17 +83,16 @@ for name, _, _ in PINNED:
         sys.exit(f"the Pis report {name} {running[name]!r} - not a version")
 
 
-def sha_forgejo(v):
-    url = f"https://codeberg.org/forgejo/forgejo/releases/download/v{v}/forgejo-{v}-linux-amd64.sha256"
-    return urllib.request.urlopen(url, timeout=60).read().decode().split()[0]
-
-
-def sha_vault(v):
-    url = f"https://releases.hashicorp.com/vault/{v}/vault_{v}_SHA256SUMS"
-    for l in urllib.request.urlopen(url, timeout=60).read().decode().splitlines():
-        if l.endswith(f"vault_{v}_linux_amd64.zip"):
-            return l.split()[0]
-    sys.exit(f"vault {v}: no linux_amd64 checksum in {url}")
+def verified_amd64(name, v):
+    """The release's amd64 build hash, its vendor's signature checked (renovate-checksums.py's pin and vendor)."""
+    pin = {**next(p for p in rc.PINS if p["name"] == name), "arches": ["amd64"]}
+    with tempfile.TemporaryDirectory(prefix="pi-versions.") as work:
+        try:
+            keys = rc.Keys(os.environ.get("PI_VERSIONS_KEYS", "renovate/keys"), work)
+            want, _ = rc.hashes(pin, v, ["amd64"], rc.Fetcher(os.environ.get("PI_VERSIONS_MIRROR"), work), keys)
+        except rc.Refused as e:
+            sys.exit(f"{name} {v}: {e}")
+    return want["amd64"]
 
 
 # Debian's packages, each on both Pis or on neither, at one version
@@ -100,7 +108,7 @@ for pkg in debian_packages():
     if not DEB_VERSION.fullmatch(apt[pkg]):
         sys.exit(f"the Pis report {pkg} {apt[pkg]!r} - not a Debian version")
 
-FETCH = {"forgejo": sha_forgejo, "vault": sha_vault}
+FETCH = ("forgejo", "vault")
 body = {}
 for name, var, playbooks in PINNED:
     v = running[name]
@@ -111,7 +119,7 @@ for name, var, playbooks in PINNED:
     body[var] = v
     if name in FETCH:
         same = str(old.get(var)) == v and (old.get(f"{name}_checksums") or {}).get("amd64")
-        body[f"{name}_checksums"] = {"amd64": same or FETCH[name](v)}
+        body[f"{name}_checksums"] = {"amd64": same or verified_amd64(name, v)}
 if apt:
     body["pi_apt_versions"] = apt
 head = ("# The Pis' service versions as production runs them, where the playbooks pin another (they install their own where\n"

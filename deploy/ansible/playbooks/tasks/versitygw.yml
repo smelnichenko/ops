@@ -54,8 +54,9 @@
     fail_msg: "REFUSED: versitygw {{ _installed_version }} is installed; this run would install {{ vgw_version }} - set vgw_version"
     quiet: true
 
-# The package's sha256 per version and arch (the release's checksums.txt, its assets' digests and the files' own sums
-# agreed, 2026-10-09): installed as root on both Pis, never unchecked. A new version adds its line.
+# The package's sha256 per version and arch - the release's checksums.txt, TLS alone (versitygw signs no release):
+# installed as root on both Pis, never unchecked. A new version adds its entry - scripts/renovate-checksums.py writes
+# it after vgw_version moves (Renovate does not move it: no annotated var), and verifies every entry here.
 - name: The versitygw packages' checksums
   ansible.builtin.set_fact:
     vgw_checksums:
