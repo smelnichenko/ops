@@ -69,7 +69,8 @@ MODULES = os.environ.get("MODULES_DIR", "/lib/modules")
 RELEASE = os.environ.get("KERNEL_RELEASE") or os.uname().release
 BOOT = os.environ.get("BOOT_FIRMWARE", "/boot/firmware")
 EEPROM = os.environ.get("RPI_EEPROM_UPDATE", "/usr/bin/rpi-eeprom-update")
-LISTS_PARENT = os.environ.get("PI_PACKAGES_LISTS_PARENT", "/var/tmp")
+# a preview's package lists: a directory of its own under it, mkdtemp's (0700, a random name) - never a shared path
+LISTS_PARENT = os.environ.get("PI_PACKAGES_LISTS_PARENT", "/var/tmp")  # NOSONAR - mkdtemp makes a private directory
 TIMEOUT_CAP = float(os.environ.get("PI_PACKAGES_TIMEOUT") or 0)
 
 SUMMARY = re.compile(r"^(\d+) upgraded, (\d+) newly installed, (\d+) to remove and (\d+) not upgraded\.$", re.M)
@@ -209,6 +210,18 @@ def back(units):
     states = r.stdout.split()
     if len(states) != len(units):
         raise NotRead(f"systemctl is-active: {len(states)} states for {len(units)} units ({r.stderr.strip()[-200:]})")
+    skipped, outside, not_yet = down_units(units, states)
+    if not_yet:
+        print("NOT YET " + ", ".join(not_yet))
+        return 1
+    said = ([f"{', '.join(skipped)} skipped by its start condition"] if skipped else []) + \
+        ([f"{', '.join(outside)} not pulled in by this boot"] if outside else [])
+    print(f"BACK {len(units)}" + (f" ({'; '.join(said)})" if said else ""))
+    return 0
+
+
+def down_units(units, states):
+    """The units not active, sorted: skipped by their own start condition, outside this boot, not back yet."""
     skipped, outside, not_yet = [], [], []
     boot = None
     for u, s in zip(units, states):
@@ -225,21 +238,14 @@ def back(units):
                 outside.append(u)
                 continue
         not_yet.append(f"{u} {s}")
-    if not_yet:
-        print("NOT YET " + ", ".join(not_yet))
-        return 1
-    said = ([f"{', '.join(skipped)} skipped by its start condition"] if skipped else []) + \
-        ([f"{', '.join(outside)} not pulled in by this boot"] if outside else [])
-    print(f"BACK {len(units)}" + (f" ({'; '.join(said)})" if said else ""))
-    return 0
+    return skipped, outside, not_yet
 
 
 def condition_failed(unit):
     """True when the unit's start conditions were checked at this boot and failed (systemd then leaves it inactive
     without an error: a first-boot unit) - a unit not tried yet has no condition timestamp."""
-    props = dict(line.split("=", 1) for line in run(
-        ["systemctl", "show", "-p", "ConditionResult", "-p", "ConditionTimestampMonotonic", unit], timeout=30).splitlines()
-        if "=" in line)
+    out = run(["systemctl", "show", "-p", "ConditionResult", "-p", "ConditionTimestampMonotonic", unit], timeout=30)
+    props = {k: v for k, v in (line.split("=", 1) for line in out.splitlines() if "=" in line)}
     return props.get("ConditionResult") == "no" and props.get("ConditionTimestampMonotonic", "0") not in ("", "0")
 
 
@@ -269,22 +275,35 @@ def heal_summary(volume):
     return bricks
 
 
-def gluster(_args):
+def mounts_not_from_fstab(mounts):
+    """Each fstab Gluster mount not mounted from its own volume, said."""
     bad = []
-    mounts = fstab_volumes()
     for src, mnt in mounts:
         # findmnt reads the mount table - no stat of the mount point, which a hung client never answers
         now = run(["findmnt", "-rn", "-o", "SOURCE", "--mountpoint", mnt], timeout=30, check=False).stdout.strip()
         now = now or "nothing"
         if now != src:
             bad.append(f"{mnt} mounted from {now}, fstab {src}")
-    volumes = run(["gluster", "volume", "list"]).split()
-    if not volumes:
-        raise NotRead("gluster volume list: no volume")
+    return bad
+
+
+def bricks_not_healed(volumes):
+    """Each brick not connected or with entries to heal, said."""
+    bad = []
     for v in volumes:
         for brick, status, total in heal_summary(v):
             if status != "Connected" or total != "0":
                 bad.append(f"{v} {brick} {status or 'no status'}, {total if total is not None else '?'} to heal")
+    return bad
+
+
+def gluster(_args):
+    mounts = fstab_volumes()
+    bad = mounts_not_from_fstab(mounts)
+    volumes = run(["gluster", "volume", "list"]).split()
+    if not volumes:
+        raise NotRead("gluster volume list: no volume")
+    bad += bricks_not_healed(volumes)
     if bad:
         print("NOT HEALED " + "; ".join(bad))
         return 1
@@ -319,7 +338,7 @@ def consul(_args):
             body = r.read()
     except urllib.error.HTTPError as e:
         body = e.read()  # 429: unhealthy, its health in the body
-    except (urllib.error.URLError, OSError) as e:
+    except OSError as e:  # URLError is an OSError
         raise NotRead(f"Consul's autopilot health not read: {e}") from None
     try:
         h = json.loads(body)
@@ -352,7 +371,7 @@ def forgejo_db():
             h = json.loads(r.read())
     except urllib.error.HTTPError as e:
         return f"Forgejo's healthz answered {e.code}"
-    except (urllib.error.URLError, OSError, ValueError) as e:
+    except (OSError, ValueError) as e:  # URLError is an OSError
         return f"Forgejo's healthz not read ({e})"
     db = [c.get("status") for c in (h.get("checks") or {}).get("database:ping", [])]
     if h.get("status") != "pass" or db != ["pass"]:
@@ -475,9 +494,8 @@ def serving(args):
             missing.append(f"{unit} {state or 'unread'}")
             continue
         try:
-            with urllib.request.urlopen(urls[unit], timeout=5):
-                pass
-        except (urllib.error.URLError, OSError) as e:
+            urllib.request.urlopen(urls[unit], timeout=5).close()  # its answering is all that is asked
+        except OSError as e:  # URLError is an OSError
             missing.append(f"{unit} not answering {urls[unit]} ({e})")
     if missing:
         print(f"NOT SERVING {vip}: " + ", ".join(missing))

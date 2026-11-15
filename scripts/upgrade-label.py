@@ -36,7 +36,7 @@ def call(method, path, body=None):
             return json.loads(raw) if raw.strip() else None
     except urllib.error.HTTPError as e:
         raise Refused(f"{method} {path}: {e.code} {e.read()[:200]!r}") from None
-    except (urllib.error.URLError, OSError, ValueError) as e:
+    except (OSError, ValueError) as e:  # URLError is an OSError
         raise Refused(f"{method} {path}: {e}") from None
 
 

@@ -56,7 +56,7 @@ def get(path, **params):
         try:
             with urllib.request.urlopen(req, timeout=30) as r:
                 data = json.loads(r.read())
-        except (urllib.error.URLError, OSError, ValueError) as e:
+        except (OSError, ValueError) as e:  # URLError is an OSError
             raise NotRead(f"{path}: {e}") from None
         if not isinstance(data, list):
             return data
@@ -84,7 +84,12 @@ def units():
             u["repos"][repo] = pr["number"]
             u["labels"] |= {lb["name"] for lb in pr.get("labels") or []}
     for name, u in found.items():
-        u["kind"] = "major" if "major" in u["labels"] else ("patch" if twin(name) == "wave-patches" else "minor")
+        if "major" in u["labels"]:
+            u["kind"] = "major"
+        elif twin(name) == "wave-patches":
+            u["kind"] = "patch"
+        else:
+            u["kind"] = "minor"
     return found
 
 
@@ -93,7 +98,7 @@ def twin(name):
     return name[len("test-"):] if name.startswith("test-") else name
 
 
-def noticed(name, u):
+def noticed(_name, u):
     """The earliest runner notice on any of the unit's pull requests."""
     times = []
     for repo, number in u["repos"].items():
@@ -121,11 +126,11 @@ def family(name):
 def order(name, u):
     name = twin(name)
     if name == "wave-patches":
-        return (0, name)
+        return (0, 0, name, (), name)
     if u["kind"] == "minor":
         base, version = family(name)
         return (1, FAMILIES.index(base) if base in FAMILIES else len(FAMILIES), base, version, name)
-    return (2, name)
+    return (2, 0, name, (), name)
 
 
 def pick():
