@@ -41,17 +41,23 @@ def check(name, got, want):
     global fails
     fails += got != want
     print(("PASS " if got == want else "FAIL ") + name + ("" if got == want else f": got {got!r}, want {want!r}"))
-def pr(number, unit, *labels):
-    return {"number": number, "head": {"ref": f"renovate/{unit}"}, "labels": [{"name": x} for x in labels]}
+def pr(number, unit, *labels, user="renovate-bot", fork=False):
+    # the repository's own branch unless fork (head.repo filled in by fixture() for its repo)
+    return {"number": number, "head": {"ref": f"renovate/{unit}", "repo": "FORK" if fork else None},
+            "user": {"login": user}, "labels": [{"name": x} for x in labels]}
 def fixture(infra=(), platform=(), ops=(), comments=None, dashboard_labels=()):
     fx = {"/repos/schnappy/infra/pulls": list(infra), "/repos/schnappy/platform/pulls": list(platform),
           "/repos/schnappy/ops/pulls": list(ops),
           "/repos/schnappy/ops/issues": [{"title": "Upgrade cycle - Renovate's dashboard (label upgrades-paused: the cycle stops)",
                                           "labels": [{"name": x} for x in dashboard_labels]}]}
+    # a comment: its body (the bot's), or (author, body)
     for (repo, n), bodies in (comments or {}).items():
-        fx[f"/repos/schnappy/{repo}/issues/{n}/comments"] = [{"body": b} for b in bodies]
+        fx[f"/repos/schnappy/{repo}/issues/{n}/comments"] = [
+            {"body": b[1], "user": {"login": b[0]}} if isinstance(b, tuple) else {"body": b, "user": {"login": "renovate-bot"}}
+            for b in bodies]
     for repo, prs in (("infra", infra), ("platform", platform), ("ops", ops)):
         for p in prs:
+            p["head"]["repo"] = {"full_name": "someone/" + repo if p["head"]["repo"] == "FORK" else f"schnappy/{repo}"}
             fx.setdefault(f"/repos/schnappy/{repo}/issues/{p['number']}/comments", [])
     json.dump(fx, open(os.path.join(W, "fixture.json"), "w"))
 NOW = "2026-11-20T03:00:00Z"
@@ -124,6 +130,13 @@ check("more than one page of pull requests: the second page read (wave-patches o
 check("Forgejo unreachable: not read (exit 1), never NOTHING", run("pick", url="http://127.0.0.1:1/api/v1")[0], 1)
 check("noticed: a unit not open", run("noticed", "nope"), (1, "NO UNIT nope"))
 check("a command it does not take", run("apply")[0], 2)
+fixture(infra=[pr(1, "wave-patches", user="mallory"), pr(2, "istio", fork=True), pr(3, "observability")])
+check("another account's pull request, or one from a fork, named renovate/<unit> all the same: no unit",
+      (run("pick"), run("list")[1].split("\n")), ((0, "prove observability minor"), ["observability minor schnappy/infra -"]))
+fixture(infra=[pr(3, "postgresql-19.x", "major")],
+        comments={("infra", 3): [("mallory", "UPGRADE NOTICE 2026-11-01T00:00:00Z - backdated")]})
+check("a notice comment by anyone but the bot: no notice (a backdated one skipped the 24 h)",
+      (run("noticed", "postgresql-19.x"), run("pick")), ((0, "NONE"), (0, "notice postgresql-19.x major")))
 print("upgrade-units: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 PYCHECK

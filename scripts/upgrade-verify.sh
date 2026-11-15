@@ -4,7 +4,8 @@
 #   settle  within UPGRADE_VERIFY_SETTLE minutes: every Argo app Synced and Healthy, its last operation Succeeded (or none),
 #           every running pod ready
 #   hold    then for UPGRADE_VERIFY_HOLD minutes, every UPGRADE_VERIFY_POLL seconds: still so, and no critical alert firing
-#           (Watchdog aside)
+#           (Watchdog aside, and the cycle's own UpgradeCycle page: an open one-way failure is the runner's to refuse on,
+#           never every later apply's verify - each failed and paged again, a cascade)
 # Usage: scripts/upgrade-verify.sh            exit 0 settled and quiet, 1 what is not (said)
 # Env:   UPGRADE_VERIFY_SETTLE (30), UPGRADE_VERIFY_HOLD (60), UPGRADE_VERIFY_POLL (60), UPGRADE_VERIFY_HOST (ten)
 set -uo pipefail
@@ -51,7 +52,7 @@ for p in pods["items"]:
 if os.environ["CRIT"]:
     for al in alerts or []:
         name = (al.get("labels") or {}).get("alertname")
-        if name != "Watchdog":
+        if name not in ("Watchdog", "UpgradeCycle"):
             bad.append(f"critical alert {name}")
 print("\n".join(bad))
 sys.exit(1 if bad else 0)

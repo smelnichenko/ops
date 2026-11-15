@@ -18,6 +18,10 @@ its open pull requests on infra, platform and ops, grouped by branch (renovate/<
                  dashboard issue carries upgrades-paused (the kill switch).
   noticed UNIT   when the unit's veto notice was posted (the runner's "UPGRADE NOTICE <iso>" comment), or "NONE"
 
+A unit is the bot's own pull requests, from branches of the repositories themselves - another account's, or a fork's,
+named renovate/<unit> all the same, is no unit; a notice is the bot's own comment (anyone's backdated one skipped the
+24 h veto).
+
 Env: UPGRADE_FORGEJO_URL (default https://git.pmon.dev/api/v1), UPGRADE_FORGEJO_TOKEN (the renovate-bot's PAT),
      UPGRADE_NOW (an ISO time, for the harness). Exit 0 with an answer, 1 when Forgejo's answer was not read.
 """
@@ -33,6 +37,7 @@ import urllib.request
 API = os.environ.get("UPGRADE_FORGEJO_URL", "https://git.pmon.dev/api/v1").rstrip("/")
 TOKEN = os.environ.get("UPGRADE_FORGEJO_TOKEN", "")
 REPOS = ("schnappy/infra", "schnappy/platform", "schnappy/ops")
+BOT = "renovate-bot"
 FAMILIES = ("istio", "kubernetes", "cilium", "observability", "data-operators", "argocd", "pi-services")
 # a unit moved one minor at a time is named for its minor (renovate/upgrade-cycle.json: istio-1.32, scylladb-2026.3)
 VERSIONED = re.compile(r"(?P<base>[a-z0-9][a-z0-9.-]*?)-(?P<major>\d+)\.(?P<minor>\d+)")
@@ -72,12 +77,18 @@ def now():
             else datetime.datetime.now(datetime.timezone.utc))
 
 
+def ours(repo, pr):
+    """The bot's own pull request, from a branch of the repository itself."""
+    head_repo = ((pr.get("head") or {}).get("repo") or {}).get("full_name")
+    return (pr.get("user") or {}).get("login") == BOT and head_repo == repo
+
+
 def units():
     found = {}
     for repo in REPOS:
         for pr in get(f"/repos/{repo}/pulls", state="open"):
             ref = (pr.get("head") or {}).get("ref") or ""
-            if not ref.startswith("renovate/"):
+            if not ref.startswith("renovate/") or not ours(repo, pr):
                 continue
             name = ref[len("renovate/"):]
             u = found.setdefault(name, {"repos": {}, "labels": set()})
@@ -103,6 +114,8 @@ def noticed(_name, u):
     times = []
     for repo, number in u["repos"].items():
         for c in get(f"/repos/{repo}/issues/{number}/comments"):
+            if (c.get("user") or {}).get("login") != BOT:
+                continue
             m = NOTICE.search(c.get("body") or "")
             if m:
                 times.append(datetime.datetime.fromisoformat(m.group(1).replace("Z", "+00:00")))

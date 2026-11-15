@@ -72,6 +72,9 @@ check("a critical alert during the hold: not quiet, named", (rc, "NOT QUIET" in 
       (1, True, True))
 rc, out = run(OK_APPS, OK_PODS, alerts=[{"labels": {"alertname": "Watchdog", "severity": "critical"}}], alert_after=0)
 check("Watchdog firing (it always does): still quiet", rc, 0)
+rc, out = run(OK_APPS, OK_PODS, alerts=[{"labels": {"alertname": "UpgradeCycle", "kind": "one-way-failed", "severity": "critical"}}],
+              alert_after=0)
+check("the cycle's own UpgradeCycle page (an earlier unit's one-way failure): not this apply's - still quiet", rc, 0)
 rc, out = run(OK_APPS, OK_PODS, down=True)
 check("ten unreachable: not settled, said", (rc, "apps not read" in out), (1, True))
 # production's list: 300 pods with long names and labels - over the 128 KiB one environment variable may hold (the

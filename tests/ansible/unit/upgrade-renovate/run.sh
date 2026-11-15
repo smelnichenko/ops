@@ -94,29 +94,50 @@ check "a repository not read through (skipped without its renovate.json, two of 
   "1 1 1 1"
 ARGS=(--force)
 check "an unknown argument refused" "$(run RENOVATE_TOKEN=$TOKEN) $([ -e "$W/argv" ] && echo ran || echo not-run)" "2 not-run"
-# the task: Renovate first, the runner after it unless LOOKUP, given the bot's token by the environment; a prompt; its
-# preconditions run as go-task runs them (sh -c, LOOKUP rendered) for each value one might type
+# the task: the copy lock and the runner's gates first, Renovate, then the runner - none of the three but Renovate with
+# LOOKUP or RUNNER=false; the runner given the bot's token by the environment; a prompt; its preconditions run as
+# go-task runs them (sh -c, the vars rendered) for each value one might type; its commands run as rendered, against a
+# shell that records them, for each mode
 PY=python3
 "$PY" -c 'import yaml' 2> /dev/null || PY=deploy/ansible/venv/bin/python3
-got=$("$PY" - <<'PYCHECK'
-import subprocess
+got=$(W="$W" "$PY" - <<'PYCHECK'
+import os, subprocess
 import yaml
+W = os.environ["W"]
 t = yaml.safe_load(open("Taskfile.yml"))["tasks"]["upgrade"]
 cmds = [c if isinstance(c, str) else c.get("cmd", "") for c in t["cmds"]]
 pre = [p["sh"] for p in t.get("preconditions", [])]
-def admitted(v, ps=None):
-    return all(subprocess.run(["sh", "-c", p.replace("{{.LOOKUP}}", v)]).returncode == 0 for p in (pre if ps is None else ps))
+def render(text, lookup, runner):
+    text = text.replace("{{.LOOKUP}}", lookup).replace("{{.RUNNER}}", runner)
+    return text.replace('{{if eq .LOOKUP "true"}}--lookup{{end}}', "--lookup" if lookup == "true" else "")
+def admitted(lookup, runner, ps=None):
+    return all(subprocess.run(["sh", "-c", render(p, lookup, runner)]).returncode == 0 for p in (pre if ps is None else ps))
 VALUES = ("true", "false", "1", "yes", "TRUE", "")
-# the value check on its own (it stays when the real run's refusal goes): true or false, nothing else
-values_only = [p for p in pre if "= false" in p]
-print(len(cmds), cmds[0].startswith("scripts/upgrade-renovate.sh"), '{{if eq .LOOKUP "true"}}--lookup{{end}}' in cmds[0],
-      cmds[1] == '[ "{{.LOOKUP}}" = true ] || UPGRADE_FORGEJO_TOKEN="$RENOVATE_TOKEN" scripts/upgrade-cycle.sh',
-      "--shadow" not in " ".join(cmds), "PRODUCTION" in t.get("prompt", "") and "radar" in t.get("prompt", ""),
-      t["vars"]["LOOKUP"], t.get("deps"), any("ignore_error" in c for c in t["cmds"] if isinstance(c, dict)),
-      [v for v in VALUES if admitted(v)], len(values_only), [v for v in VALUES if admitted(v, values_only)])
+values_only = [p for p in pre if "= false" in p and "||" in p and p.count("{{.") == 2 and ("LOOKUP" in p) != ("RUNNER" in p)]
+# each command as go-task would run it, its scripts recording (the lock, the gates, Renovate, the runner)
+os.makedirs(os.path.join(W, "tb", "scripts"), exist_ok=True)
+for name in ("copy-lock.sh", "upgrade-cycle.sh", "upgrade-renovate.sh"):
+    path = os.path.join(W, "tb", "scripts", name)
+    open(path, "w").write(f'#!/bin/sh\necho "{name} $* token=${{UPGRADE_FORGEJO_TOKEN:-none}}" >> "$REC"\n')
+    os.chmod(path, 0o755)
+def ran(lookup, runner):
+    rec = os.path.join(W, "tb", "rec")
+    if os.path.exists(rec):
+        os.remove(rec)
+    for c in cmds:
+        subprocess.run(["sh", "-c", render(c, lookup, runner)], cwd=os.path.join(W, "tb"),
+                       env={**os.environ, "REC": rec, "RENOVATE_TOKEN": "the-bots"})
+    return open(rec).read().split("\n")[:-1] if os.path.exists(rec) else []
+print(len(cmds), "--shadow" not in " ".join(cmds), "PRODUCTION" in t.get("prompt", "") and "radar" in t.get("prompt", ""),
+      t["vars"]["LOOKUP"], t["vars"]["RUNNER"], t.get("deps"), any("ignore_error" in c for c in t["cmds"] if isinstance(c, dict)),
+      sorted(f"{l}/{r}" for l in VALUES for r in VALUES if admitted(l, r)),
+      len(values_only), sorted(f"{l}/{r}" for l in VALUES for r in VALUES if admitted(l, r, values_only)), sep="|")
+print(ran("true", "true"), ran("false", "false"), ran("false", "true"), sep="|")
 PYCHECK
 )
-check "task upgrade: Renovate, then the runner for real (no --shadow) unless LOOKUP=true, its token from the environment, behind a prompt naming production and the radar; no step's failure ignored; LOOKUP=true alone admitted (true or false only - 1, yes, TRUE refused; the real run refused until the runner's open items are done)" \
-  "$got" "2 True True True True True {{.LOOKUP | default \"false\"}} ['deploy:install'] False ['true'] 1 ['true', 'false']"
+check "task upgrade: no --shadow, a prompt naming production and the radar, LOOKUP false and RUNNER true by default, no step's failure ignored; admitted: LOOKUP=true or RUNNER=false alone (the runner refused until the cycle's first proof; 1, yes, TRUE never a value)" \
+  "$(head -1 <<< "$got")" "4|True|True|{{.LOOKUP | default \"false\"}}|{{.RUNNER | default \"true\"}}|['deploy:install']|False|['false/false', 'true/false', 'true/true']|2|['false/false', 'false/true', 'true/false', 'true/true']"
+check "task upgrade's commands as run: LOOKUP=true - Renovate reads, nothing else; RUNNER=false - Renovate's branches alone; both on - the lock, the gates, Renovate, the runner with the bot's token" \
+  "$(tail -1 <<< "$got")" "['upgrade-renovate.sh --lookup token=none']|['upgrade-renovate.sh  token=none']|['copy-lock.sh  token=none', 'upgrade-cycle.sh --preflight token=none', 'upgrade-renovate.sh  token=none', 'upgrade-cycle.sh  token=the-bots']"
 check "no CI cron runs Renovate any more (.woodpecker/renovate.yaml gone)" "$([ -e .woodpecker/renovate.yaml ] && echo present || echo gone)" "gone"
 if [ "$fails" = 0 ]; then echo "upgrade-renovate: ALL-PASS"; else echo "upgrade-renovate: $fails FAILED"; exit 1; fi

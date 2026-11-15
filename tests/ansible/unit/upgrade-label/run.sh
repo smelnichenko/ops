@@ -41,16 +41,22 @@ def check(name, got, want):
     global fails
     fails += got != want
     print(("PASS " if got == want else "FAIL ") + name + ("" if got == want else f": got {got!r}, want {want!r}"))
-def pr(n, unit, sha, mergeable=True):
-    return {"number": n, "head": {"ref": f"renovate/{unit}", "sha": sha}, "mergeable": mergeable}
+SHA = {k: (k * 40)[:40] for k in ("a1", "a2", "b1", "c1", "d1")}  # 40 hex characters each
+def pr(n, unit, sha, mergeable=True, user="renovate-bot", fork=False):
+    # head.repo filled in by fixture() for its repo (a fork's another's)
+    return {"number": n, "head": {"ref": f"renovate/{unit}", "sha": SHA.get(sha, sha), "repo": "FORK" if fork else None},
+            "user": {"login": user}, "mergeable": mergeable}
 def fixture(prs, states, labels=None):
     fx = {}
     for repo in ("infra", "platform", "ops"):
+        for p in prs.get(repo, []):
+            p["head"]["repo"] = {"full_name": ("someone/" if p["head"]["repo"] in ("FORK", {"full_name": "someone/" + repo})
+                                               else "schnappy/") + repo}
         fx[f"/repos/schnappy/{repo}/pulls"] = prs.get(repo, [])
         fx[f"/repos/schnappy/{repo}/labels"] = (labels or {}).get(repo, [])
     for sha, st in states.items():
         for repo in ("infra", "platform", "ops"):
-            fx[f"/repos/schnappy/{repo}/commits/{sha}/status"] = {"state": st}
+            fx[f"/repos/schnappy/{repo}/commits/{SHA.get(sha, sha)}/status"] = {"state": st}
     json.dump(fx, open(os.path.join(W, "fixture.json"), "w"))
     if os.path.exists(os.path.join(W, "writes")):
         os.remove(os.path.join(W, "writes"))
@@ -77,22 +83,56 @@ fixture(UNIT, {})
 rc, out = run("wave-patches", "--comment", "UPGRADE NOTICE 2026-11-20T03:00:00Z - applies after 24 h")
 check("comment: on each, the text whole", (rc, [(x[0], x[1]["body"][:14]) for x in writes()]),
       (0, [(f"/repos/schnappy/{r}/issues/{n}/comments", "UPGRADE NOTICE") for r, n in (("infra", 1), ("platform", 5), ("ops", 8))]))
+fixture(UNIT, {})
+rc, heads_out = run("wave-patches", "--heads")
+check("heads: each of the unit's pull requests, its number and head - nothing written",
+      (rc, heads_out.split("\n"), writes()),
+      (0, [f"schnappy/infra 1 {SHA['a1']}", f"schnappy/platform 5 {SHA['b1']}", f"schnappy/ops 8 {SHA['c1']}"], []))
+PROVEN = os.path.join(W, "proven")
+def proven(text=heads_out):
+    open(PROVEN, "w").write(text + "\n")
 fixture(UNIT, {"a1": "success", "b1": "success", "c1": "success"})
-rc, out = run("wave-patches", "--merge")
-check("merge: every one green - infra, platform, then ops, each branch deleted",
-      (rc, [x[0] for x in writes()], {json.dumps(x[1], sort_keys=True) for x in writes()}),
+proven()
+rc, out = run("wave-patches", "--merge", "--expect", PROVEN)
+check("merge: every one green and the proven commit - infra, platform, then ops, each at that commit, its branch deleted",
+      (rc, [x[0] for x in writes()], [json.dumps(x[1], sort_keys=True) for x in writes()]),
       (0, ["/repos/schnappy/infra/pulls/1/merge", "/repos/schnappy/platform/pulls/5/merge", "/repos/schnappy/ops/pulls/8/merge"],
-       {json.dumps({"Do": "merge", "delete_branch_after_merge": True}, sort_keys=True)}))
+       [json.dumps({"Do": "merge", "delete_branch_after_merge": True, "head_commit_id": SHA[k]}, sort_keys=True)
+        for k in ("a1", "b1", "c1")]))
+fixture({**UNIT, "platform": [pr(5, "wave-patches", "d1")]}, {"a1": "success", "d1": "success", "c1": "success"})
+proven()
+rc, out = run("wave-patches", "--merge", "--expect", PROVEN)
+check("merge: one pull request moved since its proof (a push after it) - none merged, named",
+      (rc, writes(), "platform#5 moved since its proof" in out), (1, [], True))
+fixture({**UNIT, "ops": []}, {"a1": "success", "b1": "success"})
+proven()
+rc, out = run("wave-patches", "--merge", "--expect", PROVEN)
+check("merge: the pull requests not the ones proven (one gone, or one new) - none merged",
+      (rc, writes(), "not the ones proven" in out), (1, [], True))
+fixture(UNIT, {"a1": "success", "b1": "success", "c1": "success"})
+for bad in ("", "schnappy/infra 1 nothex", "schnappy/elsewhere 1 " + SHA["a1"], "just words"):
+    proven(bad)
+    check(f"merge: proven heads that are none ({bad!r}): refused, nothing merged",
+          (run("wave-patches", "--merge", "--expect", PROVEN)[0], writes()), (1, []))
+check("merge without the proven heads: a usage it lacks (never a merge of whatever is there)",
+      (run("wave-patches", "--merge")[0], writes()), (2, []))
 fixture(UNIT, {"a1": "success", "b1": "failure", "c1": "success"})
-rc, out = run("wave-patches", "--merge")
+proven()
+rc, out = run("wave-patches", "--merge", "--expect", PROVEN)
 check("merge: one red - none merged, named", (rc, writes(), "platform#5 not green" in out), (1, [], True))
 fixture(UNIT, {"a1": "success", "b1": "pending", "c1": "success"})
-check("merge: one still running - none merged", (run("wave-patches", "--merge")[0], writes()), (1, []))
+check("merge: one still running - none merged", (run("wave-patches", "--merge", "--expect", PROVEN)[0], writes()), (1, []))
 fixture({**UNIT, "ops": [pr(8, "wave-patches", "c1", mergeable=False)]}, {"a1": "success", "b1": "success", "c1": "success"})
-rc, out = run("wave-patches", "--merge")
+rc, out = run("wave-patches", "--merge", "--expect", PROVEN)
 check("merge: one not mergeable - none merged", (rc, writes(), "not mergeable" in out), (1, [], True))
+fixture({"infra": [pr(1, "wave-patches", "a1", user="mallory")], "platform": [pr(5, "wave-patches", "b1", fork=True)],
+         "ops": [pr(8, "wave-patches", "c1")]}, {"a1": "success", "b1": "success", "c1": "success"})
+rc, out = run("wave-patches", "--heads")
+check("another account's pull request, or a fork's, named renovate/<unit>: none of the unit's (heads, labels)",
+      (rc, out.split("\n"), run("wave-patches", "upgrade-blocked")[0], [x[0] for x in writes()][-1]),
+      (0, [f"schnappy/ops 8 {SHA['c1']}"], 0, "/repos/schnappy/ops/issues/8/labels"))
 fixture(UNIT, {})
-rc, out = run("nope", "--merge")
+rc, out = run("nope", "--heads")
 check("no pull request for the unit: refused", (rc, out.startswith("REFUSED"), writes()), (1, True, []))
 check("Forgejo unreachable: refused", run("wave-patches", "veto", url="http://127.0.0.1:1/api/v1")[0], 1)
 for args in (("wave-patches",), ("Bad/Unit", "x"), ("wave-patches", "--comment", ""), ("wave-patches", "Bad Label")):

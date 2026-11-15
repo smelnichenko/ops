@@ -23,19 +23,25 @@ ops/.env RENOVATE_TOKEN, write access to infra/platform/ops (operator: "grant it
 name, the allowed command from its file, no bind mount; a run that logs an error or reads a repository short stops
 before the runner; harness `upgrade-renovate`) - `LOOKUP=true` alone: the real run is refused until the runner's open
 items below are done (its first real run's review, 2026-11-15, found them - the runner had never run).
-**The runner's open items (gate the real run):** the headless agent - a clean environment (the Taskfile loads ops/.env
-whole: Vault's root token, the admin's password, the API key, which `claude -p` would bill instead of the account) and
-settings of its own (the operator's allowlist is no job's); the etcd backup's result checked (unchecked, a failed one
-went on to kubeadm), its job named per run, the unit's plan read or the unit blocked; ops checked on main, clean and
-equal to origin before anything (a dirty tree was proven and applied), the pull's result checked; the copy lock first;
-the backup window read again before the apply (and the plan's windows made the code's); one production apply a day;
-the memory checked before Renovate (a run by hand refused at once, never a wait till midnight); the first real run
-Renovate's half alone, its labels read before any apply (the shadow week checked them); the notices - amtool refuses a
-`"` (a JSON post), a start time, a label of each notice's own (a second one was deduplicated), the log's tail, a
-`resolve` kind, open pages posted again after an Alertmanager restart (alerts are memory only); verify not failing on
-the cycle's own UpgradeCycle critical (a cascade), the pick paused while one is open; Alertmanager's route ahead of the
-critical one with its own subject and grouping, the inhibit rule by unit (a one-way failure held every veto back);
-units read only from the bot's own pull requests, merged at the proven commit, notices only from the bot's comments.
+**The runner's open items - DONE 2026-11-15 (each with its harness; the first real run's review found them):** the
+headless agents (fix, review) run with a clean environment (`env -i` HOME PATH: none of ops/.env, the account's login
+rather than the API key), settings of their own (`.claude/upgrade-agent/fix.json`, `review.json`: `--setting-sources
+project,local --permission-mode dontAsk --permission-prompts none` - what they do not allow is denied, never asked;
+smoke-tested: a push and kubectl denied), in clones of the unit's branches under `.copy/upgrade-fix/` (never the
+operator's trees); the runner labels stop-updating itself. The gates before anything (and `--preflight` before
+Renovate): the backup windows from the real schedules (00:50-04:00 daily: the mirror at 04:00 local, CNPG 01:30,
+Velero 02:00, the Pis' backups 02:40, ScyllaDB and Sunday's Velero 03:00; Sundays 04:00-05:00 ScyllaDB's repair;
+05:20-05:50 the Pis' restore check), no open page (posted again), ops on main clean and origin's, the memory free
+(refused at once), no apply recorded today. The heads read before the proof and after it, the merge pinned to them
+(`--merge --expect`, Forgejo's head_commit_id); the plan read or the unit blocked; `task deploy:etcd:backup` (a Job
+of its own name, waited for) checked; the window read again before the apply (waited out); the pull checked. Units
+and notices only the bot's (author, head repository). Notices: a JSON post to Alertmanager's API (proven against
+v0.34.1: quotes, $, newlines intact), a start, a label each, the log's tail; pages recorded, mailed straight out too,
+`resolve`/`repost`/`open`; verify skips the cycle's own page. Platform: the notices' route ahead of the critical one,
+their own subject, the inhibit rule by unit, CI running amtool and Alertmanager itself on the config.
+**The first real run:** `task upgrade RUNNER=false` - Renovate's branches and pull requests made, nothing applied; their
+labels read (the shadow week checked them). Then the runner's first run proves a unit on the copy; until then the task
+refuses the runner (its precondition), lifted with that proof.
 **Not yet:** a GitHub read token, or the six GitHub-sourced annotations moved to registries (RENOVATE_GITHUB_TOKEN in ops/.env is empty - ''; the 401 seen 2026-11-14 was the two quote characters sent as a token), the agent's headless permissions, `deploy:seed-secrets` for the bot's token (the operator's OK), Nexus
 annotated, a one-way change's store backups beyond etcd (Postgres, ScyllaDB, ...: blocked). Strimzi's Kafka version
 (`strimzi.kafkaVersion`, production's and the test environment's data values) is not annotated yet - a design point
@@ -139,8 +145,9 @@ Woodpecker cron until 2026-11-15), against
   rendered charts, in CI).
 
 **2. The upgrade runner - proves and applies** (on the workstation: the copy needs ~25 GB and libvirt; nowhere else).
-`task upgrade`, started by the operator after Renovate's run (outside 02:00-03:00 and Sunday's 03:00-04:15 backup
-windows - the runner refuses them), runs a deterministic driver, `scripts/upgrade-cycle.sh`; no CI agent on the
+`task upgrade`, started by the operator after Renovate's run (outside the backup windows - the runner's list, from the
+real schedules: it refuses them, and waits one out before an apply), runs a deterministic driver,
+`scripts/upgrade-cycle.sh`; no CI agent on the
 workstation (a Woodpecker agent there would give any pipeline a shell on it). Each run, one unit:
 1. **Pick**: the next open Renovate unit in order - wave-patches, then minor groups, then one major whose 24 h notice
    has run out unvetoed. Paused when an `upgrades-paused` label is on ops' dashboard issue (the kill switch).
