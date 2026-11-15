@@ -424,10 +424,11 @@ check("the preset: one post-upgrade task, the script's --changed, once a branch,
                                                        for g in tasks[0]["postUpgradeTasks"]["fileFilters"])]),
       (1, ["schnappy/ops"], [CMD], "branch", []))
 allowed = json.load(open("renovate/allowed-commands.json"))
-pipeline = yaml.safe_load(open(".woodpecker/renovate.yaml"))["steps"][0]["commands"]
-check("the allowed commands: that one, nothing chained to it; the pipeline reads them from renovate/allowed-commands.json",
+launcher = open("scripts/upgrade-renovate.sh").read()
+check("the allowed commands: that one, nothing chained to it; task upgrade's Renovate (scripts/upgrade-renovate.sh) "
+      "reads them from renovate/allowed-commands.json",
       ([bool(re.match(rx, CMD)) for rx in allowed], [bool(re.match(rx, CMD + "; rm -rf /")) for rx in allowed],
-       any("renovate/allowed-commands.json" in c and c.rstrip().endswith("renovate") for c in pipeline)),
+       'RENOVATE_ALLOWED_COMMANDS=$(cat "$ops/renovate/allowed-commands.json")' in launcher),
       ([True], [False], True))
 annotated = {p["name"]: bool(re.search(rf"#\s*renovate:.*\n\s*{p['version']}:", open(p["file"]).read()))
              for p in rc.PINS if "version" in p}

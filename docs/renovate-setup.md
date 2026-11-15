@@ -1,6 +1,16 @@
 # Renovate (automated dependency-update PRs)
 
-Renovate runs as a Woodpecker **cron** pipeline against the self-hosted Forgejo
+Two Renovates use the `renovate-bot` account:
+
+- **The upgrade cycle's** - infra, platform and ops (docs/plans/120-automated-upgrade-cycle.md): `task upgrade`, started
+  by hand on the workstation (operator 2026-11-15: Renovate and the runner one task, run locally, no CI cron) -
+  `scripts/upgrade-renovate.sh` runs the pinned `renovate/renovate` image in docker with the bot's token
+  (`.env` `RENOVATE_TOKEN`, by name) and the shared preset `renovate/upgrade-cycle.json` (each repo's `renovate.json`
+  extends it), then `scripts/upgrade-cycle.sh` proves one unit on the Vagrant copy and applies it. `task upgrade
+  LOOKUP=true` reads only. Its Woodpecker pipeline (`.woodpecker/renovate.yaml` in ops) is gone.
+- **monitor's own** (below) - its weekly Woodpecker cron, dependency PRs on `schnappy/monitor`.
+
+Monitor's Renovate runs as a Woodpecker **cron** pipeline against the self-hosted Forgejo
 (`platform=forgejo`), modelled on the proven `depcheck-nightly` pipeline. Repo
 policy lives in each repo's `renovate.json`; the runner lives in
 `.woodpecker/renovate.yaml`. Rolled out to **monitor** first, then fanned out.
@@ -47,7 +57,10 @@ always go through Vault + the ExternalSecret.
   `packageRules` `enabled:false` in `renovate.json`).
 - Tune `prConcurrentLimit` / schedule from the first run's PR volume.
 
-## Fan-out (after monitor is proven)
+## Fan-out (after monitor is proven) - superseded
+
+Superseded by the upgrade cycle (top): infra, platform and ops extend `local>schnappy/ops//renovate/upgrade-cycle`, run
+by `task upgrade`. The plan below is kept as it was.
 
 - Add the same `.woodpecker/renovate.yaml` is **not** needed per-repo. Instead
   switch to ONE central runner: a single `renovate.yaml` cron (in `ops` or a
@@ -67,5 +80,7 @@ always go through Vault + the ExternalSecret.
 
 ## Files
 
+- [scripts/upgrade-renovate.sh](../scripts/upgrade-renovate.sh) and `task upgrade` - the upgrade cycle's Renovate.
+- [renovate/upgrade-cycle.json](../renovate/upgrade-cycle.json) - its shared preset (infra, platform, ops extend it).
 - [monitor/renovate.json](../../monitor/renovate.json) — repo policy (self-contained for the first rollout; later `extends` the shared preset).
 - [monitor/.woodpecker/renovate.yaml](../../monitor/.woodpecker/renovate.yaml) — the cron runner.

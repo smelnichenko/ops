@@ -9,17 +9,34 @@ first (decisions below).
 - Renovate: `renovate/upgrade-cycle.json` (the shared preset - units, groups, one minor at a time for Kubernetes/
   Cilium/Istio, ClickHouse's and Forgejo's lines held, majors labelled, 3 days' release age; validated by
   renovate-config-validator 44.198.3), `renovate.json` in ops (infra and platform: their `upgrade-cycle/renovate`
-  branches), `.woodpecker/renovate.yaml` (cron, image pinned, lookup mode), 15 ops version vars annotated.
+  branches), `.woodpecker/renovate.yaml` (cron, image pinned, lookup mode - gone 2026-11-15 for `task upgrade`), 15 ops
+  version vars annotated.
 - Its proof on the copy: `scripts/copy-unit.sh` / `task test:copy:unit UNIT=<it> [PLAN=true]` (the unit's branches,
   test:copy:change, each ops part's playbook from the branch's values; an unknown value refused).
-- The night: `scripts/upgrade-cycle.sh` (`--shadow` for rollout step 2, `--dry`), `upgrade-units.py` (the pick),
+- The night: `scripts/upgrade-cycle.sh` (`--dry`; `--shadow` a flag only since 2026-11-15), `upgrade-units.py` (the pick),
   `upgrade-label.py` (labels, comments, merges - whole or not at all), `upgrade-verify.sh`, `upgrade-record.sh`,
   `upgrade-notice.sh` (platform's `upgrade-cycle/notices` branch routes the UpgradeCycle alert), the agent's
   `.claude/skills/upgrade-fix`.
 **Done since:** the renovate-bot reset (operator: "reset renovate-bot with forgejo_admin yourself"), its PAT in
 ops/.env RENOVATE_TOKEN, write access to infra/platform/ops (operator: "grant it").
-**Not yet:** a GitHub read token, or the six GitHub-sourced annotations moved to registries (RENOVATE_GITHUB_TOKEN in ops/.env is empty - ''; the 401 seen 2026-11-14 was the two quote characters sent as a token), `task upgrade`
-(the decisions of 2026-11-15), the agent's headless permissions, `deploy:seed-secrets` for the bot's token (the operator's OK), Nexus
+**Built 2026-11-15:** `task upgrade` (`scripts/upgrade-renovate.sh`: the pinned image in docker, the bot's token by
+name, the allowed command from its file, no bind mount; a run that logs an error or reads a repository short stops
+before the runner; harness `upgrade-renovate`) - `LOOKUP=true` alone: the real run is refused until the runner's open
+items below are done (its first real run's review, 2026-11-15, found them - the runner had never run).
+**The runner's open items (gate the real run):** the headless agent - a clean environment (the Taskfile loads ops/.env
+whole: Vault's root token, the admin's password, the API key, which `claude -p` would bill instead of the account) and
+settings of its own (the operator's allowlist is no job's); the etcd backup's result checked (unchecked, a failed one
+went on to kubeadm), its job named per run, the unit's plan read or the unit blocked; ops checked on main, clean and
+equal to origin before anything (a dirty tree was proven and applied), the pull's result checked; the copy lock first;
+the backup window read again before the apply (and the plan's windows made the code's); one production apply a day;
+the memory checked before Renovate (a run by hand refused at once, never a wait till midnight); the first real run
+Renovate's half alone, its labels read before any apply (the shadow week checked them); the notices - amtool refuses a
+`"` (a JSON post), a start time, a label of each notice's own (a second one was deduplicated), the log's tail, a
+`resolve` kind, open pages posted again after an Alertmanager restart (alerts are memory only); verify not failing on
+the cycle's own UpgradeCycle critical (a cascade), the pick paused while one is open; Alertmanager's route ahead of the
+critical one with its own subject and grouping, the inhibit rule by unit (a one-way failure held every veto back);
+units read only from the bot's own pull requests, merged at the proven commit, notices only from the bot's comments.
+**Not yet:** a GitHub read token, or the six GitHub-sourced annotations moved to registries (RENOVATE_GITHUB_TOKEN in ops/.env is empty - ''; the 401 seen 2026-11-14 was the two quote characters sent as a token), the agent's headless permissions, `deploy:seed-secrets` for the bot's token (the operator's OK), Nexus
 annotated, a one-way change's store backups beyond etcd (Postgres, ScyllaDB, ...: blocked). Strimzi's Kafka version
 (`strimzi.kafkaVersion`, production's and the test environment's data values) is not annotated yet - a design point
 first: the test environment's unit merges before its production twin, but the Strimzi operator is one, shared, and
