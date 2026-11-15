@@ -123,7 +123,8 @@ for name, var, playbooks in PINNED:
     if name in FETCH:
         key = next(p["key"] for p in rc.PINS if p["name"] == name)
         kept = old.get(key) if str(old.get(var)) == v else None
-        body.update({key: kept} if (kept.get("amd64") if isinstance(kept, dict) else kept) else pinned(name, v))
+        kept_hash = kept.get("amd64") if isinstance(kept, dict) else kept
+        body.update({key: kept} if kept_hash else pinned(name, v))
 if apt:
     body["pi_apt_versions"] = apt
 head = ("# The Pis' service versions as production runs them, where the playbooks pin another (they install their own where\n"
