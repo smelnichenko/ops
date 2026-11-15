@@ -1,0 +1,24 @@
+---
+# The offsite git mirror run now: setup-velero.yml's deploy runs it once, the Vagrant copy's offsite-mirror-check.yml
+# twice (production's own tasks, proven there). Its start in _mirror_started ("<epoch> <YYYYMMDDTHHMMSSZ>"): a result
+# older than it is no result of this run's.
+# - a run going began before - its script the one a deploy replaced (a running script reads its old file), its pushes
+#   before a VIP move: joined only to wait for its end (systemctl start returns with it, bounded by the unit's own
+#   timeout), its result never this run's
+# - systemctl start then waits for the oneshot's end and fails with its run (a retry scheduled), runs at once while a
+#   retry is pending (the copy check proves it on the target's systemd); Ansible's systemd module skipped the start
+#   while the unit was activating: no proof
+- name: A run already going waited out - it began before, its result none of this run's - then this run's start
+  ansible.builtin.shell: |
+    case "$(systemctl show -P SubState offsite-backup.service)" in
+      start*)  # start-pre, start, start-post: a run going
+        systemctl start offsite-backup.service > /dev/null 2>&1 || echo "the run going before failed - not this run's" >&2 ;;
+    esac
+    date -u +'%s %Y%m%dT%H%M%SZ'
+  register: _mirror_started
+  changed_when: false
+
+- name: The mirror synced now
+  ansible.builtin.command:
+    argv: [systemctl, start, offsite-backup.service]
+  changed_when: true

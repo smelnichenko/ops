@@ -601,7 +601,7 @@
           plain "$n"
           mounted
           marked "$p" || { say "$n.git was not made by this mirror - nothing received"; exit 5; }
-          exec timeout --kill-after=30 1800 git-receive-pack "$p" ;;
+          exec timeout --kill-after=30 600 git-receive-pack "$p" ;;
         last-success)
           [ "${#a[@]}" -eq 2 ] && [[ ${a[1]} =~ ^[0-9]{8}T[0-9]{6}Z$ ]] || { say "last-success <YYYYMMDDTHHMMSSZ>"; exit 2; }
           mounted
@@ -1244,17 +1244,25 @@
           Description=Mirror the Forgejo organisation's repositories to the Pis (offsite copy)
           After=network-online.target
           Wants=network-online.target
-          # a failed night tried again (a Forgejo restart, a VIP move, a blip) - three times in six hours at most
-          StartLimitIntervalSec=6h
-          StartLimitBurst=3
+          # no start limit: systemd's counts every start, a deliberate one too - StartLimitBurst=3 in 6 h (meant to cap
+          # the retries) refused the Vagrant copy's fourth sync within the hour (2026-11-15), as it would have refused
+          # a deploy's or an operator's run after a failed night. The retries' backoff bounds them instead
+          StartLimitIntervalSec=0
 
           [Service]
           Type=oneshot
           User={{ _git_mirror_owner }}
           ExecStart=/usr/local/bin/offsite-backup-sync.sh
-          TimeoutStartSec=1800
+          # a backstop: a push that times out (10 min) ends the run itself, every repository after it named; a stalled
+          # fetch is 10 min each. Equal to the push's bound (1800 both), the first stall was systemd's kill, nothing named
+          TimeoutStartSec=7200
+          # a failed run tried again by itself until one succeeds (a Forgejo restart, a VIP move, a blip, a fix made
+          # later): 45 min after, then 1.5 h, 3 h, and every 6 h from then on. A start meanwhile (the timer's, a
+          # deploy's, an operator's) runs at once - systemd 257: "Scheduled restart job immediately on client request"
           Restart=on-failure
           RestartSec=45min
+          RestartSteps=3
+          RestartMaxDelaySec=6h
       register: _git_mirror_unit
       when: offsite_backup_enabled | default(true) | bool
 
@@ -1316,11 +1324,12 @@
             page=$((page + 1))
           done
           [ -n "$repos" ] || { say "FAILED: no repository listed"; exit 1; }
-          failed="" mirrored=""
+          failed="" mirrored="" hung=""
           # the list on a descriptor of its own: ssh reads its standard input, and on the loop's it swallowed every
           # repository after the first (the copy's check, 2026-11-15: the run clean, one repository of two mirrored)
           while read -r r head <&3; do
             [ -n "$r" ] || continue
+            [ -z "$hung" ] || { failed+=" $r(not tried - $hung)"; continue; }
             [[ $r =~ ^[A-Za-z0-9_][A-Za-z0-9._-]*$ ]] || { failed+=" $r(its name)"; continue; }
             [[ $head =~ ^[A-Za-z0-9._/-]+$ && $head != *..* ]] || { failed+=" $r(its default branch)"; continue; }
             d=$dir/$r.git
@@ -1353,9 +1362,14 @@
             fi
             # its repository on the Pi made when new, its HEAD the default branch - the gate's
             ssh "${ssh_opts[@]}" "$pi" init "$r" "$head" 2>&1 | logger -t git-mirror || { failed+=" $r(its repository on the Pi)"; continue; }
-            # every ref, forced, none deleted - each update said (the Pi logs and keeps the ones it replaces); bounded
-            timeout --kill-after=30 1800 git -C "$d" push --force --porcelain --receive-pack=git-receive-pack "$pi:$pidir/$r.git" 'refs/*:refs/*' \
-              2>&1 | logger -t git-mirror || { failed+=" $r(push)"; continue; }
+            # every ref, forced, none deleted - each update said (the Pi logs and keeps the ones it replaces); bounded.
+            # A push that timed out: the Pi's volume hung, most likely - every push after it to the same volume would
+            # hang too (and leave its git-receive-pack stuck on the Pi): none tried, each named
+            timeout --kill-after=30 600 git -C "$d" push --force --porcelain --receive-pack=git-receive-pack "$pi:$pidir/$r.git" 'refs/*:refs/*' \
+              2>&1 | logger -t git-mirror
+            pushed=${PIPESTATUS[0]}
+            if [ "$pushed" = 124 ] || [ "$pushed" = 137 ]; then hung="$r's push timed out"; failed+=" $r(push timed out)"; continue; fi
+            [ "$pushed" = 0 ] || { failed+=" $r(push)"; continue; }
             mirrored+=" $r"
           done 3<<< "$repos"
           if [ -n "$failed" ]; then
@@ -1403,22 +1417,10 @@
         daemon_reload: true
       when: offsite_backup_enabled | default(true) | bool
 
-    # proven now, not at 4 AM: the sync run once - systemctl start waits for a oneshot's end, and joins a run already
-    # going (Ansible's systemd module skipped the start while the unit was activating: no proof); a failure fails the
-    # play. Its result for Prometheus then this run's
-    - name: The mirror's start - this run's
-      ansible.builtin.command: date +%s
-      register: _git_mirror_started
-      changed_when: false
-      check_mode: false
-      when:
-        - git_mirror_enabled | default(true) | bool
-        - offsite_backup_enabled | default(true) | bool
-
-    - name: The mirror synced now
-      ansible.builtin.command:
-        argv: [systemctl, start, offsite-backup.service]
-      changed_when: true
+    # proven now, not at 4 AM: the sync run once (a run going waited out - it runs the script this play replaced); a
+    # failure fails the play, its result for Prometheus then this run's
+    - name: The mirror run now
+      ansible.builtin.include_tasks: tasks/offsite-mirror-run.yml
       when:
         - git_mirror_enabled | default(true) | bool
         - offsite_backup_enabled | default(true) | bool
@@ -1440,10 +1442,10 @@
         _count: "{{ _lines | select('match', '^offsite_git_mirror_repositories ') | map('split') | map('last') | first | default('-1') }}"
       ansible.builtin.assert:
         that:
-          - _ts | int >= _git_mirror_started.stdout | int
+          - _ts | int >= _mirror_started.stdout.split() | first | int
           - _count | int == _git_mirror_reach_read.stdout.split() | last | int
         fail_msg: >-
-          the sync's result: last success {{ _ts }} (it started {{ _git_mirror_started.stdout | default('?') }}),
+          the sync's result: last success {{ _ts }} (it started {{ (_mirror_started.stdout | default('?')).split() | last }}),
           {{ _count }} repositories of the {{ (_git_mirror_reach_read.stdout | default('?')).split() | last }} it reads
         quiet: true
       when:

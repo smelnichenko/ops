@@ -107,10 +107,11 @@ STUB
 printf '#!/bin/bash\ncat >> "$W/logged"\n' > "$W/bin/logger"
 chmod +x "$W/bin"/*
 W=$W PYTHONDONTWRITEBYTECODE=1 "$PY" - <<'PYGM'
-import base64, getpass, json, os, shutil, subprocess, sys, time
+import base64, getpass, json, os, re, shutil, subprocess, sys, time
 import yaml
 sys.path.insert(0, "tests/ansible/unit")
 from templar import condition, render, trust_as_template  # noqa: E402
+from plays import load as yload, tasks as ytasks  # noqa: E402
 W = os.environ["W"]
 fails = 0
 def check(name, got, want):
@@ -329,7 +330,7 @@ check("the push proven through each Pi's own address at deploy (not only the VIP
 kept = by_name["A repository on the volume the mirror did not make, kept aside"]
 check("a repository the mirror did not make kept aside at deploy, through the VIP's holder, before the sync",
       (list(render(kept["ansible.builtin.command"]["argv"], **v))[-2:],
-       names.index(kept["name"]) < names.index("The mirror synced now")), (["sm@10.0.0.5", "keep-unmarked"], True))
+       names.index(kept["name"]) < names.index("The mirror run now")), (["sm@10.0.0.5", "keep-unmarked"], True))
 td = by_name["The node_exporter textfile directory"]["ansible.builtin.file"]
 mf = by_name["The mirror's metrics file, the mirror user's"]["ansible.builtin.file"]
 check("the textfile directory root's 0755 (as setup-host-hardening's); the metrics file the mirror user's 0644 - its "
@@ -346,22 +347,93 @@ unit_t = by_name["Create offsite backup systemd service"]
 script_t = by_name["Write offsite backup sync script"]
 timer_t = by_name["Enable and start offsite backup timer"]
 unit = R(unit_t["ansible.builtin.copy"]["content"])
+ud = dict(re.findall(r"^(\w+)=(.*)$", unit, re.M))
 check("the unit written before the script (a stop between them left the old unit, no User=, to run the new script as "
-      "root); as the mirror's user; a failed night tried again (45 min, 3 in 6 h)",
-      (names.index(unit_t["name"]) < names.index(script_t["name"]), "User=sm" in unit, "Restart=on-failure" in unit,
-       "RestartSec=45min" in unit, "StartLimitBurst=3" in unit, "StartLimitIntervalSec=6h" in unit), (True,) * 6)
+      "root); a oneshot as the mirror's user; no start limit (systemd counts every start - StartLimitBurst=3 in 6 h "
+      "refused the copy's 4th sync within the hour, 2026-11-15); a failed run retried, backing off",
+      (names.index(unit_t["name"]) < names.index(script_t["name"]),
+       {k: ud.get(k) for k in ("Type", "User", "StartLimitIntervalSec", "Restart", "RestartSec", "RestartSteps",
+                               "RestartMaxDelaySec")}),
+      (True, {"Type": "oneshot", "User": "sm", "StartLimitIntervalSec": "0", "Restart": "on-failure",
+              "RestartSec": "45min", "RestartSteps": "3", "RestartMaxDelaySec": "6h"}))
 check("the script root's 0755 (its user cannot rewrite it); the timer enabled and started",
       (script_t["ansible.builtin.copy"]["owner"], script_t["ansible.builtin.copy"]["group"], script_t["ansible.builtin.copy"]["mode"],
        timer_t["ansible.builtin.systemd"]["enabled"], timer_t["ansible.builtin.systemd"]["state"]), ("root", "root", "0755", True, "started"))
-now_t = by_name["The mirror synced now"]
+# the run now - tasks/offsite-mirror-run.yml, the deploy's once, the copy check's twice: a run going waited out (it
+# began before - the replaced script, the pushes before a VIP move: joined, its clean end passed for this run's), this
+# run's start, systemctl start
+RUN = "deploy/ansible/playbooks/tasks/offsite-mirror-run.yml"
+run_tasks = {t["name"]: t for t in ytasks(yload(RUN))}
+wait_t = run_tasks["A run already going waited out - it began before, its result none of this run's - then this run's start"]
+now_t = run_tasks["The mirror synced now"]
+inc_t = by_name["The mirror run now"]
 res_t = by_name["Its result is this run's, every repository of the organisation counted"]
-check("run at deploy with systemctl start (joins a run going - the module skipped it while activating), not in a "
-      "preview; its result this run's and every repository counted - else the play fails",
-      (now_t["ansible.builtin.command"]["argv"], condition(now_t["when"], git_mirror_enabled=True, offsite_backup_enabled=True,
-                                                           ansible_check_mode=True),
-       [condition(res_t["ansible.builtin.assert"]["that"], _git_mirror_started={"stdout": "1000"}, _ts=ts, _count=c,
-                  _git_mirror_reach_read={"stdout": "PUSHES NONE 20"}) for ts, c in (("1005", "20"), ("999", "20"), ("1005", "3"))]),
-      (["systemctl", "start", "offsite-backup.service"], False, [True, False, False]))
+check("the deploy runs it after the timer's daemon-reload, never in a preview; systemctl start (the module skipped the "
+      "start while the unit was activating); its result this run's (the start's epoch) and every repository counted - "
+      "else the play fails",
+      (inc_t["ansible.builtin.include_tasks"], names.index("Enable and start offsite backup timer") < names.index(inc_t["name"]),
+       condition(inc_t["when"], git_mirror_enabled=True, offsite_backup_enabled=True, ansible_check_mode=True),
+       condition(inc_t["when"], git_mirror_enabled=True, offsite_backup_enabled=True, ansible_check_mode=False),
+       now_t["ansible.builtin.command"]["argv"], wait_t["register"],
+       [condition(res_t["ansible.builtin.assert"]["that"], _mirror_started={"stdout": "1000 19700101T001640Z"}, _ts=ts,
+                  _count=c, _git_mirror_reach_read={"stdout": "PUSHES NONE 20"})
+        for ts, c in (("1005", "20"), ("999", "20"), ("1005", "3"))]),
+      ("tasks/offsite-mirror-run.yml", True, False, True, ["systemctl", "start", "offsite-backup.service"],
+       "_mirror_started", [True, False, False]))
+sbin = os.path.join(W, "systemctl-bin")
+os.makedirs(sbin, exist_ok=True)
+with open(os.path.join(sbin, "systemctl"), "w") as f:
+    f.write('#!/bin/bash\necho "$*" >> "$W/systemctl-calls"\n'
+            'case "$1" in show) echo "${SUBSTATE:-dead}" ;; start) exit "${START_RC:-0}" ;; esac\n')
+os.chmod(os.path.join(sbin, "systemctl"), 0o755)
+def wait_run(**e):
+    p = os.path.join(W, "systemctl-calls")
+    os.path.exists(p) and os.remove(p)
+    r = subprocess.run(["sh", "-c", wait_t["ansible.builtin.shell"]], capture_output=True, text=True,
+                       env=dict(os.environ, PATH=sbin + ":" + os.environ["PATH"], W=W, **e))
+    out = r.stdout.split()
+    stamp_ok = len(out) == 2 and out[0].isdigit() and re.fullmatch(r"\d{8}T\d{6}Z", out[1]) is not None
+    return r.returncode, open(p).read().splitlines() if os.path.exists(p) else [], stamp_ok, bool(r.stderr.strip())
+show, start = "show -P SubState offsite-backup.service", "start offsite-backup.service"
+check("a run going (start, start-pre, start-post) joined to wait for its end - its failure said, never this run's; "
+      "none going (dead, failed, a retry pending), nothing joined; then the start's epoch and stamp",
+      [wait_run(SUBSTATE=x) for x in ("start", "start-pre", "start-post")] + [wait_run(SUBSTATE="start", START_RC="1")]
+      + [wait_run(SUBSTATE=x) for x in ("dead", "failed", "auto-restart")],
+      [(0, [show, start], True, False)] * 3 + [(0, [show, start], True, True)] + [(0, [show], True, False)] * 3)
+# the copy check: production's run file, before each sync's checks; the unit read back as systemd loaded it (systemd
+# ignores a directive it does not know) - its expected values the play's own; the target's systemd probed
+cc = list(ytasks(yload("tests/ansible/copy/offsite-mirror-check.yml")))
+cc_by = {t.get("name"): t for t in cc}
+cc_names = [t.get("name") for t in cc]
+incs = [t.get("name") for t in cc if str(t.get("ansible.builtin.include_tasks", "")).endswith("/" + RUN)]
+check("the copy check runs production's run file twice - before the backup is read through the first Pi, again after "
+      "the VIP moved, before it is read through the other",
+      (incs, [cc_names.index(i) < cc_names.index(n) for i, n in zip(incs, (
+          "The backup holds what Forgejo has, through {{ first_pi }}", "The backup holds what Forgejo has, through {{ other_pi }}"))],
+       cc_names.index("The other Pi holds the VIP") < cc_names.index("A sync through the other Pi")),
+      (["A sync now", "A sync through the other Pi"], [True, True], True))
+loaded_t = cc_by["The unit as systemd loaded it - no start limit, a failed run retried, backing off"]
+def loaded_ok(**over):
+    shown = dict({"Restart": ud["Restart"], "RestartUSec": ud["RestartSec"], "RestartSteps": ud["RestartSteps"],
+                  "RestartMaxDelayUSec": ud["RestartMaxDelaySec"], "StartLimitIntervalUSec": ud["StartLimitIntervalSec"]},
+                 **over)
+    return condition(loaded_t["ansible.builtin.assert"]["that"], _unit_loaded={"status": shown})
+check("the copy check: the unit as systemd loaded it equals the play's - a limit back, a directive ignored, a value "
+      "the play changed alone, each refused",
+      [loaded_ok(), loaded_ok(StartLimitIntervalUSec="6h"), loaded_ok(RestartSteps="0"),
+       loaded_ok(RestartMaxDelayUSec="infinity"), loaded_ok(RestartUSec="30min"), loaded_ok(Restart="no")],
+      [True, False, False, False, False, False])
+probe_t = cc_by["Retries backing off; six starts while one was pending, each run at once and failed with its run, none refused"]
+def probe_ok(gaps=(1.2, 2.2, 4.3), starts=((1, 0.04),) * 6, ran=6):
+    out = json.dumps({"gaps": list(gaps), "starts": [list(x) for x in starts], "ran": ran})
+    return condition(probe_t["ansible.builtin.assert"]["that"], probe=trust_as_template(probe_t["vars"]["probe"]),
+                     _systemd_probe={"stdout": out})
+check("the copy check's systemd probe (measured on systemd 257: gaps 1.2 2.2 4.3, six starts each failing at once): "
+      "retries not backing off (RestartSteps ignored), a start that waited out the pending retry, a start that did not "
+      "run its unit (rc 0 or refused), fewer runs than starts - each refused",
+      [probe_ok(), probe_ok(gaps=(1.1, 1.1, 1.1)), probe_ok(gaps=(1.2, 2.2)), probe_ok(starts=((1, 0.05),) * 5 + ((1, 4.1),)),
+       probe_ok(starts=((0, 0.05),) + ((1, 0.05),) * 5), probe_ok(ran=3), probe_ok(starts=((1, 0.05),) * 5)],
+      [True, False, False, False, False, False, False])
 pw = [t.get("name") for t in tasks if "_git_mirror_password" in json.dumps({k: x for k, x in t.items() if k != "name"})
       and "ansible.builtin.set_fact" not in t and "block" not in t and not t.get("no_log")]
 check("every task carrying the reader's password is no_log", pw, [])
@@ -418,7 +490,7 @@ check("gate keep-unmarked: a repository it did not make kept aside under its nam
        os.path.exists(os.path.join(pi, "theirs.git")), gate_run("keep-unmarked")[1]),
       (0, True, True, False, ""))
 check("gate: each step bounded (timeout around git, mountpoint, receive-pack and the last-success write)",
-      ("timeout --kill-after=10 120 git" in gate, "timeout 60 mountpoint" in gate, "exec timeout --kill-after=30 1800 git-receive-pack" in gate,
+      ("timeout --kill-after=10 120 git" in gate, "timeout 60 mountpoint" in gate, "exec timeout --kill-after=30 " in gate and " git-receive-pack" in gate,
        "timeout 60 sh -c" in gate), (True, True, True, True))
 
 # ── the sync, for real ───────────────────────────────────────────────────
@@ -580,6 +652,28 @@ check("a fetch failing: named, its stale copy NOT pushed - nothing sent to the P
       else (1, True, True, []), (1, True, True, []))
 rc, out = run(FORCE_LIST="ops infra ghost")
 check("a listed repository that does not clone: named, the others done; failed", (rc, "ghost(clone)" in out), (1, True))
+# a push that timed out: the Pi's volume taken as hung - every push after it to the same volume would hang too, its
+# git-receive-pack stuck on the Pi; a timeout stub (PUSH_TIMES_OUT=<repo>: that push ends as a timed-out one, 124;
+# each push said; every other call the real timeout)
+with open(os.path.join(W, "bin", "timeout"), "w") as f:
+    f.write('#!/bin/bash\nif [[ " $* " == *" push "* ]]; then echo "${@: -2:1}" >> "$W/pushes"\n'
+            '  [[ -n "${PUSH_TIMES_OUT:-}" && " $* " == *"/$PUSH_TIMES_OUT.git "* ]] && exit 124\nfi\n'
+            f'exec {shutil.which("timeout")} "$@"\n')
+os.chmod(os.path.join(W, "bin", "timeout"), 0o755)
+def pushed(**e):
+    p = os.path.join(W, "pushes")
+    os.path.exists(p) and os.remove(p)
+    rc, out = run(FORCE_LIST="ops infra", **e)
+    return rc, out, [os.path.basename(x.strip()) for x in open(p)] if os.path.exists(p) else []
+rc, out, ps = pushed(PUSH_TIMES_OUT="ops")
+check("a push that timed out (the Pi's volume hung): no push after it - each would hang, its receive-pack stuck on the "
+      "Pi - every repository after it named; failed",
+      (rc, "ops(push timed out)" in out, "infra(not tried - ops's push timed out)" in out, ps), (1, True, True, ["ops.git"]))
+rc, out, ps = pushed(PUSH_TIMES_OUT="infra")
+check("  the last one's push timing out: the ones before pushed, nothing named as not tried; failed",
+      (rc, "infra(push timed out)" in out, "not tried" in out, ps), (1, True, False, ["ops.git", "infra.git"]))
+rc, out, ps = pushed()
+check("  no push timing out: every one pushed; 0", (rc, ps), (0, ["ops.git", "infra.git"]))
 rc, out = run(FORCE_LIST="ops bad$(name)")
 check("a name that is no plain name: named, never used; failed",
       (rc, "(its name)" in out, "bad$(name)" in (open(os.path.join(W, "ssh-calls")).read() if os.path.exists(os.path.join(W, "ssh-calls")) else "")),
@@ -633,7 +727,13 @@ check("its fetch and clone: no redirect followed, a stalled transfer ended after
       "prepared first)", ("http.followRedirects=false" in body, "http.lowSpeedTime=600" in body), (True, True))
 check("its push: every ref forced, none deleted (no --mirror), bounded",
       ("push --force --porcelain" in body and "'refs/*:refs/*'" in body and "push -q --mirror" not in body,
-       "timeout --kill-after=30 1800 git -C" in body), (True, True))
+       "timeout --kill-after=30 " in body and " git -C \"$d\" push" in body), (True, True))
+bound = lambda pat, text: int(re.search(pat, text).group(1))  # noqa: E731
+push_s, gate_s = bound(r"timeout --kill-after=30 (\d+) git -C", body), bound(r"exec timeout --kill-after=30 (\d+) git-receive-pack", gate)
+run_s = int(ud["TimeoutStartSec"])
+check("a stalled push ends long before the run's own bound (the others still go - equal, the first stall ended the "
+      "run); the Pi's receive-pack bounded as ten's push; a first push of the largest repository (radar, 234 MB) inside it",
+      (push_s * 6 <= run_s, gate_s == push_s, push_s >= 300), (True, True, True))
 print("git-mirror: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 PYGM

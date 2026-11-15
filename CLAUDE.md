@@ -134,7 +134,7 @@ task deploy:argocd       # Install/update Argo CD (GitOps controller)
 task deploy:nexus        # Deploy Nexus repository manager on Pi
 task deploy:pi-services  # Forgejo, Keycloak, versitygw, HAProxy on Pis
 task deploy:woodpecker   # Deploy Woodpecker CI
-task deploy:velero       # Deploy Velero + Backup MinIO
+task deploy:velero       # The offsite git mirror on ten (Velero itself is Argo CD's: skipped)
 task deploy:full         # Fresh kubeadm + pi-services + argocd + app
 task deploy:status    # Check pods
 
@@ -538,7 +538,7 @@ task deploy:argocd       # Install/update Argo CD (GitOps controller)
 task deploy:full         # Fresh kubeadm + pi-services + argocd + app
 task deploy:pi-services  # Forgejo, Keycloak, versitygw, HAProxy on Pis
 task deploy:woodpecker   # Deploy Woodpecker CI
-task deploy:velero       # Deploy Velero + backups
+task deploy:velero       # The offsite git mirror on ten (Velero itself is Argo CD's: skipped)
 task deploy:status       # Check status
 task deploy:undeploy  # Remove (keeps data)
 ```
@@ -818,6 +818,12 @@ backup volume; replaced MinIO 2026-06-27, Plans 074/076).
 - **Vault: no snapshot job exists** (read 2026-10-05). Vault keeps its data in Consul on the Pis, and nothing takes a
   Consul snapshot; the Pis' nightly `vault-backup` cron tars `/var/lib/vault`, which holds no secrets. Plan 101
   (docs/plans/101-pi-upgrade.md) adds the Consul snapshot.
+- **Git repositories:** the offsite git mirror on ten (`offsite-backup.timer`, 04:00; `task deploy:velero`) pushes every
+  repository of the Forgejo organisation to the Pis' `backup-git-mirror` volume (`/mnt/backups/git-mirror`) - every ref,
+  none deleted, replaced commits kept in the reflog; read by a non-admin reader (`git-mirror`), pushed through the
+  Pis' `git-mirror-gate`. A failed run retries by itself (45 min, backing off to 6 h; no start limit). Run it now:
+  `ssh ten sudo systemctl start offsite-backup.service`. Watched by OffsiteGitMirrorMissing/-Shrank; proven on the
+  Vagrant copy by `tests/ansible/copy/offsite-mirror-check.yml`
 - **Key files:** `deploy/ansible/playbooks/setup-velero.yml` (ops repo), Helm templates in platform repo
 
 The previous setup ran a local MinIO instance on ten's SATA SSD at
@@ -843,12 +849,11 @@ ssh ten 'sudo kubectl exec deploy/velero -n velero -- velero backup get --kubeco
 ssh ten 'sudo kubectl exec deploy/velero -n velero -- velero restore create --from-backup <backup-name> --kubeconfig /etc/kubernetes/admin.conf'
 ```
 
-**Pi MinIO outage:**
-The two-Pi distributed mode tolerates single-drive or single-Pi failure
-(erasure coding stripe is 4-drive 2-parity). If both Pis are lost, the
-Velero BSL goes Unavailable until MinIO is restored — there's currently
-no offsite copy beyond Pi MinIO itself. Plan 061 sub-plan C (restore
-verification) is the open follow-up here.
+**Pi backup store outage:**
+versitygw runs on both Pis over the replicated Gluster backup volume behind the keepalived VIP: one Pi lost, the
+other serves. If both Pis are lost, the Velero BSL goes Unavailable and every backup with it - there is no copy
+outside the Pis (the offsite git mirror's copy of the code is on the same pair, in the same house). Restores are
+proven by the Pi restore check (`setup-pi-restore-check.yml`).
 
 **Vault (both Pis lost):**
 Pi Vault uses Consul as its storage backend — data lives in Consul KV, not

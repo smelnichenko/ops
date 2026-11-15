@@ -2,7 +2,9 @@
 # The offsite git mirror on the Vagrant copy (task test:copy:check runs it; test:copy:argo installs it with production's
 # own playbook, setup-velero.yml, as deploy:velero does on ten). Its daily job had failed unnoticed for months in
 # production - this proves, each run:
-#   1. a sync now (systemctl start, as its timer starts it) ends clean; its result this run's
+#   1. the unit as systemd loaded it (systemd ignores a directive it does not know): no start limit, its retries
+#      backing off; the target's systemd as the unit relies on it (a transient unit); a sync now - production's own
+#      tasks/offsite-mirror-run.yml (a run going waited out, systemctl start) - ends clean; its result this run's
 #   2. the backup holds what the copy's Forgejo has - every repository (a private fixture among them: the reader's team
 #      grant, which the copy's public repositories alone never needed), every branch and tag at its commit, HEAD the
 #      default branch - and restores: a plain clone of each checks that branch's commit out, its objects whole
@@ -62,7 +64,7 @@
 
     # a check run cut short before (Ctrl-C, the host guard) can have left keepalived stopped on a Pi: stopping the
     # other's would leave no Pi holding the VIP - refused before anything moves
-    - name: Keepalived runs on every Pi before anything moves
+    - name: Keepalived runs on every Pi before anything moves  # noqa: command-instead-of-module - read, the module would start it
       ansible.builtin.command: systemctl is-active keepalived
       delegate_to: "{{ item }}"
       loop: "{{ groups['pis'] }}"
@@ -99,7 +101,7 @@
         executable: /bin/bash
         stdin: &fixture_creds "{{ forgejo_admin_user }}\n{{ forgejo_admin_password }}"
       no_log: true  # its stdin, the admin's password
-      environment: &fixture_env
+      environment:
         BASE: "{{ base }}"
         ORG: "{{ org }}"
         FIXTURE: "{{ fixture }}"
@@ -107,16 +109,80 @@
       register: _fixture_seeded
       changed_when: true
 
-    - name: This run's start (a result older than it is no result of this run's - with 60 s for the Pis' clocks)
-      ansible.builtin.command: date -u +'%s %Y%m%dT%H%M%SZ'
-      register: _started
+    # ── 1. the unit as systemd loaded it, its systemd, a sync now ────────
+    # systemd ignores a directive it does not know (a warning in its journal, nothing else): what it loaded, read back
+    - name: The mirror's unit as systemd loaded it
+      ansible.builtin.systemd_service:
+        name: offsite-backup.service
+      register: _unit_loaded
+
+    - name: The unit as systemd loaded it - no start limit, a failed run retried, backing off
+      ansible.builtin.assert:
+        that:
+          - _unit_loaded.status.StartLimitIntervalUSec == '0'
+          - _unit_loaded.status.Restart == 'on-failure'
+          - _unit_loaded.status.RestartUSec == '45min'
+          - _unit_loaded.status.RestartSteps == '3'
+          - _unit_loaded.status.RestartMaxDelayUSec == '6h'
+        fail_msg: >-
+          offsite-backup.service as systemd loaded it:
+          {{ _unit_loaded.status | dict2items | selectattr('key', 'match', '^(Restart|StartLimit)') | items2dict }}
+        quiet: true
+
+    # what the unit relies on, on the target's own systemd (an OS upgrade can change it; a stub cannot show it): a
+    # transient unit failing, the unit's directives in seconds - RestartSec=1 backing off to 4 in 2 steps (retries 1,
+    # 2, 4 s apart), no start limit; then six starts while a retry is pending, each run at once, none refused
+    - name: The target's systemd - a failed run's retries backing off, starts while one is pending run at once
+      ansible.builtin.command:
+        cmd: python3 -I -
+        stdin: |
+          import json, os, shutil, subprocess, tempfile, time
+          u = f"offsite-mirror-probe-{int(time.time())}.service"
+          d = tempfile.mkdtemp(dir="/var/tmp", prefix="offsite-mirror-probe.")
+          runs = os.path.join(d, "runs")
+          count = lambda: sum(1 for _ in open(runs)) if os.path.exists(runs) else 0
+          try:
+              subprocess.run(["systemd-run", "--quiet", "--no-block", f"--unit={u}", "-p", "Type=oneshot", "-p", "Restart=on-failure",
+                              "-p", "RestartSec=1", "-p", "RestartSteps=2", "-p", "RestartMaxDelaySec=4",
+                              "-p", "StartLimitIntervalSec=0", "/bin/sh", "-c", f"date +%s.%N >> {runs}; exit 1"],
+                             capture_output=True, text=True, check=True)
+              deadline = time.monotonic() + 20
+              while count() < 4 and time.monotonic() < deadline:
+                  time.sleep(0.1)
+              t = [float(x) for x in open(runs)][:4]
+              before, starts = count(), []
+              for _ in range(6):
+                  s = time.monotonic()
+                  rc = subprocess.run(["systemctl", "start", u], capture_output=True).returncode
+                  starts.append([rc, round(time.monotonic() - s, 2)])
+              print(json.dumps({"gaps": [round(b - a, 1) for a, b in zip(t, t[1:])], "starts": starts,
+                                "ran": count() - before}))
+          finally:
+              subprocess.run(["systemctl", "stop", u], capture_output=True)
+              subprocess.run(["systemctl", "reset-failed", u], capture_output=True)
+              shutil.rmtree(d, ignore_errors=True)
+      register: _systemd_probe
       changed_when: false
 
-    # ── 1. a sync now ────────────────────────────────────────────────────
-    # systemctl start waits for a oneshot's end, joins a run already going, fails with it
-    - name: A sync now - as its timer starts it
-      ansible.builtin.command: systemctl start offsite-backup.service
-      changed_when: true
+    - name: Retries backing off; six starts while one was pending, each run at once and failed with its run, none refused
+      vars:
+        probe: "{{ _systemd_probe.stdout | from_json }}"
+      ansible.builtin.assert:
+        that:
+          - probe.gaps | length == 3
+          - probe.gaps[0] >= 0.7 and probe.gaps[0] <= 2
+          - probe.gaps[1] >= 1.7 and probe.gaps[1] <= 3
+          - probe.gaps[2] >= 3.7 and probe.gaps[2] <= 5.5
+          - probe.starts | length == 6
+          - probe.starts | map('first') | select('equalto', 0) | list | length == 0
+          - probe.starts | map('last') | select('ge', 2) | list | length == 0
+          - probe.ran >= 6
+        fail_msg: "the target's systemd: {{ probe }} - want retries 1, 2, 4 s apart, six starts each failing at once (< 2 s), six runs"
+        quiet: true
+
+    # production's own run (deploy:velero's): a run going waited out, this run's start, systemctl start
+    - name: A sync now
+      ansible.builtin.include_tasks: ../../../deploy/ansible/playbooks/tasks/offsite-mirror-run.yml
 
     # ── 2. the backup holds what Forgejo has, and restores ───────────────
     - name: The backup holds what Forgejo has, through {{ first_pi }}
@@ -131,12 +197,12 @@
     - name: The first sync's last-success is this run's
       vars:
         last: "{{ (_backup_side.stdout | from_json).last_success }}"
-        floor: "{{ '%Y%m%dT%H%M%SZ' | strftime((_started.stdout.split()[0] | int) - 60, utc=true) }}"
+        floor: "{{ '%Y%m%dT%H%M%SZ' | strftime((_mirror_started.stdout.split()[0] | int) - 60, utc=true) }}"
       ansible.builtin.assert:
         that:
           - last is match('^\d{8}T\d{6}Z$')
           - last >= floor
-        fail_msg: "last-success on the volume is '{{ last }}' - not this run's (it started {{ _started.stdout.split()[1] }})"
+        fail_msg: "last-success on the volume is '{{ last }}' - not this run's (it started {{ _mirror_started.stdout.split()[1] }})"
         quiet: true
 
     # ── 3. Forgejo deletes and rewrites, the VIP moves - the backup keeps what it held ──
@@ -147,14 +213,16 @@
         stdin: *fixture_creds
       no_log: true  # its stdin, the admin's password
       environment:
-        <<: *fixture_env
+        BASE: "{{ base }}"
+        ORG: "{{ org }}"
+        FIXTURE: "{{ fixture }}"
         STEP: change
       register: _fixture_changed
       changed_when: true
 
     - name: The VIP moved to the other Pi, a sync through it, the backup keeping what it held - keepalived back however it ends
       block:
-        - name: Keepalived stopped on {{ first_pi }} - the VIP goes to {{ other_pi }}
+        - name: Keepalived stopped on the first Pi - the VIP goes to the other, {{ other_pi }}
           ansible.builtin.systemd:
             name: keepalived
             state: stopped
@@ -178,21 +246,16 @@
           retries: 30
           delay: 2
 
-        - name: This sync's start
-          ansible.builtin.command: date -u +'%s %Y%m%dT%H%M%SZ'
-          register: _started_2
-          changed_when: false
-
-        - name: A sync through {{ other_pi }}
-          ansible.builtin.command: systemctl start offsite-backup.service
-          changed_when: true
+        # a run going waited out - it began before the VIP moved, its pushes through the first Pi
+        - name: A sync through the other Pi
+          ansible.builtin.include_tasks: ../../../deploy/ansible/playbooks/tasks/offsite-mirror-run.yml
 
         - name: The backup holds what Forgejo has, through {{ other_pi }}
           ansible.builtin.include_tasks: tasks/offsite-mirror-equal.yml
           vars:
             mirror_pi: "{{ other_pi }}"
 
-        - name: The replaced main's reflog on the backup
+        - name: The replaced main's reflog on the backup  # noqa: command-instead-of-module - the git module clones, never reads a reflog
           ansible.builtin.command: git -c safe.directory=* -C {{ pidir }}/{{ fixture }}.git reflog show --format=%H refs/heads/main
           delegate_to: "{{ other_pi }}"
           register: _fixture_reflog
@@ -200,18 +263,18 @@
 
         - name: The backup kept what Forgejo deleted and rewrote - the doomed branch at its commit, main the new one, the replaced commit in its reflog
           vars:
-            now: "{{ ((_backup_side.stdout | from_json).repos[fixture]).refs }}"
+            kept: "{{ ((_backup_side.stdout | from_json).repos[fixture]).refs }}"
             forgejo_main: "{{ (_forgejo_side.stdout | from_json)[fixture].refs['refs/heads/main'] }}"
           ansible.builtin.assert:
             that:
               - "'refs/heads/doomed' not in (_forgejo_side.stdout | from_json)[fixture].refs"
-              - now['refs/heads/doomed'] | default('gone') == _fixture_before['refs/heads/doomed']
-              - now['refs/heads/main'] == forgejo_main
+              - kept['refs/heads/doomed'] | default('gone') == _fixture_before['refs/heads/doomed']
+              - kept['refs/heads/main'] == forgejo_main
               - forgejo_main != _fixture_before['refs/heads/main']
               - _fixture_before['refs/heads/main'] in _fixture_reflog.stdout_lines
             fail_msg: >-
-              the fixture's backup: doomed {{ now['refs/heads/doomed'] | default('gone') }} (it was
-              {{ _fixture_before['refs/heads/doomed'] }}), main {{ now['refs/heads/main'] }} (Forgejo's {{ forgejo_main }},
+              the fixture's backup: doomed {{ kept['refs/heads/doomed'] | default('gone') }} (it was
+              {{ _fixture_before['refs/heads/doomed'] }}), main {{ kept['refs/heads/main'] }} (Forgejo's {{ forgejo_main }},
               before {{ _fixture_before['refs/heads/main'] }}), the replaced commit in its reflog
               {{ _fixture_before['refs/heads/main'] in _fixture_reflog.stdout_lines }}
             quiet: true
@@ -219,12 +282,12 @@
         - name: Its last-success is this sync's
           vars:
             last: "{{ (_backup_side.stdout | from_json).last_success }}"
-            floor: "{{ '%Y%m%dT%H%M%SZ' | strftime((_started_2.stdout.split()[0] | int) - 60, utc=true) }}"
+            floor: "{{ '%Y%m%dT%H%M%SZ' | strftime((_mirror_started.stdout.split()[0] | int) - 60, utc=true) }}"
           ansible.builtin.assert:
             that:
               - last is match('^\d{8}T\d{6}Z$')
               - last >= floor
-            fail_msg: "last-success on the volume is '{{ last }}' - not this sync's (it started {{ _started_2.stdout.split()[1] }})"
+            fail_msg: "last-success on the volume is '{{ last }}' - not this sync's (it started {{ _mirror_started.stdout.split()[1] }})"
             quiet: true
       always:
         - name: Keepalived started again on every Pi
@@ -235,7 +298,7 @@
           loop: "{{ groups['pis'] }}"
 
     # keepalived's own hand-over settles (nopreempt: the VIP stays where it went; the restarted Pi comes up backup)
-    - name: Keepalived runs on every Pi again
+    - name: Keepalived runs on every Pi again  # noqa: command-instead-of-module - read, the module would start it
       ansible.builtin.command: systemctl is-active keepalived
       delegate_to: "{{ item }}"
       loop: "{{ groups['pis'] }}"
@@ -258,7 +321,7 @@
       ansible.builtin.include_tasks: ../../../deploy/ansible/playbooks/tasks/pi-vip-holder.yml
 
     # ── 4. watched ───────────────────────────────────────────────────────
-    - name: node_exporter serves the sync's result
+    - name: The node_exporter on ten serves the sync's result
       ansible.builtin.uri:
         url: "{{ metrics_url }}"
         return_content: true
@@ -272,11 +335,11 @@
         count: "{{ lines | select('match', '^offsite_git_mirror_repositories ') | map('split') | map('last') | first | default('-1') }}"
       ansible.builtin.assert:
         that:
-          - ts | float | int >= (_started_2.stdout.split()[0] | int) - 60
+          - ts | float | int >= (_mirror_started.stdout.split()[0] | int) - 60
           - count | float | int == (_forgejo_side.stdout | from_json) | length
         fail_msg: >-
           node_exporter serves offsite_git_mirror_last_success_timestamp_seconds {{ ts }} (this sync started
-          {{ _started_2.stdout.split()[0] }}) and offsite_git_mirror_repositories {{ count }} (Forgejo has
+          {{ _mirror_started.stdout.split()[0] }}) and offsite_git_mirror_repositories {{ count }} (Forgejo has
           {{ (_forgejo_side.stdout | from_json) | length }})
         quiet: true
 
@@ -294,7 +357,7 @@
           # files, not the environment: every alert rule's JSON is over the 128 KiB one variable may hold
           kubectl --kubeconfig {{ kubeconfig }} get --raw "$P/rules?type=alert" > "$t/rules"
           kubectl --kubeconfig {{ kubeconfig }} get --raw "$P/query?query=offsite_git_mirror_last_success_timestamp_seconds" > "$t/series"
-          python3 -I - "$t/rules" "$t/series" "{{ _started_2.stdout.split()[0] }}" <<'PY'
+          python3 -I - "$t/rules" "$t/series" "{{ _mirror_started.stdout.split()[0] }}" <<'PY'
           import datetime, json, re, sys
           rules = json.load(open(sys.argv[1]))["data"]["groups"]
           found = [r for g in rules for r in g["rules"] if r.get("name") == "OffsiteGitMirrorMissing"]

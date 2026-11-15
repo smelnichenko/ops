@@ -1265,7 +1265,7 @@ tasks:
     dir: deploy/ansible
     deps: [deploy:install]
     cmds:
-      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-host-hardening.yml
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-host-hardening.yml {{.CLI_ARGS}}
 
   deploy:seed-secrets:
     # The playbook reads every env-sourced value with lookup('env') from the
