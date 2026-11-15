@@ -2,21 +2,23 @@
 # The offsite git mirror on the Vagrant copy (task test:copy:check runs it; test:copy:argo installs it with production's
 # own playbook, setup-velero.yml, as deploy:velero does on ten). Its daily job had failed unnoticed for months in
 # production - this proves, each run:
-#   1. a sync now (offsite-backup.service, as its timer starts it) ends clean
-#   2. the backup equals the copy's Forgejo: every repository of the organisation, each with Forgejo's branches and tags
-#      at the same commits, its HEAD Forgejo's default branch - and it restores: a plain clone of each checks that
-#      branch's commit out, its objects whole (tasks/offsite-mirror-equal.yml)
-#   3. it survives the VIP moving to the other Pi (ten's key was authorized on pi1 alone - with the VIP on pi2 every
-#      push was refused): keepalived stopped on the holder, the other takes the VIP, a sync again clean, the backup equal
-#      again through it - keepalived started again however the play ends
+#   1. a sync now (systemctl start, as its timer starts it) ends clean; its result this run's
+#   2. the backup holds what the copy's Forgejo has - every repository (a private fixture among them: the reader's team
+#      grant, which the copy's public repositories alone never needed), every branch and tag at its commit, HEAD the
+#      default branch - and restores: a plain clone of each checks that branch's commit out, its objects whole
+#      (tasks/offsite-mirror-equal.yml; Forgejo read with the copy's admin credentials, never the mirror's own reading)
+#   3. it KEEPS what it held: Forgejo deletes the fixture's branch and force-pushes its main, the VIP moves to the other
+#      Pi (the mirror's key on both - it was on pi1 alone), a sync through it: the deleted branch still in the backup
+#      at its commit, main the new one, the replaced commit in its reflog; keepalived on every Pi again however the
+#      play ends, one Pi holding the VIP, Forgejo answering
 #   4. it is watched: last-success on the volume is this run's, node_exporter serves its time and count, and Prometheus
-#      holds the OffsiteGitMirrorMissing rule with the series it reads and the alert not firing
+#      evaluates the OffsiteGitMirrorMissing rule (healthy, after this sync) with its series and the alert not firing
 #
 # Usage: ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/offsite-mirror-check.yml
 - name: Vagrant VMs only
   ansible.builtin.import_playbook: ../vagrant-only-play.yml
 
-- name: The offsite git mirror backs every repository up, restores, survives a VIP move, and is watched
+- name: The offsite git mirror backs every repository up, keeps what it held, restores, survives a VIP move, and is watched
   hosts: target
   become: true
   gather_facts: false
@@ -24,14 +26,49 @@
     mirror_user: "{{ offsite_backup_user | default('sm') }}"
     pidir: /mnt/backups/git-mirror
     org: schnappy
+    fixture: mirror-fixture
     base: "{{ (forgejo_root_url | default('https://git.pmon.dev/')) | regex_replace('/+$', '') }}"
-    token_file: /var/lib/git-mirror/token
     kubeconfig: /etc/kubernetes/admin.conf
     proxy: /api/v1/namespaces/schnappy-infra/services
     metrics_url: "http://{{ node_ip_override | default(ansible_host) }}:9100/metrics"
+    # the fixture's history written from here, with the copy's admin credentials - read from stdin, handed to git in its
+    # environment (never an argv, never a task's environment: under become, sudo's argv)
+    _fixture_git: |
+      set -euo pipefail
+      IFS= read -r ADMIN; IFS= read -r ADMIN_PW
+      w=$(mktemp -d /var/tmp/mirror-fixture.XXXXXX)
+      trap 'rm -rf "$w"' EXIT
+      export GIT_TERMINAL_PROMPT=0 GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_COUNT=3
+      export GIT_CONFIG_KEY_0=http.extraHeader GIT_CONFIG_VALUE_0="Authorization: Basic $(printf '%s:%s' "$ADMIN" "$ADMIN_PW" | base64 -w0)"
+      export GIT_CONFIG_KEY_1=user.name GIT_CONFIG_VALUE_1=offsite-mirror-check GIT_CONFIG_KEY_2=user.email GIT_CONFIG_VALUE_2=check@copy
+      u="$BASE/$ORG/$FIXTURE.git"
+      git clone -q "$u" "$w/r"
+      cd "$w/r"
+      # a fixture just made is empty: main unborn; else main where Forgejo has it
+      if git rev-parse -q --verify origin/main > /dev/null; then git checkout -q -B main origin/main
+      else git symbolic-ref HEAD refs/heads/main; fi
+      case "$STEP" in
+        seed)  git commit -q --allow-empty -m "fixture $(date -u +%s%N)"
+               git push -q --force origin main
+               git push -q --force origin main:refs/heads/doomed ;;
+        change) git commit -q --amend --allow-empty -m "rewritten $(date -u +%s%N)"
+               git push -q --force origin main
+               git push -q origin :refs/heads/doomed ;;
+      esac
+      git ls-remote --heads origin | awk '{print $2, $1}'
   tasks:
     - name: Vagrant VMs only (fails closed on any other host)
       ansible.builtin.import_tasks: ../vagrant-only.yml
+
+    # a check run cut short before (Ctrl-C, the host guard) can have left keepalived stopped on a Pi: stopping the
+    # other's would leave no Pi holding the VIP - refused before anything moves
+    - name: Keepalived runs on every Pi before anything moves
+      ansible.builtin.command: systemctl is-active keepalived
+      delegate_to: "{{ item }}"
+      loop: "{{ groups['pis'] }}"
+      register: _ka_before
+      changed_when: false
+      failed_when: _ka_before.stdout != 'active'
 
     - name: The VIP's holder now
       ansible.builtin.include_tasks: ../../../deploy/ansible/playbooks/tasks/pi-vip-holder.yml
@@ -41,31 +78,81 @@
         first_pi: "{{ pi_vip_holder }}"
         other_pi: "{{ groups['pis'] | reject('equalto', pi_vip_holder) | first }}"
 
-    - name: This run's start (a result older than it is no result of this run's)
-      ansible.builtin.command: date -u +%s
+    # ── the fixture: a private repository with a branch to lose ──────────
+    - name: The fixture repository, private, in the copy's organisation (made where none)
+      ansible.builtin.uri:
+        follow_redirects: none
+        url: "{{ base }}/api/v1/orgs/{{ org }}/repos"
+        method: POST
+        url_username: "{{ forgejo_admin_user }}"
+        url_password: "{{ forgejo_admin_password }}"
+        force_basic_auth: true
+        body_format: json
+        body: {name: "{{ fixture }}", private: true, default_branch: main}
+        status_code: [201, 409]  # there already: kept
+      register: _fixture_made
+      changed_when: _fixture_made.status == 201
+
+    - name: The fixture's main and its doomed branch, a new commit each run
+      ansible.builtin.shell:
+        cmd: "{{ _fixture_git }}"
+        executable: /bin/bash
+        stdin: &fixture_creds "{{ forgejo_admin_user }}\n{{ forgejo_admin_password }}"
+      no_log: true  # its stdin, the admin's password
+      environment: &fixture_env
+        BASE: "{{ base }}"
+        ORG: "{{ org }}"
+        FIXTURE: "{{ fixture }}"
+        STEP: seed
+      register: _fixture_seeded
+      changed_when: true
+
+    - name: This run's start (a result older than it is no result of this run's - with 60 s for the Pis' clocks)
+      ansible.builtin.command: date -u +'%s %Y%m%dT%H%M%SZ'
       register: _started
       changed_when: false
 
     # ── 1. a sync now ────────────────────────────────────────────────────
-    - name: A sync now - as its timer starts it (a oneshot - started is ended)
-      ansible.builtin.systemd:
-        name: offsite-backup.service
-        state: started
+    # systemctl start waits for a oneshot's end, joins a run already going, fails with it
+    - name: A sync now - as its timer starts it
+      ansible.builtin.command: systemctl start offsite-backup.service
+      changed_when: true
 
-    - name: It ended clean
-      ansible.builtin.command: systemctl show -p Result --value offsite-backup.service
-      register: _result_1
-      changed_when: false
-      failed_when: _result_1.stdout != 'success'
-
-    # ── 2. the backup equals Forgejo, and restores ───────────────────────
-    - name: The backup equals Forgejo through {{ first_pi }}
+    # ── 2. the backup holds what Forgejo has, and restores ───────────────
+    - name: The backup holds what Forgejo has, through {{ first_pi }}
       ansible.builtin.include_tasks: tasks/offsite-mirror-equal.yml
       vars:
         mirror_pi: "{{ first_pi }}"
 
-    # ── 3. the VIP moved ─────────────────────────────────────────────────
-    - name: The VIP moved to the other Pi, a sync through it, the backup equal again - keepalived back however it ends
+    - name: The fixture's backup before Forgejo changes it
+      ansible.builtin.set_fact:
+        _fixture_before: "{{ ((_backup_side.stdout | from_json).repos[fixture]).refs }}"
+
+    - name: The first sync's last-success is this run's
+      vars:
+        last: "{{ (_backup_side.stdout | from_json).last_success }}"
+        floor: "{{ '%Y%m%dT%H%M%SZ' | strftime((_started.stdout.split()[0] | int) - 60, utc=true) }}"
+      ansible.builtin.assert:
+        that:
+          - last is match('^\d{8}T\d{6}Z$')
+          - last >= floor
+        fail_msg: "last-success on the volume is '{{ last }}' - not this run's (it started {{ _started.stdout.split()[1] }})"
+        quiet: true
+
+    # ── 3. Forgejo deletes and rewrites, the VIP moves - the backup keeps what it held ──
+    - name: Forgejo deletes the fixture's doomed branch and force-pushes its main
+      ansible.builtin.shell:
+        cmd: "{{ _fixture_git }}"
+        executable: /bin/bash
+        stdin: *fixture_creds
+      no_log: true  # its stdin, the admin's password
+      environment:
+        <<: *fixture_env
+        STEP: change
+      register: _fixture_changed
+      changed_when: true
+
+    - name: The VIP moved to the other Pi, a sync through it, the backup keeping what it held - keepalived back however it ends
       block:
         - name: Keepalived stopped on {{ first_pi }} - the VIP goes to {{ other_pi }}
           ansible.builtin.systemd:
@@ -91,44 +178,83 @@
           retries: 30
           delay: 2
 
-        - name: This sync's start - in seconds and as last-success writes it (UTC, compared as text)
+        - name: This sync's start
           ansible.builtin.command: date -u +'%s %Y%m%dT%H%M%SZ'
           register: _started_2
           changed_when: false
 
         - name: A sync through {{ other_pi }}
-          ansible.builtin.systemd:
-            name: offsite-backup.service
-            state: started
+          ansible.builtin.command: systemctl start offsite-backup.service
+          changed_when: true
 
-        - name: It ended clean too
-          ansible.builtin.command: systemctl show -p Result --value offsite-backup.service
-          register: _result_2
-          changed_when: false
-          failed_when: _result_2.stdout != 'success'
-
-        - name: The backup equals Forgejo through {{ other_pi }}
+        - name: The backup holds what Forgejo has, through {{ other_pi }}
           ansible.builtin.include_tasks: tasks/offsite-mirror-equal.yml
           vars:
             mirror_pi: "{{ other_pi }}"
 
+        - name: The replaced main's reflog on the backup
+          ansible.builtin.command: git -c safe.directory=* -C {{ pidir }}/{{ fixture }}.git reflog show --format=%H refs/heads/main
+          delegate_to: "{{ other_pi }}"
+          register: _fixture_reflog
+          changed_when: false
+
+        - name: The backup kept what Forgejo deleted and rewrote - the doomed branch at its commit, main the new one, the replaced commit in its reflog
+          vars:
+            now: "{{ ((_backup_side.stdout | from_json).repos[fixture]).refs }}"
+            forgejo_main: "{{ (_forgejo_side.stdout | from_json)[fixture].refs['refs/heads/main'] }}"
+          ansible.builtin.assert:
+            that:
+              - "'refs/heads/doomed' not in (_forgejo_side.stdout | from_json)[fixture].refs"
+              - now['refs/heads/doomed'] | default('gone') == _fixture_before['refs/heads/doomed']
+              - now['refs/heads/main'] == forgejo_main
+              - forgejo_main != _fixture_before['refs/heads/main']
+              - _fixture_before['refs/heads/main'] in _fixture_reflog.stdout_lines
+            fail_msg: >-
+              the fixture's backup: doomed {{ now['refs/heads/doomed'] | default('gone') }} (it was
+              {{ _fixture_before['refs/heads/doomed'] }}), main {{ now['refs/heads/main'] }} (Forgejo's {{ forgejo_main }},
+              before {{ _fixture_before['refs/heads/main'] }}), the replaced commit in its reflog
+              {{ _fixture_before['refs/heads/main'] in _fixture_reflog.stdout_lines }}
+            quiet: true
+
         - name: Its last-success is this sync's
           vars:
             last: "{{ (_backup_side.stdout | from_json).last_success }}"
+            floor: "{{ '%Y%m%dT%H%M%SZ' | strftime((_started_2.stdout.split()[0] | int) - 60, utc=true) }}"
           ansible.builtin.assert:
             that:
               - last is match('^\d{8}T\d{6}Z$')
-              - last >= _started_2.stdout.split()[1]
+              - last >= floor
             fail_msg: "last-success on the volume is '{{ last }}' - not this sync's (it started {{ _started_2.stdout.split()[1] }})"
             quiet: true
       always:
-        - name: Keepalived started again on {{ first_pi }}
+        - name: Keepalived started again on every Pi
           ansible.builtin.systemd:
             name: keepalived
             state: started
-          delegate_to: "{{ first_pi }}"
+          delegate_to: "{{ item }}"
+          loop: "{{ groups['pis'] }}"
 
-    - name: One Pi holds the VIP again
+    # keepalived's own hand-over settles (nopreempt: the VIP stays where it went; the restarted Pi comes up backup)
+    - name: Keepalived runs on every Pi again
+      ansible.builtin.command: systemctl is-active keepalived
+      delegate_to: "{{ item }}"
+      loop: "{{ groups['pis'] }}"
+      register: _ka_after
+      changed_when: false
+      until: _ka_after.stdout == 'active'
+      retries: 15
+      delay: 2
+
+    - name: Forgejo answers at the VIP
+      ansible.builtin.uri:
+        url: "{{ base }}/api/healthz"
+        status_code: 200
+      register: _healthz_after
+      until: _healthz_after.status == 200
+      retries: 30
+      delay: 2
+
+    - name: One Pi holds the VIP
       ansible.builtin.include_tasks: ../../../deploy/ansible/playbooks/tasks/pi-vip-holder.yml
 
     # ── 4. watched ───────────────────────────────────────────────────────
@@ -139,14 +265,14 @@
       register: _metrics
       check_mode: false
 
-    - name: Its time is this run's, its count every repository
+    - name: Its time is this sync's, its count every repository
       vars:
         lines: "{{ _metrics.content.splitlines() | reject('match', '^#') | list }}"
         ts: "{{ lines | select('match', '^offsite_git_mirror_last_success_timestamp_seconds ') | map('split') | map('last') | first | default('0') }}"
         count: "{{ lines | select('match', '^offsite_git_mirror_repositories ') | map('split') | map('last') | first | default('-1') }}"
       ansible.builtin.assert:
         that:
-          - ts | float | int >= _started_2.stdout.split()[0] | int
+          - ts | float | int >= (_started_2.stdout.split()[0] | int) - 60
           - count | float | int == (_forgejo_side.stdout | from_json) | length
         fail_msg: >-
           node_exporter serves offsite_git_mirror_last_success_timestamp_seconds {{ ts }} (this sync started
@@ -154,8 +280,10 @@
           {{ (_forgejo_side.stdout | from_json) | length }})
         quiet: true
 
-    # Prometheus scrapes node_exporter every 30-60 s: the series is there within a few, and the rule reads it
-    - name: Prometheus holds the rule, reads the series, and the alert is not firing
+    # Prometheus scrapes node_exporter every 30-60 s and evaluates the rule each minute: healthy, evaluated after this
+    # sync, the series there, the alert not firing (a fresh or broken rule reads "inactive" too - its health and
+    # evaluation time read with it)
+    - name: Prometheus evaluates the rule after this sync, healthy, with its series - not firing
       ansible.builtin.shell:
         executable: /bin/bash
         cmd: |
@@ -166,15 +294,22 @@
           # files, not the environment: every alert rule's JSON is over the 128 KiB one variable may hold
           kubectl --kubeconfig {{ kubeconfig }} get --raw "$P/rules?type=alert" > "$t/rules"
           kubectl --kubeconfig {{ kubeconfig }} get --raw "$P/query?query=offsite_git_mirror_last_success_timestamp_seconds" > "$t/series"
-          python3 -I - "$t/rules" "$t/series" <<'PY'
-          import json, sys
+          python3 -I - "$t/rules" "$t/series" "{{ _started_2.stdout.split()[0] }}" <<'PY'
+          import datetime, json, re, sys
           rules = json.load(open(sys.argv[1]))["data"]["groups"]
           found = [r for g in rules for r in g["rules"] if r.get("name") == "OffsiteGitMirrorMissing"]
           series = json.load(open(sys.argv[2]))["data"]["result"]
-          print(f"rule {len(found)} state {found[0]['state'] if found else '-'} series {len(series)}")
+          if not found:
+              print("rule 0")
+              sys.exit(0)
+          r = found[0]
+          # RFC 3339 with nanoseconds: its fraction cut to microseconds for Python
+          ev = datetime.datetime.fromisoformat(re.sub(r"\.(\d{1,6})\d*", r".\1", r["lastEvaluation"]).replace("Z", "+00:00"))
+          after = ev.timestamp() > int(sys.argv[3])
+          print(f"rule {len(found)} state {r['state']} health {r['health']} evaluated-after {after} series {len(series)}")
           PY
       register: _prom
       changed_when: false
-      until: _prom.stdout == 'rule 1 state inactive series 1'
+      until: _prom.stdout == 'rule 1 state inactive health ok evaluated-after True series 1'
       retries: 20
       delay: 15

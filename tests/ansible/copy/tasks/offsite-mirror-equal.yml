@@ -1,53 +1,57 @@
 ---
-# The backup on the Pis' volume equals the copy's Forgejo, and restores - read through {{ mirror_pi }} (the Pi holding
-# the VIP: the one the sync pushed through). Included by offsite-mirror-check.yml, before and after the VIP moves.
-#   - every repository of the organisation is there, none extra
-#   - each has Forgejo's branches and tags at the same commits (refs/heads, refs/tags)
-#   - its HEAD is Forgejo's default branch, and a plain clone of it checks that branch's commit out, its objects whole
-- name: Forgejo's repositories, their default branches and refs - read with the mirror's own token (never on a command line)
+# The backup on the Pis' volume holds what the copy's Forgejo has, and restores - read through {{ mirror_pi }} (the Pi
+# holding the VIP: the one the sync pushed through). Included by offsite-mirror-check.yml, before and after Forgejo
+# changes and the VIP moves. Forgejo read with the copy's admin credentials (a copy-only check: the expected list is
+# never the mirror's own reading of it - a lost team grant would agree with itself).
+#   - every repository of the organisation is there (a backup may hold more: a repository deleted in Forgejo is kept)
+#   - each holds Forgejo's every branch and tag at the same commit (it may hold more: a branch deleted in Forgejo is
+#     kept), is the mirror's own, its HEAD Forgejo's default branch; a plain clone of it checks that branch's commit out
+#     (nothing for an empty repository), its objects whole
+# the admin's credentials on stdin (the house rule: no secret in a task's environment - under become, sudo's argv)
+- name: Forgejo's repositories, their default branches and refs - as the copy's admin reads them
   ansible.builtin.shell:
     executable: /bin/bash
     cmd: |
       set -euo pipefail
-      python3 -I - <<'PY'
-      import json, os, subprocess, urllib.request
-      token = open(os.environ["TOKEN_FILE"]).read().strip()
+      code=$(cat <<'PY'
+      import base64, json, os, subprocess, sys, urllib.request
+      creds = json.load(sys.stdin)
+      auth = "Basic " + base64.b64encode(f"{creds['admin']}:{creds['password']}".encode()).decode()
       repos, page = {}, 1
       while True:
           if page > 20:
               raise SystemExit("over 20 pages of repositories - not all read")
           req = urllib.request.Request(f"{os.environ['API']}?limit=50&page={page}")
-          req.add_unredirected_header("Authorization", f"token {token}")
+          req.add_unredirected_header("Authorization", auth)
           with urllib.request.urlopen(req, timeout=60) as r:
               batch = json.load(r)
           if not batch:
               break
           for x in batch:
-              repos[x["name"]] = {"default": x.get("default_branch") or "main"}
+              repos[x["name"]] = {"default": x.get("default_branch") or "main", "private": x.get("private")}
           page += 1
-      # the token through git's environment (GIT_CONFIG_*), never its command line
-      env = dict(os.environ, GIT_TERMINAL_PROMPT="0", GIT_CONFIG_COUNT="1", GIT_CONFIG_KEY_0="http.extraHeader",
-                 GIT_CONFIG_VALUE_0=f"Authorization: token {token}")
+      # the credentials through git's environment (GIT_CONFIG_*), never its command line
+      env = dict(os.environ, GIT_TERMINAL_PROMPT="0", GIT_CONFIG_GLOBAL="/dev/null", GIT_CONFIG_COUNT="1",
+                 GIT_CONFIG_KEY_0="http.extraHeader", GIT_CONFIG_VALUE_0=f"Authorization: {auth}")
       for name, r in repos.items():
-          url = f"{os.environ['BASE']}/{os.environ['ORG']}/{name}.git"
-          out = subprocess.run(["git", "ls-remote", "--heads", "--tags", url], env=env, capture_output=True, text=True,
-                               check=True).stdout
+          out = subprocess.run(["git", "ls-remote", "--heads", "--tags", f"{os.environ['BASE']}/{os.environ['ORG']}/{name}.git"],
+                               env=env, capture_output=True, text=True, check=True).stdout
           # a tag's peeled line (^{}) left out: the backup's refs name the tag object, as ls-remote's own line does
-          r["refs"] = {ref: sha for sha, ref in (l.split("\t") for l in out.splitlines() if l)
-                       if not ref.endswith("^{}")}
+          r["refs"] = {ref: sha for sha, ref in (l.split("\t") for l in out.splitlines() if l) if not ref.endswith("^{}")}
       print(json.dumps(repos, sort_keys=True))
       PY
+      )
+      python3 -I -c "$code"
+    stdin: "{{ {'admin': forgejo_admin_user, 'password': forgejo_admin_password} | to_json }}"
+  no_log: true  # its stdin, the admin's password
   environment:
-    TOKEN_FILE: "{{ token_file }}"
     API: "{{ base }}/api/v1/orgs/{{ org }}/repos"
     BASE: "{{ base }}"
     ORG: "{{ org }}"
-  become: true
-  become_user: "{{ mirror_user }}"
   register: _forgejo_side
   changed_when: false
 
-- name: The backup on the Pis' volume - each repository's refs and HEAD, and a plain clone of each (read through {{ mirror_pi }})
+- name: The backup on the Pis' volume - each repository's refs, HEAD, maker, and a plain clone of each (read through {{ mirror_pi }})
   ansible.builtin.shell:
     executable: /bin/bash
     cmd: |
@@ -59,23 +63,21 @@
       git = ["git", "-c", "safe.directory=*"]  # the repositories are the mirror user's; this reads them as root
       out = {}
       for d in sorted(glob.glob(os.path.join(pidir, "*.git"))):
+          if ".pre-mirror-" in d:
+              continue  # kept aside: no repository of the mirror's
           name = os.path.basename(d)[:-4]
-          refs = subprocess.run(git + ["-C", d, "for-each-ref", "--format=%(refname) %(objectname)", "refs/heads", "refs/tags"],
-                                capture_output=True, text=True, check=True).stdout
-          head = subprocess.run(git + ["-C", d, "symbolic-ref", "HEAD"], capture_output=True, text=True,
-                                check=True).stdout.strip()
-          # the restore: a plain clone, as one would make from the backup
+          run = lambda *a: subprocess.run(git + list(a), capture_output=True, text=True)
+          refs = run("-C", d, "for-each-ref", "--format=%(refname) %(objectname)", "refs/heads", "refs/tags").stdout
           with tempfile.TemporaryDirectory(dir="/var/tmp") as t:
-              subprocess.run(git + ["clone", "-q", d, os.path.join(t, "r")], check=True, capture_output=True)
-              checked = subprocess.run(git + ["-C", os.path.join(t, "r"), "rev-parse", "HEAD"], capture_output=True,
-                                       text=True).stdout.strip()
-              fsck = subprocess.run(git + ["-C", os.path.join(t, "r"), "fsck", "--no-progress", "--connectivity-only"],
-                                    capture_output=True, text=True).returncode
-          out[name] = {"refs": dict(l.split(" ", 1) for l in refs.splitlines() if l), "head": head,
-                       "restored": checked, "fsck": fsck}
+              run("clone", "-q", d, os.path.join(t, "r"))
+              restored = run("-C", os.path.join(t, "r"), "rev-parse", "--verify", "-q", "HEAD").stdout.strip()
+              fsck = run("-C", os.path.join(t, "r"), "fsck", "--no-progress", "--connectivity-only").returncode if restored else 0
+          out[name] = {"refs": dict(l.split(" ", 1) for l in refs.splitlines() if l),
+                       "head": run("-C", d, "symbolic-ref", "HEAD").stdout.strip(),
+                       "maker": run("-C", d, "config", "--get", "mirror.made-by").stdout.strip(),
+                       "restored": restored, "fsck": fsck}
       ls = os.path.join(pidir, "last-success")
-      print(json.dumps({"repos": out, "last_success": open(ls).read().strip() if os.path.exists(ls) else ""},
-                       sort_keys=True))
+      print(json.dumps({"repos": out, "last_success": open(ls).read().strip() if os.path.exists(ls) else ""}, sort_keys=True))
       PY
   environment:
     PIDIR: "{{ pidir }}"
@@ -84,31 +86,38 @@
   register: _backup_side
   changed_when: false
 
-- name: Every repository of the organisation backed up, none extra
+- name: Every repository of the organisation backed up (a private one too - the reader's team grant)
   vars:
     fj: "{{ _forgejo_side.stdout | from_json }}"
     bk: "{{ (_backup_side.stdout | from_json).repos }}"
   ansible.builtin.assert:
     that:
       - fj | length > 0
-      - fj.keys() | sort | list == bk.keys() | sort | list
-    fail_msg: "Forgejo's {{ fj.keys() | sort | list }}, the backup's (through {{ mirror_pi }}) {{ bk.keys() | sort | list }}"
+      - fj | dict2items | selectattr('value.private') | list | length > 0
+      - fj.keys() | difference(bk.keys()) | list | length == 0
+    fail_msg: >-
+      Forgejo's {{ fj.keys() | sort | list }} ({{ fj | dict2items | selectattr('value.private') | map(attribute='key') | list }}
+      private); the backup's (through {{ mirror_pi }}) lacks {{ fj.keys() | difference(bk.keys()) | list }}
     quiet: true
 
-- name: Each backup - Forgejo's branches and tags at their commits, its HEAD Forgejo's default, a clone of it that branch's commit, whole
+- name: Each backup - Forgejo's every branch and tag at its commit, the mirror's own, HEAD Forgejo's default, a clone of it that branch's commit, whole
   vars:
     fj: "{{ _forgejo_side.stdout | from_json }}"
     bk: "{{ (_backup_side.stdout | from_json).repos }}"
+    # each of Forgejo's refs the backup lacks, or holds at another commit (the backup may hold more: kept)
+    # a fixed prefix: an empty result is never mistaken for none at all
+    differ: >-
+      refs:{% for ref, sha in fj[item].refs.items() if bk[item].refs.get(ref) != sha %} {{ ref }}={{ bk[item].refs.get(ref, 'missing') }}{% endfor %}
   ansible.builtin.assert:
     that:
-      - bk[item].refs == fj[item].refs
+      - differ | trim == 'refs:'
+      - bk[item].maker == 'offsite-git-mirror'
       - bk[item].head == 'refs/heads/' ~ fj[item].default
-      - bk[item].restored == fj[item].refs['refs/heads/' ~ fj[item].default] | default('none')
+      - bk[item].restored == fj[item].refs['refs/heads/' ~ fj[item].default] | default('')
       - bk[item].fsck == 0
     fail_msg: >-
-      {{ item }} through {{ mirror_pi }}: refs equal {{ bk[item].refs == fj[item].refs }}
-      ({{ (fj[item].refs.keys() | list) | symmetric_difference(bk[item].refs.keys() | list) | join(', ') or 'same names' }});
-      HEAD {{ bk[item].head }} (Forgejo's default {{ fj[item].default }}); a clone checked out {{ bk[item].restored or 'nothing' }};
-      fsck {{ bk[item].fsck }}
+      {{ item }} through {{ mirror_pi }}: Forgejo's refs it lacks or holds at another commit: {{ differ | trim }};
+      made by '{{ bk[item].maker }}'; HEAD {{ bk[item].head }} (Forgejo's default {{ fj[item].default }}); a clone
+      checked out '{{ bk[item].restored }}'; fsck {{ bk[item].fsck }}
     quiet: true
   loop: "{{ (_forgejo_side.stdout | from_json).keys() | sort | list }}"

@@ -38,10 +38,10 @@ check("runs unprivileged", "DynamicUser=true" in unit, True)
 check("the textfile collector reads the jobs' results (the offsite git mirror's last good run)",
       flag("--collector.textfile.directory"), "/var/lib/node_exporter/textfile")
 td = tasks["The node_exporter textfile directory - root's, each job's file its own"]["ansible.builtin.file"]
-check("  its directory root's, 0755, made before the unit", (env.from_string(td["path"]).render(**v), td["owner"], td["group"],
+check("  its directory root's, 0755, made before the unit", (env.from_string(td["path"]).render(**v), td["state"], td["owner"], td["group"],
       td["mode"], list(tasks).index("The node_exporter textfile directory - root's, each job's file its own")
       < list(tasks).index("Write node_exporter systemd unit")),
-      ("/var/lib/node_exporter/textfile", "root", "root", "0755", True))
+      ("/var/lib/node_exporter/textfile", "directory", "root", "root", "0755", True))
 exclude = re.compile(flag("--collector.filesystem.mount-points-exclude"))
 kept = ["/", "/boot", "/boot/efi", "/var", "/opt", "/var/lib/kubelet"]
 gone = ["/dev", "/proc", "/sys", "/run/credentials/x.service", "/var/lib/kubelet/pods/u/volumes/kubernetes.io~csi/v/mount",

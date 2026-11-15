@@ -1,31 +1,38 @@
 #!/bin/bash
-# setup-velero.yml's offsite git mirror on ten, as the playbook holds it: every repository of the Forgejo organisation
-# production's GitOps repository lives in (setup-argocd's argocd_root_repo) - it mirrored forgejo_admin/monitor, a
-# repository production does not have, and its daily job had failed since July unnoticed. Forgejo read with a token of
-# read:repository, read:organization and read:user alone, minted BY the mirror's own non-admin reader (git-mirror: a
-# team of the organisation's gives it code read on every repository; never the admin's token - operator 2026-10-20: no
-# admin account in any automation - nor its password, which sat in the old origin URL), written
-# on ten from stdin into a 0600 file a credential helper of its own reads - one that answers git's "get" alone: git's
-# store helper erases what it holds on any 401 (a blip), and every sync after failed; the token kept while it reads the organisation's
-# repositories - a 401/403 (or none) makes a new one, a network failure proves nothing and fails the play, minting
-# none; a new one that does not read deleted again; the older ones deleted once it reads. The sync runs as the mirror's
-# user and is proven at deploy. The daily sync, run here with curl, git, ssh and logger stubs: the organisation's
-# repositories listed page by page, each cloned bare when new, its origin set bare, fetched, its bare repository made
-# on the Pi when new, pushed whole; a failure named, the rest still going, the unit failed; last-success written on
-# the Pi only after a clean run; the token on no command line. Its key authorized on both Pis (the VIP's either: ten's
-# was on pi1 alone), its good run's time and count written for node_exporter's textfile collector
-# (OffsiteGitMirrorMissing).
+# setup-velero.yml's offsite git mirror on ten: every repository of the Forgejo organisation production's GitOps
+# repository lives in, pushed daily to a repository of its own on the Pis' backup volume - a backup that KEEPS what it
+# held. Forgejo read with a token of read:repository, read:organization and read:user alone, minted BY the mirror's own
+# non-admin reader (git-mirror, made anew at each new token - never adopted: Forgejo's sign-up is open; a team of the
+# organisation's gives it code read on every repository; never the admin's token - operator 2026-10-20: no admin account
+# in any automation - nor its password, which sat in the old origin URL); the token proven from a file of its own before
+# the sync's is replaced; every run reads back that it reaches every repository the organisation has (the admin's
+# count) and pushes to none. The push key is the mirror's own, authorized on both Pis for the gate alone, from ten alone
+# - the gate (the key's forced command) the only thing it runs there: check, init, refs, git-receive-pack, last-success,
+# keep-unmarked, each checked and bounded.
+#
+# The daily sync runs here for real: real git against a local stand-in for Forgejo (bare repositories under $W/forgejo,
+# its API from a curl stub reading them), an ssh stub that runs the rendered gate as sshd would (the asked command in
+# SSH_ORIGINAL_COMMAND, its standard input passed on - git-receive-pack reads it), a counting mountpoint stub. It must:
+# mirror every repository, each backup's HEAD its default branch; keep a branch deleted upstream, a tag, the commit a
+# force-push replaced (its reflog); refuse a repository Forgejo serves empty while its backup holds refs; mirror an empty
+# one; never write a repository it did not make; write nothing once the volume is lost; name each failure; write
+# last-success and its Prometheus result after a clean run alone; send the token on curl's config and git's credential
+# helper only, on every call.
 set -u
 cd "$(dirname "$0")/../../../.." || exit 1
 PY=python3
 "$PY" -c 'import ansible, yaml' 2> /dev/null || PY=deploy/ansible/venv/bin/python3
 W=$(mktemp -d)
-trap 'rm -rf "$W"' EXIT
-mkdir -p "$W/bin" "$W/mirror"
-# curl: argv and the -K config recorded; the API's repository list from $W/pages/<n> (none: empty); FAIL_API: fails
+trap 'chmod -R u+rwX "$W" 2> /dev/null; rm -rf "$W"' EXIT
+mkdir -p "$W/bin" "$W/mirror" "$W/pi" "$W/textfile" "$W/forgejo/schnappy"
+# curl: argv and the -K config recorded. The organisation's repositories: each bare repository under $W/forgejo/schnappy
+# (its default branch its HEAD's), FORCE_LIST=<names> lists those instead (a listed one Forgejo lacks); 50 a page.
+# PROBE_CODE: the probe's code (-w); USER_CODE, PROBE_LOGIN, PROBE_ADMIN: the user API's answer; FAIL_API: refused;
+# PUSH_ON / ADMIN_ON=<repo>: its permissions; NO_PERMS: none given; PAGES=<n>: n full pages of fillers;
+# BRANCH_<repo>=<branch>: the default branch the API says
 cat > "$W/bin/curl" <<'STUB'
 #!/usr/bin/env python3
-import json, os, re, sys
+import json, os, re, subprocess, sys
 W = os.environ["W"]
 a = sys.argv[1:]
 conf = open(a[a.index("-K") + 1]).read() if "-K" in a else ""
@@ -33,75 +40,74 @@ open(os.path.join(W, "curl-calls"), "a").write(json.dumps({"argv": a, "config": 
 if os.environ.get("FAIL_API"):
     sys.exit(22)
 url = a[-1]
-if "-w" in a:  # the probe: its HTTP code
-    print(os.environ.get("PROBE_CODE", "200"), end="")
+out = a[a.index("-o") + 1] if "-o" in a else None
+def answer(body, code="200"):
+    if out and out != "/dev/null":
+        open(out, "w").write(body)
+    elif not out:
+        sys.stdout.write(body)
+    if "-w" in a:
+        sys.stdout.write(code)
+if url.endswith("/user"):
+    answer(json.dumps({"login": os.environ.get("PROBE_LOGIN", "git-mirror"), "is_admin": os.environ.get("PROBE_ADMIN") == "1"}),
+           os.environ.get("USER_CODE", "200"))
     sys.exit(0)
-if url.endswith("/user"):  # whose the token is: PROBE_LOGIN, PROBE_ADMIN; USER_FAILS: the user API refuses (403)
-    if os.environ.get("USER_FAILS"):
-        sys.exit(22)
-    print(json.dumps({"login": os.environ.get("PROBE_LOGIN", "git-mirror"), "is_admin": os.environ.get("PROBE_ADMIN") == "1"}))
+if "-w" in a:  # the probe's own listing call: its code alone
+    answer("[]", os.environ.get("PROBE_CODE", "200"))
     sys.exit(0)
 page = int(re.search(r"page=(\d+)", url).group(1))
-p = os.path.join(W, "pages", str(page))
-names = open(p).read().split() if os.path.exists(p) else []
-push_on = os.environ.get("PUSH_ON", "")  # a repository the token's account may push to
-branch = dict(x.split("=", 1) for x in os.environ.get("BRANCHES", "").split(",") if "=" in x)  # repo=its default branch
-print(json.dumps([{"name": n, "default_branch": branch.get(n, "main"),
-                   "permissions": {"pull": True, "push": n == push_on, "admin": False}} for n in names]))
+org = os.path.join(W, "forgejo", "schnappy")
+if os.environ.get("PAGES"):
+    names = [f"r{page}x{i}" for i in range(50)] if page <= int(os.environ["PAGES"]) else []
+else:
+    if os.environ.get("FORCE_LIST") is not None:
+        names = os.environ["FORCE_LIST"].split()
+    else:
+        names = sorted(d[:-4] for d in os.listdir(org) if d.endswith(".git"))
+    names = names[(page - 1) * 50: page * 50]
+def default(n):
+    forced = os.environ.get("BRANCH_" + re.sub(r"\W", "_", n))
+    if forced:
+        return forced
+    p = os.path.join(org, n + ".git")
+    head = subprocess.run(["git", "-C", p, "symbolic-ref", "--short", "HEAD"], capture_output=True, text=True).stdout.strip() \
+        if os.path.isdir(p) else ""
+    return head or "main"
+repos = []
+for n in names:
+    r = {"name": n, "default_branch": default(n)}
+    if not os.environ.get("NO_PERMS"):
+        r["permissions"] = {"pull": True, "push": n == os.environ.get("PUSH_ON"), "admin": n == os.environ.get("ADMIN_ON")}
+    repos.append(r)
+answer(json.dumps(repos))
 STUB
-# git: its argv and environment's prompt recorded; clone makes the bare directory; FETCH_FAILS=<repo>: its fetch fails
-cat > "$W/bin/git" <<'STUB'
-#!/bin/bash
-echo "git $* PROMPT=${GIT_TERMINAL_PROMPT:-unset} SSH=${GIT_SSH_COMMAND:-}" >> "$W/git-calls"
-# a push reads its standard input too (ssh beneath it): the same as ssh's stub
-case "$*" in *" push "*) cat > /dev/null ;; esac
-args=("$@")
-for ((i = 0; i < ${#args[@]}; i++)); do
-  [ "${args[$i]}" = clone ] && { dest=${args[$((${#args[@]} - 1))]}; mkdir -p "$dest"; touch "$dest/HEAD"; exit 0; }
-done
-case "$*" in *" fetch "*) [ -n "${FETCH_FAILS:-}" ] && [[ $* == *"/$FETCH_FAILS.git"* ]] && exit 128 ;; esac
-# PUSH_FAILS=<repo>: the Pi refuses its push (a full disk, a permission). A push runs its --receive-pack command as
-# the Pi would (pibin: mountpoint answering MOUNTED, git-receive-pack recording) - none given, it lands unchecked
-case "$*" in *" push "*) [ -n "${PUSH_FAILS:-}" ] && [[ $* == *"/$PUSH_FAILS.git"* ]] && exit 1
-  rp=""; for a; do case $a in --receive-pack=*) rp=${a#--receive-pack=} ;; esac; done
-  dest=${@: -1}; path=${dest#*:}; path=${path//\/mnt\/backups\/git-mirror/$W/pi}
-  if [ -n "$rp" ]; then PATH="$W/pibin:$PATH" bash -c "${rp//\/mnt\/backups\/git-mirror/$W/pi} '$path'" || exit 1
-  else echo "received-unchecked $path" >> "$W/pi-calls"; fi
-  exit 0 ;; esac
-# OLD_CONFIG=<repo>: the old mirror's settings in it - an ssh command (no host-key check) and a remote named pi;
-# GLOBAL_SSH: one in the user's or the system's git config (every scope but the repository's own)
-old=""; [ -n "${OLD_CONFIG:-}" ] && [[ $* == *"/$OLD_CONFIG.git "* ]] && old=1
-case "$*" in
-  *" config --local --get core.sshCommand"*) [ -n "$old" ] && { echo "ssh -o StrictHostKeyChecking=no"; exit 0; }; exit 1 ;;
-  *" config --get core.sshCommand"*) [ -n "$old" ] || [ -n "${GLOBAL_SSH:-}" ] && { echo "ssh -o x"; exit 0; }; exit 1 ;;
-  *" config --local --get-regexp ^remote\.pi\."*) [ -n "$old" ] && { echo "remote.pi.url pi:/x"; exit 0; }; exit 1 ;;
-  *" remote") echo origin; [ -z "$old" ] || echo pi; exit 0 ;;
-esac
-exit 0
-STUB
-# ssh: its argv recorded; INIT_FAILS=<repo>: the Pi's repository for it not made (a full disk, a permission)
+# ssh: as sshd runs the mirror key's forced command - the asked command in SSH_ORIGINAL_COMMAND, the gate run with the
+# standard input passed on (git-receive-pack reads it). Recorded: its options, host, command. REFUSE_HOST=<host>: refused
 cat > "$W/bin/ssh" <<'STUB'
 #!/bin/bash
-echo "ssh $*" >> "$W/ssh-calls"
-# as ssh does: its standard input read (sent to the remote command) - a loop fed on it loses every line after the first
-cat > /dev/null
-[ -n "${INIT_FAILS:-}" ] && [[ $* == *"/$INIT_FAILS.git/HEAD"* ]] && { echo "fatal: cannot mkdir" >&2; exit 128; }
-# LAST_FAILS: the last-success write refused on the Pi
-[ -n "${LAST_FAILS:-}" ] && [[ $* == *"last-success"* ]] && { echo "Permission denied" >&2; exit 1; }
-# the remote command run as the Pi would: the volume at $W/pi, mounted unless MOUNTED=no
-cmd=${@: -1}
-PATH="$W/pibin:$PATH" bash -c "${cmd//\/mnt\/backups\/git-mirror/$W/pi}"
+opts=() host="" cmd=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -o|-i|-p|-l) opts+=("$1" "$2"); shift 2 ;;
+    -*) opts+=("$1"); shift ;;
+    *) if [ -z "$host" ]; then host=$1; else cmd+=("$1"); fi; shift ;;
+  esac
+done
+printf '%s\n' "$(printf '%s ' "${opts[@]}")| $host | ${cmd[*]}" >> "$W/ssh-calls"
+[ "${REFUSE_HOST:-}" != "${host#*@}" ] || { echo "Permission denied (publickey)." >&2; exit 255; }
+SSH_ORIGINAL_COMMAND="${cmd[*]}" exec bash "$W/gate.sh"
 STUB
-mkdir -p "$W/pibin"
-printf '#!/bin/bash\n[ "${MOUNTED:-yes}" = yes ]\n' > "$W/pibin/mountpoint"
-# HEAD_FAILS=<repo>: setting its HEAD refused on the Pi
-printf '#!/bin/bash\necho "pi-git $*" >> "$W/pi-calls"\n[ -n "${HEAD_FAILS:-}" ] && [[ $* == *"/$HEAD_FAILS.git symbolic-ref"* ]] && exit 1\nexit 0\n' > "$W/pibin/git"
-printf '#!/bin/bash\necho "received $*" >> "$W/pi-calls"\n' > "$W/pibin/git-receive-pack"
-chmod +x "$W/pibin"/*
-printf '#!/bin/bash\ncat > /dev/null\n' > "$W/bin/logger"
+# mountpoint: the volume mounted unless MOUNTED=no; MOUNT_LOST_AFTER=<n>: lost from its (n+1)th check on
+cat > "$W/bin/mountpoint" <<'STUB'
+#!/bin/bash
+n=$(( $(cat "$W/mount-checks" 2> /dev/null || echo 0) + 1 )); echo "$n" > "$W/mount-checks"
+[ "${MOUNTED:-yes}" = yes ] || exit 1
+[ -z "${MOUNT_LOST_AFTER:-}" ] || [ "$n" -le "$MOUNT_LOST_AFTER" ]
+STUB
+printf '#!/bin/bash\ncat >> "$W/logged"\n' > "$W/bin/logger"
 chmod +x "$W/bin"/*
-W=$W PYTHONDONTWRITEBYTECODE=1 "$PY" - <<'PYGM2'
-import json, os, re, shutil, subprocess, sys
+W=$W PYTHONDONTWRITEBYTECODE=1 "$PY" - <<'PYGM'
+import base64, getpass, json, os, shutil, subprocess, sys, time
 import yaml
 sys.path.insert(0, "tests/ansible/unit")
 from templar import condition, render, trust_as_template  # noqa: E402
@@ -119,53 +125,44 @@ def walk(ts):
 play = next(p for p in yaml.safe_load(open("deploy/ansible/playbooks/setup-velero.yml"))
             if p.get("name") == "Offsite git mirror to the Pis")
 tasks = list(walk(play["tasks"]))
+names = [t.get("name") for t in tasks]
+by_name = {t.get("name"): t for t in tasks}
 pv = {k: trust_as_template(x) if isinstance(x, str) else x for k, x in play["vars"].items()}
 v = dict(pv, forgejo_admin_user="admin", forgejo_admin_password="THE-ADMIN-PW", offsite_backup_user="sm",
-         keepalived_vip="10.0.0.5")
-R = lambda t: str(render(str(t), **v))  # noqa: E731
-# the organisation: production's GitOps repository's (setup-argocd)
+         keepalived_vip="10.0.0.5", ansible_host="192.168.11.2", inventory_hostname="target")
+R = lambda t, **kw: str(render(str(t), **dict(v, **kw)))  # noqa: E731
+text = yaml.safe_dump(play)
+TOKEN = "0123456789abcdef0123456789abcdef01234567"
+
+# ── what it mirrors, from where ─────────────────────────────────────────
 argocd = yaml.safe_load(open("deploy/ansible/playbooks/setup-argocd.yml"))[0]["vars"]
 check("every repository of the organisation production's GitOps repository is in", R("{{ git_mirror_org }}"),
       argocd["argocd_root_repo"].split("/")[0])
+check("no one repository named, none of the admin's", ("forgejo_admin/" in text, "/monitor.git" in text), (False, False))
 check("Forgejo as the environment serves it: production's https://git.pmon.dev (forgejo_root_url unset), the copy's own "
       "(its VIP, http) - never git.pmon.dev there", (R("{{ git_mirror_base }}"),
-      str(render("{{ git_mirror_base }}", **dict(v, forgejo_root_url="http://192.168.56.50:3000/")))),
+      R("{{ git_mirror_base }}", forgejo_root_url="http://192.168.56.50:3000/")),
       ("https://git.pmon.dev", "http://192.168.56.50:3000"))
-text = yaml.safe_dump(play)
-check("no one repository named, none of the admin's", ("forgejo_admin/" in text, "/monitor" in text), (False, False))
-# the token
-post = [t for t in tasks if (t.get("ansible.builtin.uri") or {}).get("method") == "POST"
-        and str(t["ansible.builtin.uri"]["url"]).endswith("/tokens")]
-check("a new token: the organisation's repositories read (and whose it is), nothing more; minted BY the reader (its "
-      "own basic auth), no_log; only when the kept one does not read",
-      [(t["ansible.builtin.uri"]["body"]["scopes"], t["ansible.builtin.uri"]["user"], t["ansible.builtin.uri"]["url"],
-        t.get("no_log"),
-        condition(t.get("when"), git_mirror_enabled=True, _git_mirror_token_works=True, ansible_check_mode=False),
-        condition(t.get("when"), git_mirror_enabled=True, _git_mirror_token_works=False, ansible_check_mode=False))
-       for t in post], [(["read:repository", "read:organization", "read:user"], "{{ git_mirror_user }}",
-                         "{{ _git_mirror_forgejo }}/users/{{ git_mirror_user }}/tokens", True, False, True)])
-# no token of the admin's: every token call (list, mint, delete) authenticates as the reader
-tok = [t for t in tasks if "/tokens" in str((t.get("ansible.builtin.uri") or {}).get("url", ""))]
-check("every token call (list, mint, delete) as the reader, none as the admin - and no admin's token minted anywhere",
-      (len(tok) >= 4, sorted({t["ansible.builtin.uri"].get("user") or t["ansible.builtin.uri"].get("url_username") for t in tok}),
-       any("users/{{ forgejo_admin_user }}/tokens" in str(t) or "users/{{ git_mirror_user }}/tokens" not in str(t)
-           for t in tok)), (True, ["{{ git_mirror_user }}"], False))
-by_name = {t.get("name"): t for t in tasks}
+
+# ── the reader: made anew at each new token, no admin, its team ──────────
+NOT_WORKS = dict(git_mirror_enabled=True, _git_mirror_token_works=False, ansible_check_mode=False)
 check("the reader is git-mirror, never the admin (asserted before anything is made)",
       (R("{{ git_mirror_user }}"),
        condition(by_name["The admin's credentials, and a reader that is not the admin"]["ansible.builtin.assert"]["that"],
                  **dict(v, git_mirror_user="admin"))), ("git-mirror", False))
-made = by_name["The reader made, where Forgejo has none"]
-check("the reader made only where Forgejo has none (404), never in a preview; its body no admin, private, the "
-      "password no_log", ([condition(made["when"], git_mirror_enabled=True, _git_mirror_token_works=False,
-                                     _git_mirror_account={"status": st}, ansible_check_mode=cm)
-                           for st, cm in ((404, False), (200, False), (404, True))],
-                          "admin" not in made["ansible.builtin.uri"]["body"], made["ansible.builtin.uri"]["body"]["visibility"],
-                          made.get("no_log")), ([True, False, False], True, "private", True))
-patch = by_name["The reader's password set, and no admin"]["ansible.builtin.uri"]["body"]
-check("each run: its password set anew (kept nowhere), admin false, active, not prohibited",
-      (patch["admin"], patch["active"], patch["prohibit_login"], patch["password"]),
-      (False, True, False, "{{ _git_mirror_password }}"))
+dele = by_name["The reader of before deleted - its tokens, keys and grants with it (never adopted)"]
+made = by_name["The reader made"]
+check("an account of that name deleted first (purge: its tokens, keys, grants) - only where Forgejo has one, never in "
+      "a preview; then made anew, every new token",
+      ([condition(dele["when"], **dict(NOT_WORKS, _git_mirror_account={"status": st}, ansible_check_mode=cm))
+        for st, cm in ((200, False), (404, False), (200, True))], "purge=true" in dele["ansible.builtin.uri"]["url"],
+       dele["ansible.builtin.uri"]["method"], names.index(dele["name"]) < names.index(made["name"]),
+       condition(made["when"], **NOT_WORKS),
+       condition(made["when"], **dict(NOT_WORKS, _git_mirror_token_works=True))),
+      ([True, False, False], True, "DELETE", True, True, False))
+check("  made private, no admin in its body, the password no_log",
+      ("admin" not in made["ansible.builtin.uri"]["body"], made["ansible.builtin.uri"]["body"]["visibility"],
+       made.get("no_log")), (True, "private", True))
 noadm = by_name["The reader is no admin"]["ansible.builtin.assert"]["that"]
 check("the reader as it sees itself: its own login, no admin - else refused",
       [condition(noadm, git_mirror_user="git-mirror", _git_mirror_self={"json": j}) for j in (
@@ -181,45 +178,105 @@ alone = by_name["The reader's team holds no one else"]["ansible.builtin.assert"]
 check("the team holds the reader alone - anyone else in it refused, nothing changed",
       [condition(alone, git_mirror_user="git-mirror", _git_mirror_members={"json": j})
        for j in ([], [{"login": "git-mirror"}], [{"login": "git-mirror"}, {"login": "sm"}])], [True, True, False])
-probe = next(t for t in tasks if t.get("name") == "The mirror's token reads the organisation's repositories")
+cap = by_name["Every team read (one page, not full)"]["ansible.builtin.assert"]["that"]
+check("the teams read on one page: 49 pass, 50 refused (not all read)",
+      [condition(cap, _git_mirror_teams={"json": [{}] * n}) for n in (49, 50)], [True, False])
+atok = by_name["The admin's mirror tokens of before revoked"]
+admin_tokens = [{"id": 1, "name": "git-mirror-20261001T000000"}, {"id": 2, "name": "argocd-root"},
+                {"id": 3, "name": "woodpecker-infra"}, {"id": 4, "name": "git-mirror-20261002T000000"},
+                {"id": 5, "name": "my-git-mirror-x"}]
+pages = {"results": [{"json": admin_tokens[:3]}, {"json": admin_tokens[3:]}, {"json": []}]}
+check("the admin's mirror tokens of before (git-mirror-*) revoked, from every page - Argo CD's, Woodpecker's, a name "
+      "merely holding it kept; 404 (gone already) is done",
+      ([x["id"] for x in render(atok["loop"], _git_mirror_admin_tokens=pages)],
+       atok["ansible.builtin.uri"]["method"], 404 in atok["ansible.builtin.uri"]["status_code"], atok.get("no_log")),
+      ([1, 4], "DELETE", True, True))
+afull = by_name["Every one of the admin's tokens read (the last page not full)"]["ansible.builtin.assert"]["that"]
+check("  the admin's tokens read to a page not full - more refused",
+      [condition(afull, _git_mirror_admin_tokens=r) for r in (pages, {"results": [{"json": [{"id": 0, "name": "x"}] * 50}] * 10})],
+      [True, False])
+
+# ── the token: minted by the reader, proven from its own file, then put in place ──
+post = [t for t in tasks if (t.get("ansible.builtin.uri") or {}).get("method") == "POST"
+        and str(t["ansible.builtin.uri"]["url"]).endswith("/tokens")]
+check("a new token: the organisation's repositories read (and whose it is), nothing more; minted BY the reader (its "
+      "own basic auth), no_log; only when the kept one does not read",
+      [(t["ansible.builtin.uri"]["body"]["scopes"], t["ansible.builtin.uri"]["user"], t.get("no_log"),
+        condition(t.get("when"), **dict(NOT_WORKS, _git_mirror_token_works=True)), condition(t.get("when"), **NOT_WORKS))
+       for t in post], [(["read:repository", "read:organization", "read:user"], "{{ git_mirror_user }}", True, False, True)])
+check("no admin's token minted anywhere (every token minted under the reader's name)",
+      [t["ansible.builtin.uri"]["url"] for t in post], ["{{ _git_mirror_forgejo }}/users/{{ git_mirror_user }}/tokens"])
+block = by_name["The new token in place, proven"]
+put_new, prove, move = block["block"]
+check("the new token written beside the sync's (from stdin, 0600, no_log), proven from that file, and only then moved "
+      "over the sync's", ([t.get("name") for t in block["block"]], "/dev/stdin" in str(put_new), "0600" in str(put_new),
+                          str(put_new["ansible.builtin.command"]["argv"][-1]), put_new.get("no_log"),
+                          prove["environment"]["TOKEN_FILE"], move["ansible.builtin.command"]["argv"]),
+      (["The new token beside the sync's", "The new token reads the organisation's repositories - and is the reader's, no admin's",
+        "The new token where the sync's credential helper reads it"], True, True, "{{ git_mirror_token_file }}.new", True,
+       "{{ git_mirror_token_file }}.new", ["mv", "-f", "{{ git_mirror_token_file }}.new", "{{ git_mirror_token_file }}"]))
+resc = block["rescue"]
+check("a new token that does not read: deleted again (its id), its file removed, the play failed - the sync's as it was",
+      ([(t.get("ansible.builtin.uri") or {}).get("method") for t in resc],
+       ((resc[1].get("ansible.builtin.file") or {}).get("path"), (resc[1].get("ansible.builtin.file") or {}).get("state")),
+       "ansible.builtin.fail" in resc[2]), (["DELETE", None, None], ("{{ git_mirror_token_file }}.new", "absent"), True))
+check("the new token proven by HTTP 200 as the reader, no admin, alone",
+      [condition(prove["failed_when"], _git_mirror_new_read={"stdout": x}, git_mirror_user="git-mirror")
+       for x in ("HTTP 200 git-mirror false", "HTTP 200 git-mirror true", "HTTP 200 forgejo_admin true", "HTTP 200 UNSCOPED",
+                 "HTTP 401", "USER API HTTP 502")], [False, True, True, True, True, True])
+probe = by_name["The mirror's token reads the organisation's repositories"]
 judge = lambda out: condition(probe["failed_when"], _git_mirror_read={"stdout": out})  # noqa: E731
-check("the probe: 200 (whoever's) judged, 401/403/none replaced; no answer or a 5xx fails the play (no token minted on it)",
-      [judge(x) for x in ("HTTP 200 git-mirror false", "HTTP 200 forgejo_admin true", "HTTP 200 UNKNOWN", "HTTP 401",
-                          "HTTP 403", "NO TOKEN", "HTTP 000", "HTTP 502", "HTTP 200")],
-      [False, False, False, False, False, False, True, True, True])
-# the probe's script itself: the token from the file, on curl's config
+check("the probe: a 200 with its owner, UNSCOPED, 401/403, none judged; the user API down, a 5xx, no answer fail the play "
+      "(no token minted on a blip)",
+      [judge(x) for x in ("HTTP 200 git-mirror false", "HTTP 200 forgejo_admin true", "HTTP 200 UNSCOPED", "HTTP 401",
+                          "HTTP 403", "NO TOKEN", "HTTP 000", "HTTP 502", "USER API HTTP 500", "USER API NOT READ", "HTTP 200")],
+      [False, False, False, False, False, False, True, True, True, True, True])
+works = by_name["Whether the kept token reads"]["ansible.builtin.set_fact"]["_git_mirror_token_works"]
+check("the kept token: HTTP 200 as the reader, no admin, alone",
+      [str(render(works, _git_mirror_read=r, git_mirror_user="git-mirror")) for r in (
+          {"stdout": "HTTP 200 git-mirror false"}, {"stdout": "HTTP 200 forgejo_admin true"},
+          {"stdout": "HTTP 200 git-mirror true"}, {"stdout": "HTTP 200 UNSCOPED"}, {"stdout": "HTTP 401"},
+          {"stdout": "NO TOKEN"}, {"skipped": True})], ["True", "False", "False", "False", "False", "False", "False"])
+creds = os.path.join(W, "token")
+open(creds, "w").write(TOKEN)
+def env_with(**e):
+    return dict(os.environ, PATH=os.path.join(W, "bin") + ":" + os.environ["PATH"], W=W, **e)
+def calls():
+    p = os.path.join(W, "curl-calls")
+    out = [json.loads(x) for x in open(p)] if os.path.exists(p) else []
+    os.path.exists(p) and os.remove(p)
+    return out
 script = R(play["vars"]["_git_mirror_probe"])
-creds = os.path.join(W, "creds")
-open(creds, "w").write("0123456789abcdef0123456789abcdef01234567")
-def probe_run(code, have=True, **env):
-    os.path.exists(os.path.join(W, "curl-calls")) and os.remove(os.path.join(W, "curl-calls"))
-    r = subprocess.run(["bash", "-c", script], capture_output=True, text=True, env=dict(
-        os.environ, PATH=os.path.join(W, "bin") + ":" + os.environ["PATH"], W=W, PROBE_CODE=code,
+def probe_run(have=True, **e):
+    calls()
+    r = subprocess.run(["bash", "-c", script], capture_output=True, text=True, env=env_with(
         TOKEN_FILE=creds if have else os.path.join(W, "none"), API="https://git.pmon.dev/api/v1/orgs/x/repos",
-        USER_API="https://git.pmon.dev/api/v1/user", **env))
-    calls = [json.loads(x) for x in open(os.path.join(W, "curl-calls"))] if os.path.exists(os.path.join(W, "curl-calls")) else []
-    return r.stdout.strip(), [("0123456789abcdef" in " ".join(c["argv"]), "token 0123456789abcdef" in c["config"]) for c in calls]
-check("the probe's script: HTTP 200 with whose token it is (login, admin) / 401 said, the token on curl's config only; "
-      "no file, NO TOKEN; whose not read, UNKNOWN",
-      [probe_run("200"), probe_run("200", PROBE_LOGIN="forgejo_admin", PROBE_ADMIN="1"), probe_run("401"),
-       probe_run("200", have=False), probe_run("200", USER_FAILS="1")],
-      [("HTTP 200 git-mirror false", [(False, True), (False, True)]),
-       ("HTTP 200 forgejo_admin true", [(False, True), (False, True)]), ("HTTP 401", [(False, True)]), ("NO TOKEN", []),
-       ("HTTP 200 UNKNOWN", [(False, True), (False, True)])])
-# what the token reaches: every repository read, none pushed to - read back each run
+        USER_API="https://git.pmon.dev/api/v1/user", **e))
+    cs = calls()
+    return r.stdout.strip(), len(cs), all(f"token {TOKEN}" in c["config"] and TOKEN not in " ".join(c["argv"]) for c in cs)
+check("the probe's script: its owner said; UNSCOPED on the user API's 401/403; its code on anything else; NO TOKEN - "
+      "the token on curl's config on every call, never its command line",
+      [probe_run(), probe_run(PROBE_LOGIN="forgejo_admin", PROBE_ADMIN="1"), probe_run(USER_CODE="403"),
+       probe_run(USER_CODE="500"), probe_run(PROBE_CODE="401"), probe_run(have=False)],
+      [("HTTP 200 git-mirror false", 2, True), ("HTTP 200 forgejo_admin true", 2, True), ("HTTP 200 UNSCOPED", 2, True),
+       ("USER API HTTP 500", 2, True), ("HTTP 401", 1, True), ("NO TOKEN", 0, True)])
+check("  its user API answer kept in a file beside the token, removed after", [f for f in os.listdir(W) if f.startswith(".probe.")], [])
+
+# ── what it reaches: every repository, none pushed to - and every one the organisation has ──
 reach_script = R(play["vars"]["_git_mirror_reach"])
-def reach_run(pages_, **env):
-    shutil.rmtree(os.path.join(W, "pages"), ignore_errors=True); os.makedirs(os.path.join(W, "pages"))
-    for i, names_ in enumerate(pages_, 1):
-        open(os.path.join(W, "pages", str(i)), "w").write(" ".join(names_))
-    r = subprocess.run(["bash", "-c", reach_script], capture_output=True, text=True, env=dict(
-        os.environ, PATH=os.path.join(W, "bin") + ":" + os.environ["PATH"], W=W, TOKEN_FILE=creds,
-        API="https://git.pmon.dev/api/v1/orgs/x/repos", **env))
-    return r.stdout.strip()
-check("what it reaches: every repository over its pages read, none pushed to - else named; the listing failing, NOT READ",
-      [reach_run([["ops", "infra"], ["site"]]), reach_run([["ops", "infra"]], PUSH_ON="infra"),
-       reach_run([["ops"]], FAIL_API="1"), reach_run([[f"r{i}"] for i in range(25)])],
-      ["PUSHES NONE 3", "PUSHES infra", "NOT READ", "NOT READ"])
+def reach_run(**e):
+    calls()
+    r = subprocess.run(["bash", "-c", reach_script], capture_output=True, text=True, env=env_with(
+        TOKEN_FILE=creds, API="https://git.pmon.dev/api/v1/orgs/x/repos", **e))
+    cs = calls()
+    return r.stdout.strip(), bool(cs) and all(f"token {TOKEN}" in c["config"] for c in cs)
+check("what it reaches: every repository read, none pushed to or administered - else named; permissions missing, the "
+      "listing failing, over 20 pages: NOT READ; the token on every call",
+      [reach_run(FORCE_LIST="ops infra site"), reach_run(FORCE_LIST="ops infra", PUSH_ON="infra"),
+       reach_run(FORCE_LIST="ops infra", ADMIN_ON="ops"), reach_run(FORCE_LIST="ops", NO_PERMS="1"),
+       reach_run(FORCE_LIST="ops", FAIL_API="1")[0], reach_run(PAGES="25")],
+      [("PUSHES NONE 3", True), ("PUSHES infra", True), ("PUSHES ops", True), ("NOT READ", True), "NOT READ",
+       ("NOT READ", True)])
 rtask = by_name["What the mirror's token reaches - read, never pushed to"]
 check("  the play fails unless it reaches some and pushes to none; run in a preview where the kept token reads",
       ([condition(rtask["failed_when"], _git_mirror_reach_read={"stdout": o})
@@ -227,292 +284,356 @@ check("  the play fails unless it reaches some and pushes to none; run in a prev
        [condition(rtask["when"], git_mirror_enabled=True, ansible_check_mode=cm, _git_mirror_token_works=w)
         for cm, w in ((False, False), (True, True), (True, False))]),
       ([False, True, True, True], False, [True, True, False]))
-block = next(t for t in play["tasks"] if t.get("name") == "The new token in place, proven")
-resc = block.get("rescue") or []
-check("a new token that does not read: deleted again (its id), the play failed",
-      [(t.get("ansible.builtin.uri") or {}).get("method") for t in resc] + [("ansible.builtin.fail" in t) for t in resc],
-      ["DELETE", None, False, True])
-write = next(t for t in block["block"] if "helper reads it" in t.get("name", ""))
-check("the token written on ten from stdin (no copy content: a temp file on the controller), 0600, no_log",
-      ("ansible.builtin.copy" in write, "/dev/stdin" in str(write), '"0600"' in json.dumps(write) or "0600" in str(write),
-       write.get("no_log")), (False, True, True, True))
-names = [t.get("name") for t in tasks]
-dele = [t for t in tasks if (t.get("ansible.builtin.uri") or {}).get("method") == "DELETE" and "older" in t.get("name", "")]
-check("the older tokens deleted after the new one is proven to read",
-      bool(dele) and names.index("The new token reads the organisation's repositories - and is the reader's, no admin's")
-      < names.index(dele[0]["name"]), True)
-# which tokens go: the mirror's own alone - any other of the reader's (one made by hand) never
-admin_tokens = [{"id": 1, "name": "git-mirror-20261001T000000"}, {"id": 2, "name": "argocd-root"},
-                {"id": 3, "name": "woodpecker-infra"}, {"id": 4, "name": "git-mirror-20261002T000000"},
-                {"id": 5, "name": "my-git-mirror-x"}]
-# read page by page (Forgejo pages its answers: 30 a page by default, 50 at most) - an older mirror token on a later
-# page was never deleted
-pages = {"results": [{"json": admin_tokens[:3]}, {"json": admin_tokens[3:]}, {"json": []}]}
-check("the older tokens: the mirror's own (git-mirror-*) alone, from every page - Argo CD's, Woodpecker's, a name "
-      "merely holding it kept", [x["id"] for x in render(dele[0]["loop"], _git_mirror_tokens=pages)] if dele else None,
-      [1, 4])
-# a token gone already (deleted meanwhile - a run cut short after its delete, by hand) is what the delete wants: 404
-# fails no play whose new token is in place by then - the new token's own, on its failure, too
-# - Argo CD's token rotation (setup-argocd) as this one
-from plays import actions, files, load, tasks as all_tasks  # noqa: E402
-deletes = [(f, t.get("name"), v.get("status_code")) for f in files("deploy/ansible") for t in all_tasks(load(f))
-           for m, v in actions(t) if str(m).split(".")[-1] == "uri" and isinstance(v, dict)
-           and str(v.get("method", "")).upper() == "DELETE" and "/tokens/" in str(v.get("url"))]
-check("every Forgejo token delete (the mirror's, Argo CD's) takes 404 (gone already) as done",
-      ([x[1] for x in deletes if 404 not in (x[2] if isinstance(x[2], list) else [x[2]])], len(deletes) >= 3), ([], True))
-check("the older tokens: none read (the kept token reads) - none deleted",
-      list(render(dele[0]["loop"], _git_mirror_tokens={"results": [{"skipped": True}] * 3})) if dele else None, [])
-listing = next((t for t in tasks if (t.get("ansible.builtin.uri") or {}).get("method") == "GET"
-                and "/tokens" in str(t["ansible.builtin.uri"].get("url"))), None)
-check("the reader's tokens read a page at a time (limit and page in the URL, a loop over the pages), as the reader",
-      listing is not None and "limit=50" in str(listing["ansible.builtin.uri"]["url"])
-      and "page={{ item }}" in str(listing["ansible.builtin.uri"]["url"]) and "loop" in listing
-      and listing["ansible.builtin.uri"]["user"] == "{{ git_mirror_user }}", True)
-full = next((t for t in tasks if "ansible.builtin.assert" in t and "_git_mirror_tokens" in str(t)), None)
-check("the last page read not full - more tokens than read refused, never some left unread",
-      [condition(full["ansible.builtin.assert"]["that"], _git_mirror_tokens=r) for r in (
-          pages, {"results": [{"json": [{"id": i, "name": "x"} for i in range(50)]}] * 10})] if full else None,
-      [True, False])
-# whether the kept token reads: an HTTP 200 alone - a refusal, no token, a skipped read (the mirror off) is none
-works = next((t for t in tasks if t.get("name") == "Whether the kept token reads"), None)
-fact = (works or {}).get("ansible.builtin.set_fact", {}).get("_git_mirror_token_works")
-check("the kept token: HTTP 200 as the reader, no admin, alone (the admin's, an admin reader's, an unknown owner's, 401, "
-      "403, NO TOKEN, a skipped read: a new one)",
-      [str(render(fact, _git_mirror_read=r, git_mirror_user="git-mirror")) for r in (
-          {"stdout": "HTTP 200 git-mirror false"}, {"stdout": "HTTP 200 forgejo_admin true"},
-          {"stdout": "HTTP 200 git-mirror true"}, {"stdout": "HTTP 200 UNKNOWN"}, {"stdout": "HTTP 200"},
-          {"stdout": "HTTP 401"}, {"stdout": "HTTP 403"}, {"stdout": "NO TOKEN"}, {"skipped": True})]
-      if fact else None, ["True", "False", "False", "False", "False", "False", "False", "False", "False"])
-# the new token's proof: anything but HTTP 200 fails it - the rescue deletes it, the older ones stay
-proof = next((t for t in block["block"]
-              if t.get("name") == "The new token reads the organisation's repositories - and is the reader's, no admin's"), None)
-check("the new token proven by HTTP 200 as the reader, no admin, alone (an admin's, 401, 403, 000, 502 fail the block)",
-      [condition(proof["failed_when"], _git_mirror_new_read={"stdout": x}, git_mirror_user="git-mirror")
-       for x in ("HTTP 200 git-mirror false", "HTTP 200 git-mirror true", "HTTP 200 forgejo_admin true", "HTTP 401",
-                 "HTTP 403", "HTTP 000", "HTTP 502")] if proof else None,
-      [False, True, True, True, True, True, True])
-# the push key: the mirror user's own (made where it has none), authorized for that user on each Pi - the VIP's either
-key = by_name["The mirror's push key authorized for the mirror's user on each Pi"]
-mk = by_name["The mirror's push key, made where the mirror's user has none"]["ansible.builtin.command"]
-check("its push key: made only where none (creates), as the mirror's user; authorized for that user on every Pi, the "
-      "user's other keys kept", (mk["creates"], "ssh-keygen" in mk["argv"], key.get("delegate_to"),
-                                 key.get("loop") == "{{ groups['pis'] }}", key["ansible.posix.authorized_key"]["user"],
-                                 key["ansible.posix.authorized_key"]["exclusive"], R("{{ _git_mirror_key }}")),
-      ("{{ _git_mirror_key }}", True, "{{ item }}", True, "{{ _git_mirror_owner }}", False, "/home/sm/.ssh/id_ed25519"))
-check("  the key authorized before the deploy-time sync", names.index(key["name"]) < names.index("The mirror synced now"), True)
-# node_exporter's textfile: the mirror user's file in root's directory, made empty once, never emptied after
-mf = by_name["The mirror's metrics file, the mirror user's"]["ansible.builtin.copy"]
-check("its metrics file: the mirror user's, made once (force false), where node_exporter reads",
-      (R(mf["dest"]), mf["force"], mf["owner"], mf["mode"]),
-      ("/var/lib/node_exporter/textfile/offsite_git_mirror.prom", False, "{{ _git_mirror_owner }}", "0644"))
-svc = next(t for t in tasks if (t.get("ansible.builtin.copy") or {}).get("dest") == "/etc/systemd/system/offsite-backup.service")
-now = next((t for t in tasks if (t.get("ansible.builtin.systemd") or {}).get("name") == "offsite-backup.service"), None)
-check("the sync as the mirror's user; run once at deploy, a failure failing the play (not in a preview)",
-      ("User=sm" in R(svc["ansible.builtin.copy"]["content"]), now is not None and now["ansible.builtin.systemd"]["state"],
-       now is not None and [condition(now.get("when"), git_mirror_enabled=True, offsite_backup_enabled=True,
-                                      ansible_check_mode=c) for c in (False, True)]),
-      (True, "started", [True, False]))
-# the Pi-side root the sync writes as the mirror's user: the backup-git-mirror volume's root (root:root 0755 on
-# production, read 2026-10-08: every repository's init and last-success refused) made the mirror user's, on each Pi
-# where it is mounted - a bare mount point refused (the Pi's own disk); before the deploy-time sync
-root = next((t for t in tasks if "mountpoint -q" in str(t.get("ansible.builtin.shell", ""))
-             and "chown" in str(t.get("ansible.builtin.shell", ""))), None)
-check("the Pi-side root made the mirror user's, on each Pi, before the sync runs",
-      (root is not None and root.get("delegate_to") == "{{ item }}" and "groups['pis']" in str(root.get("loop")),
-       root is not None and names.index(root["name"]) < names.index("The mirror synced now")), (True, True))
-if root:
-    sh_ = root["ansible.builtin.shell"]
-    rscript = R(sh_ if isinstance(sh_, str) else sh_["cmd"])
-    def root_run(mounted, stat):
-        open(os.path.join(W, "root-calls"), "w").close()
-        for b, body in (("mountpoint", f'#!/bin/bash\n[ "{mounted}" = yes ]\n'), ("stat", f'#!/bin/bash\necho "{stat}"\n'),
-                        ("chown", '#!/bin/bash\necho "chown $*" >> "$W/root-calls"\n'),
-                        ("chmod", '#!/bin/bash\necho "chmod $*" >> "$W/root-calls"\n')):
-            open(os.path.join(W, "rbin", b), "w").write(body)
-            os.chmod(os.path.join(W, "rbin", b), 0o755)
-        r = subprocess.run(["bash", "-c", rscript], capture_output=True, text=True, env=dict(
-            os.environ, PATH=os.path.join(W, "rbin") + ":" + os.environ["PATH"], W=W))
-        return r.returncode, r.stdout.strip().split("\n")[-1][:40], open(os.path.join(W, "root-calls")).read().split("\n")[:2]
-    os.makedirs(os.path.join(W, "rbin"), exist_ok=True)
-    got = [root_run("no", "root:root 755"), root_run("yes", "root:root 755"), root_run("yes", "sm:sm 750")]
-    check("the root: not mounted - refused, nothing changed; root's - made the mirror user's 0750, said; already - nothing",
-          [(g[0], g[0] != 0 or "changed" in g[1], [c.split()[0] for c in g[2] if c]) for g in got],
-          [(1, True, []), (0, True, ["chown", "chmod"]), (0, False, [])])
-    check("its changed: only where it changed",
-          [condition(root.get("changed_when", True), **{root.get("register", "_r"): {"stdout": o}})
-           for o in ("changed from root:root 755", "")], [True, False])
-# the mirror's volume on the Pis touched by no other playbook's task (setup-gluster mounts it) but where it is checked
-# mounted and bounded: setup-vault-pi made its root and monitor.git through the mount, unbounded, with no check - a
-# hung client held the play, an unmounted Pi got them on its own disk; the sync makes each repository itself
-from plays import files as _files, load as _load, plays as _plays  # noqa: E402
-def _walk(ts):
-    for t in ts or []:
-        if isinstance(t, dict):
-            yield t
-            for k in ("block", "rescue", "always"):
-                yield from _walk(t.get(k))
-on_pi = lambda play, t: bool(re.search(r"\bpi", str(t.get("delegate_to", play.get("hosts")))))  # noqa: E731
-touch = [(f, t.get("name")) for f in _files("deploy/ansible") if not f.endswith("setup-gluster.yml")
-         for play in _plays(_load(f)) for k in ("pre_tasks", "tasks", "post_tasks", "handlers")
-         for t in _walk(play.get(k)) if on_pi(play, t) and ("/mnt/backups/git-mirror" in str(t) or "git_mirror_pi_dir" in str(t))
-         and not ("mountpoint -q" in str(t) and (t.get("timeout") or "timeout " in str(t)))]
-check("the mirror's volume touched by no task but one that checks it mounted, bounded", touch, [])
-# the daily sync, as the playbook writes it
-sync = next(t for t in tasks if (t.get("ansible.builtin.copy") or {}).get("dest") == "/usr/local/bin/offsite-backup-sync.sh")
-prom = os.path.join(W, "offsite_git_mirror.prom")
-body = R(sync["ansible.builtin.copy"]["content"]).replace(R("{{ git_mirror_token_file }}"), creds) \
-    .replace(R("{{ git_mirror_dir }}"), os.path.join(W, "mirror")).replace(R("{{ _git_mirror_prom }}"), prom)
+every = by_name["The mirror reads every repository the organisation has"]
+org_pages = lambda *ns: {"results": [{"json": [{}] * n} for n in ns]}  # noqa: E731
+check("it reads every repository the organisation has (the admin's count): 20 of 20 pass; 3 of 20 (a lost grant: the "
+      "public ones alone) refused; a last page not empty (not all listed) refused",
+      [condition(every["ansible.builtin.assert"]["that"], _git_mirror_reach_read={"stdout": out}, _git_mirror_org_pages=pg,
+                 _org_count=str(sum(len(x["json"]) for x in pg["results"])))
+       for out, pg in (("PUSHES NONE 20", org_pages(20, 0)), ("PUSHES NONE 3", org_pages(20, 0)),
+                       ("PUSHES NONE 50", org_pages(*([50] * 20))))], [True, False, False])
+
+# ── the gate, the key, the Pis ───────────────────────────────────────────
+gtask = by_name["The mirror's gate on each Pi"]
+check("the gate on every Pi, root's 0755, the play's own script",
+      (gtask["delegate_to"], gtask["loop"], gtask["ansible.builtin.copy"]["owner"], gtask["ansible.builtin.copy"]["mode"],
+       gtask["ansible.builtin.copy"]["content"]), ("{{ item }}", "{{ groups['pis'] }}", "root", "0755", "{{ _git_mirror_gate_script }}"))
+mk = by_name["The mirror's push key, made where it has none"]["ansible.builtin.command"]
+pub = by_name["The mirror's push key's public half - derived from the key (a passphrase on it fails here)"]
+key = by_name["The mirror's push key authorized on each Pi - for the gate alone, from ten alone"]
+ak = key["ansible.posix.authorized_key"]
+check("its push key: the mirror's own (in its directory, not its user's login key), made where none, no passphrase; its "
+      "public half derived from it (no .pub to miss), a passphrase failing it",
+      (R("{{ _git_mirror_key }}"), mk["creates"], mk["argv"][mk["argv"].index("-N") + 1],
+       pub["ansible.builtin.command"]["argv"]), ("/var/lib/git-mirror/id_ed25519", "{{ _git_mirror_key }}", "",
+                                                  ["ssh-keygen", "-y", "-P", "", "-f", "{{ _git_mirror_key }}"]))
+check("authorized on every Pi for the mirror user: its gate as forced command, restrict, from ten alone; its other keys kept",
+      (key["delegate_to"], key["loop"], ak["user"], R(ak["key_options"]), ak["exclusive"],
+       R(ak["key"], _git_mirror_pubkey={"stdout": "ssh-ed25519 AAAAKEY old-comment"})),
+      ("{{ item }}", "{{ groups['pis'] }}", "{{ _git_mirror_owner }}",
+       'restrict,from="192.168.11.2",command="/usr/local/bin/git-mirror-gate"', False, "ssh-ed25519 AAAAKEY offsite-git-mirror@target"))
+kh = R(by_name["The VIP's known hosts - both Pis' keys"]["ansible.builtin.copy"]["content"], _pi_host_keys={"results": [
+    {"content": base64.b64encode(b"ssh-ed25519 AAAApi1 root@pi1").decode()},
+    {"content": base64.b64encode(b"ssh-ed25519 AAAApi2 root@pi2").decode()}]})
+check("both Pis' host keys known under the alias the sync checks (one line each)", kh.splitlines(),
+      ["pi-vip ssh-ed25519 AAAApi1", "pi-vip ssh-ed25519 AAAApi2"])
+pchk = by_name["The push accepted on each Pi - its gate, the volume mounted and writable"]
+argv = list(render(pchk["ansible.builtin.command"]["argv"], **dict(v, item="pi2", hostvars={"pi2": {"ansible_host": "192.168.11.6"}})))
+check("the push proven through each Pi's own address at deploy (not only the VIP's holder), as the sync connects - its "
+      "key, the alias, host keys checked; anything but OK fails the play",
+      (pchk["loop"], argv[0], argv[-2:], argv[argv.index("-i") + 1] if "-i" in argv else None, "HostKeyAlias=pi-vip" in argv,
+       "StrictHostKeyChecking=yes" in argv, "BatchMode=yes" in argv,
+       [condition(pchk["failed_when"], _git_mirror_pi_check={"rc": rc, "stdout": o}) for rc, o in ((0, "OK"), (0, ""), (3, "OK"))]),
+      ("{{ groups['pis'] }}", "ssh", ["sm@192.168.11.6", "check"], "/var/lib/git-mirror/id_ed25519", True, True, True,
+       [False, True, True]))
+kept = by_name["A repository on the volume the mirror did not make, kept aside"]
+check("a repository the mirror did not make kept aside at deploy, through the VIP's holder, before the sync",
+      (list(render(kept["ansible.builtin.command"]["argv"], **v))[-2:],
+       names.index(kept["name"]) < names.index("The mirror synced now")), (["sm@10.0.0.5", "keep-unmarked"], True))
+td = by_name["The node_exporter textfile directory"]["ansible.builtin.file"]
+mf = by_name["The mirror's metrics file, the mirror user's"]["ansible.builtin.file"]
+check("the textfile directory root's 0755 (as setup-host-hardening's); the metrics file the mirror user's 0644 - its "
+      "owner and mode put right every run, its content and times never touched",
+      (R(td["path"]), td["state"], td["owner"], td["mode"], R(mf["path"]), mf["state"], mf["owner"], mf["mode"],
+       mf["modification_time"], mf["access_time"]),
+      ("/var/lib/node_exporter/textfile", "directory", "root", "0755", "/var/lib/node_exporter/textfile/offsite_git_mirror.prom",
+       "touch", "{{ _git_mirror_owner }}", "0644", "preserve", "preserve"))
+host_td = next(t for t in yaml.safe_load(open("deploy/ansible/playbooks/setup-host-hardening.yml"))[0]["tasks"]
+               if (t.get("ansible.builtin.file") or {}).get("path") == "{{ node_exporter_textfile_dir }}")["ansible.builtin.file"]
+check("  setup-host-hardening's directory the same (root, 0755): neither undoes the other",
+      (host_td["owner"], host_td["group"], host_td["mode"]), (td["owner"], td["group"], td["mode"]))
+unit_t = by_name["Create offsite backup systemd service"]
+script_t = by_name["Write offsite backup sync script"]
+timer_t = by_name["Enable and start offsite backup timer"]
+unit = R(unit_t["ansible.builtin.copy"]["content"])
+check("the unit written before the script (a stop between them left the old unit, no User=, to run the new script as "
+      "root); as the mirror's user; a failed night tried again (45 min, 3 in 6 h)",
+      (names.index(unit_t["name"]) < names.index(script_t["name"]), "User=sm" in unit, "Restart=on-failure" in unit,
+       "RestartSec=45min" in unit, "StartLimitBurst=3" in unit, "StartLimitIntervalSec=6h" in unit), (True,) * 6)
+check("the script root's 0755 (its user cannot rewrite it); the timer enabled and started",
+      (script_t["ansible.builtin.copy"]["owner"], script_t["ansible.builtin.copy"]["group"], script_t["ansible.builtin.copy"]["mode"],
+       timer_t["ansible.builtin.systemd"]["enabled"], timer_t["ansible.builtin.systemd"]["state"]), ("root", "root", "0755", True, "started"))
+now_t = by_name["The mirror synced now"]
+res_t = by_name["Its result is this run's, every repository of the organisation counted"]
+check("run at deploy with systemctl start (joins a run going - the module skipped it while activating), not in a "
+      "preview; its result this run's and every repository counted - else the play fails",
+      (now_t["ansible.builtin.command"]["argv"], condition(now_t["when"], git_mirror_enabled=True, offsite_backup_enabled=True,
+                                                           ansible_check_mode=True),
+       [condition(res_t["ansible.builtin.assert"]["that"], _git_mirror_started={"stdout": "1000"}, _ts=ts, _count=c,
+                  _git_mirror_reach_read={"stdout": "PUSHES NONE 20"}) for ts, c in (("1005", "20"), ("999", "20"), ("1005", "3"))]),
+      (["systemctl", "start", "offsite-backup.service"], False, [True, False, False]))
+pw = [t.get("name") for t in tasks if "_git_mirror_password" in json.dumps({k: x for k, x in t.items() if k != "name"})
+      and "ansible.builtin.set_fact" not in t and "block" not in t and not t.get("no_log")]
+check("every task carrying the reader's password is no_log", pw, [])
+
+# ── the gate itself ──────────────────────────────────────────────────────
+pi = os.path.join(W, "pi")
+gate = R(play["vars"]["_git_mirror_gate_script"], git_mirror_pi_dir=pi)
+open(os.path.join(W, "gate.sh"), "w").write(gate)
+def gate_run(cmd, **e):
+    r = subprocess.run(["bash", os.path.join(W, "gate.sh")], capture_output=True, text=True, input="",
+                       env=env_with(SSH_ORIGINAL_COMMAND=cmd, **e))
+    return r.returncode, r.stdout.strip()
+def git(*a, cwd=None, check_=True):
+    return subprocess.run(["git", *a], cwd=cwd, capture_output=True, text=True, check=check_,
+                          env=dict(os.environ, GIT_CONFIG_GLOBAL="/dev/null", GIT_CONFIG_NOSYSTEM="1")).stdout.strip()
+def cfg(repo, key):
+    return git("-C", repo, "config", "--get", key, check_=False)
+def reset_pi():
+    shutil.rmtree(pi); os.makedirs(pi)
+reset_pi()
+rc_init = gate_run("init ops main")
+r_ops = os.path.join(pi, "ops.git")
+check("gate init: a bare repository made, marked as the mirror's, kept as a backup (every update logged and never expired, "
+      "no gc, no deletion), HEAD its branch",
+      (rc_init[0], cfg(r_ops, "mirror.made-by"), cfg(r_ops, "core.logAllRefUpdates"), cfg(r_ops, "gc.reflogExpire"),
+       cfg(r_ops, "gc.reflogExpireUnreachable"), cfg(r_ops, "gc.pruneExpire"), cfg(r_ops, "gc.auto"), cfg(r_ops, "receive.autogc"),
+       cfg(r_ops, "receive.denyDeletes"), git("-C", r_ops, "symbolic-ref", "HEAD")),
+      (0, "offsite-git-mirror", "always", "never", "never", "never", "0", "false", "true", "refs/heads/main"))
+git("init", "-q", "--bare", os.path.join(pi, "theirs.git"))
+check("gate: a repository it did not make is never written - init and receive-pack refuse it (5)",
+      (gate_run("init theirs main")[0], gate_run(f"git-receive-pack '{pi}/theirs.git'")[0], cfg(os.path.join(pi, "theirs.git"), "gc.auto")),
+      (5, 5, ""))
+check("gate refuses what is not its own: a bad name, a bad branch, a path outside its volume, another verb, extra or "
+      "missing arguments, a command smuggled after a verb (2)",
+      [gate_run(c)[0] for c in ("init ../x main", "init -x main", "init x a..b", "init x a;b", "git-receive-pack '/etc/x.git'",
+                                f"git-receive-pack '{pi}/../x.git'", "rm -rf /", "check now", "init x", "", "check; id",
+                                "last-success yesterday", "refs a b")],
+      [2] * 13)
+check("gate: every verb refuses on an unmounted volume (3), nothing made",
+      ([gate_run(c, MOUNTED="no")[0] for c in ("check", "init new main", "refs ops", f"git-receive-pack '{pi}/ops.git'",
+                                               "last-success 20261115T040000Z", "keep-unmarked")], os.path.exists(os.path.join(pi, "new.git"))),
+      ([3] * 6, False))
+check("gate check and refs: OK; a repository's ref count (0 for none)",
+      (gate_run("check"), gate_run("refs ops"), gate_run("refs none")), ((0, "OK"), (0, "0"), (0, "0")))
+os.chmod(pi, 0o555)
+unwritable = gate_run("check")[0]
+os.chmod(pi, 0o755)
+check("gate check: an unwritable volume refused (3)", unwritable, 3 if os.geteuid() != 0 else unwritable)
+check("gate last-success: written whole", (gate_run("last-success 20261115T040000Z")[0],
+                                           open(os.path.join(pi, "last-success")).read()), (0, "20261115T040000Z\n"))
+kept_out = gate_run("keep-unmarked")
+check("gate keep-unmarked: a repository it did not make kept aside under its name (never pushed over), its own left",
+      (kept_out[0], kept_out[1].startswith("kept theirs.git as theirs.pre-mirror-"), os.path.isdir(r_ops),
+       os.path.exists(os.path.join(pi, "theirs.git")), gate_run("keep-unmarked")[1]),
+      (0, True, True, False, ""))
+check("gate: each step bounded (timeout around git, mountpoint, receive-pack and the last-success write)",
+      ("timeout --kill-after=10 120 git" in gate, "timeout 60 mountpoint" in gate, "exec timeout --kill-after=30 1800 git-receive-pack" in gate,
+       "timeout 60 sh -c" in gate), (True, True, True, True))
+
+# ── the sync, for real ───────────────────────────────────────────────────
+named = subprocess.run(["id", "-un"], capture_output=True, text=True)
+if named.returncode != 0:
+    # the sync refuses any user but the mirror's, by name (id -un): a uid with no name (a container run with --user, not
+    # CI's root) cannot be it - its part not run here, said (never a pass)
+    print(f"SKIPPED the sync's real runs: uid {os.getuid()} has no name here ({named.stderr.strip()})")
+    print("git-mirror: " + ("ALL-PASS (the sync's real runs skipped)" if not fails else f"{fails} FAILED"))
+    sys.exit(1 if fails else 0)
+me = named.stdout.strip()
+forgejo = os.path.join(W, "forgejo", "schnappy")
+prom = os.path.join(W, "textfile", "offsite_git_mirror.prom")
+sync = by_name["Write offsite backup sync script"]
+SV = dict(offsite_backup_user=me, git_mirror_dir=os.path.join(W, "mirror"), git_mirror_token_file=creds,
+          git_mirror_pi_dir=pi, node_exporter_textfile_dir=os.path.join(W, "textfile"),
+          forgejo_root_url="file://" + os.path.join(W, "forgejo") + "/")
+body = R(sync["ansible.builtin.copy"]["content"], **SV)
 open(os.path.join(W, "sync.sh"), "w").write(body)
-def run(pages, existing=(), **env):
-    for f in ("git-calls", "ssh-calls", "curl-calls"):
+def commit(work, msg):
+    git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", msg, cwd=work)
+def upstream(name, branches=("main",), tags=(), default="main"):
+    """A bare repository in the stand-in Forgejo, its branches each one commit apart, HEAD its default."""
+    bare = os.path.join(forgejo, name + ".git")
+    shutil.rmtree(bare, ignore_errors=True)
+    git("init", "-q", "--bare", "-b", default, bare)
+    work = os.path.join(W, "work-" + name)
+    shutil.rmtree(work, ignore_errors=True)
+    git("init", "-q", "-b", default, work)
+    for br in branches:
+        git("checkout", "-q", "-B", br, cwd=work)
+        commit(work, f"{name} {br} {time.time()}")
+        git("push", "-q", bare, br, cwd=work)
+    for t in tags:
+        git("-c", "user.name=t", "-c", "user.email=t@t", "tag", "-a", "-m", t, t, cwd=work)
+        git("push", "-q", bare, t, cwd=work)
+    return bare, work
+def refs(repo):
+    out = git("-C", repo, "for-each-ref", "--format=%(refname) %(objectname)", check_=False)
+    return dict(l.split(" ", 1) for l in out.splitlines() if l)
+def run(**e):
+    for f in ("ssh-calls", "logged", "mount-checks", "curl-calls"):
         os.path.exists(os.path.join(W, f)) and os.remove(os.path.join(W, f))
-    shutil.rmtree(os.path.join(W, "mirror")); os.makedirs(os.path.join(W, "mirror"))
-    shutil.rmtree(os.path.join(W, "pi"), ignore_errors=True); os.makedirs(os.path.join(W, "pi"))
-    os.path.exists(os.path.join(W, "pi-calls")) and os.remove(os.path.join(W, "pi-calls"))
-    shutil.rmtree(os.path.join(W, "pages"), ignore_errors=True); os.makedirs(os.path.join(W, "pages"))
-    for i, names_ in enumerate(pages, 1):
-        open(os.path.join(W, "pages", str(i)), "w").write(" ".join(names_))
-    for e in existing:
-        os.makedirs(os.path.join(W, "mirror", e + ".git")); open(os.path.join(W, "mirror", e + ".git", "HEAD"), "w").close()
-    r = subprocess.run(["bash", os.path.join(W, "sync.sh")], capture_output=True, text=True, timeout=60,
-                       env=dict(os.environ, PATH=os.path.join(W, "bin") + ":" + os.environ["PATH"], W=W, **env))
-    rd = lambda f: open(os.path.join(W, f)).read().splitlines() if os.path.exists(os.path.join(W, f)) else []  # noqa: E731
-    return r.returncode, r.stdout, rd("git-calls"), rd("ssh-calls"), rd("curl-calls")
-org = R("{{ git_mirror_org }}")
-rc, out, g, sh, cu = run([["ops", "infra"]], existing=["ops"])
-push = [l for l in g if " push " in l]
-check("two repositories (one new): the new cloned, both origins set bare, fetched, their Pi repositories made when new, "
-      "pushed whole; last-success written; 0",
-      (rc, sum(" clone " in l and f"/{org}/infra.git" in l for l in g), sum(" clone " in l for l in g),
-       sorted(re.search(r"set-url origin (\S+)", l).group(1) for l in g if "set-url origin" in l),
-       sum(" fetch " in l for l in g), sum("git init -q --bare" in l for l in sh),
-       sorted(re.search(r"(\S+)$", l.split(" PROMPT=")[0]).group(1).rsplit("/", 1)[1] for l in push),
-       sum("last-success" in l for l in sh)),
-      (0, 1, 1, [f"https://git.pmon.dev/{org}/infra.git", f"https://git.pmon.dev/{org}/ops.git"], 2, 2,
-       ["infra.git", "ops.git"], 1))
-metrics = dict(l.split(None, 1) for l in (open(prom).read().splitlines() if os.path.exists(prom) else [])
-               if l.strip() and not l.startswith("#"))
-check("a good run's result for Prometheus: its time (now) and how many it mirrored",
-      (abs(int(metrics.get("offsite_git_mirror_last_success_timestamp_seconds", 0)) - __import__("time").time()) < 120,
-       metrics.get("offsite_git_mirror_repositories")), (True, "2"))
-check("  its push with the mirror user's key", (bool(push), all("-i /home/sm/.ssh/id_ed25519" in l for l in push)),
-      (True, True))
-# the 2026-11-15 copy run: clean, one repository of two mirrored - ssh read the loop's list from its standard input
-check("every repository listed is mirrored though ssh and git read their standard input (three of three)",
-      (lambda r: (r[0], sorted(re.findall(r" push .*/([\w.-]+\.git) PROMPT=", "\n".join(r[2])))))(
-          run([["ops", "infra", "site"]])), (0, ["infra.git", "ops.git", "site.git"]))
-# its own helper for Forgejo's URL alone (git's credential.<url>.helper) and no redirect followed: a redirect off the
-# host (a misconfigured proxy) asked the helper for the new host, and it answered any with the token
-check("its git: no prompt (none to answer), the Pi's host keys checked, the credential helper reset before its own - "
-      "Forgejo's URL's alone; no redirect followed",
-      (all("PROMPT=0" in l for l in g), all("StrictHostKeyChecking=yes" in l and "UserKnownHostsFile=" in l for l in push),
-       all(" -c credential.helper= -c credential.https://git.pmon.dev.helper=!" in l for l in g
-           if " fetch " in l or " clone " in l),
-       all(" -c http.followRedirects=false " in l for l in g if " fetch " in l or " clone " in l)),
-      (True, True, True, True))
-# the old mirror's own settings (monitor.git on ten: core.sshCommand with no host-key check, a remote holding the Pi)
-# gone from the repository that holds them, the others left as they are
-rc, out, g, sh, cu = run([["ops", "infra"]], existing=["ops", "infra"], OLD_CONFIG="ops")
-check("the old mirror's ssh setting and its pi remote removed where they are, nowhere else; the run 0",
-      (rc, [l.split(" PROMPT=")[0].split("/mirror/")[1] for l in g if "--unset-all core.sshCommand" in l or "remote remove pi" in l]),
-      (0, ["ops.git config --unset-all core.sshCommand", "ops.git remote remove pi"]))
-# the helper as git runs it (its action an argument): "get" answers the token; "erase" and "store" (git's after a 401,
-# a success) leave the file as it is - no store helper anywhere
-fetch_line = next((l for l in g if " fetch " in l), "")
-# as git is given it: its key (credential.helper, or a URL's credential.<url>.helper) and the helper
-helper = re.search(r"(credential\.\S*?helper)=(!f\(\) \{.*?\}; f)(?= )", fetch_line)
-def helper_run(action):
-    r = subprocess.run(["sh", "-c", helper.group(2)[1:] + " " + action], input="protocol=https\nhost=git.pmon.dev\n\n",
-                       capture_output=True, text=True)
-    return r.stdout, open(creds).read()
-check("its credential helper: get answers the token; erase and store leave it be; git's store helper used nowhere",
-      (helper is not None and helper_run("get"), helper is not None and helper_run("erase")[1],
-       helper is not None and helper_run("store")[1], "store --file" in body or "store --file" in text),
-      ((f"username=git-mirror\npassword=0123456789abcdef0123456789abcdef01234567\n",
-        "0123456789abcdef0123456789abcdef01234567"), "0123456789abcdef0123456789abcdef01234567",
-       "0123456789abcdef0123456789abcdef01234567", False))
-# git itself asked as a fetch asks - for Forgejo's host, and for another (where a redirect went): only Forgejo's answered
-def fill(host):
-    r = subprocess.run(["git", "-c", "credential.helper=", "-c",
-                        f"{helper.group(1)}={helper.group(2)}" if helper else "x.y=", "credential", "fill"],
-                       input=f"protocol=https\nhost={host}\n\n", capture_output=True, text=True,
-                       env=dict(os.environ, GIT_TERMINAL_PROMPT="0"))
-    return "password=0123456789abcdef0123456789abcdef01234567" in r.stdout
-check("git asks its helper: Forgejo's host given the token, another host (a redirect's) nothing",
-      (fill("git.pmon.dev"), fill("other.example.org")), (True, False))
-check("the token on no command line (curl's config, git's credential helper)",
-      any("0123456789abcdef" in l for l in g + sh) or any("0123456789abcdef" in json.loads(c)["argv"].__str__() for c in cu),
-      False)
-rc, out, g, sh, cu = run([[f"r{i}" for i in range(50)], ["r50"]])
-check("51 repositories over two pages: every one mirrored", (rc, sum(" push " in l for l in g)), (0, 51))
-rc, out, g, sh, cu = run([], FAIL_API="1")
-check("the organisation's repositories not listed: fails, nothing done, no last-success",
-      (rc, len(g), sum("last-success" in l for l in sh)), (1, 0, 0))
-rc, out, g, sh, cu = run([])
-check("none listed: fails (an empty organisation is no clean run)", (rc, sum("last-success" in l for l in sh)), (1, 0))
-rc, out, g, sh, cu = run([["ops", "infra", "site"]], FETCH_FAILS="infra")
-check("one repository's fetch failing: the others pushed, it named, the unit failed, no last-success",
-      (rc, sum(" push " in l for l in g), "infra(fetch)" in out, sum("last-success" in l for l in sh)), (1, 3, True, 0))
-rc, out, g, sh, cu = run([["ops", "infra", "site"]], INIT_FAILS="infra")
-check("one repository's repository on the Pi not made: it named, not pushed; the others pushed; the unit failed, no "
-      "last-success", (rc, "infra(its repository on the Pi)" in out, re.findall(r" push .*/([\w.-]+\.git) PROMPT=",
-                                                                             "\n".join(g)),
-                       sum("last-success" in l for l in sh)), (1, True, ["ops.git", "site.git"], 0))
-rc, out, g, sh, cu = run([["ops", "infra", "site"]], PUSH_FAILS="infra")
-check("one repository's push refused by the Pi: named, the others pushed, the unit failed, no last-success",
-      (rc, "infra(push)" in out, sum("last-success" in l for l in sh)), (1, True, 0))
-open(prom, "w").write("offsite_git_mirror_last_success_timestamp_seconds 1700000000\n")
-rc, out, g, sh, cu = run([["ops", "infra"]], LAST_FAILS="1")
-check("its last-success not written on the Pi: the unit failed, said - and its Prometheus result left as the last good "
-      "run's", (rc, "last-success not written" in out, open(prom).read()),
-      (1, True, "offsite_git_mirror_last_success_timestamp_seconds 1700000000\n"))
-rc, out, g, sh, cu = run([["ops", "infra", "site"]], FETCH_FAILS="infra")
-check("  a repository failing: the last good run's result left too", open(prom).read(),
-      "offsite_git_mirror_last_success_timestamp_seconds 1700000000\n")
-# what it writes on the Pi only where the volume is mounted: an unmounted mount point is the Pi's own disk (pushes there
-# lost with the next mount)
-remote = [l for l in sh if "git init" in l or "last-success" in l]
-check("every write on the Pi (a repository made, last-success) under the mount's check",
-      (bool(remote), all("mountpoint -q " in l for l in remote)), (True, True))
-# run as the Pi runs them: mounted - each repository made and received, last-success written; not mounted (a bare
-# mount point, the Pi's own disk) - nothing made, nothing received, no last-success, the unit failed, each named
-pi_calls = lambda: open(os.path.join(W, "pi-calls")).read().splitlines() if os.path.exists(os.path.join(W, "pi-calls")) else []  # noqa: E731
-rc, out, g, sh, cu = run([["ops", "infra"]])
-got_m = (rc, sorted(l.split()[0] for l in pi_calls()), os.path.exists(os.path.join(W, "pi", "last-success")))
-rc, out, g, sh, cu = run([["ops", "infra"]], MOUNTED="no")
-got_u = (rc, pi_calls(), os.path.exists(os.path.join(W, "pi", "last-success")))
-check("on the Pi, mounted: each repository made and received, last-success written; not mounted: nothing made or "
-      "received, no last-success, the unit failed", (got_m, got_u),
-      ((0, ["pi-git", "pi-git", "pi-git", "pi-git", "received", "received"], True), (1, [], False)))
-# the backup's HEAD: Forgejo's default branch of each, set after its push (a plain clone of the backup checks out what
-# Forgejo's does - init --bare left it at master, and a restore found nothing to check out)
-rc, out, g, sh, cu = run([["ops", "site"]], BRANCHES="site=trunk")
-heads = sorted(re.sub(r"^.*/(\w+)\.git symbolic-ref HEAD ", r"\1 ", l) for l in pi_calls() if "symbolic-ref" in l)
-check("each backup's HEAD set to its repository's default branch, after its push, under the mount's check",
-      (rc, heads, all("mountpoint -q" in l for l in sh if "symbolic-ref" in l),
-       [l.split()[0] for l in pi_calls() if "site.git" in l]),
-      (0, ["ops refs/heads/main", "site refs/heads/trunk"], True, ["pi-git", "received", "pi-git"]))
-rc, out, g, sh, cu = run([["ops", "site"]], HEAD_FAILS="site")
-check("  its HEAD not set: named, the unit failed, no last-success, the others still done",
-      (rc, "site(its HEAD)" in out, sum("last-success" in l for l in sh), any("ops.git symbolic-ref" in l for l in pi_calls())),
-      (1, True, 0, True))
-rc, out, g, sh, cu = run([["ops", "site"]], BRANCHES="site=x;rm")
-check("  a default branch that is no plain name: named, never used; the unit failed",
-      (rc, "site(its default branch)" in out, any("x;rm" in l for l in g + sh)), (1, True, False))
-# bounded: its ssh (a dead connection ends), each remote command's mount check, its fetch's speed; the listing's pages
-check("its ssh and remote commands bounded, its fetch's low speed bounded",
-      ("ConnectTimeout=" in body and "ServerAliveInterval=" in body, all("timeout " in l for l in sh if "mountpoint" in l),
-       "http.lowSpeedLimit" in body), (True, True, True))
-rc, out, g, sh, cu = run([[f"r{i}"] for i in range(25)])
-check("more pages than it reads: fails, said - never a mirror of part of the organisation",
-      (rc, "not all listed" in out), (1, True))
-# the old mirror's settings read in the repository's own config alone: one in the user's or the system's left (its
-# unset of the repository's failed every run, every repository named)
-rc, out, g, sh, cu = run([["ops", "infra"]], existing=["ops", "infra"], GLOBAL_SSH="1")
-check("an ssh setting in git's user or system config: left, the run 0", (rc, any("--unset-all" in l for l in g)), (0, False))
-rc, out, g, sh, cu = run([["ops", "bad$(name)"]])
-check("a name that is no plain name: named, never used; the unit failed",
-      (rc, "(its name)" in out, any("bad$(name)" in l for l in g + sh)), (1, True, False))
+    r = subprocess.run(["bash", os.path.join(W, "sync.sh")], capture_output=True, text=True, timeout=120, env=env_with(**e))
+    return r.returncode, r.stdout
+def last():
+    p = os.path.join(pi, "last-success")
+    return open(p).read() if os.path.exists(p) else ""
+reset_pi()
+ops_bare, ops_work = upstream("ops", branches=("main", "dev"), tags=("v1",))
+infra_bare, _ = upstream("infra", default="trunk", branches=("trunk",))
+rc, out = run()
+ops_pi, infra_pi = os.path.join(pi, "ops.git"), os.path.join(pi, "infra.git")
+check("a first run: every repository mirrored - each backup Forgejo's refs exactly, its HEAD Forgejo's default branch, "
+      "marked as the mirror's; last-success written; 0",
+      (rc, refs(ops_pi) == refs(ops_bare), refs(infra_pi) == refs(infra_bare), git("-C", ops_pi, "symbolic-ref", "HEAD", check_=False),
+       git("-C", infra_pi, "symbolic-ref", "HEAD", check_=False), cfg(ops_pi, "mirror.made-by"), bool(last())),
+      (0, True, True, "refs/heads/main", "refs/heads/trunk", "offsite-git-mirror", True))
+cl = os.path.join(W, "restore")
+shutil.rmtree(cl, ignore_errors=True)
+git("clone", "-q", infra_pi, cl, check_=False)
+check("it restores: a plain clone of a backup checks out Forgejo's default branch's commit",
+      git("-C", cl, "rev-parse", "HEAD", check_=False), refs(infra_bare).get("refs/heads/trunk"))
+plines = open(prom).read().splitlines() if os.path.exists(prom) else []
+metrics = [l for l in plines if l and not l.startswith("#")]
+check("its result for Prometheus: its time now, every repository counted, one sample each, the HELP and TYPE lines",
+      (len(metrics), metrics[1:2], bool(metrics) and abs(int(metrics[0].split()[1]) - time.time()) < 120,
+       sum(l.startswith("# TYPE ") for l in plines)), (2, ["offsite_git_mirror_repositories 2"], True, 2))
+cs = calls()
+sc = open(os.path.join(W, "ssh-calls")).read().splitlines() if os.path.exists(os.path.join(W, "ssh-calls")) else []
+check("the token on curl's config on every API call, on no command line, never to the Pi",
+      (bool(cs), all(f"token {TOKEN}" in c["config"] for c in cs), any(TOKEN in " ".join(c["argv"]) for c in cs),
+       any(TOKEN in l for l in sc)), (True, True, False, False))
+key_path = os.path.join(W, "mirror", "id_ed25519")
+check("every ssh with the mirror's key alone, the Pi's host keys checked under its alias, no prompt; to the VIP; each "
+      "command a gate verb", (bool(sc) and all(f"-i {key_path} " in l and "IdentitiesOnly=yes" in l and "StrictHostKeyChecking=yes" in l
+                                              and "HostKeyAlias=pi-vip" in l and "BatchMode=yes" in l for l in sc),
+                              {l.split(" | ")[1] for l in sc}, sorted({l.split(" | ")[2].split()[0] for l in sc})),
+      (True, {f"{me}@10.0.0.5"}, ["git-receive-pack", "init", "last-success"]))
+# Forgejo changes: a branch deleted, a branch force-pushed, a tag added - the backup keeps what it held
+old_main = refs(ops_bare)["refs/heads/main"]
+git("push", "-q", ops_bare, ":dev", cwd=ops_work)
+git("checkout", "-q", "main", cwd=ops_work)
+git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--amend", "--allow-empty", "-m", "rewritten", cwd=ops_work)
+git("push", "-q", "--force", ops_bare, "main", cwd=ops_work)
+git("-c", "user.name=t", "-c", "user.email=t@t", "tag", "-a", "-m", "v2", "v2", cwd=ops_work)
+git("push", "-q", ops_bare, "v2", cwd=ops_work)
+dev_before = refs(ops_pi).get("refs/heads/dev")
+rc, out = run()
+pr = refs(ops_pi)
+check("Forgejo deleted a branch, force-pushed another, added a tag: the backup keeps the deleted branch at its commit, "
+      "takes the new main and tag - and its reflog keeps the commit main had (nothing Forgejo rewrites is lost); 0",
+      (rc, pr.get("refs/heads/dev") == dev_before and dev_before is not None,
+       pr.get("refs/heads/main") == refs(ops_bare)["refs/heads/main"], "refs/tags/v2" in pr,
+       old_main in git("-C", ops_pi, "reflog", "show", "--format=%H", "refs/heads/main", check_=False).split()),
+      (0, True, True, True, True))
+# Forgejo serves a repository empty (deleted and made again, a restore gone wrong): named, its backup kept
+infra_refs = refs(infra_pi)
+lsc = last(); prom_before = open(prom).read()
+shutil.rmtree(infra_bare); git("init", "-q", "--bare", "-b", "trunk", infra_bare)
+rc, out = run()
+check("Forgejo serves a repository empty while its backup holds refs: named, its backup kept as it was, the others done; "
+      "the unit failed, last-success and the Prometheus result left as the last good run's",
+      (rc, "infra(emptied in Forgejo - its backup of" in out, refs(infra_pi) == infra_refs, last() == lsc,
+       open(prom).read() == prom_before), (1, True, True, True, True))
+# an empty repository in Forgejo and in its backup: mirrored as it is
+upstream("infra", default="trunk", branches=("trunk",))
+shutil.rmtree(infra_pi)
+shutil.rmtree(os.path.join(W, "mirror", "infra.git"), ignore_errors=True)
+git("init", "-q", "--bare", "-b", "main", os.path.join(forgejo, "fresh.git"))
+rc, out = run()
+check("an empty repository (no commit yet): its backup made, HEAD set, counted - no push; the run 0",
+      (rc, os.path.isdir(os.path.join(pi, "fresh.git")), git("-C", os.path.join(pi, "fresh.git"), "symbolic-ref", "HEAD", check_=False),
+       [l for l in open(prom).read().splitlines() if l.startswith("offsite_git_mirror_repositories")]),
+      (0, True, "refs/heads/main", ["offsite_git_mirror_repositories 3"]))
+check("  two good runs: still one sample of each metric", len([l for l in open(prom).read().splitlines() if l and not l.startswith("#")]), 2)
+# a repository on the volume the mirror did not make (the old mirror's monitor.git): never pushed over
+upstream("monitor")
+git("init", "-q", "--bare", os.path.join(pi, "monitor.git"))
+before = sorted(os.listdir(os.path.join(pi, "monitor.git")))
+rc, out = run()
+check("a repository on the volume it did not make: never written (the gate refuses it), named; the others done; failed",
+      (rc, "monitor(its repository on the Pi)" in out, sorted(os.listdir(os.path.join(pi, "monitor.git"))) == before,
+       refs(os.path.join(pi, "monitor.git"))), (1, True, True, {}))
+gate_run("keep-unmarked")
+rc, out = run()
+check("  kept aside (keep-unmarked, the play's at deploy): the mirror makes its own, the old one beside it; 0",
+      (rc, cfg(os.path.join(pi, "monitor.git"), "mirror.made-by"), any(x.startswith("monitor.pre-mirror-") for x in os.listdir(pi))),
+      (0, "offsite-git-mirror", True))
+# the volume lost mid-run: nothing written after it, the unit failed, no last-success - at its first check, halfway, at
+# its last (a clean run's own count)
+shutil.rmtree(os.path.join(pi, "fresh.git"), ignore_errors=True)
+run()
+total = int(open(os.path.join(W, "mount-checks")).read())
+for lost in (1, total // 2, total - 1):
+    lsc = last()
+    shutil.rmtree(os.path.join(pi, "fresh.git"), ignore_errors=True)
+    rc, out = run(MOUNT_LOST_AFTER=str(lost))
+    checks = int(open(os.path.join(W, "mount-checks")).read())
+    check(f"the volume lost after {lost} mount checks: the unit fails, no last-success, the checks after it all refused",
+          (rc, last() == lsc, checks > lost), (1, True, True))
+shutil.rmtree(os.path.join(pi, "fresh.git"), ignore_errors=True)
+rc, out = run(MOUNTED="no")
+check("the volume not mounted: every repository named, nothing written, failed",
+      (rc, "(its repository on the Pi)" in out, os.path.exists(os.path.join(pi, "fresh.git"))), (1, True, False))
+rc, out = run()
+check("  mounted again: done; 0", rc, 0)
+# failures named, the stale copy never pushed, the rest still done
+git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "newer", cwd=ops_work)
+git("push", "-q", ops_bare, "main", cwd=ops_work)
+before_ops = refs(ops_pi)
+os.chmod(ops_bare, 0o000)
+rc, out = run()
+os.chmod(ops_bare, 0o755)
+ops_calls = [l for l in (open(os.path.join(W, "ssh-calls")).read().splitlines() if os.path.exists(os.path.join(W, "ssh-calls")) else [])
+             if l.split(" | ")[2].split()[1:2] == ["ops"] or "/ops.git" in l]
+check("a fetch failing: named, its stale copy NOT pushed - nothing sent to the Pi for it (the backup as it was), the "
+      "others done; failed", (rc, "ops(fetch)" in out, refs(ops_pi) == before_ops, ops_calls) if os.geteuid() != 0
+      else (1, True, True, []), (1, True, True, []))
+rc, out = run(FORCE_LIST="ops infra ghost")
+check("a listed repository that does not clone: named, the others done; failed", (rc, "ghost(clone)" in out), (1, True))
+rc, out = run(FORCE_LIST="ops bad$(name)")
+check("a name that is no plain name: named, never used; failed",
+      (rc, "(its name)" in out, "bad$(name)" in (open(os.path.join(W, "ssh-calls")).read() if os.path.exists(os.path.join(W, "ssh-calls")) else "")),
+      (1, True, False))
+rc, out = run(FORCE_LIST="ops", BRANCH_ops="x;rm")
+check("a default branch that is no plain name: named, never used; failed", (rc, "ops(its default branch)" in out), (1, True))
+rc, out = run(FAIL_API="1")
+check("the organisation's repositories not listed: fails, nothing done", (rc, "not listed" in out,
+      os.path.exists(os.path.join(W, "ssh-calls"))), (1, True, False))
+rc, out = run(FORCE_LIST="")
+check("none listed: fails (an empty organisation is no clean run)", (rc, "no repository listed" in out), (1, True))
+rc, out = run(PAGES="25")
+check("more pages than it reads: fails, said - never a mirror of part of the organisation", (rc, "not all listed" in out), (1, True))
+open(creds, "w").write("")
+rc, out = run()
+open(creds, "w").write(TOKEN)
+check("no token: fails, said", (rc, "no token" in out), (1, True))
+os.chmod(prom, 0o444); os.chmod(os.path.join(W, "textfile"), 0o555)
+rc, out = run()
+os.chmod(os.path.join(W, "textfile"), 0o755); os.chmod(prom, 0o644)
+check("its result not written for Prometheus: the unit fails, said",
+      (rc, "not written for Prometheus" in out) if os.geteuid() != 0 else (1, True), (1, True))
+rc, out = run(REFUSE_HOST="10.0.0.5")
+check("the Pi refusing its key: every repository named, failed", (rc, "(its repository on the Pi)" in out), (1, True))
+home = os.path.join(W, "home"); os.makedirs(home, exist_ok=True)
+open(os.path.join(home, ".gitconfig"), "w").write('[url "file:///nowhere/"]\n\tinsteadOf = file://\n')
+rc, out = run(HOME=home)
+check("the mirror user's ~/.gitconfig never applies to the mirror's git (a URL rewrite there changes nothing)", rc, 0)
+other = R(sync["ansible.builtin.copy"]["content"], **dict(SV, offsite_backup_user="someone-else"))
+r = subprocess.run(["bash", "-c", other], capture_output=True, text=True, env=env_with())
+check("run as anyone but the mirror's user (sudo by hand, the old unit as root): refused before anything",
+      (r.returncode, "REFUSED: run as someone-else" in r.stdout), (1, True))
+# its credential helper, as git runs it, for production's base and the copy's (http, a port)
+def fill(base, host):
+    b = R(sync["ansible.builtin.copy"]["content"], **dict(SV, forgejo_root_url=base + "/"))
+    lines = b.splitlines()
+    i = next(n for n, l in enumerate(lines) if l.strip().startswith("helper=("))
+    helper_def = lines[i] + "\n" + lines[i + 1]
+    snip = (f"mirror_user=git-mirror; tokenf={creds}\nforgejo_helper=\"credential.{base}.helper\"\n{helper_def}\n"
+            f"printf 'protocol={base.split(':')[0]}\\nhost={host}\\n\\n' | git \"${{helper[@]}}\" credential fill")
+    r = subprocess.run(["bash", "-c", snip], capture_output=True, text=True,
+                       env=dict(os.environ, GIT_TERMINAL_PROMPT="0", GIT_CONFIG_GLOBAL="/dev/null", GIT_CONFIG_NOSYSTEM="1"))
+    return f"password={TOKEN}" in r.stdout
+check("its credential helper answers Forgejo's host alone - production's https, the copy's http with a port; another "
+      "host (a redirect's) nothing", (fill("https://git.pmon.dev", "git.pmon.dev"), fill("https://git.pmon.dev", "other.example.org"),
+                                       fill("http://192.168.56.50:3000", "192.168.56.50:3000"),
+                                       fill("http://192.168.56.50:3000", "other.example.org")), (True, False, True, False))
+check("its credential helper never stores or erases (git's store helper used nowhere)",
+      ("store --file" in body, '[ \\"\\$1\\" = get ] || return 0' in body), (False, True))
+check("its fetch and clone: no redirect followed, a stalled transfer ended after 10 minutes (a large repository's pack "
+      "prepared first)", ("http.followRedirects=false" in body, "http.lowSpeedTime=600" in body), (True, True))
+check("its push: every ref forced, none deleted (no --mirror), bounded",
+      ("push --force --porcelain" in body and "'refs/*:refs/*'" in body and "push -q --mirror" not in body,
+       "timeout --kill-after=30 1800 git -C" in body), (True, True))
 print("git-mirror: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
-PYGM2
+PYGM

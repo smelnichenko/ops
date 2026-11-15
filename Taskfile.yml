@@ -1315,11 +1315,11 @@ tasks:
 
 
   deploy:velero:
-    desc: "The offsite git mirror of the schnappy organisation's repositories to the Pis (daily timer on ten); Velero and its in-cluster MinIO only where Argo CD does not own Velero (production: it does)"
+    desc: "The offsite git mirror of the schnappy organisation's repositories to the Pis (daily timer on ten); Velero and its in-cluster MinIO only where Argo CD does not own Velero (production: it does). -- --check --diff previews it"
     dir: deploy/ansible
     deps: [deploy:install]
     cmds:
-      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-velero.yml
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-velero.yml {{.CLI_ARGS}}
 
   deploy:backup:
     desc: "PRODUCTION: a manual Velero backup from the daily schedule (schnappy-production, pods left out: manifests only) - in the running server pod (exec deploy/velero picked a node-agent pod); waited for, failing unless Completed"

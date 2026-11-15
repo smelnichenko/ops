@@ -439,7 +439,9 @@
                     port: 9000
 
 # Every repository of the schnappy organisation mirrored from Forgejo and pushed to the Pis daily (offsite-backup.timer),
-# an extra copy of the code
+# an extra copy of the code that KEEPS what it held: nothing Forgejo deletes or rewrites is deleted from it (pushed
+# without deletions, every ref update logged and never expired, no gc there) - a repository wiped or rolled back in
+# Forgejo fails the run by name instead of wiping its backup
 - name: Offsite git mirror to the Pis
   hosts: target
   become: true
@@ -456,36 +458,49 @@
     git_mirror_org: schnappy
     # the mirror's own Forgejo account - no admin (operator 2026-10-20: no admin account in any automation): a team of
     # the organisation's gives it code read on every repository, new ones too; nothing else. The admin's credentials
-    # make the account and its team here (as setup-argocd-reader's); the sync holds the reader's token alone
+    # make the account (anew at each new token: an account of that name made by anyone else - Forgejo's sign-up is open
+    # - is never adopted with its own tokens and keys) and its team here; the sync holds the reader's token alone
     git_mirror_user: git-mirror
     git_mirror_email: git-mirror@pmon.dev
     git_mirror_team: git-mirror-read
     git_mirror_dir: /var/lib/git-mirror
     git_mirror_host_alias: pi-vip
     git_mirror_known_hosts: "/var/lib/git-mirror/known_hosts"
-    # Forgejo read with a token of read:repository and read:organization alone, never the admin's password - that sat
-    # in the old mirror's origin URL, on git-remote-https's argv at each fetch (any local user reads those in /proc).
-    # The token in a file of the mirror's user's alone: a credential helper of the sync's own hands it to git (the
-    # credential protocol: no command line) - one that answers "get" alone: git's store helper erases what it holds
+    # Forgejo read with a token of read:repository, read:organization and read:user alone, never the admin's password -
+    # that sat in the old mirror's origin URL, on git-remote-https's argv at each fetch (any local user reads those in
+    # /proc). The token in a file of the mirror's user's alone: a credential helper of the sync's own hands it to git
+    # (the credential protocol: no command line) - one that answers "get" alone: git's store helper erases what it holds
     # on any 401 (a blip), and every sync after failed; the sync's API call takes it on curl's config
     git_mirror_token_file: "/var/lib/git-mirror/token"
     # each repository pushed to a bare one of its own on the Pi at the VIP; the run's last-success beside them
     git_mirror_pi_dir: /mnt/backups/git-mirror
+    # the only thing the mirror's key may run on a Pi (its forced command): check, init, refs, git-receive-pack,
+    # last-success, keep-unmarked - their arguments checked, each bounded, the volume's mount checked at each
+    git_mirror_gate: /usr/local/bin/git-mirror-gate
+    # the address the Pis see the push come from (the mirror's key is accepted from it alone)
+    git_mirror_from: "{{ ansible_host }}"
     _git_mirror_owner: "{{ offsite_backup_user | default('sm') }}"
     _git_mirror_pi: "{{ offsite_backup_user | default('sm') }}@{{ offsite_backup_host | default(keepalived_vip) }}"
     _git_mirror_forgejo: "{{ git_mirror_base }}/api/v1"
     _git_mirror_api: "{{ _git_mirror_forgejo }}/orgs/{{ git_mirror_org }}/repos"
-    # the key the sync pushes with: the mirror user's own (made where it has none), authorized for that user on both
-    # Pis - the VIP's either (ten's was on pi1 alone: with the VIP on pi2 every push was refused)
-    _git_mirror_key: "{{ offsite_backup_ssh_key | default('/home/' ~ _git_mirror_owner ~ '/.ssh/id_ed25519') }}"
+    # the key the sync pushes with: the mirror's own (made where none, in its directory - not its user's own key, which
+    # logs in to a Pi with a shell), authorized on both Pis - the VIP's either - for the gate alone, from ten alone
+    _git_mirror_key: "{{ offsite_backup_ssh_key | default(git_mirror_dir ~ '/id_ed25519') }}"
     # the sync's result for Prometheus (node_exporter's textfile collector, setup-host-hardening.yml): its last good
-    # run's time and how many repositories it mirrored - OffsiteGitMirrorMissing fires when none is recent (the old
-    # job failed every night unnoticed from 2026-07, its successor never deployed; seen again 2026-11-15)
+    # run's time and how many repositories it mirrored - OffsiteGitMirrorMissing fires when none is recent,
+    # OffsiteGitMirrorShrank when it mirrors fewer than it did (the old job failed every night unnoticed from 2026-07,
+    # its successor never deployed; seen again 2026-11-15)
     _git_mirror_textfile_dir: "{{ node_exporter_textfile_dir | default('/var/lib/node_exporter/textfile') }}"
     _git_mirror_prom: "{{ _git_mirror_textfile_dir }}/offsite_git_mirror.prom"
-    # whether the token in the file reads the organisation's repositories, and whose it is: "HTTP 200 <login>
-    # <admin>" it reads (kept only as the reader's, no admin's); 401 or 403 (or no token) it does not - a new one is
-    # made; anything else (Forgejo or the network down) proves nothing either way: the play fails, no token made
+    _git_mirror_ssh_opts: >-
+      -o BatchMode=yes -o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=4
+      -o HostKeyAlias={{ git_mirror_host_alias }} -o UserKnownHostsFile={{ git_mirror_known_hosts }}
+      -o StrictHostKeyChecking=yes -o IdentitiesOnly=yes -i {{ _git_mirror_key }}
+    # whether the token in a file reads the organisation's repositories, and whose it is: "HTTP 200 <login> <admin>"
+    # (kept only as the reader's, no admin's); 401/403 (or no token): "HTTP <code>"/"NO TOKEN" - a new one is made; the
+    # user API refusing a token that reads (401/403: one without read:user, the admin's of before) "HTTP 200 UNSCOPED"
+    # - a new one; anything else (Forgejo or the network down, a 5xx, no answer) proves nothing either way: printed as
+    # it is, the play fails, no token made
     _git_mirror_probe: |
       set -uo pipefail
       token=$(cat "$TOKEN_FILE" 2> /dev/null) || token=""
@@ -493,12 +508,19 @@
       code=$(curl -s --max-time 30 -o /dev/null -w '%{http_code}' \
         -K <(printf 'header = "Authorization: token %s"\n' "$token") "$API?limit=1")
       [ "$code" = 200 ] || { echo "HTTP $code"; exit 0; }
-      who=$(curl -sf --max-time 30 -K <(printf 'header = "Authorization: token %s"\n' "$token") "$USER_API" \
-        | python3 -c 'import json, sys; d = json.load(sys.stdin); print(d["login"], str(d["is_admin"]).lower())') \
-        || who="UNKNOWN"
-      echo "HTTP 200 $who"
+      me=$(mktemp -p "$(dirname "$TOKEN_FILE")" .probe.XXXXXX) || { echo "NO TEMP FILE"; exit 0; }
+      trap 'rm -f "$me"' EXIT
+      ucode=$(curl -s --max-time 30 -o "$me" -w '%{http_code}' \
+        -K <(printf 'header = "Authorization: token %s"\n' "$token") "$USER_API")
+      case "$ucode" in
+        200) python3 -c 'import json, sys; d = json.load(open(sys.argv[1])); print("HTTP 200", d["login"], str(d["is_admin"]).lower())' "$me" \
+               || echo "USER API NOT READ" ;;
+        401|403) echo "HTTP 200 UNSCOPED" ;;
+        *) echo "USER API HTTP $ucode" ;;
+      esac
     # every repository the token's account reads, and what it may do there: "PUSHES NONE <n>" - none pushed to or
-    # administered - or "PUSHES <repo> ..."; "NOT READ" when the listing is not
+    # administered - or "PUSHES <repo> ..."; "NOT READ" when the listing is not, or a repository's permissions are
+    # missing (an answer without them proves nothing: fail closed)
     _git_mirror_reach: |
       set -uo pipefail
       token=$(cat "$TOKEN_FILE") || { echo "NOT READ"; exit 0; }
@@ -514,8 +536,94 @@
       [ "$page" -le 20 ] || { echo "NOT READ"; exit 0; }
       python3 -c 'import json, sys
       repos = [r for line in sys.stdin if line.strip() for r in json.loads(line)]
-      bad = [r["name"] for r in repos if (r.get("permissions") or {}).get("push") or (r.get("permissions") or {}).get("admin")]
+      if any(not isinstance(r.get("permissions"), dict) or "push" not in r["permissions"] or "admin" not in r["permissions"]
+             for r in repos):
+          print("NOT READ")
+          sys.exit(0)
+      bad = [r["name"] for r in repos if r["permissions"]["push"] or r["permissions"]["admin"]]
       print("PUSHES " + " ".join(bad) if bad else f"PUSHES NONE {len(repos)}")' <<< "$all"
+    # the gate on each Pi - the mirror's key's forced command (sshd hands it the command asked for in
+    # SSH_ORIGINAL_COMMAND; it runs that alone, as the mirror user). GIT_MIRROR_GATE_DIR: the harness's
+    _git_mirror_gate_script: |
+      #!/bin/bash
+      # git-mirror-gate - the only thing the offsite git mirror's key may run here (ops setup-velero.yml): its forced
+      # command (authorized_keys: restrict, from ten alone). Every verb checks its arguments and the volume's mount, and
+      # is bounded - a hung Gluster client holds no run. A repository it did not make is never written.
+      #   check                  the volume mounted and writable: OK
+      #   init <name> <branch>   the bare repository made where none (marked as the mirror's), kept as a backup: every
+      #                          ref update logged and never expired, no gc, no deletion; HEAD that branch
+      #   refs <name>            how many refs it holds (0: none, or no repository)
+      #   git-receive-pack '<dir>/<name>.git'   a push into one the mirror made
+      #   last-success <time>    the run's time (YYYYMMDDTHHMMSSZ) written whole
+      #   keep-unmarked          a repository the mirror did not make kept under <name>.pre-mirror-<time>.git - never
+      #                          pushed over
+      set -uo pipefail
+      dir=${GIT_MIRROR_GATE_DIR:-{{ git_mirror_pi_dir }}}
+      {% raw %}
+      say() { echo "git-mirror-gate on $(hostname): $*" >&2; }
+      read -r -a a <<< "${SSH_ORIGINAL_COMMAND:-}"
+      mounted() { timeout 60 mountpoint -q "$dir" || { say "$dir not mounted"; exit 3; }; }
+      plain() { [[ $1 =~ ^[A-Za-z0-9_][A-Za-z0-9._-]*$ ]] || { say "no repository name: $1"; exit 2; }; }
+      g() { timeout --kill-after=10 120 git "$@"; }
+      marked() { [ "$(g -C "$1" config --get mirror.made-by 2> /dev/null)" = offsite-git-mirror ]; }
+      case "${a[0]:-}" in
+        check)
+          [ "${#a[@]}" -eq 1 ] || { say "check takes nothing"; exit 2; }
+          mounted
+          [ -w "$dir" ] || { say "$dir not writable"; exit 3; }
+          echo OK ;;
+        init)
+          [ "${#a[@]}" -eq 3 ] || { say "init <name> <branch>"; exit 2; }
+          plain "${a[1]}"
+          [[ ${a[2]} =~ ^[A-Za-z0-9._/-]+$ && ${a[2]} != *..* ]] || { say "no branch name: ${a[2]}"; exit 2; }
+          mounted
+          r=$dir/${a[1]}.git
+          if [ ! -e "$r" ]; then
+            g init -q --bare "$r" && g -C "$r" config mirror.made-by offsite-git-mirror || { say "${a[1]}: not made"; exit 4; }
+          fi
+          marked "$r" || { say "${a[1]}.git was not made by this mirror - left as it is (keep-unmarked keeps it aside)"; exit 5; }
+          for kv in core.logAllRefUpdates=always gc.reflogExpire=never gc.reflogExpireUnreachable=never gc.pruneExpire=never \
+                    gc.auto=0 receive.autogc=false receive.denyDeletes=true receive.denyNonFastForwards=false; do
+            g -C "$r" config "${kv%%=*}" "${kv#*=}" || { say "${a[1]}: $kv not set"; exit 4; }
+          done
+          g -C "$r" symbolic-ref HEAD "refs/heads/${a[2]}" || { say "${a[1]}: its HEAD not set"; exit 4; } ;;
+        refs)
+          [ "${#a[@]}" -eq 2 ] || { say "refs <name>"; exit 2; }
+          plain "${a[1]}"
+          mounted
+          r=$dir/${a[1]}.git
+          if [ -e "$r" ]; then g -C "$r" for-each-ref --format=x | wc -l; else echo 0; fi ;;
+        git-receive-pack)
+          [ "${#a[@]}" -eq 2 ] || { say "git-receive-pack '<repository>'"; exit 2; }
+          p=${a[1]#\'}; p=${p%\'}
+          [[ $p == "$dir"/*.git ]] || { say "not a repository of $dir: $p"; exit 2; }
+          n=${p#"$dir"/}; n=${n%.git}
+          plain "$n"
+          mounted
+          marked "$p" || { say "$n.git was not made by this mirror - nothing received"; exit 5; }
+          exec timeout --kill-after=30 1800 git-receive-pack "$p" ;;
+        last-success)
+          [ "${#a[@]}" -eq 2 ] && [[ ${a[1]} =~ ^[0-9]{8}T[0-9]{6}Z$ ]] || { say "last-success <YYYYMMDDTHHMMSSZ>"; exit 2; }
+          mounted
+          timeout 60 sh -c 'printf "%s\n" "$1" > "$2/last-success.new" && mv -f "$2/last-success.new" "$2/last-success"' \
+            - "${a[1]}" "$dir" || { say "last-success not written"; exit 4; } ;;
+        keep-unmarked)
+          [ "${#a[@]}" -eq 1 ] || { say "keep-unmarked takes nothing"; exit 2; }
+          mounted
+          now=$(date -u +%Y%m%dT%H%M%SZ)
+          for r in "$dir"/*.git; do
+            [ -d "$r" ] || continue
+            case "$r" in *.pre-mirror-*.git) continue ;; esac
+            marked "$r" && continue
+            k=${r%.git}.pre-mirror-$now.git
+            timeout 60 mv "$r" "$k" || { say "$r not kept aside"; exit 4; }
+            echo "kept $(basename "$r") as $(basename "$k")"
+          done ;;
+        *)
+          say "refused: ${SSH_ORIGINAL_COMMAND:-(no command)}"
+          exit 2 ;;
+      esac
+      {% endraw %}
 
   tasks:
     - name: Install git
@@ -533,7 +641,7 @@
         mode: '0750'
       when: git_mirror_enabled | default(true) | bool
 
-    # the token kept while it still reads the organisation's repositories
+    # the token kept while it still reads the organisation's repositories, as the reader's
     - name: The mirror's token reads the organisation's repositories
       ansible.builtin.shell:
         cmd: "{{ _git_mirror_probe }}"
@@ -547,7 +655,7 @@
       check_mode: false  # a read: a preview judges the token too
       register: _git_mirror_read
       changed_when: false
-      failed_when: _git_mirror_read.stdout is not match('^(HTTP 200 .+|HTTP 401|HTTP 403|NO TOKEN)$')
+      failed_when: _git_mirror_read.stdout is not match('^(HTTP 200 .+ (true|false)|HTTP 200 UNSCOPED|HTTP 401|HTTP 403|NO TOKEN)$')
       when: git_mirror_enabled | default(true) | bool
 
     - name: Whether the kept token reads
@@ -556,9 +664,9 @@
         _git_mirror_token_works: "{{ _git_mirror_read.stdout | default('') == 'HTTP 200 ' ~ git_mirror_user ~ ' false' }}"
       when: git_mirror_enabled | default(true) | bool
 
-    # a new token wanted: the mirror's reader made (or found) and set as it must be - no admin, its team's code read
-    # on every repository of the organisation alone - by the admin's credentials, then the token minted BY the reader
-    # (its own basic auth, a random password set each run and kept nowhere), so no admin's token is ever minted
+    # a new token wanted: the reader made anew - an account of that name deleted first (one made by anyone else, its
+    # tokens, keys and grants with it), then made, its team's code read on every repository of the organisation alone
+    # - by the admin's credentials; the token minted BY the reader (its own basic auth, a random password kept nowhere)
     - name: The admin's credentials, and a reader that is not the admin
       ansible.builtin.assert:
         that:
@@ -586,6 +694,22 @@
         - git_mirror_enabled | default(true) | bool
         - not _git_mirror_token_works | bool
 
+    - name: The reader of before deleted - its tokens, keys and grants with it (never adopted)
+      ansible.builtin.uri:
+        follow_redirects: none
+        url: "{{ _git_mirror_forgejo }}/admin/users/{{ git_mirror_user }}?purge=true"
+        method: DELETE
+        url_username: "{{ forgejo_admin_user }}"
+        url_password: "{{ forgejo_admin_password }}"
+        force_basic_auth: true
+        status_code: [204, 404]  # gone already (deleted meanwhile) is what it wants
+      changed_when: true
+      when:
+        - git_mirror_enabled | default(true) | bool
+        - not _git_mirror_token_works | bool
+        - _git_mirror_account.status == 200
+        - not ansible_check_mode
+
     - name: A fresh random password for the reader (this run's alone)
       ansible.builtin.set_fact:
         _git_mirror_password: "{{ lookup('ansible.builtin.password', '/dev/null length=40 chars=ascii_letters,digits') }}"
@@ -594,7 +718,7 @@
         - git_mirror_enabled | default(true) | bool
         - not _git_mirror_token_works | bool
 
-    - name: The reader made, where Forgejo has none
+    - name: The reader made
       ansible.builtin.uri:
         follow_redirects: none
         url: "{{ _git_mirror_forgejo }}/admin/users"
@@ -613,32 +737,6 @@
           send_notify: false
           visibility: private
         status_code: 201
-      changed_when: true
-      no_log: true  # the password in its body
-      when:
-        - git_mirror_enabled | default(true) | bool
-        - not _git_mirror_token_works | bool
-        - _git_mirror_account.status == 404
-        - not ansible_check_mode
-
-    - name: The reader's password set, and no admin
-      ansible.builtin.uri:
-        follow_redirects: none
-        url: "{{ _git_mirror_forgejo }}/admin/users/{{ git_mirror_user }}"
-        method: PATCH
-        url_username: "{{ forgejo_admin_user }}"
-        url_password: "{{ forgejo_admin_password }}"
-        force_basic_auth: true
-        body_format: json
-        body:
-          login_name: "{{ git_mirror_user }}"
-          source_id: 0
-          password: "{{ _git_mirror_password }}"
-          must_change_password: false
-          admin: false
-          prohibit_login: false
-          active: true
-        status_code: 200
       changed_when: true
       no_log: true  # the password in its body
       when:
@@ -795,19 +893,18 @@
         - not ansible_check_mode
         - git_mirror_user not in (_git_mirror_members.json | map(attribute='login') | list)
 
-    # page by page (Forgejo pages its answers: 30 a page by default, 50 at most) - an older mirror token on a later page
-    # was never deleted; ten pages of 50, the last one not full (the check below). The reader's own tokens, read by it
-    - name: Forgejo's tokens of the reader, page by page
+    # the admin's own git-mirror-* tokens - this play minted the mirror's token on the admin before (2026-10) - revoked:
+    # no admin's token made for automation is left live. Page by page, ten of 50, the last one not full
+    - name: The admin's tokens, page by page
       loop: "{{ range(1, 11) | list }}"
       ansible.builtin.uri:
         follow_redirects: none
-        url: "{{ _git_mirror_forgejo }}/users/{{ git_mirror_user }}/tokens?limit=50&page={{ item }}"
-        method: GET
-        user: "{{ git_mirror_user }}"
-        password: "{{ _git_mirror_password }}"
+        url: "{{ _git_mirror_forgejo }}/users/{{ forgejo_admin_user }}/tokens?limit=50&page={{ item }}"
+        url_username: "{{ forgejo_admin_user }}"
+        url_password: "{{ forgejo_admin_password }}"
         force_basic_auth: true
         status_code: 200
-      register: _git_mirror_tokens
+      register: _git_mirror_admin_tokens
       changed_when: false
       no_log: true
       when:
@@ -815,17 +912,37 @@
         - not _git_mirror_token_works | bool
         - not ansible_check_mode
 
-    - name: Every one of the reader's tokens read (the last page not full)
+    - name: Every one of the admin's tokens read (the last page not full)
       ansible.builtin.assert:
-        that: (_git_mirror_tokens.results | last).json | length < 50
-        fail_msg: "REFUSED: {{ git_mirror_user }} has more than 500 tokens - not all read; delete the stale ones by hand"
+        that: (_git_mirror_admin_tokens.results | last).json | length < 50
+        fail_msg: "REFUSED: the admin has more than 500 tokens - not all read; delete the stale ones by hand"
         quiet: true
       when:
         - git_mirror_enabled | default(true) | bool
         - not _git_mirror_token_works | bool
         - not ansible_check_mode
 
-    - name: A new token for the mirror - its reads alone, under a new name (the old ones stay until it reads)
+    - name: The admin's mirror tokens of before revoked
+      ansible.builtin.uri:
+        follow_redirects: none
+        url: "{{ _git_mirror_forgejo }}/users/{{ forgejo_admin_user }}/tokens/{{ item.id }}"
+        method: DELETE
+        url_username: "{{ forgejo_admin_user }}"
+        url_password: "{{ forgejo_admin_password }}"
+        force_basic_auth: true
+        status_code: [204, 404]  # gone already (deleted meanwhile) is what it wants
+      loop: >-
+        {{ _git_mirror_admin_tokens.results | default([]) | map(attribute='json', default=[]) | flatten
+           | selectattr('name', 'match', '^git-mirror-') | list }}
+      loop_control:
+        label: "{{ item.name }}"
+      no_log: true
+      when:
+        - git_mirror_enabled | default(true) | bool
+        - not _git_mirror_token_works | bool
+        - not ansible_check_mode
+
+    - name: A new token for the mirror - its reads alone
       ansible.builtin.uri:
         follow_redirects: none
         url: "{{ _git_mirror_forgejo }}/users/{{ git_mirror_user }}/tokens"
@@ -849,7 +966,8 @@
         - not _git_mirror_token_works | bool
         - not ansible_check_mode
 
-    # a new token that does not read is deleted again (one more left behind at every run otherwise), the play failed
+    # the new token proven from a file of its own, and only then put where the sync reads it: a token that does not
+    # read is deleted again, the one the sync had left as it was (a blip during a rotation left none that reads)
     - name: The new token in place, proven
       when:
         - git_mirror_enabled | default(true) | bool
@@ -857,10 +975,10 @@
         - not ansible_check_mode
       block:
         # written on ten from the task's stdin (copy's content passes a temp file on the controller first)
-        - name: The token where the sync's credential helper reads it
+        - name: The new token beside the sync's
           ansible.builtin.command:
             argv: [install, -m, "0600", -o, "{{ _git_mirror_owner }}", -g, "{{ _git_mirror_owner }}", /dev/stdin,
-                   "{{ git_mirror_token_file }}"]
+                   "{{ git_mirror_token_file }}.new"]
             stdin: "{{ _git_mirror_token.json.sha1 }}"
             stdin_add_newline: false
           changed_when: true
@@ -871,7 +989,7 @@
             cmd: "{{ _git_mirror_probe }}"
             executable: /bin/bash
           environment:
-            TOKEN_FILE: "{{ git_mirror_token_file }}"
+            TOKEN_FILE: "{{ git_mirror_token_file }}.new"
             API: "{{ _git_mirror_api }}"
             USER_API: "{{ _git_mirror_forgejo }}/user"
           become: true
@@ -879,6 +997,13 @@
           register: _git_mirror_new_read
           changed_when: false
           failed_when: _git_mirror_new_read.stdout != 'HTTP 200 ' ~ git_mirror_user ~ ' false'
+
+        - name: The new token where the sync's credential helper reads it
+          ansible.builtin.command:
+            argv: [mv, -f, "{{ git_mirror_token_file }}.new", "{{ git_mirror_token_file }}"]
+          become: true
+          become_user: "{{ _git_mirror_owner }}"
+          changed_when: true
       rescue:
         - name: The new token deleted - it does not read
           ansible.builtin.uri:
@@ -891,33 +1016,20 @@
             status_code: [204, 404]  # gone already (deleted meanwhile) is what it wants
           no_log: true
 
+        - name: The new token's file removed
+          ansible.builtin.file:
+            path: "{{ git_mirror_token_file }}.new"
+            state: absent
+
         - name: The mirror's token - none reads
           ansible.builtin.fail:
             msg: >-
               REFUSED: a new token for the mirror does not read {{ _git_mirror_api }} as {{ git_mirror_user }}
-              ({{ _git_mirror_new_read.stdout | default('not read') }}) - deleted again
+              ({{ _git_mirror_new_read.stdout | default('not read') }}) - deleted again, the sync's file as it was
 
-    - name: The mirror's older tokens deleted (the new one reads)
-      ansible.builtin.uri:
-        follow_redirects: none
-        url: "{{ _git_mirror_forgejo }}/users/{{ git_mirror_user }}/tokens/{{ item.id }}"
-        method: DELETE
-        user: "{{ git_mirror_user }}"
-        password: "{{ _git_mirror_password }}"
-        force_basic_auth: true
-        status_code: [204, 404]  # gone already (deleted meanwhile) is what it wants
-      loop: >-
-        {{ _git_mirror_tokens.results | default([]) | map(attribute='json', default=[]) | flatten
-           | selectattr('name', 'match', '^git-mirror-') | list }}
-      loop_control:
-        label: "{{ item.name }}"
-      no_log: true
-      when:
-        - git_mirror_enabled | default(true) | bool
-        - not _git_mirror_token_works | bool
-        - not ansible_check_mode
-
-    # read back as the mirror sees it, every run: every repository it reads, none it may push to or administer
+    # read back as the mirror sees it, every run: every repository it reads, none it may push to or administer - and
+    # every repository the organisation has (the admin's count): a team grant lost or wrong (the org is private, 17 of
+    # its 20 repositories private, read 2026-11-15) lists the public ones alone, and the mirror would "succeed" on them
     - name: What the mirror's token reaches - read, never pushed to
       ansible.builtin.shell:
         cmd: "{{ _git_mirror_reach }}"
@@ -935,36 +1047,86 @@
         - git_mirror_enabled | default(true) | bool
         - not ansible_check_mode or _git_mirror_token_works | bool
 
-    # the key the sync pushes with: the mirror user's own, made where it has none, and authorized for that user on
-    # each Pi - the push goes to whichever holds the VIP
-    - name: The mirror's push key, made where the mirror's user has none
+    - name: The organisation's repositories, as the admin lists them - page by page, twenty of 50
+      loop: "{{ range(1, 21) | list }}"
+      ansible.builtin.uri:
+        follow_redirects: none
+        url: "{{ _git_mirror_api }}?limit=50&page={{ item }}"
+        url_username: "{{ forgejo_admin_user }}"
+        url_password: "{{ forgejo_admin_password }}"
+        force_basic_auth: true
+        status_code: 200
+      check_mode: false  # a read
+      register: _git_mirror_org_pages
+      changed_when: false
+      when:
+        - git_mirror_enabled | default(true) | bool
+        - not ansible_check_mode or _git_mirror_token_works | bool
+
+    - name: The mirror reads every repository the organisation has
+      vars:
+        _org_count: "{{ _git_mirror_org_pages.results | map(attribute='json') | map('length') | sum }}"
+      ansible.builtin.assert:
+        that:
+          - (_git_mirror_org_pages.results | last).json | length == 0
+          - (_git_mirror_reach_read.stdout.split() | last | int) == (_org_count | int)
+        fail_msg: >-
+          REFUSED: the mirror reads {{ _git_mirror_reach_read.stdout.split() | last }} of the organisation's
+          {{ _org_count }} repositories (or over 950 - not all listed) - its team's grant
+          ({{ git_mirror_org }}/{{ git_mirror_team }}) is not what it must be
+        quiet: true
+      when:
+        - git_mirror_enabled | default(true) | bool
+        - not ansible_check_mode or _git_mirror_token_works | bool
+
+    # the gate on each Pi: the only thing the mirror's key may run there
+    - name: The mirror's gate on each Pi
+      ansible.builtin.copy:
+        dest: "{{ git_mirror_gate }}"
+        content: "{{ _git_mirror_gate_script }}"
+        owner: root
+        group: root
+        mode: '0755'
+      delegate_to: "{{ item }}"
+      loop: "{{ groups['pis'] }}"
+      become: true
+      when: git_mirror_enabled | default(true) | bool
+
+    # the key the sync pushes with: the mirror's own (made where none - no passphrase: the sync runs unattended), its
+    # public half derived from it (a missing .pub file skipped the authorization, silently), authorized for the mirror
+    # user on each Pi - the push goes to whichever holds the VIP - for the gate alone, from ten alone
+    - name: The mirror's push key, made where it has none
       ansible.builtin.command:
-        argv: [ssh-keygen, -q, -t, ed25519, -N, "", -C, "{{ _git_mirror_owner }}@{{ inventory_hostname }} offsite git mirror",
-               -f, "{{ _git_mirror_key }}"]
+        argv: [ssh-keygen, -q, -t, ed25519, -N, "", -C, "offsite-git-mirror@{{ inventory_hostname }}", -f, "{{ _git_mirror_key }}"]
         creates: "{{ _git_mirror_key }}"
       become: true
       become_user: "{{ _git_mirror_owner }}"
       when: git_mirror_enabled | default(true) | bool
 
-    - name: The mirror's push key, if there is one
+    - name: The mirror's push key, if there is one (a preview before its first run has none yet)
       ansible.builtin.stat:
-        path: "{{ _git_mirror_key }}.pub"
+        path: "{{ _git_mirror_key }}"
       check_mode: false  # a read
-      register: _git_mirror_pubkey_file
+      register: _git_mirror_key_file
       when: git_mirror_enabled | default(true) | bool
 
-    - name: The mirror's push key, read
-      ansible.builtin.slurp:
-        src: "{{ _git_mirror_key }}.pub"
+    - name: The mirror's push key's public half - derived from the key (a passphrase on it fails here)
+      ansible.builtin.command:
+        argv: [ssh-keygen, -y, -P, "", -f, "{{ _git_mirror_key }}"]
+      become: true
+      become_user: "{{ _git_mirror_owner }}"
+      check_mode: false  # a read
       register: _git_mirror_pubkey
+      changed_when: false
       when:
         - git_mirror_enabled | default(true) | bool
-        - _git_mirror_pubkey_file.stat.exists
+        - _git_mirror_key_file.stat.exists
 
-    - name: The mirror's push key authorized for the mirror's user on each Pi
+    - name: The mirror's push key authorized on each Pi - for the gate alone, from ten alone
       ansible.posix.authorized_key:
         user: "{{ _git_mirror_owner }}"
-        key: "{{ _git_mirror_pubkey.content | b64decode | trim }}"
+        key: "{{ (_git_mirror_pubkey.stdout.split()[:2] | join(' ')) ~ ' offsite-git-mirror@' ~ inventory_hostname }}"
+        key_options: 'restrict,from="{{ git_mirror_from }}",command="{{ git_mirror_gate }}"'
         state: present
         exclusive: false  # the user's other keys stay
       delegate_to: "{{ item }}"
@@ -972,28 +1134,7 @@
       become: true
       when:
         - git_mirror_enabled | default(true) | bool
-        - _git_mirror_pubkey_file.stat.exists
-
-    # node_exporter's textfile collector reads it (setup-host-hardening.yml makes the directory, root's); the file is
-    # the mirror user's, written whole by the sync after a good run - made empty here once, never emptied after
-    - name: The node_exporter textfile directory
-      ansible.builtin.file:
-        path: "{{ _git_mirror_textfile_dir }}"
-        state: directory
-        owner: root
-        group: root
-        mode: '0755'
-      when: git_mirror_enabled | default(true) | bool
-
-    - name: The mirror's metrics file, the mirror user's
-      ansible.builtin.copy:
-        dest: "{{ _git_mirror_prom }}"
-        content: ""
-        force: false  # a good run's result kept
-        owner: "{{ _git_mirror_owner }}"
-        group: "{{ _git_mirror_owner }}"
-        mode: '0644'
-      when: git_mirror_enabled | default(true) | bool
+        - _git_mirror_pubkey.stdout is defined
 
     # the push goes to the VIP - pi1's or pi2's address, as keepalived has it: both Pis' own host keys (read from them
     # over Ansible's checked connections) known under one alias, and checked - never "no" (a host answering at the VIP
@@ -1018,6 +1159,105 @@
         mode: '0644'
       when: git_mirror_enabled | default(true) | bool
 
+    # node_exporter's textfile collector reads it (setup-host-hardening.yml makes the directory, root's - made here the
+    # same where it runs first); the file is the mirror user's, written whole by the sync after a good run - made empty
+    # here once, its owner and mode put right every run, its content and times never touched
+    - name: The node_exporter textfile directory
+      ansible.builtin.file:
+        path: "{{ _git_mirror_textfile_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+      when: git_mirror_enabled | default(true) | bool
+
+    - name: The mirror's metrics file, the mirror user's
+      ansible.builtin.file:
+        path: "{{ _git_mirror_prom }}"
+        state: touch
+        owner: "{{ _git_mirror_owner }}"
+        group: "{{ _git_mirror_owner }}"
+        mode: '0644'
+        modification_time: preserve
+        access_time: preserve
+      when: git_mirror_enabled | default(true) | bool
+
+    # the Pi-side root the sync writes as the mirror's user: the backup-git-mirror volume's root - root:root 0755 as
+    # Gluster made it on production (read 2026-10-08: every repository's init and last-success refused there) - the
+    # mirror user's on each Pi where it is mounted; a bare mount point refused (the Pi's own disk). Bounded: a hung
+    # client holds no play
+    - name: The mirror's root on the Pis - mounted, the mirror user's
+      delegate_to: "{{ item }}"
+      loop: "{{ groups['pis'] }}"
+      become: true
+      timeout: 60
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          mountpoint -q {{ git_mirror_pi_dir }} || { echo "REFUSED: {{ git_mirror_pi_dir }} is not mounted here"; exit 1; }
+          now=$(stat -c '%U:%G %a' {{ git_mirror_pi_dir }})
+          [ "$now" != "{{ _git_mirror_owner }}:{{ _git_mirror_owner }} 750" ] || exit 0
+          chown {{ _git_mirror_owner }}:{{ _git_mirror_owner }} {{ git_mirror_pi_dir }}
+          chmod 0750 {{ git_mirror_pi_dir }}
+          echo "changed from $now"
+      register: _git_mirror_pi_root
+      changed_when: "'changed from' in _git_mirror_pi_root.stdout"
+      when: git_mirror_enabled | default(true) | bool
+
+    # proven through each Pi, not only the one holding the VIP now: the key and the gate as the sync uses them, to each
+    # Pi's own address (its host key under the alias) - a Pi refusing it otherwise showed the night the VIP moved
+    - name: The push accepted on each Pi - its gate, the volume mounted and writable
+      ansible.builtin.command:
+        argv: "{{ ['ssh'] + (_git_mirror_ssh_opts | split) + [_git_mirror_owner ~ '@' ~ hostvars[item].ansible_host, 'check'] }}"
+      become: true
+      become_user: "{{ _git_mirror_owner }}"
+      loop: "{{ groups['pis'] }}"
+      register: _git_mirror_pi_check
+      changed_when: false
+      failed_when: _git_mirror_pi_check.rc != 0 or _git_mirror_pi_check.stdout != 'OK'
+      when:
+        - git_mirror_enabled | default(true) | bool
+        - not ansible_check_mode
+
+    # a repository on the volume the mirror did not make (the old mirror's monitor.git, of forgejo_admin/monitor) is
+    # kept aside under its own name, never pushed over - the mirror makes its own
+    - name: A repository on the volume the mirror did not make, kept aside
+      ansible.builtin.command:
+        argv: "{{ ['ssh'] + (_git_mirror_ssh_opts | split) + [_git_mirror_pi, 'keep-unmarked'] }}"
+      become: true
+      become_user: "{{ _git_mirror_owner }}"
+      register: _git_mirror_kept
+      changed_when: _git_mirror_kept.stdout | length > 0
+      when:
+        - git_mirror_enabled | default(true) | bool
+        - not ansible_check_mode
+
+    # the unit before the script: a run stopped between them left production's old unit (no User=) to run the new script
+    # as root, its objects root's and every run after refused
+    - name: Create offsite backup systemd service
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/offsite-backup.service
+        mode: '0644'
+        content: |
+          [Unit]
+          Description=Mirror the Forgejo organisation's repositories to the Pis (offsite copy)
+          After=network-online.target
+          Wants=network-online.target
+          # a failed night tried again (a Forgejo restart, a VIP move, a blip) - three times in six hours at most
+          StartLimitIntervalSec=6h
+          StartLimitBurst=3
+
+          [Service]
+          Type=oneshot
+          User={{ _git_mirror_owner }}
+          ExecStart=/usr/local/bin/offsite-backup-sync.sh
+          TimeoutStartSec=1800
+          Restart=on-failure
+          RestartSec=45min
+      register: _git_mirror_unit
+      when: offsite_backup_enabled | default(true) | bool
+
     - name: Write offsite backup sync script
       ansible.builtin.copy:
         dest: /usr/local/bin/offsite-backup-sync.sh
@@ -1027,13 +1267,17 @@
         content: |
           #!/bin/bash
           # offsite-backup-sync.sh - every repository of the Forgejo organisation {{ git_mirror_org }} mirrored to the
-          # Pis daily (offsite-backup.timer): a copy of the code off the Gluster pair that serves it. The repositories
-          # listed from Forgejo's API at each run (a new one mirrored the day it appears); each cloned bare when new,
-          # fetched, and pushed whole to a bare repository of its own on the Pi at the VIP (made when new). Forgejo read
-          # with the mirror's token - git's credential helper, curl's config: never a command line; the Pi's host keys
-          # checked. A repository that fails is named and the rest still go; any failure fails the unit. A good run
-          # writes last-success (its time) on the Pi, last.
+          # Pis daily (offsite-backup.timer): a copy of the code off the Gluster pair that serves it, that keeps what it
+          # held. The repositories listed from Forgejo's API at each run (a new one mirrored the day it appears); each
+          # cloned bare when new, fetched, and pushed to a repository of its own on the Pi at the VIP - every ref, forced,
+          # none deleted (the Pi's side logs every update and never expires them: a force-push or a deletion in Forgejo
+          # loses nothing there). A repository Forgejo serves empty while its backup holds refs fails by name, its
+          # backup kept. Forgejo read with the mirror's token - git's credential helper, curl's config: never a command
+          # line; the Pi's host keys checked, the Pi's gate the only thing the key runs. A repository that fails is named
+          # and the rest still go; any failure fails the unit. A good run writes last-success (its time) on the Pi,
+          # then its time and count for Prometheus, last.
           set -uo pipefail
+          [ "$(id -un)" = {{ _git_mirror_owner }} ] || { echo "REFUSED: run as {{ _git_mirror_owner }}, not $(id -un)"; exit 1; }
           dir={{ git_mirror_dir }}
           tokenf={{ git_mirror_token_file }}
           api={{ _git_mirror_api }}
@@ -1041,18 +1285,18 @@
           pidir={{ git_mirror_pi_dir }}
           say() { logger -t git-mirror "$*"; echo "$*"; }
           export GIT_TERMINAL_PROMPT=0
-          # a dead connection ends (keep-alives), each remote command's mount check bounded (a hung client held the
-          # unit to its 30 minutes, every repository after it failed, none named)
-          ssh_opts=(-o BatchMode=yes -o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=4
-                    -o HostKeyAlias={{ git_mirror_host_alias }} -o UserKnownHostsFile={{ git_mirror_known_hosts }}
-                    -o StrictHostKeyChecking=yes -i {{ _git_mirror_key }})
+          # the mirror user's own git settings never apply to the mirror's git
+          export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
+          # a dead connection ends (keep-alives); the Pi's gate bounds each of its steps
+          ssh_opts=({{ _git_mirror_ssh_opts }})
           export GIT_SSH_COMMAND="ssh ${ssh_opts[*]}"
           # git's other helpers reset; this one answers "get" alone - storing or erasing (after a 401) changes nothing -
           # and for Forgejo's URL alone (credential.<url>.helper), no redirect followed: a redirect off the host (a
-          # misconfigured proxy) asked it for the new host, and it answered any with the token
+          # misconfigured proxy) asked it for the new host, and it answered any with the token. A large repository's
+          # first clone prepares its pack with nothing sent for minutes: 10 minutes of under 1 kB/s before it aborts
           mirror_user={{ git_mirror_user }}
           forgejo_helper="credential.{{ git_mirror_base }}.helper"
-          helper=(-c http.followRedirects=false -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=60 -c credential.helper=
+          helper=(-c http.followRedirects=false -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=600 -c credential.helper=
                   -c "$forgejo_helper=!f() { [ \"\$1\" = get ] || return 0; echo username=$mirror_user; echo \"password=\$(cat $tokenf)\"; }; f")
           token=$(cat "$tokenf" 2> /dev/null) || token=""
           [ -n "$token" ] || { say "FAILED: no token in $tokenf"; exit 1; }
@@ -1077,8 +1321,8 @@
           # repository after the first (the copy's check, 2026-11-15: the run clean, one repository of two mirrored)
           while read -r r head <&3; do
             [ -n "$r" ] || continue
-            [[ $r =~ ^[A-Za-z0-9._-]+$ ]] || { failed+=" $r(its name)"; continue; }
-            [[ $head =~ ^[A-Za-z0-9._/-]+$ ]] || { failed+=" $r(its default branch)"; continue; }
+            [[ $r =~ ^[A-Za-z0-9_][A-Za-z0-9._-]*$ ]] || { failed+=" $r(its name)"; continue; }
+            [[ $head =~ ^[A-Za-z0-9._/-]+$ && $head != *..* ]] || { failed+=" $r(its default branch)"; continue; }
             d=$dir/$r.git
             url={{ git_mirror_base }}/{{ git_mirror_org }}/$r.git
             if [ ! -f "$d/HEAD" ]; then
@@ -1095,25 +1339,30 @@
             if git -C "$d" config --local --get-regexp '^remote\.pi\.' > /dev/null; then
               git -C "$d" remote remove pi || { failed+=" $r(its old remote)"; continue; }
             fi
-            git "${helper[@]}" -C "$d" fetch -q --prune origin 2>&1 | logger -t git-mirror || failed+=" $r(fetch)"
-            # only where the volume is mounted: a bare mount point is the Pi's own disk (what is pushed there is lost
-            # with the next mount)
-            ssh "${ssh_opts[@]}" "$pi" \
-              "timeout 60 mountpoint -q $pidir && { test -f $pidir/$r.git/HEAD || git init -q --bare $pidir/$r.git; }" \
-              2>&1 | logger -t git-mirror || { failed+=" $r(its repository on the Pi)"; continue; }
-            # the push's own connection checks the mount too: the VIP may have moved to the other Pi since the check
-            # above (a bare mount point there, the Pi's own disk)
-            git -C "$d" push -q --mirror --receive-pack="timeout 60 mountpoint -q $pidir && git-receive-pack" \
-              "$pi:$pidir/$r.git" 2>&1 | logger -t git-mirror || { failed+=" $r(push)"; continue; }
-            ssh "${ssh_opts[@]}" "$pi" "timeout 60 mountpoint -q $pidir && git -C $pidir/$r.git symbolic-ref HEAD refs/heads/$head" \
-              2>&1 | logger -t git-mirror || { failed+=" $r(its HEAD)"; continue; }
+            # a failed fetch pushes nothing: the stale copy would land as if it were today's
+            git "${helper[@]}" -C "$d" fetch -q --prune origin 2>&1 | logger -t git-mirror || { failed+=" $r(fetch)"; continue; }
+            here=$(git -C "$d" for-each-ref --format=x | wc -l)
+            if [ "$here" = 0 ]; then
+              # Forgejo serves it empty: an empty repository (its backup empty too) is mirrored as it is; one whose
+              # backup holds refs was wiped or replaced in Forgejo - named, its backup kept
+              there=$(ssh "${ssh_opts[@]}" "$pi" refs "$r" 2> >(logger -t git-mirror)) || { failed+=" $r(its backup not read)"; continue; }
+              if [ "$there" != 0 ]; then failed+=" $r(emptied in Forgejo - its backup of $there refs kept)"; continue; fi
+              ssh "${ssh_opts[@]}" "$pi" init "$r" "$head" 2>&1 | logger -t git-mirror || { failed+=" $r(its repository on the Pi)"; continue; }
+              mirrored+=" $r"
+              continue
+            fi
+            # its repository on the Pi made when new, its HEAD the default branch - the gate's
+            ssh "${ssh_opts[@]}" "$pi" init "$r" "$head" 2>&1 | logger -t git-mirror || { failed+=" $r(its repository on the Pi)"; continue; }
+            # every ref, forced, none deleted - each update said (the Pi logs and keeps the ones it replaces); bounded
+            timeout --kill-after=30 1800 git -C "$d" push --force --porcelain --receive-pack=git-receive-pack "$pi:$pidir/$r.git" 'refs/*:refs/*' \
+              2>&1 | logger -t git-mirror || { failed+=" $r(push)"; continue; }
             mirrored+=" $r"
           done 3<<< "$repos"
           if [ -n "$failed" ]; then
             say "FAILED:$failed"
             exit 1
           fi
-          ssh "${ssh_opts[@]}" "$pi" "timeout 60 mountpoint -q $pidir && date -u +%Y%m%dT%H%M%SZ > $pidir/last-success" \
+          ssh "${ssh_opts[@]}" "$pi" last-success "$(date -u +%Y%m%dT%H%M%SZ)" 2>&1 | logger -t git-mirror \
             || { say "FAILED: its last-success not written on the Pi"; exit 1; }
           # the good run for Prometheus (node_exporter's textfile collector): one write of the whole file - a failed run
           # leaves the last good one's time, and OffsiteGitMirrorMissing fires when it grows old
@@ -1128,23 +1377,6 @@
             || { say "FAILED: its result not written for Prometheus ({{ _git_mirror_prom }})"; exit 1; }
           say "mirrored:$mirrored"
       when: git_mirror_enabled | default(true) | bool
-
-    - name: Create offsite backup systemd service
-      ansible.builtin.copy:
-        dest: /etc/systemd/system/offsite-backup.service
-        mode: '0644'
-        content: |
-          [Unit]
-          Description=Mirror the Forgejo organisation's repositories to the Pis (offsite copy)
-          After=network-online.target
-          Wants=network-online.target
-
-          [Service]
-          Type=oneshot
-          User={{ _git_mirror_owner }}
-          ExecStart=/usr/local/bin/offsite-backup-sync.sh
-          TimeoutStartSec=1800
-      when: offsite_backup_enabled | default(true) | bool
 
     - name: Create offsite backup systemd timer (4 AM daily)
       ansible.builtin.copy:
@@ -1171,35 +1403,49 @@
         daemon_reload: true
       when: offsite_backup_enabled | default(true) | bool
 
-    # the Pi-side root the sync writes as the mirror's user: the backup-git-mirror volume's root - root:root 0755 as
-    # Gluster made it on production (read 2026-10-08: every repository's init and last-success refused there) - the
-    # mirror user's on each Pi where it is mounted; a bare mount point refused (the Pi's own disk). Bounded: a hung
-    # client holds no play
-    - name: The mirror's root on the Pis - mounted, the mirror user's
-      delegate_to: "{{ item }}"
-      loop: "{{ groups['pis'] }}"
-      become: true
-      timeout: 60
-      ansible.builtin.shell:
-        executable: /bin/bash
-        cmd: |
-          set -euo pipefail
-          mountpoint -q {{ git_mirror_pi_dir }} || { echo "REFUSED: {{ git_mirror_pi_dir }} is not mounted here"; exit 1; }
-          now=$(stat -c '%U:%G %a' {{ git_mirror_pi_dir }})
-          [ "$now" != "{{ _git_mirror_owner }}:{{ _git_mirror_owner }} 750" ] || exit 0
-          chown {{ _git_mirror_owner }}:{{ _git_mirror_owner }} {{ git_mirror_pi_dir }}
-          chmod 0750 {{ git_mirror_pi_dir }}
-          echo "changed from $now"
-      register: _git_mirror_pi_root
-      changed_when: "'changed from' in _git_mirror_pi_root.stdout"
-      when: git_mirror_enabled | default(true) | bool
+    # proven now, not at 4 AM: the sync run once - systemctl start waits for a oneshot's end, and joins a run already
+    # going (Ansible's systemd module skipped the start while the unit was activating: no proof); a failure fails the
+    # play. Its result for Prometheus then this run's
+    - name: The mirror's start - this run's
+      ansible.builtin.command: date +%s
+      register: _git_mirror_started
+      changed_when: false
+      check_mode: false
+      when:
+        - git_mirror_enabled | default(true) | bool
+        - offsite_backup_enabled | default(true) | bool
 
-    # proven now, not at 4 AM: the sync run once (a oneshot: the start waits for its end, a failure fails the play)
     - name: The mirror synced now
-      ansible.builtin.systemd:
-        name: offsite-backup.service
-        state: started
-        daemon_reload: true
+      ansible.builtin.command:
+        argv: [systemctl, start, offsite-backup.service]
+      changed_when: true
+      when:
+        - git_mirror_enabled | default(true) | bool
+        - offsite_backup_enabled | default(true) | bool
+        - not ansible_check_mode
+
+    - name: Its result for Prometheus
+      ansible.builtin.slurp:
+        src: "{{ _git_mirror_prom }}"
+      register: _git_mirror_result
+      when:
+        - git_mirror_enabled | default(true) | bool
+        - offsite_backup_enabled | default(true) | bool
+        - not ansible_check_mode
+
+    - name: Its result is this run's, every repository of the organisation counted
+      vars:
+        _lines: "{{ (_git_mirror_result.content | b64decode).splitlines() | reject('match', '^#') | list }}"
+        _ts: "{{ _lines | select('match', '^offsite_git_mirror_last_success_timestamp_seconds ') | map('split') | map('last') | first | default('0') }}"
+        _count: "{{ _lines | select('match', '^offsite_git_mirror_repositories ') | map('split') | map('last') | first | default('-1') }}"
+      ansible.builtin.assert:
+        that:
+          - _ts | int >= _git_mirror_started.stdout | int
+          - _count | int == _git_mirror_reach_read.stdout.split() | last | int
+        fail_msg: >-
+          the sync's result: last success {{ _ts }} (it started {{ _git_mirror_started.stdout | default('?') }}),
+          {{ _count }} repositories of the {{ (_git_mirror_reach_read.stdout | default('?')).split() | last }} it reads
+        quiet: true
       when:
         - git_mirror_enabled | default(true) | bool
         - offsite_backup_enabled | default(true) | bool
@@ -1209,4 +1455,7 @@
       ansible.builtin.debug:
         msg: >-
           Every repository of {{ git_mirror_org }} mirrored in {{ git_mirror_dir }}, pushed daily at 4 AM
-          (offsite-backup.timer) to {{ _git_mirror_pi }}:{{ git_mirror_pi_dir }}
+          (offsite-backup.timer) to {{ _git_mirror_pi }}:{{ git_mirror_pi_dir }}{{ _kept_said }}
+      vars:
+        _kept_said: >-
+          {{ ' - kept aside: ' ~ (_git_mirror_kept.stdout_lines | join('; ')) if (_git_mirror_kept.stdout_lines | default([])) else '' }}
