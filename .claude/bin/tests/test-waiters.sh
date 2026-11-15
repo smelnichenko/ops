@@ -95,7 +95,7 @@ out=$(ci_wait o/r "$sha" 10 2>&1); rc=$?
 none
 cat > "$scratch/wp-errors" <<'EOF'
 #!/usr/bin/env bash
-# exactly what `sqlite3 -json` prints for the pipelines table (errors is a JSON string column)
+# errors as a JSON string column (sqlite3 -json's form, older rows)
 printf '%s\n' '[{"number":343,"errors":"[{\"type\":\"generic\",\"message\":\"could not load config from forge: context deadline exceeded\",\"is_warning\":false,\"data\":null}]"}]'
 EOF
 chmod +x "$scratch/wp-errors"
@@ -103,6 +103,21 @@ start=$(date +%s)
 out=$(CI_WAIT_NONE_GRACE=2 CI_WAIT_PIPELINE_ROWS="$scratch/wp-errors" ci_wait o/r "$sha" 60 2>&1); rc=$?
 took=$(( $(date +%s) - start ))
 [[ $rc == 1 && $out == *"could not load config"* && $took -lt 30 ]] && pass "a silent pipeline error ends the wait" || fail "a silent pipeline error ends the wait" "rc=$rc after ${took}s: $out"
+
+# what Woodpecker's Postgres answers (json_agg - errors a JSON array, not a string): the same verdict
+none
+cat > "$scratch/wp-errors" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' '[{"number":344,"errors":[{"type":"compiler","message":"go-yaml load error at L162","is_warning":false,"data":null}]}]'
+EOF
+chmod +x "$scratch/wp-errors"
+out=$(CI_WAIT_NONE_GRACE=2 CI_WAIT_PIPELINE_ROWS="$scratch/wp-errors" ci_wait o/r "$sha" 60 2>&1); rc=$?
+[[ $rc == 1 && $out == *"pipeline 344 error: go-yaml load error"* ]] && pass "a pipeline error as Postgres answers it ends the wait" \
+    || fail "a pipeline error as Postgres answers it ends the wait" "rc=$rc: $out"
+# the database the rows come from: Woodpecker's Postgres (the SQLite file stopped 2026-11-01 - no error was ever found)
+grep -q 'kubectl -n woodpecker exec woodpecker-postgres-1' "$here/forgejo-ci-wait" && ! grep -q 'sqlite3' "$here/forgejo-ci-wait" \
+    && pass "the rows read from Woodpecker's Postgres, never the stale SQLite file" \
+    || fail "the rows read from Woodpecker's Postgres, never the stale SQLite file" "sqlite3 still read"
 
 # no status and no pipeline error: the waiter keeps waiting (a pipeline that is merely queued)
 cat > "$scratch/wp-errors" <<'EOF'

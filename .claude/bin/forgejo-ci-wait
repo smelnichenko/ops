@@ -22,7 +22,7 @@
 # Prints one line per state change and a final "CI <state> <sha> <url>" line. Never prints the token.
 #
 # Overrides (tests): FORGEJO_API, CI_WAIT_POLL (30 s), CI_WAIT_NONE_GRACE (300 s), CI_WAIT_PIPELINE_ROWS (a command given
-# <owner/repo> <sha> <since-epoch> that prints the errored pipelines as sqlite -json rows; the parsing is always real).
+# <owner/repo> <sha> <since-epoch> that prints the errored pipelines as JSON rows; the parsing is always real).
 set -uo pipefail
 
 fresh=false
@@ -42,11 +42,14 @@ token=$(sed -n 's#.*sm:\([^@]*\)@git\.pmon\.dev.*#\1#p' ~/.git-credentials 2>/de
 get() { curl -sf --max-time 20 -H "Authorization: token $token" "$api/$1"; }
 
 # The errored pipelines on a commit as JSON rows (number, errors), read-only from the Woodpecker server's database on
-# ten: no Woodpecker API token exists.
+# ten (no Woodpecker API token exists): its Postgres (CNPG woodpecker-postgres) since 2026-11 - the SQLite file on the
+# old PV stopped at 2026-11-01, and a lookup there found no errored pipeline ever again. The repo and sha checked to
+# their own alphabets before they reach SQL.
 pipeline_rows() {
     local repo=$1 sha=$2 since=$3
+    [[ $repo =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ && $sha =~ ^[0-9a-f]{7,64}$ && $since =~ ^[0-9]+$ ]] || return 0
     ssh -o BatchMode=yes -o ConnectTimeout=10 sm@192.168.11.2 \
-        "pv=\$(kubectl get pv \$(kubectl -n woodpecker get pvc data-woodpecker-server-0 -o jsonpath='{.spec.volumeName}') -o jsonpath='{.spec.hostPath.path}'); sudo -n sqlite3 -json \"file:\$pv/woodpecker.sqlite?mode=ro\" \"select p.number, p.errors from pipelines p join repos r on r.id = p.repo_id where r.full_name = '$repo' and p.\\\`commit\\\` = '$sha' and p.status = 'error' and p.created >= $since order by p.number desc limit 1\"" 2>/dev/null
+        "kubectl -n woodpecker exec woodpecker-postgres-1 -c postgres -- psql -At -d woodpecker -v ON_ERROR_STOP=1 -c \"select coalesce(json_agg(t), '[]') from (select p.number, p.errors from pipelines p join repos r on r.id = p.repo_id where r.full_name = '$repo' and p.commit = '$sha' and p.status = 'error' and p.created >= $since order by p.number desc limit 1) t\"" 2>/dev/null
 }
 
 # "pipeline <n> error: <message>" for the latest errored pipeline on the commit, or nothing.
@@ -55,7 +58,8 @@ pipeline_errors() {
 import sys, json
 rows = json.loads(sys.stdin.read() or "[]")
 for r in rows:
-    errs = json.loads(r.get("errors") or "[]") or []
+    errs = r.get("errors") or []
+    errs = json.loads(errs) if isinstance(errs, str) else errs  # Postgres json_agg: a list; a JSON text in older rows
     msg = "; ".join(e.get("message", "") for e in errs if not e.get("is_warning")) or "errored before any step"
     number = r.get("number")
     print(f"pipeline {number} error: {msg}")'
