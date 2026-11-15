@@ -91,6 +91,19 @@ check("list: one line a unit - its kind, its repos, its labels", run("list"), (0
 check("wave-patches first, before the minors and the majors", run("pick"), (0, "prove wave-patches patch"))
 fixture(infra=[pr(1, "wave-patches"), pr(3, "sonarqube-26.x", renovate=False)], platform=[pr(7, "wave-patches", renovate=False)])
 import base64  # noqa: E402
+def blob(text):
+    p = pr(5, "rclone-1.x", renovate=False)
+    p["body"] = "x\n<!--renovate-debug:" + text + "-->"
+    return p
+for text, why in (("!!!notbase64", "not base64"), (base64.b64encode(b"not json").decode(), "not JSON"),
+                  (base64.b64encode(b"[1, 2]").decode(), "a list, not a record"), (base64.b64encode(b"null").decode(), "null"),
+                  (base64.b64encode(json.dumps({"labels": 5}).encode()).decode(), "labels a number"),
+                  (base64.b64encode(json.dumps({"labels": "major"}).encode()).decode(), "labels a string"),
+                  (base64.b64encode(json.dumps({"labels": {"major": 1}}).encode()).decode(), "labels a mapping"),
+                  (base64.b64encode(json.dumps({"labels": [["major"]]}).encode()).decode(), "labels nested")):
+    fixture(infra=[blob(text)])
+    check(f"Renovate's record malformed ({why}): no label granted, no crash - unlabelled, never picked",
+          (run("list"), run("pick")), ((0, "rclone-1.x minor schnappy/infra - UNLABELLED"), (0, "NOTHING")))
 def recorded(p, *labels):  # Renovate's own record in the body: the labels it decided (Forgejo dropped them)
     p["body"] = "This PR contains...\n<!--renovate-debug:" + base64.b64encode(json.dumps({"labels": list(labels)}).encode()).decode() + "-->"
     return p

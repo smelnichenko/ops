@@ -131,9 +131,11 @@ subject() {  # what a complaint is about: "app <name>", "pod <ns>/<owner>" (a Re
   case "$1" in
     "app "*) cut -d' ' -f1-2 <<< "$1" ;;
     "pod "*) local p=${1#pod }; p=${p%% *}
-      # a ReplicaSet's hash holds a digit (node-exporter-x7k2q is a DaemonSet's pod, "exporter" no hash)
-      if [[ $p =~ ^(.+)-([a-z0-9]{8,10})-[a-z0-9]{5}$ && ${BASH_REMATCH[2]} == *[0-9]* ]]; then echo "pod ${BASH_REMATCH[1]}"
-      elif [[ $p =~ ^(.+)-([0-9]+|[a-z0-9]{5})$ ]]; then echo "pod ${BASH_REMATCH[1]}"
+      # Kubernetes names a pod's random parts from its own alphabet (no vowels, no 0, 1, 3): a ReplicaSet's pod
+      # <name>-<8-10 of it>-<5 of it>, a DaemonSet's or a Job's <name>-<5 of it>, a StatefulSet's <name>-<number>
+      local a=bcdfghjklmnpqrstvwxz2456789
+      if [[ $p =~ ^(.+)-[$a]{8,10}-[$a]{5}$ ]]; then echo "pod ${BASH_REMATCH[1]}"
+      elif [[ $p =~ ^(.+)-([0-9]+|[$a]{5})$ ]]; then echo "pod ${BASH_REMATCH[1]}"
       else echo "pod $p"; fi ;;
     "critical alert "*) cut -d' ' -f1-3 <<< "$1" ;;
     *) echo "$1" ;;
@@ -164,7 +166,7 @@ while [ "$(up)" -lt "$end" ]; do
   while IFS= read -r line; do
     [ -n "$line" ] || continue
     key=$(subject "$line")
-    now[$key]=$(( ${seen[$key]:-0} + 1 ))
+    now[$key]=$(( ${seen[$key]:-0} + 1 ))  # from the last look's count: once a look, however many of its pods are wrong
     if [ "${now[$key]}" -ge "$streak" ]; then echo "NOT QUIET during the hold ($streak looks in a row):"; echo "$out"; exit 1; fi
   done <<< "$out"
   seen=(); for k in "${!now[@]}"; do seen[$k]=${now[$k]}; done

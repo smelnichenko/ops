@@ -156,9 +156,27 @@ check("an app broken through the hold, its state flipping each look (Degraded, P
       (rc, "NOT QUIET" in out), (1, True))
 rc, out = run(OK_APPS, OK_PODS, streak="3", hold="15",
               pods_by_look={n: [pod("schnappy-production", f"monitor-7d9f8b6c4d-{x}", ready=(False,))]
-                            for n, x in ((1, "aaaa1"), (2, "bbbb2"), (3, "cccc3"), (4, "dddd4"))})
+                            for n, x in ((1, "bbbb2"), (2, "cccc4"), (3, "dddd5"), (4, "ffff6"))})
 check("a Deployment's pod unready, recreated under a new name each look: its owner the subject - not quiet",
       (rc, "NOT QUIET" in out), (1, True))
+rc, out = run(OK_APPS, OK_PODS, streak="3", hold="15", pods_by_look={1: [pod("schnappy-production", f"monitor-7d9f8b6c4d-{x}", ready=(False,))
+                                                                         for x in ("aaaa2", "bbbb4", "cccc5")]})
+check("three replicas unready in one look, quiet after: one subject counted once - quiet (never three looks in one)",
+      (rc, out.strip().splitlines()[-1]), (0, "SETTLED AND QUIET for 15 min"))
+# what a complaint is about - the function itself (Kubernetes' own alphabet names a pod's random parts)
+vsrc = open("scripts/upgrade-verify.sh").read()
+subject_fn = vsrc[vsrc.index("\nsubject() {") + 1:].split("\n}\n", 1)[0] + "\n}"
+def subject(line):
+    return subprocess.run(["bash", "-c", subject_fn + '\nsubject "$1"', "_", line], capture_output=True, text=True).stdout.strip()
+TABLE = [("pod ns/monitor-7d9f8b6c4d-x2k9p unready: c", "pod ns/monitor"), ("pod ns/monitor-bcdfghjklm-x2k9p unready: c", "pod ns/monitor"),
+         ("pod ns/kafka-0 unready: c", "pod ns/kafka"), ("pod ns/kafka-1 unready: c", "pod ns/kafka"),
+         ("pod ns/redis-6379-1 unready: c", "pod ns/redis-6379"), ("pod ns/pg15-7d9f8b6c4d-x2k9p unready: c", "pod ns/pg15"),
+         ("pod ns/node-exporter-x7k2q unready: c", "pod ns/node-exporter"), ("pod ns/etcd-ten unready: c", "pod ns/etcd-ten"),
+         ("app observability Synced Degraded -", "app observability"), ("app observability OutOfSync Healthy Running", "app observability"),
+         ("critical alert NodeDown", "critical alert NodeDown"), ("apps not read", "apps not read")]
+check("a complaint's subject: a ReplicaSet's pods by their name (a hash with no digit too), a StatefulSet's by theirs, a "
+      "DaemonSet's, a name of its own as it is; an app whatever its state; an alert by its name",
+      [(l, subject(l), w) for l, w in TABLE if subject(l) != w], [])
 STALL = app("cert-manager", sync="OutOfSync")
 STALL["spec"]["syncPolicy"] = {"automated": {}}
 STALL["status"]["operationState"] = {"phase": "Succeeded", "operation": {"initiatedBy": {"automated": True}}}

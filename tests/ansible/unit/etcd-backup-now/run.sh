@@ -20,7 +20,7 @@ case "$*" in
     [ "$st" != FAIL ] || exit 255
     printf '%s' "$st" ;;
   *"-l job-name=etcd-backup-now-"*"field-selector=status.phase=Succeeded"*) [ -e "$W/nopod" ] || { [ ! -e "$W/twopods" ] || echo "pod/etcd-backup-now-x-early"; echo "pod/etcd-backup-now-x-ok"; } ;;
-  *"logs pod/etcd-backup-now-x-early -c upload"*) echo "an upload that said nothing" ;;
+  *"logs pod/etcd-backup-now-x-early -c upload"*) if [ -e "$W/firstok" ]; then cat "$W/upload.log"; else echo "an upload that said nothing"; fi ;;
   *"logs pod/etcd-backup-now-x-ok -c upload"*) cat "$W/upload.log" ;;
   *"-c upload"*) echo "the failed pod's log: no OK line" ;;
   *"--all-containers"*) echo "pod etcd-backup-now-x: upload: connection refused" ;;
@@ -51,6 +51,9 @@ check "Complete but no OK line in the upload's log: not taken as proof (exit 1)"
 check "a read failing once (ten's ssh): read again, then taken" "$(run $'/\nFAIL\nTrue/')" "0 3"
 check "  the OK line read from the pod that succeeded (a retried Job's failed pod beside it never read)" \
   "$(grep -c 'logs pod/etcd-backup-now-x-ok -c upload' "$W/calls")" "1"
+touch "$W/twopods" "$W/firstok"; r=$(run 'True/'); rm -f "$W/twopods" "$W/firstok"
+check "two pods succeeded, the first's upload OK: taken from it, the second never read" \
+  "$r $(grep -c 'logs pod/etcd-backup-now-x-ok' "$W/calls")" "0 1 0"
 touch "$W/twopods"; r=$(run 'True/'); rm -f "$W/twopods"
 check "two pods succeeded, the first's upload saying nothing: the second's OK line read - taken" "$r $(grep -c '^etcd-backup OK: ' "$W/out")" "0 1 1"
 touch "$W/nopod"; r=$(run 'True/'); rm -f "$W/nopod"

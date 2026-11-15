@@ -134,9 +134,11 @@ def renovate_labels(pr):
     if not m:
         return set()
     try:
-        return set(json.loads(base64.b64decode(m.group(1))).get("labels") or [])
-    except (ValueError, TypeError, AttributeError):
+        record = json.loads(base64.b64decode(m.group(1), validate=True))
+    except ValueError:  # not base64, not JSON (binascii.Error is a ValueError)
         return set()
+    labels = record.get("labels") if isinstance(record, dict) else None
+    return {x for x in labels if isinstance(x, str)} if isinstance(labels, list) else set()
 
 
 def twin(name):

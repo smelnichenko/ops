@@ -3,7 +3,7 @@
 Status: **BUILDING** (operator 2026-11-14: "start building plan 120 meanwhile", "ensure renovate works with
 vagrant") - the review answered 2026-11-14 (below); plan 119's wave 1 done by hand (2026-11-14); rollout step 1 (the
 lookup) run - its findings fixed below, three questions open. 2026-11-15: one manual task, Kafka's operator first
-(decisions below); review rounds two to four done - the applying runner waits for its first clean shadow proof.
+(decisions below); review rounds two to seven done - the applying runner waits for its first clean shadow proof.
 
 **Built 2026-11-14 (ops upgrade/wave-1 branch, each with its harness):**
 - Renovate: `renovate/upgrade-cycle.json` (the shared preset - units, groups, one minor at a time for Kubernetes/
@@ -106,6 +106,24 @@ complaint is placed in the test environment; issue comments are read in one requ
 loop with no end at 50); verify keys its hold's streak on the subject (the app, the pod's owner, the alert) and keeps
 an empty Helm `values` out of the spec comparison; the etcd check tries each pod that succeeded; the seed playbook maps
 monitor's and masi's `renovate_token` to a bot of their own (`RENOVATE_APPS_TOKEN`), never the cycle's.
+**Round seven (2026-11-15) - done:** the agent commits as an author of its own (Upgrade Fix Agent,
+upgrade-fix@pmon.dev): Renovate takes a branch whose commits carry its own e-mail for unmodified and rebases over
+them. Its files are UTF-8 with no control, format, separator, private or unassigned character but tab and newline (a
+NEL or U+2028 is a line break to YAML and none to git or a diff; a bidi override or a zero-width character hides what
+the mail shows), no merge commit of its own, and its commit subjects reach the record escaped. A notice holds only when
+nothing since it but main's - no commit of its own outside main, each merge's tree exactly the one git's own merge
+of its parents makes (an evil merge, a side branch merged in: noticed again; proven with real git). The notice's mail is a summary
+of what the unit changes - each repo's stat, its commits, the review's passes and verdict, the diff; 100 KB in all, the
+diff cut first (a fix's: its record whole) - and stop-updating is labelled before it (a newer release pushed by Renovate would void the notice:
+a loop). Tries are counted for the unit's pull requests (a new instance of the name starts at none); a CI still
+running after an hour, git or Forgejo not read, main moving while the CI ran: said, no try. The runner updates the
+branches first and then waits for their CI (a CI run on a stale head was wasted), and never takes Forgejo's empty answer
+for a head. A unit without Renovate's labels is never applied (its kind not known). The test path skips verify's own
+headers and places only `schnappy-test` and `schnappy-test-<x>` in the test environment (not `schnappy-testing`).
+Verify names a pod's owner by Kubernetes' name alphabet and counts a subject once a look; Renovate's debug record is
+read strictly (its base64 validated, its labels a list); the etcd check reads each pod that succeeded until one says
+OK; the seed playbook's harness checks monitor's and masi's token is empty, never the cycle's, without
+`RENOVATE_APPS_TOKEN`.
 **The first real run:** `task upgrade RUNNER=false` - Renovate's branches and pull requests made, nothing applied; their
 labels read (the shadow week checked them). Then `task upgrade SHADOW=true` proves and reviews a unit on the copy,
 applying nothing - the cycle's first proof; until it ends clean (the runner's own record,

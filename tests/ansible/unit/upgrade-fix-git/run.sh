@@ -5,7 +5,9 @@
 # the commits fetched from the clone into the runner's own repository and pushed from there to the branch on the
 # "Forgejo"; a hook the agent planted in its clone never run; a rename of a script into clusters/ judged by both its
 # sides (refused); a symlink refused by its mode; a deletion of the unit's own file pushed; two repos, the second one
-# refused - nothing pushed at all; a commit that rewrote the proven one refused.
+# refused - nothing pushed at all; a commit that rewrote the proven one refused; a Unicode line break or invisible
+# character refused; a merge of the agent's refused. The notice's check (notice_holds) against real repositories: main
+# merged in holds; an evil merge, a commit of its own, a side branch merged, a rebase, git failing - noticed again.
 set -u
 cd "$(dirname "$0")/../../../.." || exit 1
 REAL=$PWD
@@ -94,6 +96,31 @@ agent infra sh -c 'printf "v: 2\r  extra: evil\n" > clusters/production/values.y
 check "a value with a carriage return hiding a YAML key (real git, the blob read back): refused, nothing pushed" \
   "$(pushfix) $( [ "$(branch infra)" = "$(proven infra)" ] && echo untouched)" "rc=1 fixed= untouched"
 
+for ch in '\342\200\250' '\302\205' '\342\200\256' '\342\200\213'; do  # U+2028, NEL, a bidi override, a zero-width space (octal: sh's printf has no \x)
+  setup
+  agent infra sh -c "printf 'v: 2$ch  privileged: true\n' > clusters/production/values.yaml"
+  check "a value with a Unicode line break or invisible character ($ch as bytes - YAML's line, git's none): refused" \
+    "$(pushfix) $( [ "$(branch infra)" = "$(proven infra)" ] && echo untouched)" "rc=1 fixed= untouched"
+done
+setup
+agent infra sh -c "printf 'v: \\377\\n' > clusters/production/values.yaml"
+check "a value that is not UTF-8 (a byte no text has): refused" \
+  "$(pushfix) $( [ "$(branch infra)" = "$(proven infra)" ] && echo untouched)" "rc=1 fixed= untouched"
+setup
+(cd "$W/fix/infra" && echo "v: 2" > clusters/production/values.yaml && g commit -qam "$(printf 'fix \033[2J\033]0;owned\007 done')") > /dev/null 2>&1
+pushfix > /dev/null
+check "a commit subject with terminal escapes: on record (the notice's mail) with each control byte a '?'" \
+  "$(grep -c "$(printf '\033')" "$W/state/fixes/u.diff") $(grep -o 'fix ?\[2J?\]0;owned? done' "$W/state/fixes/u.diff")" "0 fix ?[2J?]0;owned? done"
+setup
+agent infra sh -c 'printf "naïve: café\n" > clusters/production/values.yaml'
+check "plain UTF-8 text (letters beyond ASCII): pushed" "$(pushfix)" "rc=0 fixed=1"
+
+setup
+(cd "$W/fix/infra" && git checkout -q -b side && echo "s: 1" > clusters/production/side.yaml && g add -A && g commit -qm side \
+  && git checkout -q renovate/u && g merge -q --no-ff side -m merged) > /dev/null 2>&1
+check "a merge commit of the agent's (its content no notice's check would judge): refused, nothing pushed" \
+  "$(pushfix) $( [ "$(branch infra)" = "$(proven infra)" ] && echo untouched)" "rc=1 fixed= untouched"
+
 setup
 agent infra sh -c 'printf "a\0b" > clusters/production/blob.yaml'
 check "a binary file (a NUL - git shows 'Binary files differ'): refused, nothing pushed" \
@@ -140,6 +167,55 @@ setup
 (cd "$W/fix/infra" && echo "v: 3" > clusters/production/values.yaml && g commit -qa --amend -m rewritten) > /dev/null 2>&1
 check "a commit that rewrote the proven one: refused, nothing pushed" \
   "$(pushfix) $( [ "$(branch infra)" = "$(proven infra)" ] && echo untouched)" "rc=1 fixed= untouched"
+
+# ── the notice's check (notice_holds) against real git: a unit applies only what its notice announced - main merged in
+# by Forgejo's update aside; an evil merge, a commit of its own, a merge of anything not main's, a rebase: noticed again
+holds_funcs=$(python3 - "$REAL/scripts/upgrade-cycle.sh" <<'PY'
+import sys
+src = open(sys.argv[1]).read()
+out = []
+for name in ("repo_dir", "notice_holds"):
+    i = src.index(f"\n{name}() {{") + 1
+    out.append(src[i:].split("\n}\n", 1)[0] + "\n}")
+print("\n".join(out))
+PY
+)
+N=$W/notice; rm -rf "$N"; mkdir -p "$N/src/ops/scripts"
+g init -q --bare "$N/origin.git"; g clone -q "$N/origin.git" "$N/src/infra" 2> /dev/null
+(cd "$N/src/infra" && echo "v: 1" > a.yaml && g add -A && g commit -qm base && g push -q origin HEAD:main && g branch -q -M main \
+  && git checkout -q -b renovate/u && echo "v: 2" > a.yaml && g commit -qam unit && g push -q origin renovate/u) > /dev/null 2>&1
+announced=$(git -C "$N/src/infra" rev-parse renovate/u)
+(cd "$N/src/infra" && git checkout -q main && echo "m: 1" > m.yaml && g add -A && g commit -qm main-moves && g push -q origin main) > /dev/null 2>&1
+printf '#!/bin/sh\necho "2026-11-19T02:00:00Z schnappy/infra@%s"\n' "$announced" > "$N/src/ops/scripts/upgrade-units.py"
+chmod +x "$N/src/ops/scripts/upgrade-units.py"
+holds() {  # holds <the unit's head now>: notice_holds' verdict, the runner's own function
+  printf 'schnappy/infra 1 %s %s\n' "$1" "$(git -C "$N/src/infra" rev-parse origin/main 2> /dev/null)" > "$N/heads"
+  (cd "$N/src/ops" && ops=$N/src/ops unit=u heads=$N/heads log=$N/log dry="" bash -c "$holds_funcs
+     notice_holds && echo holds || echo noticed-again")
+}
+variant() {  # variant <how>: the unit's branch made so in a fresh copy; its head printed
+  local d=$N/v-$1; rm -rf "$d"; git clone -q "$N/origin.git" "$d" 2> /dev/null; git -C "$d" checkout -q renovate/u
+  case "$1" in
+    update) g -C "$d" merge -q --no-ff origin/main -m "Merge branch 'main' into renovate/u" ;;
+    evil) g -C "$d" merge -q --no-ff --no-commit origin/main > /dev/null 2>&1; echo "x: evil" > "$d/evil.yaml"; g -C "$d" add evil.yaml
+          g -C "$d" commit -qm "Merge branch 'main' into renovate/u" ;;
+    extra) echo "v: 3" > "$d/a.yaml"; g -C "$d" commit -qam "a commit of its own" ;;
+    side) git -C "$d" checkout -q -b side origin/main 2> /dev/null; echo "s: 1" > "$d/s.yaml"; g -C "$d" add -A; g -C "$d" commit -qm side
+          git -C "$d" checkout -q renovate/u; g -C "$d" merge -q --no-ff side -m "Merge side" ;;
+    rebase) git -C "$d" rebase -q origin/main > /dev/null 2>&1 ;;
+  esac
+  g -C "$d" push -q -f origin "HEAD:refs/heads/v-$1" > /dev/null 2>&1
+  git -C "$N/src/infra" fetch -q origin "+refs/heads/v-$1:refs/remotes/origin/v-$1" main
+  git -C "$N/src/infra" rev-parse "origin/v-$1"
+}
+check "notice holds: main merged in by an update (Forgejo's, nothing of its own in the merge)" "$(holds "$(variant update)")" "holds"
+check "  an evil merge (main merged in AND a file of its own inside the merge): noticed again" "$(holds "$(variant evil)")" "noticed-again"
+check "  a commit of its own since the notice: noticed again" "$(holds "$(variant extra)")" "noticed-again"
+check "  a merge of a branch that is not main's: noticed again" "$(holds "$(variant side)")" "noticed-again"
+check "  rebased onto main (the announced head no longer its ancestor): noticed again" "$(holds "$(variant rebase)")" "noticed-again"
+check "  the unit's head unchanged since its notice: holds" "$(holds "$announced")" "holds"
+git -C "$N/src/infra" update-ref -d refs/remotes/origin/main
+check "  origin/main not there (git failing): noticed again - never 'nothing new'" "$(holds "$announced")" "noticed-again"
 
 echo "upgrade-fix-git: $([ $fails -eq 0 ] && echo ALL-PASS || echo "$fails FAILED")"
 [ $fails -eq 0 ]
