@@ -54,7 +54,8 @@
       ansible.builtin.debug:
         msg: >-
           {{ forgejo_orphans_before }} orphaned package blob(s) in Forgejo's storage{{ (' - a preview: none removed; to
-          remove them: -e forgejo_orphans_expected=' ~ forgejo_orphans_before) if ansible_check_mode else '' }}
+          remove them: -e forgejo_orphans_expected=' ~ forgejo_orphans_before) if ansible_check_mode
+          and forgejo_orphans_before | int > 0 else '' }}
 
     - name: The count to remove given back - the preview's
       ansible.builtin.assert:

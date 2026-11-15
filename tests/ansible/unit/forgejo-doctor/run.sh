@@ -132,9 +132,12 @@ check("judged from the doctor's own lines: 21 of 21 removed and none read after 
        judged(ok.replace(NONE, ORPHANS.replace("21/", "1/"))), judged(ok.split("==== read again")[0]),
        judged(ok, rc=3)],
       [True, False, False, False, False, False, False])
-check("the preview says how to remove them; the removal changes only where the doctor deleted",
+check("the preview says how to remove them (none found: nothing to say); the removal changes only where the doctor "
+      "deleted",
       (str(R(by["The orphaned package blobs"]["ansible.builtin.debug"]["msg"], forgejo_orphans_before="21",
-             ansible_check_mode=True)).endswith("-e forgejo_orphans_expected=21"),
+             ansible_check_mode=True)).endswith("-e forgejo_orphans_expected=21") and "forgejo_orphans_expected" not in
+       str(R(by["The orphaned package blobs"]["ansible.builtin.debug"]["msg"], forgejo_orphans_before="0",
+             ansible_check_mode=True)),
        [condition(rm["changed_when"], **dict(pv, _removal={"stdout": o})) for o in (ok, "")]),
       (True, [True, False]))
 resc = blk.get("rescue") or [{}]

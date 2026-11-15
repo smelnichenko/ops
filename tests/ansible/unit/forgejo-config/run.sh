@@ -122,11 +122,13 @@ for f in ("setup-pi-services.yml", "setup-patroni.yml"):
     hs = [h for p in load("deploy/ansible/playbooks/" + f) for h in p.get("handlers") or []]
     hn = [h.get("name") for h in hs]
     r = [h for h in hs if h.get("listen") == "Restart Forgejo"]
-    check(f"{f}: Forgejo's record written by a handler listening to Restart Forgejo, after the restart, on any tag's run",
+    check(f"{f}: Forgejo's record written by a handler listening to Restart Forgejo, after the restart, on any tag's run, "
+          "in no preview (it restarted nothing)",
           (len(r), r and (r[0].get("ansible.builtin.include_tasks") or {}).get("file"),
            r and ((r[0].get("ansible.builtin.include_tasks") or {}).get("apply") or {}).get("tags"),
-           "Restart Forgejo" in hn and bool(r) and hn.index(r[0].get("name")) > hn.index("Restart Forgejo")),
-          (1, "tasks/forgejo-recorded.yml", ["always"], True))
+           "Restart Forgejo" in hn and bool(r) and hn.index(r[0].get("name")) > hn.index("Restart Forgejo"),
+           [condition(r[0].get("when", True), ansible_check_mode=c) for c in (False, True)] if r else None),
+          (1, "tasks/forgejo-recorded.yml", ["always"], True, [True, False]))
 fr = load("deploy/ansible/playbooks/tasks/forgejo-recorded.yml")
 check("tasks/forgejo-recorded.yml: the files as Forgejo now runs them (started on them just now), their hash recorded",
       ([(t.get("ansible.builtin.include_tasks"), (t.get("vars") or {}).get("loaded_service")) for t in fr],

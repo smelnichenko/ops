@@ -850,6 +850,7 @@
         file: tasks/forgejo-recorded.yml
         apply:
           tags: [always]
+      when: not ansible_check_mode  # a preview restarted nothing: nothing to record
 
     # Forgejo restarts with it (its unit Requires= haproxy): both answering again before the next Pi
     - name: Restart HAProxy

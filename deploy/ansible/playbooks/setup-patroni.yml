@@ -703,6 +703,7 @@
         file: tasks/forgejo-recorded.yml
         apply:
           tags: [always]
+      when: not ansible_check_mode  # a preview restarted nothing: nothing to record
 
 # Keycloak restarted where its unit changed (its database port, above): both Pis in one play - the Pi without the VIP
 # first, one at a time, guarded, its stamp recorded (setup-pi-services' own restart, the same file)
