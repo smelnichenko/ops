@@ -50,7 +50,7 @@
   "customManagers": [
     {
       "customType": "regex",
-      "description": "Ansible version vars, each annotated on the line above it: '# renovate: datasource=<ds> depName=<name> [registryUrl=<url>] [versioning=<v>]' - a value restating an Argo chart takes the chart's own datasource, name and repository, so its unit's branch is the one infra's chart gets",
+      "description": "Ansible version vars, each annotated on the line above it: '# renovate: datasource=<ds> depName=<name> [registryUrl=<url>] [versioning=<v>]' - a registry or git-tags where the project publishes there (no token: Renovate refuses GitHub's API without one), versioning=semver where a registry's tags include bare minors (vault:1.22) - a value restating an Argo chart takes the chart's own datasource, name and repository, so its unit's branch is the one infra's chart gets",
       "managerFilePatterns": [
         "/^deploy/ansible/.+\\.ya?ml$/"
       ],
@@ -108,6 +108,13 @@
       "enabled": false
     },
     {
+      "description": "platform's Keycloak chart (schnappy-auth): no Argo app deploys it - Keycloak runs on the Pis (setup-pi-services.yml)",
+      "matchFileNames": [
+        "helm/schnappy-auth/**"
+      ],
+      "enabled": false
+    },
+    {
       "description": "etcdctl for the backups follows the cluster's etcd, which kubeadm moves with Kubernetes: its patches only",
       "matchPackageNames": [
         "registry.k8s.io/etcd"
@@ -149,7 +156,7 @@
         "gateway",
         "/^istio\\//",
         "/^docker\\.io\\/istio\\//",
-        "kubernetes-sigs/gateway-api"
+        "https://github.com/kubernetes-sigs/gateway-api"
       ],
       "groupName": "istio",
       "groupSlug": "istio",
@@ -163,7 +170,7 @@
         "minor"
       ],
       "matchPackageNames": [
-        "kubernetes/kubernetes",
+        "registry.k8s.io/kube-apiserver",
         "alpine/k8s",
         "bitnami/kubectl",
         "docker.io/bitnami/kubectl"
@@ -260,8 +267,8 @@
       ],
       "matchPackageNames": [
         "forgejo/forgejo",
-        "keycloak/keycloak",
-        "caddyserver/caddy",
+        "quay.io/keycloak/keycloak",
+        "caddy",
         "versity/versitygw",
         "sonatype/nexus-public",
         "patroni",
@@ -274,7 +281,7 @@
     {
       "description": "Kubernetes, Cilium, Istio and ScyllaDB's release lines: one minor at a time (each minor its own branch - the families above name it)",
       "matchPackageNames": [
-        "kubernetes/kubernetes",
+        "registry.k8s.io/kube-apiserver",
         "alpine/k8s",
         "bitnami/kubectl",
         "docker.io/bitnami/kubectl",
@@ -288,7 +295,7 @@
         "gateway",
         "/^istio\\//",
         "/^docker\\.io\\/istio\\//",
-        "kubernetes-sigs/gateway-api",
+        "https://github.com/kubernetes-sigs/gateway-api",
         "/^(docker\\.io\\/)?scylladb\\/scylla$/"
       ],
       "separateMultipleMinor": true

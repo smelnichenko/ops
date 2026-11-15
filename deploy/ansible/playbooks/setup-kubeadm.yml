@@ -23,7 +23,7 @@
   vars:
     k8s_version: "1.36"
     # the exact package version: an unpinned install takes the repo's newest patch, not what ten runs
-    # renovate: datasource=github-releases depName=kubernetes/kubernetes
+    # renovate: datasource=docker depName=registry.k8s.io/kube-apiserver versioning=semver
     k8s_package_version: "1.36.6-1.1"
     # the minor's CNI plugins and crictl, as upgrade-kubeadm.yml's minor_packages pins them: unpinned, a rebuild took
     # the repository's newest, which no run tested
@@ -58,7 +58,7 @@
     # renovate: datasource=helm depName=metrics-server registryUrl=https://kubernetes-sigs.github.io/metrics-server
     metrics_server_chart_version: "3.14.0"
     prometheus_operator_crds_chart_version: "32.0.1"  # operator v0.94.1
-    # renovate: datasource=github-releases depName=kubernetes-sigs/gateway-api
+    # renovate: datasource=git-tags depName=https://github.com/kubernetes-sigs/gateway-api versioning=semver
     gateway_api_version: "v1.5.1"
     # renovate: datasource=docker depName=rancher/local-path-provisioner
     local_path_provisioner_version: "v0.0.37"

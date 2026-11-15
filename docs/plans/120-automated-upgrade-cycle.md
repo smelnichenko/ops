@@ -60,9 +60,11 @@ Kafka 4.2.2, ...). What it found, fixed in the preset and the runner (harness ca
 - Left out: kagent (disabled in production), the retired in-cluster Vault's values (no Argo app reads them), the etcd
   image's minors and majors (etcdctl follows kubeadm's etcd); kubectl images (alpine/k8s) move with the kubernetes
   family. `registryUrlTemplate` gone (an empty URL for each annotation without one: a warning each).
-- Open, for the operator: (1) a GitHub read token - six deps (Caddy, Consul, Vault, Keycloak on the Pis, Kubernetes,
-  Gateway API) are skipped without one; or their annotations move to registries (Docker Hub/quay/registry.k8s.io,
-  no token) where one publishes the same versions. (2) DONE 2026-11-15 (operator: "a bug left from previous upgrade,
+- Open, for the operator: (1) DONE 2026-11-15 (operator: option B): the six deps Renovate skipped without a GitHub
+  token (Caddy, Consul, Vault, Keycloak on the Pis, Kubernetes, Gateway API) now read registries (Docker Hub, quay,
+  registry.k8s.io) and Gateway API's git tags, versioning=semver - the lookup resolves all six with no token (Caddy
+  2.10.0 -> 2.10.2/2.11.8, Consul 1.20.6 -> 1.22.7/2.1.0, Vault 1.21.4 -> 2.2.2, Kubernetes 1.36.6 -> 1.37.2,
+  Gateway API 1.5.1 -> 1.6.3/1.7.0, Keycloak 26.5.7 -> 26.8.2). Build-hash verification follows. (2) DONE 2026-11-15 (operator: "a bug left from previous upgrade,
   fix it"): platform's chart defaults that infra overrides were behind production (Grafana 12.4.2, Mimir 2.17.8, Tempo
   2.7.2, Keycloak 26.5.6) - aligned with production (platform 9f967a16; production's render byte-identical), so no
   unit opens for versions nothing runs.
