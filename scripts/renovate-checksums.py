@@ -239,58 +239,82 @@ def first_hash(text, what):
     return parts[0]
 
 
+def _from_lists(vd, vendor, fill, labels, fetch, keys):
+    """A checksum list naming each artifact, its signature checked where the vendor signs it."""
+    out, texts, signer = {}, {}, None
+    for a in labels:
+        url = fill(vd["list"], a=a)
+        if url not in texts:
+            path = fetch.path(url)
+            if "sig" in vd:
+                signer = keys.verify(vendor, fetch.path(fill(vd["sig"], a=a, list=url)), path)
+            with open(path, encoding="utf-8") as f:
+                texts[url] = f.read()
+        out[a] = listed(texts[url], fill(vd["name"], a=a), url)
+    return out, signer
+
+
+def _xz_sha256(xz, base):
+    """The sha256 of the .xz's content, decompressed as it is read."""
+    h, d = hashlib.sha256(), lzma.LZMADecompressor()
+    try:
+        with open(xz, "rb") as f:
+            for chunk in iter(lambda: f.read(1 << 20), b""):
+                h.update(d.decompress(chunk))
+    except lzma.LZMAError as e:
+        raise Refused(f"{base}.xz: {e}") from None
+    if not d.eof:
+        raise Refused(f"{base}.xz: truncated")
+    return h.hexdigest()
+
+
+def _from_xz(vd, vendor, fill, labels, fetch, keys):
+    """Each artifact through its .xz the vendor signs, its own .sha256 naming it and agreeing."""
+    out, signer = {}, None
+    for a in labels:
+        base = fill(vd["xz"], a=a)
+        # the small files first: a release half uploaded is refused before its binary is fetched
+        own = listed(fetch.text(base + ".sha256"), base.rsplit("/", 1)[-1], base + ".sha256")
+        sig = fetch.path(base + ".xz.asc")
+        xz = fetch.path(base + ".xz")
+        try:
+            signer = keys.verify(vendor, sig, xz)
+            digest = _xz_sha256(xz, base)
+        finally:
+            os.remove(xz)
+        if own != digest:
+            raise Refused(f"{base}.sha256 says {own}, the signed artifact is {digest}")
+        out[a] = own
+    return out, signer
+
+
+def _from_each(vd, vendor, fill, labels, fetch, keys):
+    """One sha256 file per artifact."""
+    return {a: first_hash(fetch.text(fill(vd["each"], a=a)), fill(vd["each"], a=a)) for a in labels}, None
+
+
+def _from_index(vd, vendor, fill, labels, fetch, keys):
+    """A package index whose links carry #sha256= - labels its files."""
+    out, pages = {}, {}
+    for f in labels:
+        project = f.split("-", 1)[0]
+        if project not in pages:
+            pages[project] = fetch.text(fill(vd["index"], project=project))
+        m = re.search(re.escape(urllib.parse.quote(f)) + r"#sha256=([0-9a-f]{64})", pages[project])
+        if not m:
+            raise Refused(f"{f}: not in PyTorch's cpu index for {project}")
+        out[f] = m.group(1)
+    return out, None
+
+
+READERS = {"list": _from_lists, "xz": _from_xz, "each": _from_each, "index": _from_index}
+
+
 def hashes(pin, version, labels, fetch, keys):
     """{label: sha256} for the version's artifacts (labels: its arches, or its wheel files), and how it was vouched."""
-    vd, vendor = VENDORS[pin["vendor"]], pin["vendor"]
+    vd = VENDORS[pin["vendor"]]
     fill = lambda t, **kw: t.format(v=version, p=pin.get("product", ""), **kw)  # noqa: E731
-    out, signer = {}, None
-    if "list" in vd:
-        texts = {}
-        for a in labels:
-            url = fill(vd["list"], a=a)
-            if url not in texts:
-                path = fetch.path(url)
-                if "sig" in vd:
-                    signer = keys.verify(vendor, fetch.path(fill(vd["sig"], a=a, list=url)), path)
-                with open(path, encoding="utf-8") as f:
-                    texts[url] = f.read()
-            out[a] = listed(texts[url], fill(vd["name"], a=a), url)
-    elif "xz" in vd:
-        for a in labels:
-            base = fill(vd["xz"], a=a)
-            # the small files first: a release half uploaded is refused before its binary is fetched
-            own = listed(fetch.text(base + ".sha256"), base.rsplit("/", 1)[-1], base + ".sha256")
-            sig = fetch.path(base + ".xz.asc")
-            xz = fetch.path(base + ".xz")
-            try:
-                signer = keys.verify(vendor, sig, xz)
-                h, d = hashlib.sha256(), lzma.LZMADecompressor()
-                with open(xz, "rb") as f:
-                    for chunk in iter(lambda: f.read(1 << 20), b""):
-                        h.update(d.decompress(chunk))
-                if not d.eof:
-                    raise Refused(f"{base}.xz: truncated")
-            except lzma.LZMAError as e:
-                raise Refused(f"{base}.xz: {e}") from None
-            finally:
-                os.remove(xz)
-            if own != h.hexdigest():
-                raise Refused(f"{base}.sha256 says {own}, the signed artifact is {h.hexdigest()}")
-            out[a] = own
-    elif "each" in vd:
-        for a in labels:
-            url = fill(vd["each"], a=a)
-            out[a] = first_hash(fetch.text(url), url)
-    elif "index" in vd:
-        pages = {}
-        for f in labels:
-            project = f.split("-", 1)[0]
-            if project not in pages:
-                pages[project] = fetch.text(fill(vd["index"], project=project))
-            m = re.search(re.escape(urllib.parse.quote(f)) + r"#sha256=([0-9a-f]{64})", pages[project])
-            if not m:
-                raise Refused(f"{f}: not in PyTorch's cpu index for {project}")
-            out[f] = m.group(1)
+    out, signer = READERS[next(k for k in READERS if k in vd)](vd, pin["vendor"], fill, labels, fetch, keys)
     return out, vd["how"] + (f" {signer}" if signer else "")
 
 
@@ -332,36 +356,45 @@ def top(lines, pin):
     return start[0], children(lines, start[0])
 
 
+def _wheel_lines(lines, pin, start):
+    """{wheel file: its sha256 line} - '- file: <f>' then 'sha256: <h>'."""
+    out, current = {}, None
+    for i in range(start + 1, len(lines)):
+        l = lines[i]
+        if l.strip() and indent(l) <= indent(lines[start]):
+            break
+        m = re.match(r"^\s*-\s+file:\s*(\S+)", l)
+        if m:
+            current = m.group(1)
+        elif current and re.match(r"^\s+sha256:", l):
+            out[current], current = i, None
+    if not out:
+        raise Refused(f"{pin['file']}: {pin['key']} lists no wheel with its sha256")
+    return out
+
+
+def _single_line(lines, pin):
+    at = [i for i, l in enumerate(lines) if re.match(rf"^\s*{pin['key']}:", l)]
+    if len(at) != 1:
+        raise Refused(f"{pin['file']}: {len(at)} lines set {pin['key']} - want one")
+    return {pin["arches"][0]: at[0]}
+
+
 def pin_lines(lines, pin, version=None):
     """{label: line index} of the pin's hashes (for the version) - empty for a versioned map without that version."""
-    shape = pin["shape"]
-    if shape == "single":
-        at = [i for i, l in enumerate(lines) if re.match(rf"^\s*{pin['key']}:", l)]
-        if len(at) != 1:
-            raise Refused(f"{pin['file']}: {len(at)} lines set {pin['key']} - want one")
-        return {pin["arches"][0]: at[0]}
+    if pin["shape"] == "single":
+        return _single_line(lines, pin)
     start, (at, _, _) = top(lines, pin)
-    if shape == "wheels":  # '- file: <f>' then 'sha256: <h>'
-        out, current = {}, None
-        for i in range(start + 1, len(lines)):
-            l = lines[i]
-            if l.strip() and indent(l) <= indent(lines[start]):
-                break
-            m = re.match(r"^\s*-\s+file:\s*(\S+)", l)
-            if m:
-                current = m.group(1)
-            elif current and re.match(r"^\s+sha256:", l):
-                out[current], current = i, None
-        if not out:
-            raise Refused(f"{pin['file']}: {pin['key']} lists no wheel with its sha256")
-        return out
-    if shape == "versioned":
+    if pin["shape"] == "wheels":
+        return _wheel_lines(lines, pin, start)
+    if pin["shape"] == "versioned":
         if version not in at:
             return {}
         at, _, _ = children(lines, at[version])
     missing = [a for a in pin["arches"] if a not in at]
     if missing:
-        raise Refused(f"{pin['file']}: {pin['key']}{' ' + version if shape == 'versioned' else ''} has no {missing}")
+        held = f" {version}" if pin["shape"] == "versioned" else ""
+        raise Refused(f"{pin['file']}: {pin['key']}{held} has no {missing}")
     return {a: at[a] for a in pin["arches"]}
 
 
@@ -439,28 +472,37 @@ def compare(lines, pin, version, fetch, keys):
     return at, want, current, how
 
 
+def _check_older(lines, pin, version, fetch, keys):
+    """A versioned map's entries for the versions before it: each verified, never rewritten (a mismatch refused)."""
+    for older in versions_held(lines, pin):
+        if older == version:
+            continue
+        _, want, current, _ = compare(lines, pin, older, fetch, keys)
+        bad = [a for a in want if current.get(a) != want[a]]
+        if bad:
+            raise Refused(f"{pin['key']} {older} ({' '.join(bad)}) is not the vendor's - never rewritten")
+
+
+def _rewritten(lines, pin, version, at, want):
+    if not at:
+        lines = add_version(lines, pin, version, want)
+    for a, i in at.items():
+        m = VALUE.match(lines[i])
+        lines[i] = m.group("head") + want[a] + m.group("tail")
+    return lines
+
+
 def run_pin(pin, args, fetch, keys):
     lines = read_lines(args, pin)
     version = None if pin["shape"] == "wheels" else read_version(lines, pin)
     at, want, current, how = compare(lines, pin, version, fetch, keys)
     if pin["shape"] == "versioned":
-        # the entries for the versions before it: each verified, never rewritten (a mismatch there is refused)
-        for older in versions_held(lines, pin):
-            if older != version:
-                _, o_want, o_current, _ = compare(lines, pin, older, fetch, keys)
-                bad = [a for a in o_want if o_current.get(a) != o_want[a]]
-                if bad:
-                    raise Refused(f"{pin['key']} {older} ({' '.join(bad)}) is not the vendor's - never rewritten")
+        _check_older(lines, pin, version, fetch, keys)
     stale = [a for a in want if current.get(a) != want[a]]
-    said = f"{pin['name']} {version or f'{len(want)} wheels'}: " + ", ".join(
-        f"{a} {'MISSING' if a not in current else 'STALE' if a in stale else 'ok'}" for a in want) + f" ({how})"
+    state = {a: "MISSING" if a not in current else "STALE" if a in stale else "ok" for a in want}
+    said = f"{pin['name']} {version or f'{len(want)} wheels'}: " + ", ".join(f"{a} {st}" for a, st in state.items()) + f" ({how})"
     if stale and not args.check:
-        if not at:
-            lines = add_version(lines, pin, version, want)
-        for a, i in at.items():
-            m = VALUE.match(lines[i])
-            lines[i] = m.group("head") + want[a] + m.group("tail")
-        write_lines(args, pin, lines)
+        write_lines(args, pin, _rewritten(lines, pin, version, at, want))
         said += " - rewritten"
     return said, bool(stale)
 
@@ -485,7 +527,7 @@ def refresh_keys(keys, fetch):
     return 1 if failed else 0
 
 
-def main():
+def parse_args():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--check", action="store_true", help="compare, write nothing; exit 1 on a stale pin")
     ap.add_argument("--changed", action="store_true",
@@ -500,45 +542,32 @@ def main():
     ap.add_argument("--mirror", default=None, help="every URL read from DIR/<host>/<path> (the harness)")
     ap.add_argument("--refresh-keys", action="store_true", help="each vendor's key file taken again from its url "
                     "(keys.json) - only while every pinned primary fingerprint is still in it")
-    args = ap.parse_args()
-    if args.ref and not args.check:
-        print("REFUSED: --ref reads a branch's pins - with --check alone (nothing is written to a ref)")
-        return 2
-    with tempfile.TemporaryDirectory(prefix="renovate-checksums.") as work:
+    return ap.parse_args()
+
+
+def run_pins(pins, args, moved, fetch, keys):
+    """Each pin read (with --changed, those that moved): (failed, stale, the vendors read)."""
+    failed, stale, read = [], [], set()
+    for pin in pins:
+        if moved is not None and not changed(pin, moved):
+            continue
+        read.add(pin["vendor"])
         try:
-            keys = Keys(args.keys or os.path.join(args.root, "renovate", "keys"), work)
-        except Refused as e:
-            print(f"FAILED: {e}")
-            return 1
-        fetch = Fetcher(args.mirror, work)
-        if args.refresh_keys:
-            return refresh_keys(keys, fetch)
-        pins = [p for p in PINS if args.only is None or p["name"] in args.only]
-        if args.only and len(pins) != len(set(args.only)):
-            print(f"REFUSED: no pin named {sorted(set(args.only) - {p['name'] for p in pins})}")
-            return 2
-        try:
-            moved = moved_files(args) if args.changed else None
-        except subprocess.CalledProcessError as e:
-            print(f"FAILED: what moved since {args.base} not read: {e.stderr.strip()}")
-            return 1
-        failed, stale, read = [], [], set()
-        for pin in pins:
-            if moved is not None and not changed(pin, moved):
-                continue
-            read.add(pin["vendor"])
-            try:
-                said, was_stale = run_pin(pin, args, fetch, keys)
-            except (Refused, OSError, KeyError, ValueError, subprocess.CalledProcessError) as e:
-                failed.append(pin["name"])
-                print(f"FAILED: {pin['name']}: {e}")
-                continue
-            print(said)
-            if was_stale:
-                stale.append(pin["name"])
-        for w in keys.expiring(read, time.time()):
-            print(w)
-    if moved is not None and not read:
+            said, was_stale = run_pin(pin, args, fetch, keys)
+        except (Refused, OSError, KeyError, ValueError, subprocess.CalledProcessError) as e:
+            failed.append(pin["name"])
+            print(f"FAILED: {pin['name']}: {e}")
+            continue
+        print(said)
+        if was_stale:
+            stale.append(pin["name"])
+    for w in keys.expiring(read, time.time()):
+        print(w)
+    return failed, stale, read
+
+
+def verdict(args, failed, stale, read):
+    if args.changed and not read:
         print(f"no pin's version or hash moved since {args.base} - nothing read")
     if failed:
         print(f"FAILED: {' '.join(failed)} - their files left as they were")
@@ -547,6 +576,32 @@ def main():
         print(f"STALE: {' '.join(stale)}")
         return 1
     return 0
+
+
+def main():
+    args = parse_args()
+    if args.ref and not args.check:
+        print("REFUSED: --ref reads a branch's pins - with --check alone (nothing is written to a ref)")
+        return 2
+    pins = [p for p in PINS if args.only is None or p["name"] in args.only]
+    if args.only and len(pins) != len(set(args.only)):
+        print(f"REFUSED: no pin named {sorted(set(args.only) - {p['name'] for p in pins})}")
+        return 2
+    with tempfile.TemporaryDirectory(prefix="renovate-checksums.") as work:
+        try:
+            keys = Keys(args.keys or os.path.join(args.root, "renovate", "keys"), work)
+            fetch = Fetcher(args.mirror, work)
+            if args.refresh_keys:
+                return refresh_keys(keys, fetch)
+            moved = moved_files(args) if args.changed else None
+        except Refused as e:
+            print(f"FAILED: {e}")
+            return 1
+        except subprocess.CalledProcessError as e:
+            print(f"FAILED: what moved since {args.base} not read: {e.stderr.strip()}")
+            return 1
+        failed, stale, read = run_pins(pins, args, moved, fetch, keys)
+    return verdict(args, failed, stale, read)
 
 
 if __name__ == "__main__":
