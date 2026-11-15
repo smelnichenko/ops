@@ -1,0 +1,17 @@
+---
+# Forgejo's unit and config as it runs them, recorded once it restarted on them: the handlers that listen to Restart
+# Forgejo (setup-pi-services', setup-patroni's) include this after the restart - a restart that failed or was refused
+# leaves the record as it was, and the next setup-pi-services finds the restart pending (tasks/restart-pending.yml, by
+# content) and makes it. A handler fired once used to be all: a re-run, the files unchanged, left the old process.
+- name: Forgejo's unit and config, as it now runs them
+  ansible.builtin.include_tasks: restart-pending.yml
+  vars:
+    loaded_service: forgejo
+    loaded_files: [/etc/systemd/system/forgejo.service, /var/lib/forgejo/custom/conf/app.ini]
+    loaded_started_now: true  # restarted on them just now
+
+- name: Forgejo's unit and config, recorded as loaded
+  ansible.builtin.include_tasks: restart-recorded.yml
+  vars:
+    loaded_service: forgejo
+    loaded_hash: "{{ _restart_pending.stdout_lines[1] }}"

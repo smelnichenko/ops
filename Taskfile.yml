@@ -637,6 +637,17 @@ tasks:
       # the offsite git mirror: a sync, the backup equal to Forgejo and restorable, again with the VIP on the other Pi,
       # its result on node_exporter and in Prometheus (OffsiteGitMirrorMissing not firing)
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/offsite-mirror-check.yml
+      # Forgejo and the Pis' keys: bad states planted (Forgejo's keys file and the old mirror's key on each Pi, a restart
+      # left pending on one, an orphaned package blob), production's own runs on them - the config's narrow run, the
+      # doctor's preview and its removal at the count planted, deploy:velero - then what they left checked: no sign-up,
+      # no git over SSH, no keys file, the pending restart made, the old key gone, the blob removed. Production's runs as
+      # test:copy:playbook runs one: behind the Vagrant guard, production's secrets (ops/.env) never reaching them
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/forgejo-plant.yml
+      - cmd: env -i HOME="$HOME" PATH="$PATH" bash -c 'cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/vagrant-only-play.yml playbooks/setup-pi-services.yml --tags forgejo-config'
+      - cmd: env -i HOME="$HOME" PATH="$PATH" bash -c 'cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/vagrant-only-play.yml playbooks/forgejo-doctor.yml --check'
+      - cmd: env -i HOME="$HOME" PATH="$PATH" bash -c 'cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/vagrant-only-play.yml playbooks/forgejo-doctor.yml -e forgejo_orphans_expected=1'
+      - cmd: env -i HOME="$HOME" PATH="$PATH" bash -c 'cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/vagrant-only-play.yml playbooks/setup-velero.yml'
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/forgejo-check.yml
       # the inventory last, after every check (a check's leftovers show): production's, minus the documented left-outs;
       # after a change: its own differences printed for review, any the build had too failing (production moved), and
       # what the checks changed since the change settled failing (a check's leftovers)
@@ -997,7 +1008,15 @@ tasks:
     deps: [deploy:install]
     dotenv: ['../../.env']
     cmds:
-      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-pi-services.yml
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-pi-services.yml {{.CLI_ARGS}}
+
+  deploy:forgejo:orphans:
+    desc: "PRODUCTION: Forgejo's orphaned package blobs (files no package refers to) - a preview counts them (-- --check); a run removes them at that count given back (-- -e forgejo_orphans_expected=N), uploads held by a lock meanwhile, and reads again: none left"
+    dir: deploy/ansible
+    deps: [deploy:install]
+    dotenv: ['../../.env']
+    cmds:
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/forgejo-doctor.yml {{.CLI_ARGS}}
 
   deploy:forgejo:upgrade:
     desc: "PRODUCTION: Forgejo on both Pis to vars/forgejo.yml's version - a pg_dump first, both stopped, the VIP's Pi started first (it migrates), then the other (git.pmon.dev down about a minute)"

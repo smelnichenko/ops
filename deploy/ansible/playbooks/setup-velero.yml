@@ -458,8 +458,9 @@
     git_mirror_org: schnappy
     # the mirror's own Forgejo account - no admin (operator 2026-10-20: no admin account in any automation): a team of
     # the organisation's gives it code read on every repository, new ones too; nothing else. The admin's credentials
-    # make the account (anew at each new token: an account of that name made by anyone else - Forgejo's sign-up is open
-    # - is never adopted with its own tokens and keys) and its team here; the sync holds the reader's token alone
+    # make the account (anew at each new token: an account of that name made by anyone else - Forgejo's sign-up was open
+    # until 2026-11-15, an admin can still make one - is never adopted with its own tokens and keys) and its team here;
+    # the sync holds the reader's token alone
     git_mirror_user: git-mirror
     git_mirror_email: git-mirror@pmon.dev
     git_mirror_team: git-mirror-read
@@ -486,6 +487,12 @@
     # the key the sync pushes with: the mirror's own (made where none, in its directory - not its user's own key, which
     # logs in to a Pi with a shell), authorized on both Pis - the VIP's either - for the gate alone, from ten alone
     _git_mirror_key: "{{ offsite_backup_ssh_key | default(git_mirror_dir ~ '/id_ed25519') }}"
+    # the old mirror's key - ten's own login key for its user (sm@ten, ~/.ssh/id_ed25519), hand-added to pi1 once with
+    # no restriction: a shell and sudo there from ten. Its last login 2026-11-15 04:04 (pi1's sshd), the old script's
+    # last run; the mirror pushes with its own restricted key since. Retired: removed from each Pi, exactly this key -
+    # never one read from ten at the run (a key copied there - the controller's - would have locked Ansible out)
+    git_mirror_retired_keys:
+      - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIB9EAL7urRI7nrWQ/9u6qNumPsn2zb0konaHUmbpoSE2
     # the sync's result for Prometheus (node_exporter's textfile collector, setup-host-hardening.yml): its last good
     # run's time and how many repositories it mirrored - OffsiteGitMirrorMissing fires when none is recent,
     # OffsiteGitMirrorShrank when it mirrors fewer than it did (the old job failed every night unnoticed from 2026-07,
@@ -1136,6 +1143,17 @@
         - git_mirror_enabled | default(true) | bool
         - _git_mirror_pubkey.stdout is defined
 
+    # the old mirror's key, retired: removed from each Pi for the mirror's user (exactly that key - the user's others stay)
+    - name: The old mirror's key - ten's own, no restriction - removed from each Pi
+      ansible.posix.authorized_key:
+        user: "{{ _git_mirror_owner }}"
+        key: "{{ item.1 }}"
+        state: absent
+      delegate_to: "{{ item.0 }}"
+      loop: "{{ groups['pis'] | product(git_mirror_retired_keys) | list }}"
+      become: true
+      when: git_mirror_enabled | default(true) | bool
+
     # the push goes to the VIP - pi1's or pi2's address, as keepalived has it: both Pis' own host keys (read from them
     # over Ansible's checked connections) known under one alias, and checked - never "no" (a host answering at the VIP
     # got the code)
@@ -1216,6 +1234,24 @@
       register: _git_mirror_pi_check
       changed_when: false
       failed_when: _git_mirror_pi_check.rc != 0 or _git_mirror_pi_check.stdout != 'OK'
+      when:
+        - git_mirror_enabled | default(true) | bool
+        - not ansible_check_mode
+
+    # ten reaches a Pi by the mirror's key and its gate alone: its user's own keys (ssh's defaults, no config) refused
+    # on each - "Permission denied (publickey)", a host key that does not check never taken for it
+    - name: Ten's own keys let the mirror's user in on no Pi
+      ansible.builtin.command:
+        argv: [ssh, -F, /dev/null, -o, BatchMode=yes, -o, ConnectTimeout=30, -o, PreferredAuthentications=publickey,
+               -o, ControlPath=none, -o, "HostKeyAlias={{ git_mirror_host_alias }}", -o,
+               "UserKnownHostsFile={{ git_mirror_known_hosts }}", -o, StrictHostKeyChecking=yes,
+               "{{ _git_mirror_owner }}@{{ hostvars[item].ansible_host }}", "true"]
+      become: true
+      become_user: "{{ _git_mirror_owner }}"
+      loop: "{{ groups['pis'] }}"
+      register: _git_mirror_own_keys
+      changed_when: false
+      failed_when: _git_mirror_own_keys.rc != 255 or 'Permission denied (publickey' not in _git_mirror_own_keys.stderr
       when:
         - git_mirror_enabled | default(true) | bool
         - not ansible_check_mode

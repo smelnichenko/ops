@@ -1,0 +1,174 @@
+---
+# What production's own runs left on the copy's Pis from tests/ansible/copy/forgejo-plant.yml's bad states (task
+# test:copy:check runs, in order: the plant, setup-pi-services.yml --tags forgejo-config, forgejo-doctor.yml --check,
+# forgejo-doctor.yml -e forgejo_orphans_expected=1, setup-velero.yml, this). Each Pi's Forgejo, on its own port:
+#   1. no sign-up (DISABLE_REGISTRATION) - its sign-in page served, as the control
+#   2. no git over SSH (DISABLE_SSH): a repository's page offers HTTPS alone; no keys file for the Pis' sshd, and the
+#      doctor's check of it passes (SSH_CREATE_AUTHORIZED_KEYS_FILE off - it failed on the file missing)
+#   3. the restart left pending on the first Pi made by the narrow run, the other Pi's Forgejo not restarted; each Pi's
+#      record the files it runs
+#   4. the old mirror's retired key gone from the mirror user's authorized_keys (Ansible still in: its own key kept)
+# and on the shared storage the planted orphan found and removed, the doctor reading none.
+#
+# Usage: ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/forgejo-check.yml
+- name: Vagrant VMs only
+  ansible.builtin.import_playbook: ../vagrant-only-play.yml
+
+- name: Each Pi's Forgejo - no sign-up, no git over SSH, the pending restart made, the old key gone
+  hosts: pis
+  become: true
+  gather_facts: false
+  vars:
+    _forgejo: http://127.0.0.1:3000
+    retired: >-
+      {{ (lookup('file', playbook_dir ~ '/../../../deploy/ansible/playbooks/setup-velero.yml') | from_yaml
+          | selectattr('vars', 'defined') | map(attribute='vars') | selectattr('git_mirror_retired_keys', 'defined')
+          | first).git_mirror_retired_keys }}
+  tasks:
+    - name: Its sign-in page - the control
+      ansible.builtin.uri:
+        url: "{{ _forgejo }}/user/login"
+        return_content: true
+      register: _login
+
+    - name: Its sign-up page
+      ansible.builtin.uri:
+        url: "{{ _forgejo }}/user/sign_up"
+        follow_redirects: none
+        return_content: true
+        status_code: [200, 403, 404]
+      register: _signup
+
+    - name: Sign-up refused - registration disabled, no sign-up form; the sign-in form served
+      ansible.builtin.assert:
+        that:
+          - "'name=\"user_name\"' in _login.content"
+          - _signup.status in [403, 404] or 'Registration is disabled' in _signup.content
+          - "'name=\"retype\"' not in _signup.content"
+        fail_msg: >-
+          {{ inventory_hostname }}: sign-in form {{ 'name="user_name"' in _login.content }}; sign-up {{ _signup.status }},
+          disabled {{ 'Registration is disabled' in _signup.content }}, its form {{ 'name="retype"' in _signup.content }}
+        quiet: true
+
+    # its page's clone panel, not its API: the API's ssh_url is filled whatever DISABLE_SSH says (the copy, 2026-11-15)
+    - name: A repository's page (the copy's infra, public there)
+      ansible.builtin.uri:
+        url: "{{ _forgejo }}/schnappy/infra"
+        follow_redirects: none
+        return_content: true
+      register: _page
+
+    - name: Its clone panel offers HTTPS alone - git over SSH off
+      ansible.builtin.assert:
+        # the SSH button an element of its own (id="repo-clone-ssh", an ssh:// link) - the page's script names its id
+        # whatever the setting
+        that:
+          - "'clone-https' in _page.content"
+          - "'id=\"repo-clone-ssh\"' not in _page.content and 'ssh://' not in _page.content"
+        fail_msg: >-
+          {{ inventory_hostname }}'s clone panel: HTTPS {{ 'clone-https' in _page.content }}, an SSH button
+          {{ 'id="repo-clone-ssh"' in _page.content }}, an ssh:// link {{ 'ssh://' in _page.content }}
+        quiet: true
+
+    - name: Forgejo's keys file for the Pis' sshd
+      ansible.builtin.stat:
+        path: /var/lib/forgejo/.ssh/authorized_keys
+      register: _keys
+
+    - name: Forgejo's doctor on its keys file - what upgrade-forgejo.yml's checks include
+      ansible.builtin.command:
+        argv: [/usr/local/bin/forgejo, doctor, check, --run, authorized-keys, --config, /var/lib/forgejo/custom/conf/app.ini]
+        chdir: /var/lib/forgejo
+      become: true
+      become_user: forgejo
+      register: _doctor_keys
+      changed_when: false
+
+    - name: No keys file (the planted one removed), its check passing
+      ansible.builtin.assert:
+        that:
+          - not _keys.stat.exists
+          - _doctor_keys.stdout_lines | select('match', '^OK$') | list | length == 1
+          - _doctor_keys.stdout_lines | select('match', '^(ERROR|FAIL)$|^ - .[EC]. ') | list | length == 0
+        fail_msg: >-
+          {{ inventory_hostname }}: keys file {{ _keys.stat.exists }}; the doctor's check: {{ _doctor_keys.stdout_lines }}
+        quiet: true
+
+    - name: Forgejo's start, noted at the plant and now
+      ansible.builtin.command:
+        argv: [sh, -c, "cat /var/tmp/forgejo-check.started; systemctl show -p ActiveEnterTimestampMonotonic --value forgejo"]
+      register: _starts
+      changed_when: false
+
+    - name: Its files, hashed, and its record
+      ansible.builtin.command:
+        argv:
+          - sh
+          - -c
+          - >-
+            cat /etc/systemd/system/forgejo.service /var/lib/forgejo/custom/conf/app.ini | sha256sum | cut -d' ' -f1;
+            cat /var/lib/config-loaded/forgejo.sha256
+      register: _record
+      changed_when: false
+
+    - name: The first Pi's pending restart made, the other's Forgejo left running; each record the files it runs
+      ansible.builtin.assert:
+        that:
+          - _starts.stdout_lines | length == 2
+          - (_starts.stdout_lines[0] != _starts.stdout_lines[1]) == (inventory_hostname == groups['pis'][0])
+          - _record.stdout_lines | length == 2 and _record.stdout_lines[0] == _record.stdout_lines[1]
+        fail_msg: >-
+          {{ inventory_hostname }}: Forgejo started {{ _starts.stdout_lines }} (plant, now) - restarted expected on
+          {{ groups['pis'][0] }} alone; files {{ _record.stdout_lines[0] | default('?') }}, record
+          {{ _record.stdout_lines[1] | default('none') }}
+        quiet: true
+
+    - name: The mirror user's authorized_keys
+      ansible.builtin.slurp:
+        src: "~{{ offsite_backup_user | default('sm') }}/.ssh/authorized_keys"
+      register: _ak
+
+    - name: The old mirror's key gone from it
+      ansible.builtin.assert:
+        that: (retired[0].split()[1]) not in (_ak.content | b64decode)
+        fail_msg: "{{ inventory_hostname }}: the old mirror's retired key still in {{ offsite_backup_user | default('sm') }}'s authorized_keys"
+        quiet: true
+
+    - name: The plant's note removed
+      ansible.builtin.file:
+        path: /var/tmp/forgejo-check.started
+        state: absent
+
+- name: The planted orphan found and removed, none left
+  hosts: pis
+  become: true
+  gather_facts: false
+  vars:
+    blob: /var/lib/forgejo/data/packages/ab/cd/abcd0000000000000000000000000000000000000000000000000000000000ff
+  tasks:
+    - name: On the Pi holding the VIP alone
+      ansible.builtin.import_tasks: ../../../deploy/ansible/playbooks/tasks/vip-holder-only.yml
+
+    - name: The planted blob
+      ansible.builtin.stat:
+        path: "{{ blob }}"
+      register: _blob
+
+    - name: The doctor's count now
+      ansible.builtin.command:
+        argv: [/usr/local/bin/forgejo, doctor, check, --run, storage-packages, --config, /var/lib/forgejo/custom/conf/app.ini]
+        chdir: /var/lib/forgejo
+      become: true
+      become_user: forgejo
+      register: _now
+      changed_when: false
+
+    - name: Gone, and the doctor reads none
+      ansible.builtin.assert:
+        that:
+          - not _blob.stat.exists
+          - _now.stdout is search('Found [0-9]+ [(][^)]*[)] package blob')
+          # its count line, not the check's title ("Check if there are orphaned package blobs in storage")
+          - _now.stdout is not search('Found [0-9]+/[0-9]+ [(][^)]*[)] orphaned package blob')
+        fail_msg: "the planted blob still there: {{ _blob.stat.exists }}; the doctor: {{ _now.stdout_lines | select('search', 'package blob') | list }}"
+        quiet: true

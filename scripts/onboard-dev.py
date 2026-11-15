@@ -271,8 +271,10 @@ def ensure_forgejo_org(creds):
         die("EMAIL is required to resolve the Forgejo account")
     owner = forgejo_user_by_email(creds)
     if not owner:
-        print(f"[forgejo] no account with email {EMAIL} yet — the developer must sign in "
-              f"once at\n          {FORGEJO} via \"Sign in with Keycloak\", then re-run this.")
+        # sign-up is closed (DISABLE_REGISTRATION): a first Keycloak sign-in makes no account - only the
+        # pre-creation above does, which a dry run skips
+        print(f"[forgejo] no account with email {EMAIL} yet — a run without DRY_RUN pre-creates it "
+              f"(Forgejo's sign-up is closed: a first sign-in via Keycloak makes none).")
         return False
     org = f"{USERNAME}{ORG_SUFFIX}"
     code, _ = http(f"{FORGEJO}/api/v1/orgs/{urllib.parse.quote(org)}", basic=creds)

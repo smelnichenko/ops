@@ -695,6 +695,15 @@
         name: forgejo
         state: restarted
 
+    # recorded once restarted (tasks/forgejo-recorded.yml): setup-pi-services' next run compares with it - unrecorded,
+    # it read this restart's new HOST as a restart still pending
+    - name: Forgejo's unit and config recorded as it runs them
+      listen: Restart Forgejo
+      ansible.builtin.include_tasks:
+        file: tasks/forgejo-recorded.yml
+        apply:
+          tags: [always]
+
 # Keycloak restarted where its unit changed (its database port, above): both Pis in one play - the Pi without the VIP
 # first, one at a time, guarded, its stamp recorded (setup-pi-services' own restart, the same file)
 - name: Keycloak restarted where its unit changed

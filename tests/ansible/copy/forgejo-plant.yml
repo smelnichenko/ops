@@ -1,0 +1,101 @@
+---
+# Bad states planted on the copy's Pis for production's own runs after it (task test:copy:check: the config's narrow
+# run, the doctor's preview and its removal at the count planted, deploy:velero); tests/ansible/copy/forgejo-check.yml
+# checks what they left. Each Pi:
+#   1. a keys file for the Pis' sshd, Forgejo's (DISABLE_SSH alone left it written; pi1's held ten's key)
+#   2. the old mirror's retired key (setup-velero's git_mirror_retired_keys) in the mirror user's authorized_keys, as
+#      pi1 held it - unrestricted
+#   3. Forgejo's start noted - and on the first Pi its restart left pending (its record not the files it runs, as a
+#      restart that failed or was refused leaves it)
+# and, on the shared storage, an orphaned package blob - a file no package refers to.
+#
+# Usage: ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/forgejo-plant.yml
+- name: Vagrant VMs only
+  ansible.builtin.import_playbook: ../vagrant-only-play.yml
+
+- name: Forgejo's keys file, the old mirror's key, a restart left pending
+  hosts: pis
+  become: true
+  gather_facts: false
+  vars:
+    retired: >-
+      {{ (lookup('file', playbook_dir ~ '/../../../deploy/ansible/playbooks/setup-velero.yml') | from_yaml
+          | selectattr('vars', 'defined') | map(attribute='vars') | selectattr('git_mirror_retired_keys', 'defined')
+          | first).git_mirror_retired_keys }}
+  tasks:
+    - name: Forgejo's .ssh directory
+      ansible.builtin.file:
+        path: /var/lib/forgejo/.ssh
+        state: directory
+        owner: forgejo
+        group: forgejo
+        mode: '0700'
+
+    - name: A keys file for the Pis' sshd, as Forgejo wrote it
+      ansible.builtin.copy:
+        dest: /var/lib/forgejo/.ssh/authorized_keys
+        content: |
+          # gitea public key
+          command="/usr/local/bin/forgejo --config=/var/lib/forgejo/custom/conf/app.ini serv key-3",restrict {{ retired[0] }} planted@forgejo-check
+        owner: forgejo
+        group: forgejo
+        mode: '0600'
+
+    - name: The old mirror's key in the mirror user's authorized_keys, unrestricted
+      ansible.posix.authorized_key:
+        user: "{{ offsite_backup_user | default('sm') }}"
+        key: "{{ retired[0] }} sm@ten"
+        state: present
+
+    - name: Forgejo's start, as it is now
+      ansible.builtin.command:
+        argv: [systemctl, show, -p, ActiveEnterTimestampMonotonic, --value, forgejo]
+      register: _started
+      changed_when: false
+
+    - name: Noted, to tell the Pi restarted from the other
+      ansible.builtin.copy:
+        dest: /var/tmp/forgejo-check.started
+        content: "{{ _started.stdout }}\n"
+        mode: '0600'
+
+    - name: The record's directory
+      ansible.builtin.file:
+        path: /var/lib/config-loaded
+        state: directory
+        owner: root
+        group: root
+        mode: '0700'
+
+    - name: The first Pi's restart left pending - its record not the files it runs
+      ansible.builtin.copy:
+        dest: /var/lib/config-loaded/forgejo.sha256
+        content: "{{ '0' * 64 }}\n"
+        owner: root
+        group: root
+        mode: '0600'
+      when: inventory_hostname == groups['pis'][0]
+
+- name: An orphaned package blob on the shared storage
+  hosts: pis
+  become: true
+  gather_facts: false
+  tasks:
+    - name: On the Pi holding the VIP alone
+      ansible.builtin.import_tasks: ../../../deploy/ansible/playbooks/tasks/vip-holder-only.yml
+
+    - name: Its directory, Forgejo's
+      ansible.builtin.file:
+        path: /var/lib/forgejo/data/packages/ab/cd
+        state: directory
+        owner: forgejo
+        group: forgejo
+        mode: '0755'
+
+    - name: A blob no package refers to
+      ansible.builtin.copy:
+        dest: /var/lib/forgejo/data/packages/ab/cd/abcd0000000000000000000000000000000000000000000000000000000000ff
+        content: "an orphan the doctor must find\n"
+        owner: forgejo
+        group: forgejo
+        mode: '0644'

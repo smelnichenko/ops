@@ -113,8 +113,11 @@ check("the unit, its start, Keycloak's wait tagged; the credentials' check on ev
 check("no handler restarts Keycloak, nothing notifies one",
       ([t.get("name") for p in doc for t in p.get("handlers") or [] if "Keycloak" in str(t.get("name"))],
        [t.get("name") for t in every if "Keycloak" in str(t.get("notify", ""))]), ([], []))
-pend = next((t for t in every if "restart-pending.yml" in str(t.get("ansible.builtin.include_tasks"))), None)
-rec = next((t for t in every if "restart-recorded.yml" in str(t.get("ansible.builtin.include_tasks"))), None)
+# Keycloak's own (Forgejo's restart is pending by content in this playbook too)
+pend = next((t for t in every if "restart-pending.yml" in str(t.get("ansible.builtin.include_tasks"))
+             and (t.get("vars") or {}).get("loaded_service") == "keycloak"), None)
+rec = next((t for t in every if "restart-recorded.yml" in str(t.get("ansible.builtin.include_tasks"))
+            and (t.get("vars") or {}).get("loaded_service") == "keycloak"), None)
 check("its restart pending by its unit and secrets file, recorded after - both tagged, in no preview",
       (pend is not None and sorted((pend.get("vars") or {}).get("loaded_files") or []) ==
        sorted(["/etc/systemd/system/keycloak.service"] + named) and tagged(pend), rec is not None and tagged(rec),

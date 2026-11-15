@@ -101,12 +101,18 @@ check("test:copy:check: the lock, then settled (pushed commits, recorded apps, i
       ([True] * 3, True))
 # the serial checks, each exactly its playbook on the copy - none in check mode, none tolerated, in this order
 PB = "cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml "
+# production's playbooks among them as test:copy:playbook runs one: the Vagrant guard first, without ops/.env
+GUARDED = ("env -i HOME=\"$HOME\" PATH=\"$PATH\" bash -c 'cd deploy/ansible && venv/bin/ansible-playbook -i "
+           "inventory/vagrant.yml ../../tests/ansible/vagrant-only-play.yml playbooks/%s'")
 want = [PB + "../../tests/ansible/copy/" + f for f in ("barman-check.yml", "cert-check.yml", "restore-check.yml",
                                                         "backup-check.yml",
                                                         "backup-check.yml -e schedule=velero-full-weekly")] + \
     [PB + "playbooks/scylla-backup-check.yml", PB + "../../tests/ansible/copy/sweeper-check.yml",
-     PB + "../../tests/ansible/copy/offsite-mirror-check.yml"]
-got = [c for _, c, _ in check_ if c.startswith(PB) and "argo-settled" not in c]
+     PB + "../../tests/ansible/copy/offsite-mirror-check.yml", PB + "../../tests/ansible/copy/forgejo-plant.yml"] + \
+    [GUARDED % f for f in ("setup-pi-services.yml --tags forgejo-config", "forgejo-doctor.yml --check",
+                           "forgejo-doctor.yml -e forgejo_orphans_expected=1", "setup-velero.yml")] + \
+    [PB + "../../tests/ansible/copy/forgejo-check.yml"]
+got = [c for _, c, _ in check_ if (c.startswith(PB) or c.startswith(GUARDED.split("%s")[0])) and "argo-settled" not in c]
 check("  its serial checks, each its playbook exactly, in order", got, want)
 # the offsite git mirror installed on the copy as production's deploy:velero does it, after the build's settle (Argo CD
 # owning Velero by then - before it, the Velero play installed Velero and MinIO itself), before the checks read it

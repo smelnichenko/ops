@@ -1,0 +1,131 @@
+---
+# Forgejo's orphaned package blobs - files in its package storage no package refers to (its doctor's storage-packages
+# check found 21 of 7005, 494 MiB, on 2026-11-14). A preview (--check) counts them; a run removes them only at the count
+# the preview showed, given back (-e forgejo_orphans_expected=N) - another count, or none given, removes nothing - and
+# reads again: none left, or the play fails. On the Pi holding the VIP alone: the storage is the pair's Gluster volume,
+# one Pi reads it all. A doctor output it cannot read fails the play (never taken for none).
+#
+# Removed with the package blobs' table locked against writes (LOCK TABLE ... IN SHARE MODE, a session of its own held
+# over the doctor's runs): Forgejo writes a blob's row and then its file - by way of a temporary file in the same
+# storage - in one transaction, so to the doctor an upload in flight is a file no row refers to (its --fix deletes it,
+# and the push fails or, its row committed after, the image's layer is gone - the storage is in no backup). The lock
+# waits out the uploads in flight and holds new ones before their file is written (pushes wait, reads go on); under it
+# the doctor counts again, removes only at the count given, and reads again. Forgejo 15's source, 2026-11-15.
+#
+# Usage: task deploy:forgejo:orphans -- --check, then task deploy:forgejo:orphans -- -e forgejo_orphans_expected=<N>
+- name: Forgejo's orphaned package blobs - counted, or removed
+  hosts: pis
+  become: true
+  gather_facts: false
+  vars:
+    _config: /var/lib/forgejo/custom/conf/app.ini
+    # bounded: a hung Gluster client leaves the doctor in D-state and the play waiting on it for good; three runs under
+    # the lock (8 min each) stay inside HAProxy's 30 min on the lock's idle session, a statement between them
+    _doctor: >-
+      timeout --kill-after=30s 8m /usr/local/bin/forgejo doctor check --run storage-packages --config {{ _config }}
+    # '[W] Found 21/7005 (494 MiB/654 GiB) orphaned package blob(s)'; with none: '[I] Found 7005 (654 GiB) package
+    # blob(s)'; --fix: 'Deleted 21/21 orphaned package blob(s)'
+    _orphans_re: 'Found (\d+)/\d+ \([^)]*\) orphaned package blob'
+    _none_re: 'Found \d+ \([^)]*\) package blob'
+    _deleted_re: 'Deleted (\d+)/(\d+) orphaned package blob'
+    # Forgejo's own database login (the postgres account, as its config and upgrade-forgejo.yml have it)
+    _db_password: "{{ postgres_admin_password }}"
+  tasks:
+    - name: On the Pi holding the VIP alone
+      ansible.builtin.import_tasks: tasks/vip-holder-only.yml
+
+    - name: The orphaned package blobs Forgejo's doctor finds
+      ansible.builtin.command:
+        argv: "{{ _doctor | split }}"
+        chdir: /var/lib/forgejo
+      become: true
+      become_user: forgejo
+      check_mode: false
+      changed_when: false
+      register: _before
+
+    - name: How many - read from the doctor's own line, or the play fails
+      ansible.builtin.set_fact:
+        forgejo_orphans_before: >-
+          {{ (_before.stdout | regex_search(_orphans_re, '\1') | first) if _before.stdout is search(_orphans_re) else 0 }}
+      failed_when: _before.stdout is not search(_orphans_re) and _before.stdout is not search(_none_re)
+
+    - name: The orphaned package blobs
+      ansible.builtin.debug:
+        msg: >-
+          {{ forgejo_orphans_before }} orphaned package blob(s) in Forgejo's storage{{ (' - a preview: none removed; to
+          remove them: -e forgejo_orphans_expected=' ~ forgejo_orphans_before) if ansible_check_mode else '' }}
+
+    - name: The count to remove given back - the preview's
+      ansible.builtin.assert:
+        that: (forgejo_orphans_expected | default('none') | string) == (forgejo_orphans_before | string)
+        fail_msg: >-
+          REFUSED - nothing removed: {{ forgejo_orphans_before }} orphaned package blob(s) found,
+          {{ forgejo_orphans_expected | default('no count') }} given - a preview (-- --check) shows the count, a run
+          removes them with it given back (-e forgejo_orphans_expected=N)
+        quiet: true
+      when: forgejo_orphans_before | int > 0 and not ansible_check_mode
+
+    - name: Removed under the lock at the count given, none left
+      when: forgejo_orphans_before | int > 0 and not ansible_check_mode
+      block:
+        - name: Removed by Forgejo's doctor under the lock - counted again, removed at the count given, read again
+          ansible.builtin.shell:
+            executable: /bin/bash
+            chdir: /var/lib/forgejo
+            cmd: |
+              set -euo pipefail
+              # the password on stdin, not in the environment Ansible puts on the command line
+              read -r PGPASSWORD; export PGPASSWORD
+              # for psql's \! (sh -c): the doctor, and its line with the count given
+              export DOCTOR={{ _doctor | quote }}
+              export WANT='Found {{ forgejo_orphans_expected | int }}/[0-9]+ \([^)]*\) orphaned package blob'
+              psql -X -q -A -t -w -v ON_ERROR_STOP=1 -h 127.0.0.1 -p 5000 -U postgres -d forgejo <<'SQL'
+              SET idle_in_transaction_session_timeout = 0;
+              BEGIN;
+              SET LOCAL lock_timeout = '5min';
+              LOCK TABLE package_blob IN SHARE MODE;
+              \echo ==== counted under the lock
+              \! out=$($DOCTOR); printf '%s\n' "$out"; printf '%s\n' "$out" | grep -qE "$WANT"
+              \if :SHELL_ERROR
+              \echo ==== REFUSED: the count under the lock is not the one given - nothing removed
+              ROLLBACK;
+              \else
+              SELECT 'the lock held';
+              \echo ==== removed
+              \! $DOCTOR --fix
+              SELECT 'the lock held';
+              \echo ==== read again
+              \! $DOCTOR
+              COMMIT;
+              \endif
+              SQL
+            stdin: "{{ _db_password }}"
+          become: true
+          become_user: forgejo
+          no_log: true  # the database password on stdin
+          register: _removal
+          # psql failing (the lock not had in 5 min, the session lost) or the count under it not the one given
+          failed_when: _removal.rc != 0 or '==== REFUSED' in _removal.stdout
+          changed_when: _removal.stdout is search(_deleted_re)
+
+        - name: What the doctor removed, and read after - from its own lines
+          ansible.builtin.set_fact:
+            forgejo_orphans_removed: "{{ _removal.stdout | regex_search(_deleted_re, '\\1', '\\2') | default([], true) }}"
+            forgejo_orphans_after: >-
+              {{ _removal.stdout.split('==== read again') | last if '==== read again' in _removal.stdout else '' }}
+
+        - name: Removed at the count given, none left
+          ansible.builtin.assert:
+            that:
+              - forgejo_orphans_removed == [forgejo_orphans_expected | string] * 2
+              - forgejo_orphans_after is search(_none_re) and forgejo_orphans_after is not search(_orphans_re)
+            success_msg: "{{ forgejo_orphans_removed[0] }} orphaned package blob(s) removed under the lock, none left"
+      # the removal's own output hidden (its stdin the password): what the doctor said, shown - and the play failed
+      rescue:
+        - name: What Forgejo's doctor said under the lock
+          ansible.builtin.fail:
+            msg: >-
+              {{ ansible_failed_task.name }} - psql {{ _removal.rc | default('not run') }}: {{ (_removal.stdout_lines
+              | default([])) | select('search', '====|package blob|lock held|FAIL|ERROR|\[[EC]\]') | list }}
+              {{ _removal.stderr_lines | default([]) }}

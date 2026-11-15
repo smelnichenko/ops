@@ -47,6 +47,8 @@
           - keycloak_admin_password | default('') | length > 0
           - forgejo_secret_key | default('') | length > 0
           - forgejo_internal_token | default('') | length > 0
+          # signs Forgejo's OAuth2 tokens (Woodpecker's): missing, each Pi makes its own - a failover rejects them all
+          - forgejo_jwt_secret | default('') | length > 0
           - forgejo_admin_user | default('') | length > 0
           - forgejo_admin_password | default('') | length > 0
           - backup_root_user | default('') | length > 0
@@ -105,13 +107,13 @@
 
     # (the module reports a unit that does not exist as not-found - it fails only on a real error, which must show)
     - name: Detect Patroni state (drives Forgejo DB-host resolution below)
-      tags: [keycloak-db-url]
+      tags: [keycloak-db-url, forgejo-config]  # forgejo-config: the database host Forgejo's config names
       ansible.builtin.systemd:
         name: patroni
       register: _patroni_state
 
     - name: Detect PgBouncer state
-      tags: [keycloak-db-url]
+      tags: [keycloak-db-url, forgejo-config]  # forgejo-config: the database host Forgejo's config names
       ansible.builtin.systemd:
         name: pgbouncer
       register: _pgbouncer_state
@@ -119,12 +121,12 @@
     # a first install is a Pi without Patroni - not one whose Patroni is stopped for a moment: Debian's own cluster is
     # set up only then, and never restarted under Patroni
     - name: Is Patroni installed here
-      tags: [keycloak-db-url]
+      tags: [keycloak-db-url, forgejo-config]  # forgejo-config: the database host Forgejo's config names
       ansible.builtin.set_fact:
         _patroni_installed: "{{ _patroni_state.status.LoadState | default('') == 'loaded' }}"
 
     - name: PgBouncer installed here is running (else Forgejo and Keycloak would be moved to :5000 and restarted)
-      tags: [keycloak-db-url]
+      tags: [keycloak-db-url, forgejo-config]  # forgejo-config: the database host Forgejo's config names
       ansible.builtin.fail:
         msg: "REFUSED on {{ inventory_hostname }}: PgBouncer is installed but {{ _pgbouncer_state.status.ActiveState }} - start it first"
       when:
@@ -132,12 +134,12 @@
         - _pgbouncer_state.status.ActiveState | default('') != 'active'
 
     - name: Pick effective DB port (pgbouncer if up, else haproxy direct)
-      tags: [keycloak-db-url]
+      tags: [keycloak-db-url, forgejo-config]  # forgejo-config: the database host Forgejo's config names
       ansible.builtin.set_fact:
         _db_port: "{{ '6432' if _pgbouncer_state.status.ActiveState | default('') == 'active' else '5000' }}"
 
     - name: Set effective DB host for Forgejo/Keycloak
-      tags: [keycloak-db-url]
+      tags: [keycloak-db-url, forgejo-config]  # forgejo-config: the database host Forgejo's config names
       ansible.builtin.set_fact:
         forgejo_db_host_effective: >-
           {{ ('127.0.0.1:' ~ _db_port)
@@ -324,7 +326,9 @@
         - /var/local/forgejo/indexers
         - /var/local/forgejo/sessions
 
+    # tag forgejo-config: its config alone (with the database host it names) - deploy:pi-services -- --tags forgejo-config
     - name: Write Forgejo config
+      tags: [forgejo-config]
       ansible.builtin.copy:
         dest: /var/lib/forgejo/custom/conf/app.ini
         owner: forgejo
@@ -345,6 +349,18 @@
           ROOT_URL = {{ forgejo_root_url | default('https://git.pmon.dev/') }}
           APP_DATA_PATH = /var/lib/forgejo/data
           LFS_START_SERVER = false
+          # no git over SSH: every remote and Argo CD's sources are HTTPS (its one user, ten's target-scorer checkout,
+          # pulls nothing since 2026-11-15) - its keys file removed below
+          DISABLE_SSH = true
+          # and no keys file for the Pis' sshd: DISABLE_SSH alone leaves Forgejo writing it (a key added, the admin's
+          # resync) and its doctor's default checks failing on it missing (upgrade-forgejo.yml's) - Forgejo 15's source
+          SSH_CREATE_AUTHORIZED_KEYS_FILE = false
+          SSH_CREATE_AUTHORIZED_PRINCIPALS_FILE = false
+
+          [service]
+          # no sign-up: accounts are made by the admin (the offsite mirror's reader by setup-velero) - it was open,
+          # anyone could register an account on git.pmon.dev (found 2026-11-15)
+          DISABLE_REGISTRATION = true
 
           [database]
           DB_TYPE = postgres
@@ -432,6 +448,14 @@
       diff: false  # the database password and Forgejo's secrets - a --check --diff preview would print them
       notify: Restart Forgejo
 
+    # no git over SSH (DISABLE_SSH): the keys Forgejo wrote for the Pis' sshd go - pi1's held ten's key, pi2's none
+    # (written on the Pi that took the request); left, sshd would still let that key in as the forgejo user
+    - name: Forgejo's SSH keys file gone
+      tags: [forgejo-config]
+      ansible.builtin.file:
+        path: /var/lib/forgejo/.ssh/authorized_keys
+        state: absent
+
     - name: Install Forgejo systemd service
       ansible.builtin.copy:
         dest: /etc/systemd/system/forgejo.service
@@ -461,6 +485,50 @@
         enabled: true
         state: started
         daemon_reload: true
+      register: _forgejo_start
+
+    # a restart that failed or was refused (the other Pi not serving, Forgejo not back in 180 s) left its files written
+    # and Forgejo running on the ones before; a re-run, the files unchanged, notified nothing. Pending by content
+    # (tasks/restart-pending.yml) against the record the handler leaves once Forgejo restarted (tasks/forgejo-recorded):
+    # the next run makes it. Not in a preview: it wrote neither file
+    - name: Forgejo's restart pending here - its unit and config against the ones it last loaded
+      tags: [forgejo-config]
+      ansible.builtin.include_tasks:
+        file: tasks/restart-pending.yml
+        apply:
+          tags: [forgejo-config]
+      vars:
+        loaded_service: forgejo
+        loaded_files: [/etc/systemd/system/forgejo.service, /var/lib/forgejo/custom/conf/app.ini]
+        # its status as the start found it: not running, it started on these files just now
+        loaded_started_now: >-
+          {{ ((_forgejo_start | default({})).status | default({})).ActiveState | default('active')
+             not in ['active', 'activating'] }}
+      when: not ansible_check_mode
+
+    - name: Forgejo restarted where pending
+      tags: [forgejo-config]
+      ansible.builtin.debug:
+        msg: "Forgejo on {{ inventory_hostname }} runs a unit or config other than its own files - restarted"
+      changed_when: true
+      notify: Restart Forgejo
+      when:
+        - not ansible_check_mode
+        - _restart_pending.stdout_lines[0] == 'pending'
+
+    # current: recorded now (a Pi read by the clock, without a record yet, compared by content from here on)
+    - name: Forgejo's unit and config recorded as loaded - found current
+      tags: [forgejo-config]
+      ansible.builtin.include_tasks:
+        file: tasks/restart-recorded.yml
+        apply:
+          tags: [forgejo-config]
+      vars:
+        loaded_service: forgejo
+        loaded_hash: "{{ _restart_pending.stdout_lines[1] }}"
+      when:
+        - not ansible_check_mode
+        - _restart_pending.stdout_lines[0] == 'current'
 
     - name: Wait for Forgejo
       ansible.builtin.uri:
@@ -773,6 +841,15 @@
         executable: /bin/bash
       throttle: 1
       changed_when: true
+
+    # after its restart, recorded (tasks/forgejo-recorded.yml): a restart that failed leaves the Pi out of the run and
+    # the record as it was - pending at the next run. Any tag's run: a handler fires whatever the run's tags
+    - name: Forgejo's unit and config recorded as it runs them
+      listen: Restart Forgejo
+      ansible.builtin.include_tasks:
+        file: tasks/forgejo-recorded.yml
+        apply:
+          tags: [always]
 
     # Forgejo restarts with it (its unit Requires= haproxy): both answering again before the next Pi
     - name: Restart HAProxy

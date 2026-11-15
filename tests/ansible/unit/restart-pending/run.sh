@@ -94,10 +94,11 @@ for f in sorted(glob.glob("deploy/ansible/playbooks/*.yml")):
             exprs[(os.path.basename(f), v["loaded_service"])] = v["loaded_started_now"]
 # (setup-patroni's Keycloak: it starts no Keycloak - the restart's, through tasks/keycloak-restart.yml, takes the
 # default: not started now)
-check("loaded_started_now in consul, keepalived, patroni, vault, keycloak: each its own service's systemd register",
+check("loaded_started_now in consul, keepalived, patroni, vault, keycloak, forgejo: each its own service's systemd "
+      "register",
       users, {**{(f"setup-{n}.yml", s_): [s_] for n, s_ in (("consul", "consul"), ("keepalived", "keepalived"),
                                                            ("patroni", "patroni"), ("vault-pi", "vault"),
-                                                           ("pi-services", "keycloak"))},
+                                                           ("pi-services", "keycloak"), ("pi-services", "forgejo"))},
               ("setup-patroni.yml", "keycloak"): []})
 # and each one's expression, as Ansible renders it, for what its start task can find: started now from inactive or
 # failed; not when it ran already (active, activating), nor when the status is not there (a default of "running")

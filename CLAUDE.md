@@ -175,7 +175,7 @@ Chat (namespace: schnappy)
   ├─ ScyllaDB (StatefulSet)        ← message persistence (day-bucketed)
   └─ WebSocket (STOMP/SockJS)      ← real-time delivery
 
-Forgejo (namespace: forgejo)       ← git hosting (source code + webhooks)
+Forgejo (the Pis, pi1/pi2 + VIP)   ← git hosting (source code + webhooks, container registry)
 
 Woodpecker CI (namespace: woodpecker) ← CI/CD pipeline execution
   ├─ Server (StatefulSet)          ← orchestrates pipelines, UI at ci.pmon.dev
@@ -722,16 +722,24 @@ Receive inbound emails via Resend webhook, store them in the database, and displ
 
 ## Forgejo (Self-Hosted Git Forge)
 
-Self-hosted Git forge at `https://git.pmon.dev/` for source hosting. CI/CD handled by Woodpecker CI.
+Self-hosted Git forge at `https://git.pmon.dev/` for source hosting and the container registry, on both Pis behind the
+keepalived VIP (Caddy on each Pi proxies to its own Forgejo); repositories and package storage on the pair's Gluster
+volume. CI/CD handled by Woodpecker CI.
 
-- **Namespace:** `forgejo`
-- **Chart:** `oci://code.forgejo.org/forgejo-helm/forgejo` (v16.2.0)
-- **Database:** SQLite (single-node, no extra pod)
-- **Image:** Rootless, SSH disabled (HTTPS only)
-- **Ingress:** `git.pmon.dev` via Istio Gateway + cert-manager TLS
-- **Secrets:** forgejo admin seeded by `seed-vault-secrets.yml`, consumed at install time
-- **DB:** Patroni-backed Postgres via HAProxy on localhost:5000 on each Pi
-- **Key files:** `deploy/ansible/playbooks/setup-pi-services.yml` — Forgejo bare-metal on Pis
+- **Database:** Patroni-backed Postgres via PgBouncer/HAProxy on each Pi
+- **HTTPS only:** `DISABLE_SSH`, no keys file for the Pis' sshd (`SSH_CREATE_AUTHORIZED_KEYS_FILE = false`) - every
+  remote, Argo CD source and CI clone is HTTPS. Turning SSH back on needs `forgejo admin regenerate keys` as the forgejo
+  user on each Pi (the keys file lives in each Pi's own home)
+- **No sign-up:** `DISABLE_REGISTRATION` - accounts are made by the admin (CLI or admin API): the CI bot, argocd-reader,
+  the offsite mirror's reader, `scripts/onboard-dev.py` (pre-created, linked to the Keycloak sub; a first Keycloak
+  sign-in makes no account)
+- **Config alone:** `task deploy:pi-services -- --tags forgejo-config [--check --diff]` - app.ini with the database host
+  it names; Forgejo restarts where its unit or config differ from what it last loaded (pending by content, so a failed
+  restart is made by the next run), one Pi at a time, guarded
+- **Orphaned package blobs:** `task deploy:forgejo:orphans -- --check` counts them; `-- -e forgejo_orphans_expected=N`
+  removes them at that count, uploads held by a table lock meanwhile, and reads again
+- **Upgrade:** `task deploy:forgejo:upgrade` (dump first, both stopped, the VIP's Pi first - git.pmon.dev down ~1 min)
+- **Key files:** `deploy/ansible/playbooks/setup-pi-services.yml`, `forgejo-doctor.yml`, `upgrade-forgejo.yml`
 
 ## Woodpecker CI
 

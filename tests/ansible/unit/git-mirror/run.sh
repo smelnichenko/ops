@@ -2,11 +2,12 @@
 # setup-velero.yml's offsite git mirror on ten: every repository of the Forgejo organisation production's GitOps
 # repository lives in, pushed daily to a repository of its own on the Pis' backup volume - a backup that KEEPS what it
 # held. Forgejo read with a token of read:repository, read:organization and read:user alone, minted BY the mirror's own
-# non-admin reader (git-mirror, made anew at each new token - never adopted: Forgejo's sign-up is open; a team of the
-# organisation's gives it code read on every repository; never the admin's token - operator 2026-10-20: no admin account
-# in any automation - nor its password, which sat in the old origin URL); the token proven from a file of its own before
-# the sync's is replaced; every run reads back that it reaches every repository the organisation has (the admin's
-# count) and pushes to none. The push key is the mirror's own, authorized on both Pis for the gate alone, from ten alone
+# non-admin reader (git-mirror, made anew at each new token - never adopted: Forgejo's sign-up was open until
+# 2026-11-15; a team of the organisation's gives it code read on every repository; never the admin's token - operator
+# 2026-10-20: no admin account in any automation - nor its password, which sat in the old origin URL); the token
+# proven from a file of its own before the sync's is replaced; every run reads back that it reaches every repository
+# the organisation has (the admin's count) and pushes to none. The push key is the mirror's own, authorized on both
+# Pis for the gate alone, from ten alone
 # - the gate (the key's forced command) the only thing it runs there: check, init, refs, git-receive-pack, last-success,
 # keep-unmarked, each checked and bounded.
 #
@@ -437,6 +438,39 @@ check("the copy check's systemd probe (measured on systemd 257: gaps 1.2 2.2 4.3
 pw = [t.get("name") for t in tasks if "_git_mirror_password" in json.dumps({k: x for k, x in t.items() if k != "name"})
       and "ansible.builtin.set_fact" not in t and "block" not in t and not t.get("no_log")]
 check("every task carrying the reader's password is no_log", pw, [])
+# the old mirror's key - ten's own login key for its user, hand-added to pi1 with no restriction - retired: exactly the
+# pinned key removed from each Pi for the mirror's user, the user's other keys kept (never exclusive), never a key read
+# from ten at the run (one copied there - the controller's - would lock Ansible out); then ten's own keys refused on
+# each Pi, a host key that does not check never taken for the refusal
+old_rm = by_name["The old mirror's key - ten's own, no restriction - removed from each Pi"]
+ak = old_rm["ansible.posix.authorized_key"]
+retired = play["vars"]["git_mirror_retired_keys"]
+pairs = render(str(old_rm["loop"]), groups={"pis": ["pi1", "pi2"]}, git_mirror_retired_keys=retired)
+check("the old mirror's key removed from each Pi: the pinned key alone (type and key, no comment), state absent, the "
+      "mirror's user, never exclusive, as root, every Pi each retired key; nothing read from ten for it",
+      ([str(x).split() for x in retired], ak["state"], R(ak["user"]), ak.get("exclusive", False), old_rm.get("become"),
+       [list(x) for x in pairs], render(ak["key"], item=["pi1", retired[0]]), old_rm["delegate_to"],
+       [n for n in names if "Ten's own login key" in str(n) or "home on ten" in str(n)]),
+      ([["ssh-ed25519", "AAAAC3NzaC1lZDI1NTE5AAAAIB9EAL7urRI7nrWQ/9u6qNumPsn2zb0konaHUmbpoSE2"]], "absent", "sm", False,
+       True, [["pi1", retired[0]], ["pi2", retired[0]]], retired[0], "{{ item.0 }}", []))
+probe = by_name["Ten's own keys let the mirror's user in on no Pi"]
+pa = R(" ".join(probe["ansible.builtin.command"]["argv"]), item="pi1", hostvars={"pi1": {"ansible_host": "192.168.11.4"}})
+fw = probe["failed_when"]
+check("then ten's own keys refused on each Pi: ssh's defaults (no config, no identity named), no shared connection, "
+      "the VIP's known hosts checked strictly; only 'Permission denied (publickey)' passes - a login, a host key that "
+      "does not check, no answer fail; after the push's check, never in a preview",
+      (pa.startswith("ssh -F /dev/null ") and "IdentitiesOnly" not in pa and " -i " not in pa, "ControlPath=none" in pa,
+       "StrictHostKeyChecking=yes" in pa and "UserKnownHostsFile=/var/lib/git-mirror/known_hosts" in pa,
+       pa.endswith("sm@192.168.11.4 true"), R(probe["become_user"]),
+       [condition(fw, _git_mirror_own_keys=r) for r in (
+           {"rc": 255, "stderr": "sm@192.168.11.4: Permission denied (publickey)."},
+           {"rc": 0, "stderr": ""},
+           {"rc": 255, "stderr": "Host key verification failed."},
+           {"rc": 255, "stderr": "ssh: connect to host 192.168.11.4 port 22: Connection timed out"})],
+       names.index("Ten's own keys let the mirror's user in on no Pi") >
+       names.index("The push accepted on each Pi - its gate, the volume mounted and writable"),
+       condition(probe["when"], git_mirror_enabled=True, ansible_check_mode=True)),
+      (True, True, True, True, "sm", [False, True, True, True], True, False))
 
 # ── the gate itself ──────────────────────────────────────────────────────
 pi = os.path.join(W, "pi")
