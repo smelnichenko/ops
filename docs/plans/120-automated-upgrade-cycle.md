@@ -62,9 +62,10 @@ Kafka 4.2.2, ...). What it found, fixed in the preset and the runner (harness ca
   family. `registryUrlTemplate` gone (an empty URL for each annotation without one: a warning each).
 - Open, for the operator: (1) a GitHub read token - six deps (Caddy, Consul, Vault, Keycloak on the Pis, Kubernetes,
   Gateway API) are skipped without one; or their annotations move to registries (Docker Hub/quay/registry.k8s.io,
-  no token) where one publishes the same versions. (2) platform's chart defaults that infra overrides are behind
-  production (Grafana 12.4.2, Mimir 2.17.8, Tempo 2.7.2, Keycloak 26.5.6): Renovate opens units for them (a Grafana,
-  Mimir and Tempo major among them) - align the defaults with production, or leave platform's overridden values out.
+  no token) where one publishes the same versions. (2) DONE 2026-11-15 (operator: "a bug left from previous upgrade,
+  fix it"): platform's chart defaults that infra overrides were behind production (Grafana 12.4.2, Mimir 2.17.8, Tempo
+  2.7.2, Keycloak 26.5.6) - aligned with production (platform 9f967a16; production's render byte-identical), so no
+  unit opens for versions nothing runs.
   (3) the labels themselves are seen only on the first real run (the local platform opens no PRs): the shadow week
   checks them.
 
