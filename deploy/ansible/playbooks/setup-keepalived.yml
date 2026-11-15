@@ -91,9 +91,8 @@
           # would always fail and pin the VIP. versitygw is the opposite — it
           # runs on BOTH Pis, so it IS checked to make the VIP follow a live
           # gateway. (MinIO, formerly active-passive here, was retired 2026-06-27.)
-
-          # Forgejo
-          curl -sf -o /dev/null -m 3 http://localhost:3000/api/v1/version || exit 1
+          # Forgejo is left out: both Pis serve it and each Pi's Caddy falls back to the other's (setup-caddy.yml) -
+          # checked here, a restart of the holder's Forgejo past 15 s moved the VIP, Nexus failing over with it.
 
           # Keycloak
           curl -sf -o /dev/null -m 3 http://localhost:8080/realms/master || exit 1

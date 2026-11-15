@@ -14,7 +14,9 @@
 # Caddy runs on both Pis — only the VIP holder serves traffic.
 #
 # Proxied services:
-#   git.pmon.dev     → localhost:3000  (Forgejo)
+#   git.pmon.dev     → localhost:3000  (Forgejo), the other Pi's Forgejo while this one's does not answer - both serve
+#                      (one database, the shared data): a restart of the VIP holder's Forgejo is no outage, and the VIP
+#                      no longer follows Forgejo (keepalived's check leaves it out)
 #   auth.pmon.dev    → localhost:8080  (Keycloak)
 #   nexus.pmon.dev   → localhost:8081  (Nexus)
 #   s3.pmon.dev      → localhost:9000  (MinIO)
@@ -38,6 +40,7 @@
   vars:
     # renovate: datasource=docker depName=caddy versioning=semver
     caddy_version: "2.10.0"
+    peer_ip: "{{ hostvars[groups['pis'] | difference([inventory_hostname]) | first]['ansible_host'] }}"
     porkbun_api_key: "{{ lookup('env', 'PORKBUN_API_KEY') }}"
     porkbun_secret_key: "{{ lookup('env', 'PORKBUN_SECRET_KEY') }}"
 
@@ -176,9 +179,19 @@
             tls /etc/caddy/certs/wildcard.crt /etc/caddy/certs/wildcard.key
           }
 
+          # this Pi's Forgejo first; the other Pi's while this one's refuses a connection (the request tried there
+          # at once) or fails its health check. Nexus has no such peer: it runs on the VIP's Pi alone
           git.pmon.dev {
             import wildcard_tls
-            reverse_proxy localhost:3000
+            reverse_proxy localhost:3000 {{ peer_ip }}:3000 {
+              lb_policy first
+              lb_try_duration 15s
+              lb_try_interval 250ms
+              fail_duration 30s
+              health_uri /api/healthz
+              health_interval 10s
+              health_timeout 5s
+            }
           }
 
           nexus.pmon.dev {

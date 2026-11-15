@@ -8,7 +8,9 @@
 #   3. the restart left pending on the first Pi made by the narrow run, the other Pi's Forgejo not restarted; each Pi's
 #      record the files it runs
 #   4. the old mirror's retired key gone from the mirror user's authorized_keys (Ansible still in: its own key kept)
-# and on the shared storage the planted orphan found and removed, the doctor reading none.
+# and on the shared storage the planted orphan found and removed, the doctor reading none. Then git.pmon.dev through
+# each Pi's Caddy with that Pi's Forgejo stopped (setup-caddy.yml's fallback to the other Pi's), the VIP staying where it
+# was through 20 s of it (keepalived's check leaves Forgejo out).
 #
 # Usage: ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/forgejo-check.yml
 - name: Vagrant VMs only
@@ -172,3 +174,72 @@
           - _now.stdout is not search('Found [0-9]+/[0-9]+ [(][^)]*[)] orphaned package blob')
         fail_msg: "the planted blob still there: {{ _blob.stat.exists }}; the doctor: {{ _now.stdout_lines | select('search', 'package blob') | list }}"
         quiet: true
+
+- name: Through each Pi's Caddy, git.pmon.dev with that Pi's Forgejo stopped - the other Pi's serving, the VIP staying put
+  hosts: pis
+  become: true
+  gather_facts: false
+  serial: 1  # one Pi's Forgejo down at a time: the other's is what the check proves serving
+  vars:
+    _vip: "{{ keepalived_vip }}"
+    # through this Pi's own Caddy (its address for the name - the VIP may be the other Pi's), Forgejo's health
+    _through_caddy: [curl, -sk, -o, /dev/null, -w, "%{http_code}", --max-time, "20", --resolve, "git.pmon.dev:443:127.0.0.1",
+                     "https://git.pmon.dev/api/healthz"]
+  tasks:
+    - name: Whether this Pi holds the VIP, before
+      ansible.builtin.command:
+        argv: [ip, -o, addr, show, to, "{{ _vip }}/32"]
+      register: _holds_before
+      changed_when: false
+
+    - name: This Pi's Forgejo stopped for a while, git.pmon.dev read through its Caddy
+      block:
+        - name: This Pi's Forgejo stopped
+          ansible.builtin.systemd_service:
+            name: forgejo
+            state: stopped
+
+        - name: Through this Pi's Caddy at once - the request tried on the other Pi's Forgejo  # noqa: command-instead-of-module
+          ansible.builtin.command:  # the uri module has no --resolve: this Pi's Caddy, not the VIP's
+            argv: "{{ _through_caddy }}"
+          register: _at_once
+          changed_when: false
+          failed_when: _at_once.stdout != '200'
+
+        - name: Past keepalived's 15 s (3 failed checks, 5 s apart, when it checked Forgejo)
+          ansible.builtin.pause:
+            seconds: 20
+
+        - name: Through this Pi's Caddy again - its health check has this Pi's Forgejo out  # noqa: command-instead-of-module
+          ansible.builtin.command:
+            argv: "{{ _through_caddy }}"
+          register: _later
+          changed_when: false
+          failed_when: _later.stdout != '200'
+
+        - name: Whether this Pi holds the VIP, after
+          ansible.builtin.command:
+            argv: [ip, -o, addr, show, to, "{{ _vip }}/32"]
+          register: _holds_after
+          changed_when: false
+
+        - name: The VIP where it was - Forgejo down on a Pi no reason to move it
+          ansible.builtin.assert:
+            that: (_holds_after.stdout_lines | length) == (_holds_before.stdout_lines | length)
+            fail_msg: >-
+              {{ inventory_hostname }} held the VIP {{ _holds_before.stdout_lines | length }} ->
+              {{ _holds_after.stdout_lines | length }} with its Forgejo stopped for 20 s: keepalived still follows Forgejo
+            quiet: true
+      always:
+        - name: This Pi's Forgejo started again
+          ansible.builtin.systemd_service:
+            name: forgejo
+            state: started
+
+        - name: This Pi's Forgejo healthy again before the other Pi's is stopped
+          ansible.builtin.uri:
+            url: http://127.0.0.1:3000/api/healthz
+          register: _healthy
+          retries: 36
+          delay: 5
+          until: _healthy.status == 200
