@@ -35,7 +35,8 @@ class Refused(Exception):
 
 
 def call(method, path, token, api):
-    req = urllib.request.Request(api + path, method=method, headers={"Authorization": f"token {token}"})
+    req = urllib.request.Request(api + path, method=method)
+    req.add_unredirected_header("Authorization", f"token {token}")  # a redirect elsewhere never carries the token
     try:
         with urllib.request.urlopen(req, timeout=60) as r:
             body = r.read()
