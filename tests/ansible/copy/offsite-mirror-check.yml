@@ -297,7 +297,7 @@
           delegate_to: "{{ item }}"
           loop: "{{ groups['pis'] }}"
 
-    # keepalived's own hand-over settles (nopreempt: the VIP stays where it went; the restarted Pi comes up backup)
+    # keepalived's own hand-over settles (one priority: the VIP stays where it went; the restarted Pi comes up backup)
     - name: Keepalived runs on every Pi again  # noqa: command-instead-of-module - read, the module would start it
       ansible.builtin.command: systemctl is-active keepalived
       delegate_to: "{{ item }}"

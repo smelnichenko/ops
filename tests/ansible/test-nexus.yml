@@ -23,7 +23,7 @@
 #        curl still responds 200
 #     3. sentinel artifact (maven-releases upload) is intact on the new
 #        active Pi (Gluster replicated it)
-#     4. restart keepalived on the original Pi; no flap-back (nopreempt)
+#     4. restart keepalived on the original Pi; no flap-back (both Pis at one priority)
 
 - name: Vagrant VMs only
   ansible.builtin.import_playbook: vagrant-only-play.yml
@@ -314,16 +314,17 @@
   gather_facts: false
 
   tasks:
-    - name: Restart keepalived (with nopreempt it shouldn't reclaim VIP)
+    - name: Restart keepalived (at one priority it shouldn't reclaim VIP)
       ansible.builtin.systemd:
         name: keepalived
         state: started
 
-    - name: Give cluster 10s to settle
+    # past the preempt_delay (30 s) and the checks' rise: a takeback, were there one, would have happened
+    - name: Give cluster 45s to settle
       ansible.builtin.pause:
-        seconds: 10
+        seconds: 45
 
-- name: Confirm VIP stayed on the failover Pi (nopreempt behaviour)
+- name: Confirm VIP stayed on the failover Pi (no preempting at one priority)
   hosts: pi1,pi2
   become: true
   gather_facts: false
@@ -342,13 +343,13 @@
     - name: Assert new_active still holds VIP
       ansible.builtin.assert:
         that: _vip_final.stdout == "has-vip"
-        fail_msg: "{{ new_active }} should still hold VIP (nopreempt), got no-vip"
+        fail_msg: "{{ new_active }} should still hold VIP (one priority), got no-vip"
       when: inventory_hostname == new_active
 
     - name: Assert orig_active does NOT hold VIP
       ansible.builtin.assert:
         that: _vip_final.stdout == "no-vip"
-        fail_msg: "VIP flapped back to {{ inventory_hostname }} — nopreempt didn't hold"
+        fail_msg: "VIP flapped back to {{ inventory_hostname }} — an equal priority preempted"
       when: inventory_hostname != new_active
 
 - name: TEST PASSED
@@ -370,5 +371,5 @@
           ✓ Sentinel artifact uploaded to maven-releases
           ✓ Forced failover (stop keepalived on active) → VIP + Nexus move
           ✓ Sentinel intact on new active Pi (Gluster replicated)
-          ✓ Recovery: original keepalived restarted, nopreempt holds
+          ✓ Recovery: original keepalived restarted, no flap-back at one priority
           ====================================================

@@ -16,7 +16,7 @@
 # Proxied services:
 #   git.pmon.dev     → localhost:3000  (Forgejo), the other Pi's Forgejo while this one's does not answer - both serve
 #                      (one database, the shared data): a restart of the VIP holder's Forgejo is no outage, and the VIP
-#                      no longer follows Forgejo (keepalived's check leaves it out)
+#                      follows Forgejo only after a minute down (keepalived's check_forgejo); keepalived checks Caddy
 #   auth.pmon.dev    → localhost:8080  (Keycloak)
 #   nexus.pmon.dev   → localhost:8081  (Nexus)
 #   s3.pmon.dev      → localhost:9000  (MinIO)

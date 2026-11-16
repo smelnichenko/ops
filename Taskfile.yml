@@ -978,7 +978,8 @@ tasks:
       - defer: vagrant halt
       # Full Pi data-plane stack (consul → pi-services → patroni → vault-pi)
       # needed because setup-gluster runs after consul, and keepalived's
-      # check_services.sh probes Keycloak/Patroni/versitygw.
+      # check_services.sh probes Caddy/Keycloak/versitygw, check_forgejo.sh Forgejo - the stack here has no
+      # Caddy, so both Pis fail it alike (both at 50): no check moves the VIP; the tests fail over by stopping keepalived.
       - task: _vagrant:pi-stack
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-gluster.yml
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-nexus.yml

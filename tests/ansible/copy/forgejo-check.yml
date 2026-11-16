@@ -10,7 +10,10 @@
 #   4. the old mirror's retired key gone from the mirror user's authorized_keys (Ansible still in: its own key kept)
 # and on the shared storage the planted orphan found and removed, the doctor reading none. Then git.pmon.dev through
 # each Pi's Caddy with that Pi's Forgejo stopped (setup-caddy.yml's fallback to the other Pi's), the VIP staying where it
-# was through 20 s of it (keepalived's check leaves Forgejo out). On the Patroni leader: Forgejo and Keycloak in their
+# was through 20 s of it (Forgejo's own check in keepalived gives it a minute). Then Caddy stopped on the VIP's Pi: the
+# VIP moves to the other Pi (keepalived checks Caddy), git.pmon.dev answers through it, and with Caddy back (its check
+# passing) the VIP stays there (both Pis at one priority) - twice, each Pi the holder once. Then Forgejo down on the
+# holder past its minute: the VIP to the other Pi, and with Forgejo back it stays. On the Patroni leader: Forgejo and Keycloak in their
 # databases as their own roles (no backend of another there), each database and everything in it its role's.
 #
 # And the Pi restart lock (Consul's pi-restart: a restart on pi2 waits while pi1 holds it), each Pi's journal on disk
@@ -210,7 +213,7 @@
           changed_when: false
           failed_when: _at_once.stdout != '200'
 
-        - name: Past keepalived's 15 s (3 failed checks, 5 s apart, when it checked Forgejo)
+        - name: Past the 15 s (3 failed checks, 5 s apart) Forgejo's check had before its own minute
           ansible.builtin.pause:
             seconds: 20
 
@@ -232,7 +235,7 @@
             that: (_holds_after.stdout_lines | length) == (_holds_before.stdout_lines | length)
             fail_msg: >-
               {{ inventory_hostname }} held the VIP {{ _holds_before.stdout_lines | length }} ->
-              {{ _holds_after.stdout_lines | length }} with its Forgejo stopped for 20 s: keepalived still follows Forgejo
+              {{ _holds_after.stdout_lines | length }} with its Forgejo stopped for 20 s: keepalived follows Forgejo within its minute
             quiet: true
       always:
         - name: This Pi's Forgejo started again
@@ -247,6 +250,259 @@
           retries: 36
           delay: 5
           until: _healthy.status == 200
+
+- name: Caddy stopped on the VIP's Pi (the holder at the start) - the VIP to the other Pi, git.pmon.dev through it; Caddy back, the VIP stays
+  hosts: pis
+  become: true
+  gather_facts: false
+  vars:
+    _vip: "{{ keepalived_vip }}"
+    _other: "{{ groups['pis'] | difference([inventory_hostname]) | first }}"
+  tasks:
+    - name: On the Pi holding the VIP alone
+      ansible.builtin.import_tasks: ../../../deploy/ansible/playbooks/tasks/vip-holder-only.yml
+
+    - name: Its Caddy stopped, the VIP to the other Pi, git.pmon.dev through the VIP
+      block:
+        - name: Its Caddy stopped
+          ansible.builtin.systemd_service:
+            name: caddy
+            state: stopped
+
+        - name: The VIP gone from this Pi (3 failed checks 5 s apart, then the other Pi's preempt_delay 30 - about 45 s)
+          ansible.builtin.command:
+            argv: [ip, -o, addr, show, to, "{{ _vip }}/32"]
+          register: _vip_c1_here
+          changed_when: false
+          until: _vip_c1_here.stdout_lines | length == 0
+          retries: 45
+          delay: 2
+
+        - name: The other Pi holding it
+          ansible.builtin.command:
+            argv: [ip, -o, addr, show, to, "{{ _vip }}/32"]
+          delegate_to: "{{ _other }}"
+          register: _vip_c1_there
+          changed_when: false
+          until: _vip_c1_there.stdout_lines | length == 1
+          retries: 10
+          delay: 2
+
+        - name: Through the VIP, git.pmon.dev - the other Pi's Caddy  # noqa: command-instead-of-module
+          ansible.builtin.command:  # the uri module has no --resolve
+            argv: [curl, -sk, -o, /dev/null, -w, "%{http_code}", --max-time, "20", --resolve, "git.pmon.dev:443:{{ _vip }}",
+                   "https://git.pmon.dev/api/healthz"]
+          register: _through_vip
+          changed_when: false
+          until: _through_vip.stdout == '200'
+          retries: 15
+          delay: 4
+      always:
+        - name: Its Caddy started again
+          ansible.builtin.systemd_service:
+            name: caddy
+            state: started
+
+    - name: Its services' check passing again
+      ansible.builtin.command: /etc/keepalived/check_services.sh
+      register: _vip_c1_back
+      changed_when: false
+      failed_when: false
+      until: _vip_c1_back.rc == 0
+      retries: 30
+      delay: 2
+
+    - name: Its services' check passed
+      ansible.builtin.assert:
+        that: _vip_c1_back.rc == 0
+        fail_msg: "{{ inventory_hostname }}'s /etc/keepalived/check_services.sh still fails - the no-takeback below would prove nothing"
+        quiet: true
+
+    - name: Past its rise and the preempt_delay
+      ansible.builtin.pause:
+        seconds: 45
+
+    - name: Where the VIP is now - here and on the other Pi
+      ansible.builtin.command:
+        argv: [ip, -o, addr, show, to, "{{ _vip }}/32"]
+      delegate_to: "{{ item }}"
+      loop: ["{{ inventory_hostname }}", "{{ _other }}"]
+      register: _vip_c1_after
+      changed_when: false
+
+    - name: On the other Pi, not here - never handed back at one priority
+      ansible.builtin.assert:
+        that: (_vip_c1_after.results | map(attribute='stdout_lines') | map('length') | list) == [0, 1]
+        fail_msg: >-
+          the VIP on [here, {{ _other }}]: {{ _vip_c1_after.results | map(attribute='stdout_lines') | map('length') | list }}
+          - want [0, 1]
+        quiet: true
+
+- name: Caddy stopped on the VIP's Pi (now the other Pi - both directions) - the VIP to the other Pi, git.pmon.dev through it; Caddy back, the VIP stays
+  hosts: pis
+  become: true
+  gather_facts: false
+  vars:
+    _vip: "{{ keepalived_vip }}"
+    _other: "{{ groups['pis'] | difference([inventory_hostname]) | first }}"
+  tasks:
+    - name: On the Pi holding the VIP alone
+      ansible.builtin.import_tasks: ../../../deploy/ansible/playbooks/tasks/vip-holder-only.yml
+
+    - name: Its Caddy stopped, the VIP to the other Pi, git.pmon.dev through the VIP
+      block:
+        - name: Its Caddy stopped
+          ansible.builtin.systemd_service:
+            name: caddy
+            state: stopped
+
+        - name: The VIP gone from this Pi (3 failed checks 5 s apart, then the other Pi's preempt_delay 30 - about 45 s)
+          ansible.builtin.command:
+            argv: [ip, -o, addr, show, to, "{{ _vip }}/32"]
+          register: _vip_c2_here
+          changed_when: false
+          until: _vip_c2_here.stdout_lines | length == 0
+          retries: 45
+          delay: 2
+
+        - name: The other Pi holding it
+          ansible.builtin.command:
+            argv: [ip, -o, addr, show, to, "{{ _vip }}/32"]
+          delegate_to: "{{ _other }}"
+          register: _vip_c2_there
+          changed_when: false
+          until: _vip_c2_there.stdout_lines | length == 1
+          retries: 10
+          delay: 2
+
+        - name: Through the VIP, git.pmon.dev - the other Pi's Caddy  # noqa: command-instead-of-module
+          ansible.builtin.command:  # the uri module has no --resolve
+            argv: [curl, -sk, -o, /dev/null, -w, "%{http_code}", --max-time, "20", --resolve, "git.pmon.dev:443:{{ _vip }}",
+                   "https://git.pmon.dev/api/healthz"]
+          register: _through_vip
+          changed_when: false
+          until: _through_vip.stdout == '200'
+          retries: 15
+          delay: 4
+      always:
+        - name: Its Caddy started again
+          ansible.builtin.systemd_service:
+            name: caddy
+            state: started
+
+    - name: Its services' check passing again
+      ansible.builtin.command: /etc/keepalived/check_services.sh
+      register: _vip_c2_back
+      changed_when: false
+      failed_when: false
+      until: _vip_c2_back.rc == 0
+      retries: 30
+      delay: 2
+
+    - name: Its services' check passed
+      ansible.builtin.assert:
+        that: _vip_c2_back.rc == 0
+        fail_msg: "{{ inventory_hostname }}'s /etc/keepalived/check_services.sh still fails - the no-takeback below would prove nothing"
+        quiet: true
+
+    - name: Past its rise and the preempt_delay
+      ansible.builtin.pause:
+        seconds: 45
+
+    - name: Where the VIP is now - here and on the other Pi
+      ansible.builtin.command:
+        argv: [ip, -o, addr, show, to, "{{ _vip }}/32"]
+      delegate_to: "{{ item }}"
+      loop: ["{{ inventory_hostname }}", "{{ _other }}"]
+      register: _vip_c2_after
+      changed_when: false
+
+    - name: On the other Pi, not here - never handed back at one priority
+      ansible.builtin.assert:
+        that: (_vip_c2_after.results | map(attribute='stdout_lines') | map('length') | list) == [0, 1]
+        fail_msg: >-
+          the VIP on [here, {{ _other }}]: {{ _vip_c2_after.results | map(attribute='stdout_lines') | map('length') | list }}
+          - want [0, 1]
+        quiet: true
+
+# Forgejo down on the VIP's Pi past its window (12 failed checks 5 s apart - a minute - then the preempt_delay's 30 s):
+# the VIP to the other Pi (its own Forgejo up: 100 against 80); Forgejo back, the VIP stays
+- name: Forgejo stopped on the VIP's Pi past its minute - the VIP to the other Pi; Forgejo back, the VIP stays
+  hosts: pis
+  become: true
+  gather_facts: false
+  vars:
+    _vip: "{{ keepalived_vip }}"
+    _other: "{{ groups['pis'] | difference([inventory_hostname]) | first }}"
+  tasks:
+    - name: On the Pi holding the VIP alone
+      ansible.builtin.import_tasks: ../../../deploy/ansible/playbooks/tasks/vip-holder-only.yml
+
+    - name: Its Forgejo stopped, the VIP to the other Pi
+      block:
+        - name: Its Forgejo stopped
+          ansible.builtin.systemd_service:
+            name: forgejo
+            state: stopped
+
+        - name: The VIP gone from this Pi (a minute of failed checks, then the preempt_delay - about 90 s)
+          ansible.builtin.command:
+            argv: [ip, -o, addr, show, to, "{{ _vip }}/32"]
+          register: _vip_fj_here
+          changed_when: false
+          until: _vip_fj_here.stdout_lines | length == 0
+          retries: 75
+          delay: 2
+
+        - name: The other Pi holding it
+          ansible.builtin.command:
+            argv: [ip, -o, addr, show, to, "{{ _vip }}/32"]
+          delegate_to: "{{ _other }}"
+          register: _vip_fj_there
+          changed_when: false
+          until: _vip_fj_there.stdout_lines | length == 1
+          retries: 10
+          delay: 2
+      always:
+        - name: Its Forgejo started again
+          ansible.builtin.systemd_service:
+            name: forgejo
+            state: started
+
+    - name: Its Forgejo check passing again
+      ansible.builtin.command: /etc/keepalived/check_forgejo.sh
+      register: _vip_fj_back
+      changed_when: false
+      failed_when: false
+      until: _vip_fj_back.rc == 0
+      retries: 30
+      delay: 2
+
+    - name: Its Forgejo check passed
+      ansible.builtin.assert:
+        that: _vip_fj_back.rc == 0
+        fail_msg: "{{ inventory_hostname }}'s /etc/keepalived/check_forgejo.sh still fails - the no-takeback below would prove nothing"
+        quiet: true
+
+    - name: Past its rise and the preempt_delay
+      ansible.builtin.pause:
+        seconds: 45
+
+    - name: Where the VIP is now - here and on the other Pi
+      ansible.builtin.command:
+        argv: [ip, -o, addr, show, to, "{{ _vip }}/32"]
+      delegate_to: "{{ item }}"
+      loop: ["{{ inventory_hostname }}", "{{ _other }}"]
+      register: _vip_fj_after
+      changed_when: false
+
+    - name: On the other Pi, not here - never handed back at one priority
+      ansible.builtin.assert:
+        that: (_vip_fj_after.results | map(attribute='stdout_lines') | map('length') | list) == [0, 1]
+        fail_msg: >-
+          the VIP on [here, {{ _other }}]: {{ _vip_fj_after.results | map(attribute='stdout_lines') | map('length') | list }}
+          - want [0, 1]
+        quiet: true
 
 - name: Forgejo and Keycloak in their databases as their own roles, each database and all in it theirs
   hosts: pis
@@ -476,7 +732,7 @@
     - name: Pi1's script through the helper, 30 s long
       ansible.builtin.shell:
         executable: /bin/bash
-        cmd: echo 'sleep 30' | /usr/local/bin/pi-restart-locked copy-check-script
+        cmd: set -o pipefail; echo 'sleep 30' | /usr/local/bin/pi-restart-locked copy-check-script
       async: 120
       poll: 0
       register: _script

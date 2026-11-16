@@ -2,8 +2,9 @@
 # Setup Keepalived for floating VIP between pi1 and pi2
 #
 # Provides a single stable IP (192.168.11.5) that floats between Pis.
-# All services (Forgejo, Keycloak, MinIO, Postgres) are reached via VIP.
-# If the active Pi dies, the other grabs the VIP in ~3 seconds.
+# Caddy's names (git, auth, nexus), the backup store (versitygw) and Vault are reached via the VIP - Postgres never
+# (each Pi's PgBouncer -> HAProxy on 127.0.0.1 -> the primary). If the active Pi dies, the other grabs the VIP in
+# about 4 s; a holder failing its checks is taken over about 30 s after they fail (preempt_delay).
 #
 # Prerequisites:
 #   - Both Pis running with services installed
@@ -23,9 +24,14 @@
     vip_cidr: 24
     vrrp_router_id: 51
     vrrp_password: "{{ keepalived_vrrp_password }}"
-    # pi1 is master (higher priority), pi2 is backup
-    vrrp_priority: "{{ 150 if inventory_hostname == 'pi1' else 100 }}"
-    # Both start as BACKUP — higher priority wins MASTER. nopreempt requires this.
+    # Both Pis equal, preempting allowed: the holder keeps the VIP while its checks pass (an equal priority never
+    # preempts), a failing check (weight -50) drops it under the other's and the other takes it. With pi1 at 150 and
+    # nopreempt the checks moved nothing: a BACKUP with nopreempt accepts any non-zero advert (the copy, 2026-11-16: the
+    # holder's priority 100 -> 50 for a minute, the VIP stayed - keepalived's vrrp.c); operator, 2026-11-16: switch.
+    # Two masters at once (a partition healed, both timers out together at a boot or reload) settle on the higher
+    # address - pi2 - whoever held it before
+    vrrp_priority: 100
+    # Both start as BACKUP: the first up takes the VIP, the other never preempts it at an equal priority
     vrrp_state: BACKUP
     # Unicast VRRP: explicit source + peer on the private-network IPs.
     peer_src_ip: "{{ ansible_host }}"
@@ -79,6 +85,16 @@
         from_ip: "{{ production_lan }}"
         comment: "VRRP protocol"
 
+    # Forgejo on the VIP's Pi down for more than a minute moves the VIP (a broken Forgejo there stays the other Pi's
+    # Caddy's to serve otherwise); its restarts, 3-11 s measured (2026-11-14/15), never do
+    - name: Create Forgejo's health check script
+      ansible.builtin.copy:
+        dest: /etc/keepalived/check_forgejo.sh
+        mode: '0755'
+        content: |
+          #!/bin/bash
+          curl -sf -o /dev/null --connect-timeout 1 -m 2 http://localhost:3000/api/healthz
+
     - name: Create health check script
       ansible.builtin.copy:
         dest: /etc/keepalived/check_services.sh
@@ -91,18 +107,22 @@
           # would always fail and pin the VIP. versitygw is the opposite — it
           # runs on BOTH Pis, so it IS checked to make the VIP follow a live
           # gateway. (MinIO, formerly active-passive here, was retired 2026-06-27.)
-          # Forgejo is left out: both Pis serve it and each Pi's Caddy falls back to the other's (setup-caddy.yml) -
-          # checked here, a restart of the holder's Forgejo past 15 s moved the VIP, Nexus failing over with it.
+          # Forgejo has a check of its own (check_forgejo.sh, a minute's window): both Pis serve it and each Pi's Caddy
+          # falls back to the other's (setup-caddy.yml) - in this one, a restart of the holder's Forgejo past 15 s moved
+          # the VIP, Nexus failing over with it.
 
-          # Keycloak
-          curl -sf -o /dev/null -m 3 http://localhost:8080/realms/master || exit 1
-
-          # Patroni
-          curl -sf -o /dev/null -m 3 http://localhost:8008/health || exit 1
-          # versitygw runs on both Pis; gate the VIP onto a Pi with a live gateway.
-          curl -sf -o /dev/null -m 3 http://localhost:9000/health || exit 1
-
-          exit 0
+          # Patroni left out: nothing reaches Postgres through the VIP (each Pi's PgBouncer -> HAProxy on 127.0.0.1 -> the
+          # primary), and its planned switchovers fail /health - live, they moved the VIP and Nexus mid-handover.
+          # Each probe 2 s at most, all at once: keepalived counts a check still running at its timeout failed.
+          probe() { curl -sf -o /dev/null --connect-timeout 1 -m 2 "$1"; }
+          # Caddy - every name the VIP serves goes through it (its admin endpoint: Caddy itself, whatever is behind it)
+          probe http://127.0.0.1:2019/config/ & caddy=$!
+          # Keycloak (its restarts: 9.5-13 s measured, 2026-11-14/16 - they can reach the fall's 3 failures; the other
+          # Pi's preempt_delay, 30 s, absorbs them)
+          probe http://localhost:8080/realms/master & keycloak=$!
+          # versitygw runs on both Pis; gate the VIP onto a Pi with a live gateway (the backup store)
+          probe http://localhost:9000/health & versitygw=$!
+          wait "$caddy" && wait "$keycloak" && wait "$versitygw"
 
     # Active-passive controller scripts (Nexus + MinIO). Same safety
     # model for both:
@@ -350,8 +370,12 @@
         state: absent
       notify: Reload systemd
 
+    # a config keepalived refuses is never installed (its own --config-test on the new file): a reboot, an upgrade's
+    # restart or a reload would load it - on one Pi a mixed pair, on both no VIP
     - name: Write Keepalived config
+      register: _ka_conf
       ansible.builtin.copy:
+        validate: keepalived --config-test -f %s
         dest: /etc/keepalived/keepalived.conf
         mode: '0600'  # the VRRP auth_pass is in it
         content: |
@@ -364,8 +388,21 @@
           vrrp_script check_services {
             script "/etc/keepalived/check_services.sh"
             interval 5
+            timeout 4
             weight -50
             fall 3
+            rise 2
+          }
+
+          # a minute (12 failed checks 5 s apart): Forgejo's restarts take 3-11 s, Caddy serves git from the other
+          # Pi's Forgejo meanwhile. Lighter than the services' 50: a Pi whose Forgejo alone is down (80) still takes
+          # the VIP from a holder failing its services (50), and both Pis' Forgejo down together moves nothing
+          vrrp_script check_forgejo {
+            script "/etc/keepalived/check_forgejo.sh"
+            interval 5
+            timeout 4
+            weight -20
+            fall 12
             rise 2
           }
 
@@ -375,7 +412,10 @@
             virtual_router_id {{ vrrp_router_id }}
             priority {{ vrrp_priority }}
             advert_int 1
-            nopreempt
+            # a holder whose priority fell is taken over 30 s later, not at once: a restart shorter than its checks' fall
+            # and this (Keycloak's ~10 s, Forgejo's - both Pis' at an upgrade) moves nothing; a holder that stops or
+            # dies is taken over at once (priority 0, or its adverts gone)
+            preempt_delay 30
 
             # Unicast VRRP — multicast may not cross Vagrant/libvirt bridged
             # private networks; unicast explicitly targets the peer IP on the
@@ -397,6 +437,7 @@
 
             track_script {
               check_services
+              check_forgejo
             }
 
             notify_master "/etc/keepalived/active_services_master.sh"
@@ -404,9 +445,6 @@
             notify_fault "/etc/keepalived/active_services_backup.sh"
           }
       diff: false  # the VRRP auth_pass - a --check --diff preview would print it
-      # a reload re-reads the config and keeps the VRRP state: a restart would run the stop drop-in (releasing Nexus on
-      # the active Pi) and move the VIP
-      notify: Reload Keepalived
 
     - name: Enable and start Keepalived
       ansible.builtin.systemd:
@@ -416,10 +454,158 @@
         daemon_reload: true
       register: _keepalived_start
 
-    # Fire any pending keepalived restart NOW, not at end of play — the
-    # converge + verify tasks below must assert the post-restart steady
-    # state, not a snapshot the restart immediately invalidates.
-    - name: Apply pending keepalived restarts before converging
+    # A config keepalived has not loaded is reloaded - re-read, the VRRP state kept (a restart would run the stop
+    # drop-in, releasing Nexus) - one Pi at a time, the VIP's holder last: both at once moved the VIP 5 times in 8 (the
+    # copy, 2026-11-16). Pending: the config written by this run (a hand edit or a rollback it restored), or its
+    # checksum not the one recorded at the last reload (a run cut short between the write and the reload); a keepalived
+    # this run started read the config as written - recorded, not reloaded. The config passed keepalived's own
+    # --config-test before it was written. Before any reload: both Pis in the play, the VIP held by one. The holder's
+    # reload - its one planned move at most - waits for the other Pi ready to take the VIP (keepalived running, the VIP
+    # not on it, its own checks passing: a sick standby would take it and hand it back - two Nexus moves) and the
+    # holder read again (moved meanwhile: refused).
+    - name: Keepalived's config as written and as last loaded
+      ansible.builtin.shell: |
+        set -o pipefail
+        sum=$(sha256sum /etc/keepalived/keepalived.conf) || exit 1
+        echo "conf=${sum%% *}"
+        echo "loaded=$(cat /etc/keepalived/.loaded.sha256 2> /dev/null)"
+      register: _ka_sums
+      changed_when: false
+      check_mode: false  # a read: a preview says what it would reload
+
+    - name: Keepalived started by this run, or its config pending a reload
+      ansible.builtin.set_fact:
+        _ka_conf_sum: "{{ _ka_sums.stdout_lines | select('match', '^conf=') | first | regex_replace('^conf=', '') }}"
+        _ka_loaded_sum: "{{ _ka_sums.stdout_lines | select('match', '^loaded=') | first | regex_replace('^loaded=', '') }}"
+        _ka_started_now: "{{ _keepalived_start.status.ActiveState | default('active') not in ['active', 'activating'] }}"
+
+    - name: Its reload pending - the config written now, or not the one loaded last
+      ansible.builtin.set_fact:
+        _ka_pending: "{{ not _ka_started_now and (_ka_conf is changed or _ka_conf_sum != _ka_loaded_sum) }}"
+
+    - name: Recorded as loaded where keepalived started now with it
+      ansible.builtin.copy:
+        dest: /etc/keepalived/.loaded.sha256
+        content: "{{ _ka_conf_sum }}\n"
+        mode: '0600'
+      when: _ka_started_now
+
+    # the Pis in the play: one out of it (dead, or a --limit) is reloaded by nothing here - a Pi left with nothing
+    # pending goes on (converge, verify); one pending is refused below without both
+    - name: Any Pi pending
+      ansible.builtin.set_fact:
+        _ka_any_pending: >-
+          {{ ansible_play_hosts | map('extract', hostvars) | map(attribute='_ka_pending', default=false) | select | list | length > 0 }}
+
+    - name: Both Pis in the play before any reload - the holder's needs the other ready to take the VIP
+      ansible.builtin.assert:
+        that: groups['pis'] | difference(ansible_play_hosts) | length == 0
+        fail_msg: >-
+          keepalived's config pending, {{ groups['pis'] | difference(ansible_play_hosts) | join(', ') }} not in the play -
+          nothing reloaded (run again with both Pis)
+        quiet: true
+      when: _ka_any_pending
+
+    - name: The Pi holding the VIP - its reload the last (an election just after a start takes ~4 s - read again once)
+      when: _ka_any_pending
+      block:
+        - name: The Pi holding the VIP
+          ansible.builtin.include_tasks: tasks/pi-vip-holder.yml
+      rescue:
+        - name: An election under way - read again in 10 s
+          ansible.builtin.pause:
+            seconds: 10
+
+        - name: The Pi holding the VIP, read again
+          ansible.builtin.include_tasks: tasks/pi-vip-holder.yml
+
+    - name: The holder as read
+      ansible.builtin.set_fact:
+        _ka_holder: "{{ pi_vip_holder }}"
+      when: _ka_any_pending
+
+    - name: Reload Keepalived where pending - the Pi without the VIP first
+      ansible.builtin.systemd:
+        name: keepalived
+        state: reloaded
+      when: _ka_pending and inventory_hostname != _ka_holder
+
+    - name: Its new config recorded as loaded there
+      ansible.builtin.copy:
+        dest: /etc/keepalived/.loaded.sha256
+        content: "{{ _ka_conf_sum }}\n"
+        mode: '0600'
+      when: _ka_pending and inventory_hostname != _ka_holder
+
+    # its reload a signal answered after systemd returns: a moment before it is judged
+    - name: The other Pi's reload settling
+      ansible.builtin.pause:
+        seconds: 5
+      when: _ka_any_pending
+
+    - name: The other Pi's keepalived running - the holder's reload waits for it
+      ansible.builtin.systemd:
+        name: keepalived
+      register: _ka_peer_unit
+      retries: 12
+      delay: 5
+      until: _ka_peer_unit.status.ActiveState | default('') == 'active'
+      when: _ka_any_pending and inventory_hostname != _ka_holder
+
+    # ready to take the VIP: not holding it, and healthy by keepalived's own checks (a standby at 50 or 80 would take
+    # the VIP at the holder's reload and hand it back - two Nexus moves)
+    - name: The other Pi ready to take the VIP - not holding it, its checks passing
+      ansible.builtin.shell: |
+        set -o pipefail
+        [ -z "$(ip -o -4 addr show to {{ keepalived_vip }}/32)" ] || { echo "holds the VIP"; exit 1; }
+        /etc/keepalived/check_services.sh || { echo "its services' check fails"; exit 1; }
+        /etc/keepalived/check_forgejo.sh || { echo "its Forgejo check fails"; exit 1; }
+        echo READY
+      register: _ka_peer
+      changed_when: false
+      check_mode: false  # a read: a preview judges it as a run would
+      retries: 12
+      delay: 5
+      until: _ka_peer.stdout == 'READY'
+      when: _ka_any_pending and inventory_hostname != _ka_holder
+
+    - name: Both Pis still in the play before the holder's reload
+      ansible.builtin.assert:
+        that: groups['pis'] | difference(ansible_play_hosts) | length == 0
+        fail_msg: >-
+          {{ groups['pis'] | difference(ansible_play_hosts) | join(', ') }} left the play (its reload or its BACKUP
+          state failed) - the holder {{ _ka_holder }} not reloaded
+        quiet: true
+      when: _ka_any_pending
+
+    - name: The Pi holding the VIP read again right before its reload
+      ansible.builtin.include_tasks: tasks/pi-vip-holder.yml
+      when: _ka_any_pending
+
+    - name: Still the Pi read first - a VIP moved meanwhile refuses the reload
+      ansible.builtin.assert:
+        that: pi_vip_holder == _ka_holder
+        fail_msg: "the VIP moved from {{ _ka_holder }} to {{ pi_vip_holder }} while the other Pi reloaded - the holder not reloaded"
+        quiet: true
+      when: _ka_any_pending
+
+    - name: Reload Keepalived where pending - the VIP's holder last
+      ansible.builtin.systemd:
+        name: keepalived
+        state: reloaded
+      when: _ka_pending and inventory_hostname == _ka_holder
+
+    - name: Its new config recorded as loaded there too
+      ansible.builtin.copy:
+        dest: /etc/keepalived/.loaded.sha256
+        content: "{{ _ka_conf_sum }}\n"
+        mode: '0600'
+      when: _ka_pending and inventory_hostname == _ka_holder
+
+    # Fire any pending handler (systemd's reload) NOW, not at end of play - the
+    # converge + verify tasks below must assert the steady state after the
+    # reloads above, not a snapshot a later change immediately invalidates.
+    - name: Apply pending handlers before converging
       ansible.builtin.meta: flush_handlers
 
     # Converge script — reused by the deploy task below AND the periodic
@@ -516,11 +702,6 @@
     - name: Reload systemd
       ansible.builtin.systemd:
         daemon_reload: true
-
-    - name: Reload Keepalived
-      ansible.builtin.systemd:
-        name: keepalived
-        state: reloaded
 
 # ─── The drop-in loaded where it is pending: a daemon-reload, no restart ───────────────────────────────────────────
 # The drop-in sets ExecStopPost alone, which systemd runs at keepalived's next stop from the unit as it holds it: a

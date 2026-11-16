@@ -180,6 +180,35 @@
         state: absent
 
 # ─── Keepalived VIP ──────────────────────────────────────────────────────────
+# both Pis at one priority (setup-keepalived.yml): the first keepalived up holds the VIP, not pi1 by rank - the failure
+# simulation below fails pi1, so the VIP is put there first: pi2's keepalived restarted when pi2 holds it (its stop
+# sends priority 0, pi1 takes the VIP at once; back up, pi2 never preempts at the equal priority)
+- name: The VIP on pi1 for the failure simulation
+  hosts: pi2
+  become: true
+  gather_facts: false
+  vars:
+    vip: "{{ keepalived_vip | default(lookup('env', 'VAGRANT_VIP') | default('192.168.56.50', true)) }}"
+  tasks:
+    - name: Pi2 holding it?
+      ansible.builtin.command: ip -o -4 addr show to {{ vip }}/32
+      register: _pi2_vip
+      changed_when: false
+
+    - name: Pi2's keepalived restarted - the VIP to pi1
+      ansible.builtin.systemd:
+        name: keepalived
+        state: restarted
+      when: _pi2_vip.stdout_lines | length > 0
+
+    - name: Pi2 no longer holding it
+      ansible.builtin.command: ip -o -4 addr show to {{ vip }}/32
+      register: _pi2_vip_after
+      changed_when: false
+      until: _pi2_vip_after.stdout_lines | length == 0
+      retries: 15
+      delay: 2
+
 - name: VIP present + Forgejo reachable via VIP
   hosts: pi1
   become: true
@@ -289,7 +318,7 @@
   gather_facts: false
 
   tasks:
-    # pi1 comes back as BACKUP (nopreempt keeps the VIP on pi2), but versitygw is
+    # pi1 comes back as BACKUP (at one priority the VIP stays on pi2), but versitygw is
     # stateless and runs on BOTH Pis — restart it with the rest; it serves
     # locally again even though pi2 holds the VIP.
     - name: systemctl start
