@@ -3,15 +3,19 @@
 # Gateway API, Cilium, local-path, the Kubernetes packages, containerd.io, the Argo CD chart, the data operators' charts - equal
 # production's inventory (tests/ansible/copy/prod-inventory.txt): they build the Vagrant copy's node layer and a DR
 # rebuild (task deploy:kubeadm). One moved without the other (two sources of truth) fails here, naming both - not at
-# the end of a two-hour build.
+# the end of a two-hour build. A pull request (CI's, an upgrade unit's) may move one: the unit moves the default with
+# infra's chart, and production's inventory is read again after its apply - so there a default differing from production
+# passes when the pull request itself moved it from its target's (origin/<target>, the clone step's fetch) and the
+# target's still equals production (the copy proves it against infra's half). Its target not in the clone: refused.
 set -u
 cd "$(dirname "$0")/../../../.." || exit 1
 PY=python3
 "$PY" -c 'import yaml' 2> /dev/null || PY=deploy/ansible/venv/bin/python3
 exec "$PY" - <<'PY_DFP'
-import re, sys
+import os, re, subprocess, sys
 import yaml
 P = "deploy/ansible/playbooks/"
+EVENT, TARGET = os.environ.get("CI_PIPELINE_EVENT"), os.environ.get("CI_COMMIT_TARGET_BRANCH")
 MAP = [
     (P + "setup-kubeadm.yml", "var", "cert_manager_version", r"argo-chart cert-manager cert-manager@(\S+)"),
     (P + "setup-kubeadm.yml", "var", "external_secrets_chart_version", r"argo-chart external-secrets external-secrets@(\S+)"),
@@ -56,14 +60,35 @@ def default(text, kind, key):
     return None
 
 
+def target_text(path):
+    """A pull request's target's file, as the clone fetched it; None off a pull request."""
+    if EVENT != "pull_request":
+        return None
+    r = subprocess.run(["git", "show", f"refs/remotes/origin/{TARGET}:{path}"], capture_output=True, text=True)
+    if not TARGET or r.returncode != 0:
+        print(f"FAIL a pull request, its target origin/{TARGET} not in this clone (the clone step's fetch_target_branch) "
+              f"- {path} not judged")
+        sys.exit(1)
+    return r.stdout
+
+
+same = lambda a, b: a is not None and b is not None and str(a).lstrip("v") == str(b).lstrip("v")
 have = open("tests/ansible/copy/prod-inventory.txt").read().splitlines()
 fails = 0
 for path, kind, key, pat in MAP:
     d = default(open(path).read(), kind, key)
     live = sorted({m.group(1) for m in (re.fullmatch(pat, l) for l in have) if m})
-    ok = d is not None and len(live) == 1 and str(d).lstrip("v") == live[0].lstrip("v")
+    ok = len(live) == 1 and same(d, live[0])
+    why = ""
+    if not ok and len(live) == 1 and d is not None:
+        t = target_text(path)
+        if t is not None:
+            td = default(t, kind, key)
+            ok = same(td, live[0]) and not same(d, td)
+            why = (f" (this pull request does not move it: its target's is {td} too)" if same(d, td) else
+                   f" (this pull request moves it from {td}" + (", its target's - as production" if ok else "") + ")")
     fails += not ok
-    print(f"{'PASS' if ok else 'FAIL'} {path.split('/')[-1]} {key}: default {d}, production {live or 'none'}")
+    print(f"{'PASS' if ok else 'FAIL'} {path.split('/')[-1]} {key}: default {d}, production {live or 'none'}{why}")
 print("defaults-follow-production: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 PY_DFP
