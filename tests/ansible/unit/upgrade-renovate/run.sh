@@ -218,4 +218,19 @@ print(d.get("rebaseWhen"), d.get("prConcurrentLimit"), d.get("branchConcurrentLi
       any("prPriority" in r for r in d["packageRules"]))
 PYLIMIT
 )" "conflicted 0 0 0 False"
+# Woodpecker a unit of its own (the copy runs no Woodpecker): renovate/manual-woodpecker - the prefix and the branch topic
+# both (the wave-patches rule names its branch by group.branchTopic: a groupSlug alone left it on manual-wave-patches),
+# the last rule naming the chart, so no group after it takes it back
+check "the preset: Woodpecker's chart on renovate/manual-woodpecker, the last rule that names it" \
+  "$("$PY" - <<'PYWOODPECKER'
+import json, re
+d = json.load(open("renovate/upgrade-cycle.json"))
+CHART = "ghcr.io/woodpecker-ci/helm/woodpecker"
+# Renovate's /regex/ (a search, flags after the last slash) or an exact name
+hit = lambda p: re.search(p[1:p.rindex("/")], CHART) is not None if p.startswith("/") and p.rindex("/") > 0 else p == CHART
+names = [i for i, r in enumerate(d["packageRules"]) if any(hit(p) for p in r.get("matchPackageNames", []))]
+r = d["packageRules"][names[-1]] if names else {}
+print(r.get("additionalBranchPrefix"), (r.get("group") or {}).get("branchTopic"), r.get("groupSlug"), names[-1] == len(d["packageRules"]) - 1 if names else None)
+PYWOODPECKER
+)" "manual- woodpecker woodpecker True"
 if [ "$fails" = 0 ]; then echo "upgrade-renovate: ALL-PASS"; else echo "upgrade-renovate: $fails FAILED"; exit 1; fi

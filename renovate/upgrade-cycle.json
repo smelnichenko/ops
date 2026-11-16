@@ -396,14 +396,17 @@
       ]
     },
     {
-      "description": "Woodpecker, the CI server (its chart): a unit of its own, renovate/manual-woodpecker - the Vagrant copy runs no Woodpecker, so nothing proves it there and the copy refuses it (SHADOW run 7, 2026-11-16). The runner never picks a manual- unit: applied by hand - merged, then a pipeline run checked (a bad one is CI down, reverted by its commit). Last, so it takes Woodpecker out of wave-patches and every group (operator 2026-11-16)",
+      "description": "Woodpecker, the CI server (its chart): a unit of its own, renovate/manual-woodpecker - the Vagrant copy runs no Woodpecker, so nothing proves it there and the copy refuses it (SHADOW run 7, 2026-11-16). The runner never picks a manual- unit: applied by hand - merged, then a pipeline run checked (a bad one is CI down, reverted by its commit). Last, so it takes Woodpecker out of wave-patches and every group (operator 2026-11-16). Its group.branchTopic too: the wave-patches rule names its branch by one, and a groupSlug alone left Woodpecker on renovate/manual-wave-patches (SHADOW run 8, 2026-11-16)",
       "matchPackageNames": [
         "woodpecker",
         "/woodpecker-ci\\/helm/"
       ],
       "groupName": "woodpecker",
       "groupSlug": "woodpecker",
-      "additionalBranchPrefix": "manual-"
+      "additionalBranchPrefix": "manual-",
+      "group": {
+        "branchTopic": "woodpecker"
+      }
     }
   ],
   "ignorePresets": [
