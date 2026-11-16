@@ -619,6 +619,8 @@
       failed_when: caddy_running_version.stdout != 'v' ~ (caddy_pinned | default('not set by the play above'))
       when: not ansible_check_mode
 
+    # a run's verdicts: a preview (--check) skips the uri module, and its result then has no status - the print below
+    # failed every preview (2026-11-16)
     - name: Test HTTPS Forgejo
       ansible.builtin.uri:
         url: https://git.pmon.dev/api/v1/version
@@ -628,8 +630,10 @@
       retries: 12
       delay: 10
       until: forgejo_https.status == 200
+      when: not ansible_check_mode
 
     - name: Print results
+      when: not ansible_check_mode
       ansible.builtin.debug:
         msg: |
           ============================================

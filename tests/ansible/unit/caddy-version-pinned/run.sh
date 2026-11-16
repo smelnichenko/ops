@@ -212,6 +212,12 @@ pinned = verify.get("This Pi's Caddy the pinned version", {})
 check("the Verify play: the running process's own image (/proc/<pid>/exe) at the pin, never judged in a preview",
       ('"/proc/$pid/exe" version' in (pinned.get("ansible.builtin.shell") or ""), pinned.get("failed_when"), pinned.get("when")),
       (True, "caddy_running_version.stdout != 'v' ~ (caddy_pinned | default('not set by the play above'))", "not ansible_check_mode"))
+# a preview skips the uri module: its result has no status, so whatever reads forgejo_https runs in a run alone (every
+# preview failed on the print, 2026-11-16)
+readers = sorted(n for n, t in verify.items() if "forgejo_https" in json.dumps(t))
+check("the Verify play: the Forgejo probe and whatever reads it skipped in a preview",
+      (readers, sorted({str(verify[n].get("when")) for n in readers})),
+      (["Print results", "Test HTTPS Forgejo"], ["not ansible_check_mode"]))
 print("caddy-version-pinned: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 PY_CVP
