@@ -24,7 +24,12 @@ import urllib.parse
 import urllib.request
 
 KEEP_IMAGE, KEEP_CACHE = 10, 5
+CACHE = "/cache"  # a build cache's package: <image>/cache
 REF = re.compile(r"git\.pmon\.dev/schnappy/([a-z0-9._/-]+):([A-Za-z0-9._-]+)")
+REPOSITORY = re.compile(r"repository:\s*[\"']?git\.pmon\.dev/schnappy/([a-z0-9._/-]+)")
+TAG = re.compile(r"\btag:\s*[\"']?([A-Za-z0-9._-]+)")
+SCANNED = (".yaml", ".yml", ".sh", ".py", ".json")
+SKIPPED = ("node_modules", "venv")
 RUNNING = ("ssh -o BatchMode=yes -o ConnectTimeout=10 sm@192.168.11.2 \"kubectl get pods -A -o jsonpath='"
            "{range .items[*]}{range .spec.containers[*]}{.image}{\\\"\\n\\\"}{end}{range .spec.initContainers[*]}"
            "{.image}{\\\"\\n\\\"}{end}{end}'\"")
@@ -60,28 +65,38 @@ def versions(owner, token, api):
         page += 1
 
 
+def paths(src):
+    """Every file of the checkouts an image could be named in (dot directories, node_modules and venv skipped)."""
+    for repo in ("infra", "platform", "ops"):
+        for root, dirs, files in os.walk(os.path.join(src, repo)):
+            dirs[:] = [d for d in dirs if not d.startswith(".") and d not in SKIPPED]
+            yield from (os.path.join(root, fn) for fn in files if fn.endswith(SCANNED))
+
+
+def read(path):
+    """A file's text - empty when it cannot be read."""
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            return f.read()
+    except OSError:
+        return ""
+
+
+def values_tags(lines):
+    """A values file's image: its repository line and the first tag line within the next four - (name, tag)."""
+    for i, line in enumerate(lines):
+        m = REPOSITORY.search(line)
+        t = next((t for t in map(TAG.search, lines[i + 1:i + 5]) if t), None) if m else None
+        if t:
+            yield m.group(1).lower(), t.group(1).lower()
+
+
 def referenced(src):
     """Every schnappy image tag the checkouts name: name:tag anywhere, and a values file's repository + tag lines."""
     used = set()
-    for repo in ("infra", "platform", "ops"):
-        for root, dirs, files in os.walk(os.path.join(src, repo)):
-            dirs[:] = [d for d in dirs if not d.startswith(".") and d not in ("node_modules", "venv")]
-            for fn in files:
-                if not fn.endswith((".yaml", ".yml", ".sh", ".py", ".json")):
-                    continue
-                try:
-                    text = open(os.path.join(root, fn), encoding="utf-8", errors="replace").read()
-                except OSError:
-                    continue
-                used |= {(n.lower(), t.lower()) for n, t in REF.findall(text)}
-                lines = text.splitlines()
-                for i, line in enumerate(lines):
-                    m = re.search(r"repository:\s*[\"']?git\.pmon\.dev/schnappy/([a-z0-9._/-]+)", line)
-                    for nxt in lines[i + 1:i + 5] if m else ():
-                        t = re.search(r"\btag:\s*[\"']?([A-Za-z0-9._-]+)", nxt)
-                        if t:
-                            used.add((m.group(1).lower(), t.group(1).lower()))
-                            break
+    for text in map(read, paths(src)):
+        used |= {(n.lower(), t.lower()) for n, t in REF.findall(text)}
+        used |= set(values_tags(text.splitlines()))
     return used
 
 
@@ -100,8 +115,9 @@ def plan(vers, used):
         by.setdefault(name, []).append((created, ver))
     keep, delete = [], []
     for name, vs in sorted(by.items()):
-        n = KEEP_CACHE if name.endswith("/cache") else KEEP_IMAGE
-        base = name[:-len("/cache")] if name.endswith("/cache") else name
+        cache = name.endswith(CACHE)
+        n = KEEP_CACHE if cache else KEEP_IMAGE
+        base = name[:-len(CACHE)] if cache else name
         for i, (_, ver) in enumerate(sorted(vs, reverse=True)):
             v = ver.lower()
             (keep if i < n or v == "latest" or (name, v) in used or (base, v) in used else delete).append((name, ver))
