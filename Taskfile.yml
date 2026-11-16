@@ -208,21 +208,21 @@ tasks:
     dir: deploy/ansible
     deps: [deploy:install]
     cmds:
-      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-nexus.yml
-      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-kubeadm.yml
-      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-consul.yml
-      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-pi-services.yml
-      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-patroni.yml
-      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-vault-pi.yml -e @vars/vault.yml
-      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/seed-vault-secrets.yml -e @vars/vault.yml
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-nexus.yml {{.CLI_ARGS}}
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-kubeadm.yml {{.CLI_ARGS}}
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-consul.yml {{.CLI_ARGS}}
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-pi-services.yml {{.CLI_ARGS}}
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-patroni.yml {{.CLI_ARGS}}
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-vault-pi.yml -e @vars/vault.yml {{.CLI_ARGS}}
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/seed-vault-secrets.yml -e @vars/vault.yml {{.CLI_ARGS}}
       # External Secrets' login to the Pi Vault, once Vault serves (setup-kubeadm installed External Secrets)
       - cd ../.. && ./bootstrap.sh vault-eso
       # Argo CD's Forgejo account and its token in Vault, before setup-argocd gives the repo-creds Secret that token
       # (Argo CD clones the private infra before it installs External Secrets). It derives what Argo CD reads from
       # infra's main on Forgejo: the repositories pushed there first (docs/DR-PROCEDURE.md) - without them it fails
       # here, nothing installed
-      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-argocd-reader.yml
-      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-argocd.yml -e @vars/vault.yml
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-argocd-reader.yml {{.CLI_ARGS}}
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-argocd.yml -e @vars/vault.yml {{.CLI_ARGS}}
 
   deploy:vault-pi:
     desc: "Deploy Pi Vault (Consul backend + Shamir + vault-unseal.service on both Pis); task deploy:vault-pi -- --check --diff previews it"
@@ -236,7 +236,7 @@ tasks:
     dir: deploy/ansible
     deps: [deploy:install]
     cmds:
-      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/backup-vault-keys.yml
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/backup-vault-keys.yml {{.CLI_ARGS}}
 
   deploy:keycloak-clients:
     desc: Ensure app realm roles exist (incl. JOBS), the Admins composite, and k6-smoke SA roles — fails on a missing role
@@ -244,14 +244,14 @@ tasks:
     deps: [deploy:install]
     dotenv: ['../../.env']
     cmds:
-      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-keycloak-clients.yml
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-keycloak-clients.yml {{.CLI_ARGS}}
 
   deploy:gluster:
     desc: Setup GlusterFS replication for Forgejo repos between pi1 and pi2
     dir: deploy/ansible
     deps: [deploy:install]
     cmds:
-      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-gluster.yml
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-gluster.yml {{.CLI_ARGS}}
 
   deploy:caddy:
     desc: Setup Caddy TLS reverse proxy for Pi-hosted services (git, auth, nexus)
@@ -259,7 +259,7 @@ tasks:
     deps: [deploy:install]
     dotenv: ['../../.env']
     cmds:
-      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-caddy.yml
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-caddy.yml {{.CLI_ARGS}}
 
   deploy:keepalived:
     desc: Setup Keepalived VIP (192.168.11.5) between pi1 and pi2
@@ -343,7 +343,7 @@ tasks:
     deps: [deploy:install]
     dotenv: ['../../.env']
     cmds:
-      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/seed-vault-secrets.yml -e vault_prefix=schnappy-test
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/seed-vault-secrets.yml -e vault_prefix=schnappy-test {{.CLI_ARGS}}
 
   # ============== VAGRANT DEPLOY HELPERS (internal) ==============
   # Shared deploy chain used by every k8s-cluster Vagrant test. Assumes
@@ -1069,7 +1069,7 @@ tasks:
     dotenv: ['../../.env']
     prompt: "Upgrade Forgejo on PRODUCTION's Pis (git.pmon.dev down about a minute)?"
     cmds:
-      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/upgrade-forgejo.yml
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/upgrade-forgejo.yml {{.CLI_ARGS}}
 
   test:pi:rerun-guards:
     desc: "Vagrant: re-running the Pi playbooks is safe - setup-patroni refuses while Patroni is stopped (its data untouched), passes while it runs and keeps the database port; setup-consul keeps the key and restarts nothing; setup-keepalived reloads a changed config (PgBouncer put in front first, as on the Pis, where missing)"
@@ -1091,7 +1091,7 @@ tasks:
     dotenv: ['../../.env']
     prompt: "Install the daily tier-0 backup on PRODUCTION's Pis?"
     cmds:
-      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-pi-backups.yml
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-pi-backups.yml {{.CLI_ARGS}}
 
   test:pi-restore-check:
     desc: "Vagrant: the Pis' restore check (setup-pi-restore-check.yml) against the copy's real backups - its CNPG base backups and WAL, its etcd snapshots, the Pis' tier-0 backup (one taken first) - green on pi1, nothing left behind, nothing archived; on pi2 a stale etcd snapshot and a missing database each red alone; a killed run's leftovers cleared by the next"
@@ -1106,7 +1106,7 @@ tasks:
     dotenv: ['../../.env']
     prompt: "Install the daily restore check on PRODUCTION's Pis?"
     cmds:
-      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-pi-restore-check.yml
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-pi-restore-check.yml {{.CLI_ARGS}}
 
   deploy:patroni:upgrade:
     desc: "PRODUCTION: Patroni on both Pis to vars/patroni.yml's version - the cluster paused (Postgres keeps serving, no failover), each node upgraded and restarted, resumed"
@@ -1115,7 +1115,7 @@ tasks:
     dotenv: ['../../.env']
     prompt: "Upgrade Patroni on PRODUCTION's Pis (no failover while paused)?"
     cmds:
-      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/upgrade-patroni.yml
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/upgrade-patroni.yml {{.CLI_ARGS}}
 
   deploy:pi-packages:upgrade:
     desc: "PRODUCTION: the Pis' apt packages upgraded, one Pi at a time (the VIP's last), each rebooted - Patroni's leader, Vault's active node and the VIP handed to the other Pi first (a switchover, the VIP moving: seconds each); refused in the backup windows (UTC 01:50-04:00, 05:20-05:50). -- --check previews from freshly read package lists; -- -e pi_packages_turns=1 upgrades the first Pi alone (its kernel soaks; a run again takes the second)"
@@ -1150,7 +1150,7 @@ tasks:
     deps: [deploy:install]
     prompt: "Upgrade Vault on PRODUCTION's Pis (one failover)?"
     cmds:
-      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/upgrade-vault.yml -e @vars/vault.yml
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/upgrade-vault.yml -e @vars/vault.yml {{.CLI_ARGS}}
 
   # Production's runs of the playbooks a cluster change may need once merged - each tried on the Vagrant copy first
   # (task test:copy:playbook PLAYBOOK=<it>), its variables after -- (task <name> -- -e k=v)
@@ -1259,7 +1259,7 @@ tasks:
     dir: deploy/ansible
     deps: [deploy:install]
     cmds:
-      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-woodpecker.yml -e @vars/woodpecker.yml
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-woodpecker.yml -e @vars/woodpecker.yml {{.CLI_ARGS}}
 
   # Woodpecker CI's own Forgejo account (woodpecker-ci, no admin): its teams (code write on infra alone, packages
   # write; code read where pipelines clone), scoped tokens, written to Vault woodpecker-ci with every other property
@@ -1272,7 +1272,7 @@ tasks:
     deps: [deploy:install]
     dotenv: ['../../.env']
     cmds:
-      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-ci-bot.yml
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-ci-bot.yml {{.CLI_ARGS}}
 
   # once CI runs on the bot's tokens (proven by a CD run): the admin's tokens CI held deleted - those .env names
   # (WOODPECKER_INFRA_REPO_TOKEN, WOODPECKER_CLONE_TOKEN) and those in Vault woodpecker-ci's version history. Refused
@@ -1284,7 +1284,7 @@ tasks:
     deps: [deploy:install]
     dotenv: ['../../.env']
     cmds:
-      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-ci-bot.yml --tags retire
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-ci-bot.yml --tags retire {{.CLI_ARGS}}
 
   # Argo CD's own Forgejo account (argocd-reader, no admin): teams reading what infra's Applications clone and its PR
   # generator lists (derived from the infra checkout beside ops), a read:repository token in Vault
@@ -1296,7 +1296,7 @@ tasks:
     deps: [deploy:install]
     dotenv: ['../../.env']
     cmds:
-      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-argocd-reader.yml
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-argocd-reader.yml {{.CLI_ARGS}}
 
   # once Argo CD's repo-creds and forgejo-readonly-token hand out argocd-reader's token (ten synced): the admin's tokens
   # Argo CD held deleted - named argocd*, .env's FORGEJO_READONLY_TOKEN, Vault's history and what setup-argocd-reader
@@ -1307,14 +1307,14 @@ tasks:
     deps: [deploy:install]
     dotenv: ['../../.env']
     cmds:
-      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-argocd-reader.yml --tags retire
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-argocd-reader.yml --tags retire {{.CLI_ARGS}}
 
   deploy:kubeadm:
     desc: Install kubeadm cluster on ten
     dir: deploy/ansible
     deps: [deploy:install]
     cmds:
-      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-kubeadm.yml
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-kubeadm.yml {{.CLI_ARGS}}
 
   deploy:node-config:
     desc: Apply node/kubelet tuning to the live node (idempotent; safe to re-run, no bootstrap)
@@ -1339,7 +1339,7 @@ tasks:
     deps: [deploy:install]
     dotenv: ['../../.env']
     cmds:
-      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/seed-vault-secrets.yml
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/seed-vault-secrets.yml {{.CLI_ARGS}}
 
   deploy:delete-environment:
     desc: 'Purge a Vault prefix (e.g. CLI_ARGS="-e vault_prefix=schnappy-pr-42")'
@@ -1351,7 +1351,7 @@ tasks:
     desc: 'Provision the scoped Vault token used by the PR-env GC CronJob'
     dir: deploy/ansible
     cmds:
-      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-vault-cleanup-policy.yml
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-vault-cleanup-policy.yml {{.CLI_ARGS}}
 
   deploy:pgbouncer:
     desc: 'PgBouncer in front of Patroni on each Pi (port 6432)'
@@ -1359,21 +1359,21 @@ tasks:
     dotenv: ['../../.env']
     cmds:
       # its password the inventory's, from the environment (.env) - an extra variable put it on the command line
-      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-pgbouncer.yml
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-pgbouncer.yml {{.CLI_ARGS}}
 
   deploy:istio:
     desc: Install Istio ambient mesh + HAProxy
     dir: deploy/ansible
     deps: [deploy:install]
     cmds:
-      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-istio.yml
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-istio.yml {{.CLI_ARGS}}
 
   deploy:argocd:
     desc: Install/update Argo CD
     dir: deploy/ansible
     deps: [deploy:install]
     cmds:
-      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-argocd.yml -e @vars/vault.yml
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-argocd.yml -e @vars/vault.yml {{.CLI_ARGS}}
     dotenv: ['.env']
 
 
@@ -1396,7 +1396,7 @@ tasks:
     desc: Run k6 smoke tests to validate a Velero restore
     deps: [deploy:install]
     cmds:
-      - cd deploy/ansible && venv/bin/ansible-playbook -i inventory/production.yml playbooks/verify-restore.yml
+      - cd deploy/ansible && venv/bin/ansible-playbook -i inventory/production.yml playbooks/verify-restore.yml {{.CLI_ARGS}}
 
   deploy:backup:status:
     desc: Check Velero backup status
