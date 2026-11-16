@@ -28,11 +28,12 @@
     pi_ip: "{{ node_ip_override | default(ansible_default_ipv4.address) }}"
     pi1_ip: "{{ hostvars['pi1']['ansible_host'] | default('192.168.11.4') }}"
     pi2_ip: "{{ hostvars['pi2']['ansible_host'] | default('192.168.11.6') }}"
-    # Credentials come from inventory (vagrant.yml: test fixtures;
-    # production.yml: lookup('env', ...)). Names map 1:1 with the
-    # inventory vars — no per-play defaults.
-    forgejo_db_password: "{{ postgres_admin_password }}"
-    keycloak_db_password: "{{ postgres_admin_password }}"
+    # Credentials come from inventory (vagrant.yml: test fixtures; production.yml: lookup('env', ...)) - Forgejo's and
+    # Keycloak's database passwords their own roles' (forgejo_db_password, keycloak_db_password), never the superuser's.
+    # Their logins: a way back is a run with -e forgejo_db_user=postgres -e forgejo_db_password=<the superuser's> (and
+    # Keycloak's alike), judged by the same guards - never a revert into the old ones
+    forgejo_db_user: forgejo
+    keycloak_db_user: keycloak
     # the other Pi of the pair: a restart here never takes the last serving copy of a service down (the handlers)
     peer_ip: "{{ hostvars[groups['pis'] | difference([inventory_hostname]) | first]['ansible_host'] }}"
 
@@ -44,6 +45,8 @@
       ansible.builtin.assert:
         that:
           - postgres_admin_password | default('') | length > 0
+          - forgejo_db_password | default('') | length > 0
+          - keycloak_db_password | default('') | length > 0
           - keycloak_admin_password | default('') | length > 0
           - forgejo_secret_key | default('') | length > 0
           - forgejo_internal_token | default('') | length > 0
@@ -57,9 +60,48 @@
         quiet: true
       no_log: true
 
+    # app.ini (go-ini) and the secrets file (systemd) each read quotes, a '#' or a backslash their own way: the roles'
+    # passwords letters and digits alone (openssl rand -hex 32), whatever reads them
+    - name: The roles' passwords are letters and digits
+      tags: [always]
+      ansible.builtin.assert:
+        that:
+          - forgejo_db_user != 'forgejo' or forgejo_db_password is match('^[A-Za-z0-9]+$')
+          - keycloak_db_user != 'keycloak' or keycloak_db_password is match('^[A-Za-z0-9]+$')
+        fail_msg: "REFUSED: FORGEJO_DB_ROLE_PASSWORD or KEYCLOAK_DB_ROLE_PASSWORD not letters and digits alone (openssl rand -hex 32)"
+        quiet: true
+      no_log: true
+
     # ================================================================
     # Phase 1: System dependencies
     # ================================================================
+
+    # every restart of a service both Pis run (Forgejo, HAProxy, Keycloak) holds Consul's lock pi-restart - one at a
+    # time across both Pis and every Ansible run (files/pi-restart-locked.sh)
+    - name: The Pi restart lock's helper
+      tags: [always]
+      ansible.builtin.import_tasks: tasks/pi-restart-lock.yml
+
+    # a Pi's journal kept across reboots, 30 days or 1 GB at most, whichever comes first (each boot began a new one: two
+    # days of Forgejo's restarts were all there was to measure, 2026-11-15)
+    - name: The journal's settings directory
+      tags: [journal]
+      ansible.builtin.file:
+        path: /etc/systemd/journald.conf.d
+        state: directory
+        mode: '0755'
+
+    - name: The journal kept on disk - 30 days, 1 GB at most
+      tags: [journal]
+      ansible.builtin.copy:
+        dest: /etc/systemd/journald.conf.d/retention.conf
+        mode: '0644'
+        content: |
+          [Journal]
+          Storage=persistent
+          SystemMaxUse=1G
+          MaxRetentionSec=30day
+      notify: Restart journald
 
     - name: Install system packages
       ansible.builtin.apt:
@@ -171,6 +213,11 @@
             fi
           done
       changed_when: true
+      when: not _patroni_installed | bool
+
+    # their own roles owning them, before anything logs in (under Patroni setup-patroni.yml does it on the leader)
+    - name: Forgejo's and Keycloak's own roles (first install only)
+      ansible.builtin.include_tasks: tasks/app-db-owner.yml
       when: not _patroni_installed | bool
 
     - name: Find Postgres config directory
@@ -326,6 +373,43 @@
         - /var/local/forgejo/indexers
         - /var/local/forgejo/sessions
 
+    # a login that does not work is never written: Forgejo restarted on it serves nothing (setup-patroni.yml makes the
+    # role and gives it its database on the leader - deploy:patroni first). The host and port its config names; under
+    # Patroni (a first install's database host may not answer yet - its roles were made just above)
+    - name: Forgejo's database login - its role, its password, its database
+      tags: [forgejo-config]
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          read -r PGPASSWORD; export PGPASSWORD
+          host='{{ forgejo_db_host_effective | trim | split(':') | first }}'
+          port='{{ forgejo_db_host_effective | trim | split(':') | last }}'
+          # what it needs there: every relation its own (or a role it has - the superuser has all), the schema its
+          # migrations create in - a login alone passed with tables still another's (a run of the roles cut short)
+          q="select (select count(*) from pg_class c join pg_namespace n on n.oid = c.relnamespace"
+          q+=" where n.nspname not in ('pg_catalog', 'information_schema') and n.nspname !~ '^pg_toast'"
+          q+=" and not pg_has_role(current_user, c.relowner, 'USAGE')) || ' ' || has_schema_privilege('public', 'CREATE')"
+          psql -X -At -w -h "$host" -p "$port" -U '{{ forgejo_db_user }}' -d forgejo -c "$q"
+        stdin: "{{ forgejo_db_password }}"
+      register: _forgejo_login
+      changed_when: false
+      failed_when: false
+      check_mode: false  # a read: a preview shows the refusal a run would meet
+      no_log: true  # the password went in on stdin - psql's own error below, without it
+      when: _patroni_installed | bool
+
+    - name: Forgejo's login works - or its config is not written
+      tags: [forgejo-config]
+      ansible.builtin.assert:
+        that: _forgejo_login.rc == 0 and _forgejo_login.stdout | trim == '0 true'
+        fail_msg: >-
+          REFUSED: Forgejo's role cannot log into its database, or does not own what is in it ({{ _forgejo_login.stdout
+          | default('') | trim }} {{ _forgejo_login.stderr | default('') | trim }}: relations not its own, CREATE on
+          public) - its config not written; deploy:patroni makes the role (FORGEJO_DB_ROLE_PASSWORD in .env)
+        quiet: true
+      when: _patroni_installed | bool
+
     # tag forgejo-config: its config alone (with the database host it names) - deploy:pi-services -- --tags forgejo-config
     - name: Write Forgejo config
       tags: [forgejo-config]
@@ -369,7 +453,8 @@
           # without forgejo needing to know which host is primary.
           HOST = {{ forgejo_db_host_effective }}
           NAME = forgejo
-          USER = postgres
+          # its own role, owning its database (setup-patroni.yml) - never the superuser
+          USER = {{ forgejo_db_user }}
           PASSWD = {{ forgejo_db_password }}
           SSL_MODE = disable
           # Force connections to be recycled hourly. Default 0 = forever,
@@ -671,37 +756,50 @@
         state: directory
         mode: '0700'
 
-    - name: Keycloak's secrets, root only
+    - name: Keycloak's secrets, root only - written aside, put in place once their login works
       tags: [keycloak-db-url]
       ansible.builtin.copy:
-        dest: /etc/keycloak/secrets.env
+        dest: /etc/keycloak/secrets.env.new
         mode: '0600'
         content: |
           KC_DB_PASSWORD={{ keycloak_db_password }}
           KC_BOOTSTRAP_ADMIN_PASSWORD={{ keycloak_admin_password }}
       no_log: true
 
-    # before the unit names it: the database password the file gives - as systemd reads an EnvironmentFile (quotes,
-    # backslashes: not as an inline Environment=) - is the one Keycloak runs with now (production's inline, read from
-    # the running process), by hash, never said, on no command line. Another: refused, the unit not written (pi2's
-    # Keycloak crash-looped on it, both units on disk naming it). Keycloak not running: nothing to compare
-    - name: The secrets file gives Keycloak the database password it runs with now
+    # before the unit names it: the file's login - as systemd reads an EnvironmentFile (quotes, backslashes: not as an
+    # inline Environment=) - logs Keycloak's own role into its database through the host its URL names, never said, on
+    # no command line; the file written aside, put in place only then. One that does not: refused, neither the secrets
+    # Keycloak runs on nor its unit touched (pi2's Keycloak crash-looped on a password it could not use, both units on
+    # disk naming it). Under Patroni (a first install's database host may not answer yet)
+    - name: The secrets file's login works for Keycloak's role and database
       tags: [keycloak-db-url]
       ansible.builtin.shell:
         executable: /bin/bash
         cmd: |
           set -euo pipefail
-          pid=$(systemctl show -p MainPID --value keycloak)
-          if [ "$pid" = 0 ]; then echo "not running"; exit 0; fi
-          now=$(tr '\0' '\n' < "/proc/$pid/environ" | sed -n 's/^KC_DB_PASSWORD=//p' | sha256sum)
-          new=$(systemd-run --quiet --pipe --wait --collect -p EnvironmentFile=/etc/keycloak/secrets.env \
-            /usr/bin/printenv KC_DB_PASSWORD | sha256sum)
-          if [ "$now" = "$new" ]; then echo same; else echo different; fi
-      register: _keycloak_db_password_same
+          # what it needs there, as Forgejo's guard asks it: every relation its own (or a role it has), CREATE on public
+          q="select (select count(*) from pg_class c join pg_namespace n on n.oid = c.relnamespace"
+          q+=" where n.nspname not in ('pg_catalog', 'information_schema') and n.nspname !~ '^pg_toast'"
+          q+=" and not pg_has_role(current_user, c.relowner, 'USAGE')) || ' ' || has_schema_privilege('public', 'CREATE')"
+          systemd-run --quiet --pipe --wait --collect -p EnvironmentFile=/etc/keycloak/secrets.env.new \
+            /bin/sh -c 'PGPASSWORD="$KC_DB_PASSWORD" exec psql -X -At -w -h "$1" -p "$2" -U "$3" -d keycloak -c "$4"' \
+            sh '{{ keycloak_db_host_effective | trim | split(':') | first }}' '{{ keycloak_db_host_effective | trim | split(':') | last }}' \
+            '{{ keycloak_db_user }}' "$q"
+      register: _keycloak_login
       changed_when: false
-      failed_when: >-
-        _keycloak_db_password_same.rc != 0 or _keycloak_db_password_same.stdout | trim not in ['same', 'not running']
-      when: not ansible_check_mode
+      failed_when: _keycloak_login.rc != 0 or _keycloak_login.stdout | trim != '0 true'
+      # a preview wrote no secrets file: nothing to judge
+      when: _patroni_installed | bool and not ansible_check_mode
+
+    - name: Keycloak's secrets in place - the ones just judged
+      tags: [keycloak-db-url]
+      ansible.builtin.copy:
+        src: /etc/keycloak/secrets.env.new
+        dest: /etc/keycloak/secrets.env
+        remote_src: true
+        mode: '0600'
+      diff: false  # its content is the passwords
+      no_log: true
 
     # targetServerType=any: PgBouncer hands every client the startup parameters of its first server connection, never
     # read again - one made to the replica (HAProxy's servers start up, before their first check) says in_hot_standby=on
@@ -731,7 +829,7 @@
           Group=keycloak
           Environment=KC_DB=postgres
           Environment=KC_DB_URL=jdbc:postgresql://{{ keycloak_db_host_effective }}/keycloak?targetServerType=any
-          Environment=KC_DB_USERNAME=postgres
+          Environment=KC_DB_USERNAME={{ keycloak_db_user }}
           EnvironmentFile=/etc/keycloak/secrets.env
           Environment=KC_HOSTNAME=auth.pmon.dev
           Environment=KC_PROXY_HEADERS=xforwarded
@@ -799,6 +897,14 @@
             Postgres: {{ pi_ip }}:5432
 
   handlers:
+    # restarted onto its settings, what it held in memory (/run, lost at a reboot) written to disk
+    - name: Restart journald
+      ansible.builtin.shell: |
+        set -euo pipefail
+        systemctl restart systemd-journald
+        journalctl --flush
+      changed_when: true
+
     - name: Reload systemd daemon
       ansible.builtin.systemd:
         daemon_reload: true
@@ -824,6 +930,7 @@
 
     - name: Restart Forgejo
       ansible.builtin.shell: |
+        /usr/local/bin/pi-restart-locked forgejo <<'RESTART'
         set -euo pipefail
         up() { curl -sf -o /dev/null --max-time 10 "http://$1:3000/api/v1/version"; }
         if up 127.0.0.1 && ! up {{ peer_ip }}; then
@@ -837,6 +944,7 @@
           sleep 2
         done
         echo "Forgejo on {{ inventory_hostname }} not serving 180 s after its restart" >&2; exit 1
+        RESTART
       args:
         executable: /bin/bash
       throttle: 1
@@ -855,6 +963,7 @@
     # Forgejo restarts with it (its unit Requires= haproxy): both answering again before the next Pi
     - name: Restart HAProxy
       ansible.builtin.shell: |
+        /usr/local/bin/pi-restart-locked haproxy <<'RESTART'
         set -euo pipefail
         up() { curl -sf -o /dev/null --max-time 10 "http://$1:3000/api/v1/version"; }
         if up 127.0.0.1 && ! up {{ peer_ip }}; then
@@ -871,6 +980,7 @@
           sleep 2
         done
         echo "HAProxy (or Forgejo behind it) on {{ inventory_hostname }} not back 180 s after its restart" >&2; exit 1
+        RESTART
       args:
         executable: /bin/bash
       throttle: 1

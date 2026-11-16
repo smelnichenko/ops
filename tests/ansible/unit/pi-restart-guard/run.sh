@@ -31,6 +31,9 @@ stub("curl", 'for a in "$@"; do case $a in http*) u=$a;; esac; done\n'
              'for x in $UP; do [ "$x" = "$h" ] && exit 0; done\nexit 22\n')
 stub("systemctl", 'echo "$*" >> "$WORK/calls"; case $1 in restart) touch "$WORK/restarted";; esac; exit 0\n')
 stub("sleep", "exit 0\n")
+# each restart under the lock (files/pi-restart-locked.sh, the helper itself): its consul a fake holding it at once
+stub("fake-consul", 'while [ "$#" -gt 0 ] && [ "$1" != pi-restart ]; do shift; done; shift; "$@"; [ "$?" = 0 ] || exit 2\n')
+HELPER = os.path.abspath("deploy/ansible/playbooks/files/pi-restart-locked.sh")
 # pg_isready (PgBouncer, 127.0.0.1 only): answers once restarted, unless $PGB_DOWN
 stub("pg_isready", '[ -z "${PGB_DOWN:-}" ] && [ -e "$WORK/restarted" ]\n')
 # rclone (versitygw's S3 check): S3 answers once restarted, unless $S3_DOWN
@@ -62,7 +65,9 @@ def run(cmd, up, **env_extra):
             os.remove(os.path.join(work, f))
     if "127.0.0.1" in up:
         open(os.path.join(work, "restarted"), "w").close()  # serving here before the restart
-    env = dict(os.environ, PATH=stubs + ":" + os.environ["PATH"], WORK=work, UP=" ".join(up), **env_extra)
+    cmd = cmd.replace("/usr/local/bin/pi-restart-locked", HELPER)
+    env = dict(os.environ, PATH=stubs + ":" + os.environ["PATH"], WORK=work, UP=" ".join(up),
+               PI_RESTART_CONSUL=os.path.join(stubs, "fake-consul"), TMPDIR=work, **env_extra)
     r = subprocess.run(["bash", "-c", cmd], capture_output=True, text=True, env=env)
     calls = open(os.path.join(work, "calls")).read() if os.path.exists(os.path.join(work, "calls")) else ""
     return r.returncode, any(c.startswith("restart ") for c in calls.splitlines()), r.stderr

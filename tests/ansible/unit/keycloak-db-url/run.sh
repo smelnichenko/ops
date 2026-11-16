@@ -198,7 +198,9 @@ if len(restarts) == 3:
     open(os.path.join(W, "bin", "curl"), "w").write(
         '#!/bin/bash\ncase "$*" in *127.0.0.1*) [ -z "${HERE_DOWN:-}" ] || grep -q "restart keycloak" "$W/calls" ;;\n'
         '*) [ -z "${PEER_DOWN:-}" ] ;; esac\n')  # here: serving once restarted
-    for b in ("systemctl", "curl"):
+    # each restart under the lock (files/pi-restart-locked.sh, the helper itself): its consul a fake holding it at once
+    open(os.path.join(W, "bin", "fake-consul"), "w").write('#!/bin/bash\nwhile [ "$#" -gt 0 ] && [ "$1" != pi-restart ]; do shift; done; shift; "$@"; [ "$?" = 0 ] || exit 2\n')
+    for b in ("systemctl", "curl", "fake-consul"):
         os.chmod(os.path.join(W, "bin", b), 0o755)
     def restart(t, have_file=True, **env):
         sh = t["ansible.builtin.shell"]
@@ -211,9 +213,11 @@ if len(restarts) == 3:
         elif os.path.exists(f):
             os.remove(f)
         open(os.path.join(W, "calls"), "w").close()
+        script = script.replace("/usr/local/bin/pi-restart-locked", os.path.abspath("deploy/ansible/playbooks/files/pi-restart-locked.sh"))
         r = subprocess.run(["bash", "-c", script.replace("/etc/systemd/system/keycloak.service", u)],
                            capture_output=True, text=True, timeout=60,
-                           env=dict(os.environ, PATH=os.path.join(W, "bin") + ":" + os.environ["PATH"], W=W, **env))
+                           env=dict(os.environ, PATH=os.path.join(W, "bin") + ":" + os.environ["PATH"], W=W,
+                                    PI_RESTART_CONSUL=os.path.join(W, "bin", "fake-consul"), TMPDIR=W, **env))
         return r.returncode, "REFUSED" in r.stderr, "systemctl restart keycloak" in open(os.path.join(W, "calls")).read()
     check("its restart: the unit's secrets file missing - refused, nothing restarted (an optional one's absence fine); "
           "the peer down while this serves - refused; else restarted",
@@ -255,51 +259,62 @@ if len(restarts) == 3:
            simulate({"pi1": True, "pi2": False}, {"pi1"}, {"pi1"})],
           [["pi2 restarted", "pi1 restarted"], ["pi2 restarted", "pi1 restarted"], ["pi1 restarted", "pi2 restarted"],
            ["pi1 restarted", "pi2 restarted"], ["pi1 refused"]])
-# before the unit names the secrets file: the database password it gives (as systemd reads an EnvironmentFile - quotes,
-# backslashes) is the one Keycloak runs with now (production's inline Environment=, read from the running process), by
-# hash, neither said nor on a command line; a Keycloak not running has nothing to compare. A different one: refused,
-# the unit not written (pi2's Keycloak crash-looped on it, both units on disk naming it)
+# before the unit names the secrets file: its login - as systemd reads an EnvironmentFile (quotes, backslashes) - works
+# for Keycloak's own role in its own database, through the host its URL names, and that role can use what is there
+# (every relation its own or a role it has, CREATE on public); the file written aside, judged, put in place only after.
+# A login that does not: refused, neither the secrets Keycloak runs on nor its unit touched (pi2's Keycloak crash-looped
+# on a password it could not use, both units on disk naming it)
 same = next((t for t in every if "systemd-run" in str(t.get("ansible.builtin.shell", ""))), None)
-check("the password compared before the unit is written, tagged, never in a preview",
-      (same is not None and every.index(same) < every.index(unit_task) and every.index(same) >
-       min(i for i, t in enumerate(every) for m, v in actions(t) if isinstance(v, dict)
-           and v.get("dest") == "/etc/keycloak/secrets.env"),
-       same is not None and tagged(same), condition((same or {}).get("when", True), ansible_check_mode=True)),
-      (True, True, False))
+aside = min((i for i, t in enumerate(every) for m, v in actions(t) if isinstance(v, dict)
+             and v.get("dest") == "/etc/keycloak/secrets.env.new"), default=None)
+placed = min((i for i, t in enumerate(every) for m, v in actions(t) if isinstance(v, dict)
+              and v.get("dest") == "/etc/keycloak/secrets.env" and v.get("src") == "/etc/keycloak/secrets.env.new"), default=None)
+check("the login judged from the file written aside, before it is put in place and before the unit; tagged; under "
+      "Patroni, never in a preview",
+      (same is not None and aside is not None and placed is not None and aside < every.index(same) < placed < every.index(unit_task),
+       same is not None and tagged(same),
+       condition((same or {}).get("when", True), ansible_check_mode=True, _patroni_installed=True),
+       condition((same or {}).get("when", True), ansible_check_mode=False, _patroni_installed=True)),
+      (True, True, False, True))
 if same:
     import os, subprocess, tempfile  # noqa: E401,E402
     from templar import render  # noqa: E402
     S = tempfile.mkdtemp()
     os.makedirs(os.path.join(S, "bin"))
-    # systemctl: the running Keycloak's PID (a process this test started with that environment), 0 when none;
-    # systemd-run: the variable as an EnvironmentFile gives it (KEY=VALUE, the value's quotes stripped)
-    open(os.path.join(S, "bin", "systemctl"), "w").write('#!/bin/bash\necho "${KC_PID:-0}"\n')
+    # systemd-run: the command run with the variable as an EnvironmentFile gives it (KEY=VALUE, the value's quotes
+    # stripped); psql: the role's answer - "<relations not its own> <CREATE on public>" for keycloak with the password
+    # this case says, else a failed login
     open(os.path.join(S, "bin", "systemd-run"), "w").write(
-        '#!/bin/bash\nf=""; for a; do case $a in EnvironmentFile=*) f=${a#EnvironmentFile=};; esac; done\n'
-        'v=$(sed -n "s/^KC_DB_PASSWORD=//p" "$f"); v=${v#\\"}; v=${v%\\"}; printf "%s\\n" "$v"\n')
-    for b in ("systemctl", "systemd-run"):
+        '#!/bin/bash\nf=""; while [ "$#" -gt 0 ]; do case $1 in -p) f=${2#EnvironmentFile=}; shift 2;; --*) shift;; *) break;; esac; done\n'
+        'v=$(sed -n "s/^KC_DB_PASSWORD=//p" "$f"); v=${v#\\"}; v=${v%\\"}; KC_DB_PASSWORD=$v exec "$@"\n')
+    open(os.path.join(S, "bin", "psql"), "w").write(
+        '#!/bin/bash\nu=""; d=""; q=""; while [ "$#" -gt 0 ]; do case $1 in -U) u=$2; shift;; -d) d=$2; shift;; -c) q=$2; shift;; esac; shift; done\n'
+        'echo "$u $d $PGPASSWORD $q" > "$S/psql.args"\n'
+        '[ "$u" = keycloak ] && [ "$d" = keycloak ] && [ "$PGPASSWORD" = "$GOOD_PW" ] || { echo "FATAL: password authentication failed for user $u" >&2; exit 2; }\n'
+        'echo "${ANSWER:-0 true}"\n')
+    for b in ("systemd-run", "psql"):
         os.chmod(os.path.join(S, "bin", b), 0o755)
     sh = same["ansible.builtin.shell"]
-    script = render(sh if isinstance(sh, str) else sh["cmd"], inventory_hostname="pi1")
-    def compare(running, file_value):
-        f = os.path.join(S, "secrets.env")
+    script = render(sh if isinstance(sh, str) else sh["cmd"], inventory_hostname="pi1", keycloak_db_user="keycloak",
+                    keycloak_db_host_effective="127.0.0.1:6432")
+    def judge(file_value, good, answer="0 true"):
+        f = os.path.join(S, "secrets.env.new")
         open(f, "w").write(f"KC_DB_PASSWORD={file_value}\n")
-        proc = subprocess.Popen(["sleep", "30"], env={"KC_DB_PASSWORD": running}) if running is not None else None
-        try:
-            r = subprocess.run(["bash", "-c", script.replace("/etc/keycloak/secrets.env", f)], capture_output=True,
-                               text=True, timeout=30, env=dict(os.environ, PATH=os.path.join(S, "bin") + ":" +
-                                                               os.environ["PATH"], KC_PID=str(proc.pid) if proc else "0"))
-        finally:
-            if proc:
-                proc.kill()
-                proc.wait()
+        r = subprocess.run(["bash", "-c", script.replace("/etc/keycloak/secrets.env.new", f)], capture_output=True,
+                           text=True, timeout=30, env=dict(os.environ, PATH=os.path.join(S, "bin") + ":" + os.environ["PATH"],
+                                                           S=S, GOOD_PW=good, ANSWER=answer))
         reg = same.get("register", "_r")
         res = {"rc": r.returncode, "stdout": r.stdout.strip(), "stdout_lines": r.stdout.split()}
         failed = condition(same.get("failed_when", "false"), **{reg: res}) if "failed_when" in same else r.returncode != 0
         return failed, "pw" in (r.stdout + r.stderr)
-    check("the same password: on; another (systemd read the file's quotes away): refused; Keycloak not running: on; "
-          "the password itself never said",
-          [compare("pw", "pw"), compare("pw", '"pw2"'), compare(None, "pw")], [(False, False), (True, False), (False, False)])
+    check("its own role logging in and using its database: on; a wrong password (systemd read the file's quotes away - "
+          "what Keycloak would get): refused; relations another role's: refused; the password itself never said",
+          [judge("pw1", "pw1"), judge('"pw1"', "pw1"), judge("pw2", "pw1"), judge("pw1", "pw1", answer="3 true"),
+           judge("pw1", "pw1", answer="0 false")],
+          [(False, False), (False, False), (True, False), (True, False), (True, False)])
+    check("  through the host and port its URL names, its own database, the role from keycloak_db_user",
+          open(os.path.join(S, "psql.args")).read().split()[:2] if os.path.exists(os.path.join(S, "psql.args")) else None,
+          ["keycloak", "keycloak"])
 # one URL's query on every writer: two that differ restart Keycloak on each other's every run
 check("the same query from every writer", len({u.split("?", 1)[-1] for found in urls.values() for u in found}), 1)
 print("keycloak-db-url: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))

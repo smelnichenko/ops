@@ -62,7 +62,7 @@
     - name: Forgejo's database dropped and made empty
       ansible.builtin.command: >-
         psql -w -h 127.0.0.1 -p 5000 -U postgres -d postgres -v ON_ERROR_STOP=1
-        -c "DROP DATABASE IF EXISTS forgejo WITH (FORCE)" -c "CREATE DATABASE forgejo"
+        -c "DROP DATABASE IF EXISTS forgejo WITH (FORCE)" -c "CREATE DATABASE forgejo OWNER forgejo"
       environment:
         PGPASSWORD: "{{ postgres_admin_password }}"
       changed_when: true

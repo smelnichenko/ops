@@ -51,6 +51,7 @@
     # every file the unit loads its environment from there (one missing failed its start: "Failed to load
     # environment files" - production's Keycloak down); the other Pi serving while this one does
     cmd: &keycloak_restart |
+      /usr/local/bin/pi-restart-locked keycloak <<'RESTART'
       set -euo pipefail
       up() { curl -sf -o /dev/null --max-time 10 "http://$1:8080/realms/master"; }
       for f in $(sed -n 's/^EnvironmentFile=\([^-].*\)$/\1/p' /etc/systemd/system/keycloak.service); do
@@ -65,6 +66,7 @@
       end=$(( $(cut -d. -f1 /proc/uptime) + 240 ))
       for _ in $(seq 120); do up 127.0.0.1 && exit 0; [ "$(cut -d. -f1 /proc/uptime)" -lt "$end" ] || break; sleep 2; done
       echo "Keycloak on {{ inventory_hostname }} not serving 240 s after its restart" >&2; exit 1
+      RESTART
   changed_when: true
   when:
     - not ansible_check_mode

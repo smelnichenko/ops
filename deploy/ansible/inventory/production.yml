@@ -26,7 +26,10 @@ all:
     # nothing was encrypted with the default, so this is a safe one-time set).
     forgejo_secret_key: "{{ lookup('env', 'FORGEJO_SECRET_KEY') }}"
     keycloak_admin_password: "{{ lookup('env', 'KEYCLOAK_ADMIN_PASSWORD') }}"
-    postgres_admin_password: "{{ lookup('env', 'KEYCLOAK_DB_PASSWORD') }}"
+    postgres_admin_password: "{{ lookup('env', 'KEYCLOAK_DB_PASSWORD') }}"  # the superuser's - its key's name aside
+    # Forgejo's and Keycloak's own roles (setup-patroni.yml makes them, owning their databases)
+    forgejo_db_password: "{{ lookup('env', 'FORGEJO_DB_ROLE_PASSWORD') }}"
+    keycloak_db_password: "{{ lookup('env', 'KEYCLOAK_DB_ROLE_PASSWORD') }}"
     postgres_replication_password: "{{ lookup('env', 'POSTGRES_REPLICATION_PASSWORD') }}"
     backup_root_user: "{{ lookup('env', 'BACKUP_ACCESS_KEY') | default('velero-admin', true) }}"
     backup_root_password: "{{ lookup('env', 'BACKUP_SECRET_KEY') }}"
