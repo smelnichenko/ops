@@ -11,6 +11,9 @@
       ],
       "allowRead": [
         "/home/sm/src/.upgrade-cycle-work"
+      ],
+      "allowWrite": [
+        "/home/sm/src/.upgrade-cycle-work"
       ]
     },
     "network": {

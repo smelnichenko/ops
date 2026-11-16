@@ -8,7 +8,8 @@ reading, read-only git and your reviewers, nothing else - what they deny is deni
 
 ## The unit's diff
 
-In each clone: `cd <repo>`, `git log --oneline origin/main..HEAD`, `git diff origin/main...HEAD`, `cd ..`. Commits by
+In each clone: `cd <repo>`, `git log --oneline origin/main..HEAD`, `git diff origin/main...HEAD`, `cd ..` - one command
+per Bash call (never git's own -C option, never `&&` or `;`: each is refused). Commits by
 Renovate Bot after the first are either Renovate's or the cycle's fix agent's (an `agent-fixed` unit): read those with
 the most suspicion - a fix may only move the unit's own values and charts.
 

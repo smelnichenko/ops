@@ -27,14 +27,20 @@ WORK = "/home/sm/src/.upgrade-cycle-work"  # scripts/upgrade-cycle.sh's default:
 runner = open("scripts/upgrade-cycle.sh").read()
 check("the clones' directory the runner uses is the one the settings let Bash read",
       'work=${UPGRADE_WORK:-$(dirname "$ops")/.upgrade-cycle-work}' in runner and WORK == "/home/sm/src/.upgrade-cycle-work", True)
+# writable: the clones alone - git writes its objects there (a commit), and the sandbox protects the work directory's
+# .claude/settings*.json by mounting over them: in a read-only work directory it could not, and every Bash command
+# failed before it started ("bwrap: Can't create file .../.claude/settings.json: Read-only file system" - the fix agent's
+# first run, SHADOW run 6, 2026-11-16, could not run git at all; the real CLI 2.1.308 smoke-tested after: cd, git
+# log/diff/add/commit run, a branch rename, a push and ~/.ssh refused)
 for name, d in (("fix", fix), ("review", review)):
     sb = d.get("sandbox", {})
     check(f"{name}: the Bash sandbox on, failing closed (never unsandboxed, never auto-allowed), the whole home directory "
-          "unreadable to Bash but the clones (every credential, transcript, browser profile, other checkout)",
+          "unreadable to Bash but the clones (every credential, transcript, browser profile, other checkout), writable "
+          "there alone",
           (sb.get("enabled"), sb.get("failIfUnavailable"), sb.get("allowUnsandboxedCommands"), sb.get("autoAllowBashIfSandboxed"),
            sb.get("filesystem", {}).get("denyRead"), sb.get("filesystem", {}).get("allowRead"), sb.get("excludedCommands"),
            sorted(sb.get("filesystem", {}).get("allowWrite", []))),
-          (True, True, False, False, ["~"], [WORK], [], []))
+          (True, True, False, False, ["~"], [WORK], [], [WORK]))
 check("Bash's network none, the fix's and the review's (no command of theirs needs it - the release notes are WebFetch's)",
       (fix["sandbox"]["network"]["allowedDomains"], review["sandbox"]["network"]["allowedDomains"]), ([], []))
 # what every job denies: production, other hosts, the network, the operator's credentials, a branch, a push

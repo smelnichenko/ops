@@ -646,7 +646,7 @@ read_heads "$heads" || { notice blocked "$unit" "its pull requests not read - no
 fresh_or_end
 build
 if ! run task test:copy:unit UNIT="$unit"; then
-  say "RED: $unit - the agent's fix"
+  say "RED: $unit - handed to the fix agent"
   fixdir=$work/$unit-fix-$$; fixdiff=$ops/.copy/upgrade-fix-$unit-$$.diff; fixout=$ops/.copy/upgrade-fix-$unit-$$.txt
   clones "$fixdir" || { notice blocked "$unit" "red; its branches not cloned for the agent - no fix, the next run proves it again" "$log"; exit 1; }
   dirs+=("$fixdir.push")

@@ -20,7 +20,9 @@ do not look for a way around a denial.
 - Read `proof.log` and the clones. Read the upstream release notes of what the unit moves (WebFetch: github.com,
   raw.githubusercontent.com, codeberg.org).
 - In each clone the failure needs: `cd <repo>`, make the change it calls for, `git add`, `git commit` (the author is set
-  for you: Renovate Bot), `cd ..`. Never push: the runner pushes your commits to `renovate/<unit>` after you - only when
+  for you: Upgrade Fix Agent), `cd ..`. Your Bash takes one command per call - `cd infra` in a call of its own, then
+  `git log ...` in the next (never git's own -C option, never `&&` or `;`, never a redirect: each is refused); a file is
+  changed with your Edit tool. Never push: the runner pushes your commits to `renovate/<unit>` after you - only when
   they sit on top of the commit that failed, on that branch, and change only the unit's own kind of files: infra's
   `clusters/`, platform's `helm/`, ops' `deploy/ansible/vars/*.yml` and `deploy/ansible/playbooks/*.yml` (never CI, a
   script, a task, Renovate's config or a CLAUDE.md - a commit touching one is not pushed at all), each a plain text
