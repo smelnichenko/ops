@@ -122,11 +122,12 @@ check("  each recorded under its reload's own condition, the written checksum",
        for r, l in ((C1, R1), (C2, R2))], [(True, "/etc/keepalived/.loaded.sha256", True)] * 2)
 unit, peer = T[O("The other Pi's keepalived running")], T[O("The other Pi ready to take the VIP")]
 check("the other Pi before the holder's reload - reloaded or not: a settle, its keepalived running, ready (a minute at most "
-      "each), judged in a preview too",
+      "each) - its readiness not judged in a preview (the scripts it runs may be the run's own, unwritten)",
       ([fires(O("The other Pi's keepalived running"), me, "pi2", p_) for me, p_ in cases],
        [fires(O("The other Pi ready"), me, "pi2", p_) for me, p_ in cases],
        (T[O("The other Pi's reload settling")].get("ansible.builtin.pause") or {}).get("seconds"),
-       unit.get("until"), peer.get("until"), peer.get("check_mode"),
+       unit.get("until"), peer.get("until"), render(bare(str(peer.get("when"))), _ka_any_pending=True, inventory_hostname="pi1",
+                                                    _ka_holder="pi2", ansible_check_mode=True),
        all(t.get("retries", 0) * t.get("delay", 0) >= 30 for t in (unit, peer))),
       ([True, True, False, False], [True, True, False, False], 5,
        "_ka_peer_unit.status.ActiveState | default('') == 'active'", "_ka_peer.stdout == 'READY'", False, True))

@@ -563,11 +563,12 @@
         echo READY
       register: _ka_peer
       changed_when: false
-      check_mode: false  # a read: a preview judges it as a run would
       retries: 12
       delay: 5
       until: _ka_peer.stdout == 'READY'
-      when: _ka_any_pending and inventory_hostname != _ka_holder
+      # not in a preview: the check scripts it runs may be this run's own, not written yet (check_forgejo.sh's first
+      # deploy: its preview failed on the script missing, 2026-11-16)
+      when: _ka_any_pending and inventory_hostname != _ka_holder and not ansible_check_mode
 
     - name: Both Pis still in the play before the holder's reload
       ansible.builtin.assert:
