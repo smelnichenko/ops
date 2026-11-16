@@ -166,6 +166,12 @@ upgrade-units.py picks an open test unit first (`test <unit> <kind>`, in its twi
 while its test unit is open (blocked or vetoed too); upgrade-cycle.sh's `test` action: the one-way check, merged, the
 cluster settled (upgrade-verify), recorded, reported - no copy, no review; red after the merge: blocked, not paged.
 
+Woodpecker (2026-11-16, SHADOW run 7): wave-patches carried the Woodpecker chart (3.7.3 -> 3.7.7), and the copy runs no
+Woodpecker (its overlay leaves it out), so the mirror refused the unit - the fix agent's "no fix", rightly. Operator:
+Woodpecker a unit of its own, applied by hand. The preset's last rule sends the chart to `renovate/manual-woodpecker`;
+upgrade-units.py never picks a `manual-` unit. By hand: merge its pull request, then check a pipeline runs (a bad one is
+CI down, reverted by its commit).
+
 **Rollout step 1 - the lookup, 2026-11-14** (Renovate 44.198.3, `local` platform, `RENOVATE_DRY_RUN=lookup`, each
 repo's branch exported to a scratch git directory under ops/.copy with the preset as its renovate.json - a `local>`
 preset does not resolve on the local platform; read-only: the repos untouched, the registries read). Its units

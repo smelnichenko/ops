@@ -20,6 +20,7 @@ grouped by branch (renovate/<unit> - the same name in each repo).
                  data-operators, argocd, pi-services - the first three one minor at a time, named <family>-<X.Y>, the
                  lowest first), then any other minor (a <name>-<X.Y> one by its version), then majors - a waiting
                  major's notice before a new one's. Left out:
+                 a manual- unit (renovate/manual-<unit>: what the copy cannot prove - Woodpecker - applied by hand),
                  a unit labelled upgrade-blocked (red after its fix) or veto, a major in its 24 h, a unit any of whose pull
                  requests lacks Renovate's own labels (upgrade-cycle, major, one-way: its kind not known - Forgejo applies
                  only labels a repo has); everything while the
@@ -207,7 +208,9 @@ def pick(shadow=False):
         return "PAUSED"
     all_units = units()
     # unlabelled (Renovate's labels not on it): never picked - a major unlabelled read as a minor, applied with no notice
-    open_units = {n: u for n, u in all_units.items() if not ({"upgrade-blocked", "veto"} & u["labels"]) and not u["unlabelled"]}
+    # a manual- unit (renovate/manual-woodpecker, the preset's): what the copy cannot prove - applied by hand, never picked
+    open_units = {n: u for n, u in all_units.items() if not ({"upgrade-blocked", "veto"} & u["labels"]) and not u["unlabelled"]
+                  and not n.startswith("manual-")}
     tests = sorted((n for n in open_units if n.startswith("test-")), key=lambda n: order(n, open_units[n]))
     if tests and not shadow:
         return f"test {tests[0]} {open_units[tests[0]]['kind']}"

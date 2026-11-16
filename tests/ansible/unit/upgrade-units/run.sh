@@ -156,6 +156,12 @@ check("a name that only looks versioned is not (istio-x.32 is no istio minor): t
       run("pick"), (0, "prove istio minor"))
 fixture(infra=[pr(1, "wave-patches", "upgrade-blocked"), pr(2, "istio", "veto"), pr(3, "observability")])
 check("a blocked unit and a vetoed one left out", run("pick"), (0, "prove observability minor"))
+# a manual- unit (renovate/manual-woodpecker): what the copy cannot prove - applied by hand, never picked
+fixture(infra=[pr(1, "manual-woodpecker")])
+check("a manual- unit alone: nothing picked (applied by hand)", (run("pick"), run("pick", "--shadow")), ((0, "NOTHING"), (0, "NOTHING")))
+fixture(infra=[pr(1, "manual-woodpecker"), pr(2, "observability")], platform=[pr(3, "manual-woodpecker")])
+check("  beside another unit: that one proven, the manual one left - and listed", (run("pick"), "manual-woodpecker" in run("list")[1]),
+      ((0, "prove observability minor"), True))
 fixture(infra=[pr(1, "wave-patches")], dashboard_labels=["upgrades-paused"])
 check("the kill switch on the dashboard issue: paused, nothing picked", run("pick"), (0, "PAUSED"))
 fixture(infra=[pr(3, "postgresql-19.x", "major")])
