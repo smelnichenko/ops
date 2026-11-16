@@ -96,7 +96,9 @@ esac''')
 stub(os.path.join(BIN, "task"), LOG + '''
 case "$*" in
   *PLAN=true*) [ ! -e "$ST/plan.fail" ] || { cat "$ST/plan"; exit 1; }; cat "$ST/plan" ;;
-  test:copy:build) exit "$(cat "$ST/build.rc" 2>/dev/null || echo 0)" ;;
+  test:copy:build)  # the locale's encoding as Ansible reads it at its start (it refuses any but UTF-8)
+    python3 -c 'import locale; locale.setlocale(locale.LC_ALL, ""); print(locale.getlocale()[1])' > "$ST/build.locale" 2>&1
+    exit "$(cat "$ST/build.rc" 2>/dev/null || echo 0)" ;;
   test:copy:unit*) [ ! -e "$ST/slowproof" ] || { touch "$ST/slowproof.started"; for _ in $(seq 50); do sleep 0.1; done; }
     n=$(head -1 "$ST/proofs"); sed -i 1d "$ST/proofs"; exit "${n:-0}" ;;
   "--yes deploy:etcd:backup"*) [ ! -e "$ST/slow" ] || { touch "$ST/slow.started"; for _ in $(seq 30); do sleep 0.1; done; }
@@ -366,6 +368,8 @@ PLAN = ("test:copy:change INFRA_REF=renovate/wave-patches PLATFORM_REF=main\n"
         "test:copy:playbook PLAYBOOK=upgrade-forgejo.yml ARGS='-e @/x/forgejo.yml'\n")
 REVS = "infra=" + "f" * 40
 rc, calls = night("prove wave-patches patch", plan=PLAN)
+check("the copy built in a UTF-8 locale - Ansible refuses any other (the first build through the runner, 2026-11-16: "
+      "LC_ALL=C, 'Detected None')", open(os.path.join(ST, "build.locale")).read().strip().lower().replace("-", ""), "utf8")
 KEY = ("task ", "upgrade-label.py", "upgrade-record.sh", "vagrant", "claude", "upgrade-notice.sh applied", "upgrade-verify.sh ARGO",
        "upgrade-verify.sh AFTER", "upgrade-units.py held")
 seq = [words(c, 2 if c.startswith("upgrade-record.sh") else 3) for c in calls if c.startswith(KEY)

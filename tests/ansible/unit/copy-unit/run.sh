@@ -194,7 +194,8 @@ check "a unit changing the vendors' keys (renovate/keys): refused, never proven"
 # run mode: the branch's build hashes checked (COPY_UNIT_PINS, a stub saying its arguments) before any proof step; a
 # check that fails refuses the unit, nothing proven (task, a stub saying what it was asked)
 mkdir -p "$W/bin"
-printf '#!/bin/bash\necho "task $*" >> "$W/ran"\n' > "$W/bin/task"
+# the task stub notes the locale's encoding as Ansible reads it at its start (it refuses any but UTF-8)
+printf '#!/bin/bash\necho "task $*" >> "$W/ran"\npython3 -c "import locale; locale.setlocale(locale.LC_ALL, \\"\\"); print(locale.getlocale()[1])" > "$W/locale" 2>&1\n' > "$W/bin/task"
 printf '#!/bin/bash\necho "pins $*" >> "$W/ran"\nexit "${PINS_RC:-0}"\n' > "$W/bin/pins"
 chmod +x "$W/bin/task" "$W/bin/pins"
 runit() { rm -f "$W/ran"; PATH="$W/bin:$PATH" W="$W" COPY_UNIT_SRC="$W/src" COPY_UNIT_PINS="$W/bin/pins" \
@@ -203,6 +204,8 @@ rc=$(runit vault)
 check "run: the build hashes checked first - the branch's changed pins (--check --changed --base main --ref renovate/vault) against main's keys - then the proof; proven" \
   "$rc $(head -1 "$W/ran") | $(sed -n 2p "$W/ran" | cut -d' ' -f1-2) | $(grep -c 'PROVEN' "$W/run.out")" \
   "0 pins --check --changed --base main --ref renovate/vault --root $W/src/ops --keys $OPS/renovate/keys | task test:copy:playbook | 1"
+check "  its proof steps in a UTF-8 locale - Ansible refuses any other (LC_ALL=C: 'Detected None', the runner's first build 2026-11-16)" \
+  "$(tr -d '-' < "$W/locale" | tr 'A-Z' 'a-z')" "utf8"
 rc=$(PINS_RC=1 runit vault)
 check "run: a build-hash check that fails refuses the unit - no proof step run" \
   "$rc $(grep -c '^task' "$W/ran") $(grep -c "REFUSED: renovate/vault's build hashes" "$W/run.out")" "1 0 1"

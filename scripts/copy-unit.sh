@@ -11,7 +11,7 @@
 # Env:   COPY_UNIT_SRC (the directory holding infra, platform and ops - default this repo's parent; the harness's own)
 #        COPY_UNIT_PINS (the build-hash check's command - default scripts/renovate-checksums.py; the harness's stub)
 set -euo pipefail
-export LC_ALL=C
+export LC_ALL=C.UTF-8  # its proof steps run Ansible, which refuses any locale encoding but UTF-8 (LC_ALL=C: 'Detected None')
 unit=${1:-}
 mode=${2:-run}
 [[ $unit =~ ^[a-z0-9][a-z0-9.-]*$ ]] || { echo "REFUSED: copy-unit.sh <unit> [--plan] - a unit's name (renovate/<it>), not '$unit'"; exit 2; }

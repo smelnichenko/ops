@@ -86,7 +86,10 @@
 #        UPGRADE_NOW_DOW (1-7), UPGRADE_TODAY (YYYY-MM-DD UTC), UPGRADE_MEMINFO, UPGRADE_FORGEJO_GIT (the bot's git URL
 #        base, default https://git.pmon.dev)
 set -uo pipefail
-export LC_ALL=C
+# C's messages and byte order, UTF-8's encoding: what the runner starts includes Ansible (the copy's build, the apply's
+# tasks), and Ansible refuses any locale encoding but UTF-8 - LC_ALL=C stopped the first build through the runner
+# (2026-11-16, 'Detected None')
+export LC_ALL=C.UTF-8
 ops=$(cd "$(dirname "$0")/.." && pwd)
 cd "$ops" || exit 1
 dry=""; shadow=""; preflight=""
