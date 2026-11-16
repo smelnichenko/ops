@@ -601,6 +601,17 @@ tasks:
   # run's labels read before anything applies. SHADOW=true: the runner proves and reviews a unit, applies nothing (its
   # result on the pull requests). Until the cycle's first clean shadow proof (.upgrade-cycle/shadow-proven, the runner's
   # own record of it), the applying runner is refused - here and by the runner itself
+  forgejo:package-cleanup:
+    desc: "PRODUCTION: Forgejo's container packages pruned (scripts/package-cleanup.py) - the newest 10 of each image, 5 of each build cache, latest, and every tag infra/platform/ops name or the cluster runs kept; the rest deleted (in no backup: rebuilt from git when needed). A plan only unless APPLY=true. FORGEJO_PACKAGES_TOKEN in ops/.env: a token of the organisation's owner with write:package"
+    dotenv: ['.env']
+    vars:
+      APPLY: '{{.APPLY | default "false"}}'
+    preconditions:
+      - sh: '[ "{{.APPLY}}" = true ] || [ "{{.APPLY}}" = false ]'
+        msg: "REFUSED: APPLY is true or false - not '{{.APPLY}}'"
+    cmds:
+      - cmd: scripts/package-cleanup.py {{if eq .APPLY "true"}}--apply{{end}}
+
   renovate:apps:
     desc: "monitor's and masi's Renovate, by hand on the workstation (scripts/upgrade-renovate.sh --apps): their dependency pull requests from each repo's renovate.json, as renovate-bot (ops/.env RENOVATE_TOKEN) - their weekly Woodpecker cron is gone. LOOKUP=true: read only"
     dotenv: ['.env']
