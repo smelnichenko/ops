@@ -436,7 +436,14 @@ check("each pin Renovate moves is annotated where its version is; each it does n
       ({n: a for n, a in annotated.items() if PIN[n].get("renovate", True) != a},
        [p["name"] for p in rc.PINS if p.get("renovate", True) is False and not p.get("why")]), ({}, []))
 
-# ci-build-hashes.sh: a push's moved pins against the commit before it; every pin when the keys change
+# ci-build-hashes.sh: a pull request's moved pins against its target as the clone step fetched it (fetch_target_branch: a
+# step's own git holds no credentials - its fetch failed every pull request, 2026-11-16); a push's against the branch's
+# last push pipeline; a push after a pull request's pipeline (Woodpecker's previous pipeline on main then - the commit
+# before the push not known, and not in the clone: every main push after one failed) - every pin when the push touched a
+# pin's file, the checker or the keys (or its files not given), else nothing read; every pin when the keys change
+clone = yaml.safe_load(open(".woodpecker/ci.yaml"))["clone"]
+check("ops CI's clone fetches a pull request's target branch (the pins' base, with the clone's credentials)",
+      [c.get("settings", {}).get("fetch_target_branch") for c in clone], [True])
 fresh_repo()
 os.makedirs(os.path.join(R, "scripts"))
 shutil.copyfile("scripts/ci-build-hashes.sh", os.path.join(R, "scripts/ci-build-hashes.sh"))
@@ -445,22 +452,49 @@ shutil.copytree(good_keys, os.path.join(R, "renovate/keys"))
 sh("add", "-A")
 sh("commit", "-qm", "the checker")
 prev = sh("rev-parse", "HEAD").strip()
+sh("remote", "add", "origin", os.path.join(W, "no-such-remote.git"))  # a fetch fails, as a step's own does in CI
 bump("vault")
 sh("commit", "-qam", "vault, its old pins")
-def ci(prev_sha):
+NOT_HERE = "8d7527c2" + "0" * 32  # a pull request's commit: Woodpecker's previous one on main, in no clone of main
+def ci(prev_sha="", prev_event="push", event="push", target="", files=None):
+    env = {k: v for k, v in os.environ.items() if k != "CI_PIPELINE_FILES"}
+    env.update(CI_PIPELINE_EVENT=event, CI_PREV_COMMIT_SHA=prev_sha, CI_PREV_PIPELINE_EVENT=prev_event, GIT_TERMINAL_PROMPT="0")
+    if target:
+        env["CI_COMMIT_TARGET_BRANCH"] = target
+    if files is not None:
+        env["CI_PIPELINE_FILES"] = json.dumps(files)
     r = subprocess.run(["bash", os.path.join(R, "scripts/ci-build-hashes.sh"), "--mirror", M], capture_output=True,
-                       text=True, env=dict(os.environ, CI_PIPELINE_EVENT="push", CI_PREV_COMMIT_SHA=prev_sha))
+                       text=True, env=env)
     return r.returncode, r.stdout + r.stderr
 code, out = ci(prev)
-check("ci-build-hashes.sh on a push: the pin it moved checked (STALE: vault - a bump without its hashes), the others "
-      "not read; exit 1", (code, "STALE: vault" in out, "forgejo" in out), (1, True, False))
+check("ci-build-hashes.sh on a push after a push: the pin it moved checked (STALE: vault - a bump without its hashes), "
+      "the others not read; exit 1", (code, "STALE: vault" in out, "forgejo" in out), (1, True, False))
+code, out = ci(event="pull_request", target="main")
+check("  a pull request, its target not in the clone (the clone step did not fetch it): refused - never a fetch of its own",
+      (code, "origin/main is not in this clone" in out), (1, True))
+sh("update-ref", "refs/remotes/origin/main", prev)
+code, out = ci(event="pull_request", target="main")
+check("  a pull request: against its target as the clone fetched it (origin/main) - the pin it moved checked, the others "
+      "not read", (code, "STALE: vault" in out, "forgejo" in out), (1, True, False))
+code, out = ci(NOT_HERE, prev_event="pull_request", files=["docs/x.md", PIN["vault"]["file"]])
+check("  a push after a pull request's pipeline (the commit before it not known), a pin's file among its files: every pin "
+      "checked", (code, "every pin checked" in out, "forgejo" in out), (1, True, True))
+code, out = ci(NOT_HERE, prev_event="pull_request", files=["renovate/keys/keys.json"])
+check("    a key among them: every pin checked", (code, "every pin checked" in out), (1, True))
+code, out = ci(NOT_HERE, prev_event="pull_request", files=["docs/x.md", "scripts/upgrade-cycle.sh"])
+check("    no pin's file, checker or key among them: nothing read, it passes", (code, "nothing read" in out, "forgejo" in out),
+      (0, True, False))
+code, out = ci(NOT_HERE, prev_event="pull_request")
+check("    its files not given (Woodpecker leaves them out past its limit): every pin checked", (code, "every pin checked" in out),
+      (1, True))
+code, out = ci("0" * 40, files=["docs/x.md"])
+check("  a push whose last push pipeline is not its ancestor (history rewritten, or past the clone's depth): judged by its "
+      "files as after a pull request's", (code, "nothing read" in out), (0, True))
 open(os.path.join(R, "renovate/keys/keys.json"), "a").write("\n")
 sh("commit", "-qam", "the keys touched")
 code, out = ci(prev)
 check("  the keys changed too: every pin checked (forgejo's too, its version not moved)",
       (code, "every pin checked" in out, "forgejo" in out), (1, True, True))
-code, out = ci("0" * 40)
-check("  a base the clone does not hold: refused, nothing waved through", (code, "not in this clone" in out), (1, True))
 print("renovate-checksums: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 PYRC

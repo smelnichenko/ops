@@ -24,6 +24,9 @@ clone:
     settings:
       partial: false
       depth: 100
+      # a pull request's target too (origin/main): scripts/ci-build-hashes.sh's base, fetched with the clone's
+      # credentials - a step's own git has none
+      fetch_target_branch: true
 
 steps:
   - name: ansible-lint
