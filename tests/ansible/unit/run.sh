@@ -2,12 +2,12 @@
 # Runs every Ansible unit harness (localhost plays, no infrastructure). Each
 # harness directory carries its own run.sh; a non-zero exit fails the build.
 # Usage: tests/ansible/unit/run.sh [harness directory, default this one]
-# UNIT_JOBS harnesses run side by side, as processes (default 4: CI's container has 4 CPUs - one by one the suite
+# UNIT_JOBS harnesses run side by side, as processes (default 6: CI's container has 6 CPUs since 2026-11-16 - one by one the suite
 # outgrew Woodpecker's 60 min limit, 2026-10-20); each one's output is printed whole, in the suite's order.
 set -u
 # a directory that is none fails (an empty H globbed /*/run.sh)
 H=$(cd "${1:-$(dirname "$0")}" && pwd) || exit 1
-JOBS=${UNIT_JOBS:-4}
+JOBS=${UNIT_JOBS:-6}
 [[ $JOBS =~ ^[1-9][0-9]*$ ]] || { echo "UNIT_JOBS=$JOBS: a positive number of harnesses at once"; exit 1; }
 # everything the runner makes lives here, removed at its end (a harness's own temp directory too: eleven left Python
 # temp directories in /tmp - RAM here - on every run)
