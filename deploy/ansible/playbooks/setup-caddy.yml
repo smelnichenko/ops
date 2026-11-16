@@ -54,32 +54,52 @@
           - apt-transport-https
         state: present
 
-    - name: Check if caddy with porkbun plugin exists
+    # the binary installed: its version and the Porkbun module - built again when either is not the pinned one (the
+    # module alone was read before: caddy_version moved and nothing was built, the pin a label - wave-patches 2026-11-16)
+    - name: The Caddy installed - its version, and whether it has the Porkbun module
       ansible.builtin.shell: |
         set -o pipefail
-        caddy list-modules 2>/dev/null | grep -q porkbun && echo "exists" || echo "missing"
+        v=$(/usr/local/bin/caddy version 2> /dev/null | awk '{print $1}')
+        m=$(/usr/local/bin/caddy list-modules 2> /dev/null | grep -c porkbun || true)
+        echo "${v:-none} ${m:-0}"
       register: caddy_check
       changed_when: false
+      check_mode: false  # a read: a preview says whether it would build
+
+    # the pin a fact too: the Verify play below (a play of its own, without this play's vars) checks it is running
+    - name: Caddy to build - not the pinned version, or no Porkbun module
+      ansible.builtin.set_fact:
+        caddy_build: "{{ caddy_check.stdout | trim != 'v' ~ caddy_version ~ ' 1' }}"
+        caddy_pinned: "{{ caddy_version }}"
 
     - name: Install xcaddy
       ansible.builtin.shell: |
         go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
+      args:
+        creates: /usr/local/bin/xcaddy
       environment:
         GOPATH: /usr/local/go
         GOBIN: /usr/local/bin
-      when: caddy_check.stdout | trim == 'missing'
-      changed_when: true
+      when: caddy_build
 
+    # built beside the running binary and moved over it - one rename, the running Caddy untouched until its restart
+    # (written in place, a running binary refuses it: text file busy); the new one checked before it is moved
     - name: Build Caddy with Porkbun DNS plugin
       ansible.builtin.shell: |
+        set -euo pipefail
         /usr/local/bin/xcaddy build v{{ caddy_version }} \
           --with github.com/caddy-dns/porkbun \
-          --output /usr/local/bin/caddy
+          --output /usr/local/bin/caddy.new
+        [ "$(/usr/local/bin/caddy.new version | awk '{print $1}')" = "v{{ caddy_version }}" ] \
+          || { echo "the build is not v{{ caddy_version }}"; exit 1; }
+        /usr/local/bin/caddy.new list-modules | grep -q porkbun || { echo "the build has no Porkbun module"; exit 1; }
+        mv -f /usr/local/bin/caddy.new /usr/local/bin/caddy
       environment:
         GOPATH: /usr/local/go
-      when: caddy_check.stdout | trim == 'missing'
+      when: caddy_build
       changed_when: true
       timeout: 600
+      notify: Restart Caddy
 
     - name: Allow HTTP and HTTPS through UFW
       community.general.ufw:
@@ -500,6 +520,16 @@
         fail_msg: "{{ inventory_hostname }}'s Caddy is {{ caddy_status.stdout }} - the VIP moving here would serve nothing"
         quiet: true
       # a preview (--check) of a first install has no Caddy yet: it shows the state, a run judges it
+      when: not ansible_check_mode
+
+    # the version pinned is the version running (the binary, and the process started from it after its restart)
+    - name: This Pi's Caddy the pinned version
+      ansible.builtin.shell: |
+        set -o pipefail
+        /usr/local/bin/caddy version | awk '{print $1}'
+      register: caddy_running_version
+      changed_when: false
+      failed_when: caddy_running_version.stdout != 'v' ~ (caddy_pinned | default('not set by the play above'))
       when: not ansible_check_mode
 
     - name: Test HTTPS Forgejo

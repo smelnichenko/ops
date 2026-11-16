@@ -133,12 +133,15 @@ VARS_FILES = {  # a vars file -> its playbook and the arguments production's tas
     "deploy/ansible/vars/forgejo.yml": ("upgrade-forgejo.yml", ""),
 }
 ORDER = {"upgrade-kubeadm.yml": 0, "setup-kubeadm.yml": 1, "setup-argocd.yml": 2, "upgrade-patroni.yml": 3,
-         "upgrade-vault.yml": 4, "upgrade-forgejo.yml": 5, "setup-host-hardening.yml": 6}
+         "upgrade-vault.yml": 4, "upgrade-forgejo.yml": 5, "setup-host-hardening.yml": 6, "setup-caddy.yml": 7}
 # node_exporter on ten: its version and the hash that moves with it - production's setup-host-hardening.yml on the copy
 NODE_EXPORTER = {"node_exporter_version", "node_exporter_sha256"}
 # Argo CD itself (no Argo app holds it): its chart default and the image pinned on a chart - setup-argocd.yml on the copy
 # with the copy's Vault values (as test:copy:build installs it), its pods restarting
 ARGOCD = {"argocd_chart_default", "argocd_image_pins"}
+# Caddy on the Pis: its version - production's setup-caddy.yml on the copy's Pis, which builds the version pinned
+# (and its Verify play checks that version running)
+CADDY = {"caddy_version"}
 for path in changed:
     if not path.startswith("deploy/ansible/"):
         continue  # renovate.json and the like: no part of a deploy
@@ -185,6 +188,29 @@ for path in changed:
             moved_values = {k: new[k] for k in moved if k in new}
             refused += pins({k: old.get(k) for k in moved}, moved_values, path)
             steps.append(("setup-host-hardening.yml", f"-e @{vars_file(moved_values, 'setup-host-hardening-vars.yml')}", False))
+    elif path == "deploy/ansible/playbooks/setup-caddy.yml":
+        old, new = play_vars(show("main", path) or ""), play_vars(show(BRANCH, path) or "")
+        moved = sorted(k for k in set(old) | set(new) if old.get(k) != new.get(k))
+        if without_vars(show("main", path)) != without_vars(show(BRANCH, path)):
+            refused.append(f"{path} (its tasks)")
+        elif not moved or set(moved) - CADDY:
+            refused.append(f"{path} {' '.join(sorted(set(moved) - CADDY)) or '(its tasks)'}")
+        else:
+            version(new["caddy_version"])
+            moved_values = {k: new[k] for k in moved if k in new}
+            refused += pins({k: old.get(k) for k in moved}, moved_values, path)
+            steps.append(("setup-caddy.yml", f"-e @{vars_file(moved_values, 'setup-caddy-vars.yml')}", False))
+    elif path == "deploy/ansible/playbooks/setup-istio.yml":
+        # Istio's version restated from production's istiod chart (defaults-follow-production): it moves with the infra
+        # unit, proven by Argo on the copy - no step of its own; anything else in it is unproven
+        old, new = play_vars(show("main", path) or ""), play_vars(show(BRANCH, path) or "")
+        moved = sorted(k for k in set(old) | set(new) if old.get(k) != new.get(k))
+        if without_vars(show("main", path)) != without_vars(show(BRANCH, path)):
+            refused.append(f"{path} (its tasks)")
+        elif set(moved) - FOLLOW:
+            refused.append(f"{path} {' '.join(sorted(set(moved) - FOLLOW))}")
+        else:
+            refused += pins(old, new, path)
     elif path in VARS_FILES:
         text = show(BRANCH, path)
         if text is None:

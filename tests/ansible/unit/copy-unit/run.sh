@@ -51,6 +51,21 @@ cat > "$W/src/ops/deploy/ansible/playbooks/setup-host-hardening.yml" <<'Y'
     node_exporter_port: 9100
   tasks: []
 Y
+cat > "$W/src/ops/deploy/ansible/playbooks/setup-caddy.yml" <<'Y'
+- name: caddy
+  hosts: pi1,pi2
+  vars:
+    caddy_version: "2.10.0"
+    peer_ip: "10.0.0.2"
+  tasks: []
+Y
+cat > "$W/src/ops/deploy/ansible/playbooks/setup-istio.yml" <<'Y'
+- name: istio
+  hosts: target
+  vars:
+    istio_version: "1.31.1"
+  tasks: []
+Y
 printf 'forgejo_version: "15.0.11"\nforgejo_checksums:\n  arm64: %s\n' "$(printf 'cd%.0s' $(seq 32))" > "$W/src/ops/deploy/ansible/vars/forgejo.yml"
 printf 'vault_version: "1.21.4"\n' > "$W/src/ops/deploy/ansible/vars/vault.yml"
 printf 'patroni_version: "4.1.5"\n' > "$W/src/ops/deploy/ansible/vars/patroni.yml"
@@ -78,6 +93,16 @@ unit ops argocd-tasks 's/tasks: \[\]/tasks: [{debug: {msg: x}}]/' deploy/ansible
 unit ops argocd-bad 's/"10.9.7"/"10.18.0 -e x=y"/' deploy/ansible/playbooks/setup-argocd.yml
 unit ops node-exporter 's/"1.12.1"/"1.13.0"/; s/b51d8a76aa2a9156a55d501aca6276fae09e262259a5e4e831d2c2222f084e63/'"$(printf 'ab%.0s' $(seq 32))"'/' deploy/ansible/playbooks/setup-host-hardening.yml
 unit ops node-exporter-port 's/node_exporter_port: 9100/node_exporter_port: 9101/' deploy/ansible/playbooks/setup-host-hardening.yml
+unit ops caddy 's/"2.10.0"/"2.10.2"/' deploy/ansible/playbooks/setup-caddy.yml
+unit ops caddy-peer 's/"2.10.0"/"2.10.2"/; s/10.0.0.2/10.0.0.3/' deploy/ansible/playbooks/setup-caddy.yml
+unit ops caddy-task 's/"2.10.0"/"2.10.2"/; s/tasks: \[\]/tasks: [{name: x, command: id}]/' deploy/ansible/playbooks/setup-caddy.yml
+unit ops caddy-bad 's/"2.10.0"/"2.10.2 -e x=y"/' deploy/ansible/playbooks/setup-caddy.yml
+# Istio's version restated in setup-istio.yml moves with infra's istiod chart (wave-patches, 2026-11-16)
+unit infra istio-follow 's/a:1/a:4/' clusters/v.yaml
+unit ops istio-follow 's/"1.31.1"/"1.31.4"/' deploy/ansible/playbooks/setup-istio.yml
+unit infra istio-task 's/a:1/a:5/' clusters/v.yaml
+unit ops istio-task 's/"1.31.1"/"1.31.4"/; s/tasks: \[\]/tasks: [{name: x, command: id}]/' deploy/ansible/playbooks/setup-istio.yml
+unit ops istio-alone 's/"1.31.1"/"1.31.4"/' deploy/ansible/playbooks/setup-istio.yml
 # what the copy hands Ansible on this workstation: a version or a hash, never a template, never a connection setting
 unit ops vault-jinja 's/"1.21.4"/"{{ lookup('"'"'pipe'"'"', '"'"'id'"'"') }}"/' deploy/ansible/vars/vault.yml
 unit ops forgejo-conn 's/^forgejo_version: "15.0.11"$/forgejo_version: "15.0.12"\nansible_ssh_common_args: "1"/' deploy/ansible/vars/forgejo.yml
@@ -188,6 +213,22 @@ for u in vault-list-jinja vault-nested-jinja; do
 done
 out=$(plan node-exporter-port); rc=$?
 check "  another of its values (its port): refused, no known proof" "$rc $(grep -c 'node_exporter_port' <<< "$out")" "1 1"
+out=$(plan caddy); f=$(vars_of setup-caddy.yml "$out")
+check "Caddy's version: production's setup-caddy on the copy's Pis, the branch's version handed to it (it builds the pinned one)" \
+  "$(sed "s|@$f|@VARS|" <<< "$out") | $( [ -n "$f" ] && tr '\n' ' ' < "$f")" \
+  "test:copy:playbook PLAYBOOK=setup-caddy.yml ARGS='-e @VARS' | caddy_version: 2.10.2 "
+for u in caddy-peer caddy-task caddy-bad; do
+  out=$(plan "$u"); rc=$?
+  check "  $u: another of its values, its tasks, or no version beside it: refused" \
+    "$rc $(grep -c '^REFUSED' <<< "$out") $(grep -c 'test:copy:playbook' <<< "$out")" "1 1 0"
+done
+out=$(plan istio-follow); rc=$?
+check "Istio's version in setup-istio.yml beside infra's chart: no ops step of its own (it moves with the chart, Argo on the copy)" \
+  "$rc $out" "0 test:copy:change INFRA_REF=renovate/istio-follow PLATFORM_REF=main"
+out=$(plan istio-task); rc=$?
+check "  setup-istio's tasks changed beside it: refused" "$rc $(grep -c 'REFUSED.*setup-istio.yml (its tasks)' <<< "$out")" "1 1"
+out=$(plan istio-alone); rc=$?
+check "  setup-istio's version alone, no chart moving with it: nothing to prove - refused" "$rc $(grep -c 'nothing to prove' <<< "$out")" "1 1"
 out=$(plan vault-keyed); rc=$?
 check "a unit changing the vendors' keys (renovate/keys): refused, never proven" \
   "$rc $(grep -c 'changes what vouches for the build hashes (renovate/keys/hashicorp.asc)' <<< "$out")" "1 1"

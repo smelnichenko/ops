@@ -779,7 +779,7 @@ for step, why in (("test:copy:playbook PLAYBOOK=upgrade-kubeadm.yml ARGS='-e k8s
           (1, False, []))
 for pb, cmd in (("upgrade-patroni.yml", "deploy:patroni:upgrade"), ("upgrade-vault.yml", "deploy:vault:upgrade"),
                 ("setup-host-hardening.yml", "deploy:host-hardening"), ("setup-argocd.yml", "deploy:argocd"),
-                ("upgrade-forgejo.yml", "deploy:forgejo:upgrade"),
+                ("upgrade-forgejo.yml", "deploy:forgejo:upgrade"), ("setup-caddy.yml", "deploy:caddy"),
                 ("setup-kubeadm.yml ARGS='--tags cilium -e cilium_version=1.20.5'", "deploy:cilium:upgrade -- -e cilium_version=1.20.5")):
     rc, calls = night("prove centrifugo minor", plan=f"test:copy:playbook PLAYBOOK={pb}\n")
     check(f"{pb.split()[0]} -> task --yes {cmd}", (rc, [c[len("task --yes "):] for c in has(calls, "task --yes")]), (0, [cmd]))
