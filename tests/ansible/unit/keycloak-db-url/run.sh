@@ -274,8 +274,9 @@ check("the login judged from the file written aside, before it is put in place a
       (same is not None and aside is not None and placed is not None and aside < every.index(same) < placed < every.index(unit_task),
        same is not None and tagged(same),
        condition((same or {}).get("when", True), ansible_check_mode=True, _patroni_installed=True),
-       condition((same or {}).get("when", True), ansible_check_mode=False, _patroni_installed=True)),
-      (True, True, False, True))
+       condition((same or {}).get("when", True), ansible_check_mode=False, _patroni_installed=True),
+       condition(every[placed].get("when", True), ansible_check_mode=True) if placed is not None else None),
+      (True, True, False, True, False))
 if same:
     import os, subprocess, tempfile  # noqa: E401,E402
     from templar import render  # noqa: E402

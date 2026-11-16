@@ -800,6 +800,7 @@
         mode: '0600'
       diff: false  # its content is the passwords
       no_log: true
+      when: not ansible_check_mode  # a preview wrote nothing aside: nothing to put in place
 
     # targetServerType=any: PgBouncer hands every client the startup parameters of its first server connection, never
     # read again - one made to the replica (HAProxy's servers start up, before their first check) says in_hot_standby=on
