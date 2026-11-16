@@ -59,7 +59,7 @@ it), and a card with no title (`JobCards`, nothing else names it).
 | LLM prompts and answers (`llm_call` holds usage and cost only) | no | **Phase 2, or the answers are lost** |
 | Operator's edits (`source_config_change` covers sources only), manual pastes, inbound mail | partly | Phase 3 as events |
 | Order of ingest across sources (commit order, not request time) | no | Phase 3 |
-| Streams (`ctx.stream`: the register's CSVs, EMTA), browser pages (LinkedIn, TeamDash landing) | no | Decision 4 |
+| Streams (`ctx.stream`: the register's CSVs, EMTA; `ctx.streamBoard`: the Teamtailor, Greenhouse, Lever, Ashby and Workable boards since masi PR 251, measured as they pass), browser pages (LinkedIn, TeamDash landing) | no | Decision 4 |
 | Paths outside `CollectContext`: `OpenWebFetcher`/visits, pictures, `PostingImages`, `BoardCensus`, `BoardProbe`, `CompanyService` | no | Each logged or excluded by name, Decision 4 |
 
 Phases 1 and 2 are useful alone. **Phase 3 changes how masi writes time and edits,** and is planned after Phase 2 has run.
