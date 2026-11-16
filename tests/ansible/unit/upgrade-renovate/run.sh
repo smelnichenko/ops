@@ -173,8 +173,12 @@ check "Renovate beside a running runner (its lock held): refused, docker never r
 exec 8>&-
 check "no CI cron runs Renovate any more (.woodpecker/renovate.yaml gone)" "$([ -e .woodpecker/renovate.yaml ] && echo present || echo gone)" "gone"
 # platform's CI check runs the chart's Alertmanager image (its render step refuses the two apart): the preset finds both,
-# one depName - one branch moves them together (else every Alertmanager release left platform's unit red for good)
-check "the preset moves platform's CI Alertmanager image with the chart's: both found, the same depName and version, nothing else in CI" \
+# one depName - one branch moves them together: a CI check that runs in production's image refuses the two apart
+# (platform's alertmanager-render.sh and clickhouse-config-start.sh, infra's tests/stale-pr-envs-sweeper and
+# tests/restore-check-age), so a unit that moved only production's stayed red for good (wave-patches, 2026-11-16: infra#36
+# alpine/k8s 1.35.10, platform#38 ClickHouse 26.8.37.168) - the step's image and its CI_STEP_IMAGE_CHECK both, digest kept;
+# CI's own tools (helm, kubeconform, postgres, Prometheus - its tag follows a chart's appVersion) never a unit
+check "the preset moves CI's copies of production's images with production's: the same depName, version and digest, CI's own tools left out" \
   "$("$PY" - <<'PYPRESET'
 import json, re
 d = json.load(open("renovate/upgrade-cycle.json"))
@@ -183,13 +187,26 @@ def found(path, text):
     for m in d["customManagers"]:
         if any(re.search(p.strip("/"), path) for p in m["managerFilePatterns"]):
             for s in m["matchStrings"]:
-                out += [(g.group("depName"), g.group("currentValue")) for g in re.finditer(s.replace("(?<", "(?P<"), text)]
+                out += [(g.group("depName"), g.group("currentValue"), bool(g.groupdict().get("currentDigest")))
+                        for g in re.finditer(s.replace("(?<", "(?P<"), text)]
     return out
-ci = "  - name: alertmanager-check\n    image: prom/alertmanager:v0.34.1\n  - name: lint\n    image: alpine/helm:3.20.0\n"
-values = "alertmanager:\n  enabled: true\n  image: prom/alertmanager:v0.34.1\n"
-print(found(".woodpecker/ci.yaml", ci), found("helm/schnappy-observability/values.yaml", values))
+dig = "@sha256:" + "4" * 64
+ci = ("  - name: stale-pr-envs-sweeper\n    image: alpine/k8s:1.35.9\n    commands:\n"
+      "  - name: restore-check-age\n    image: rclone/rclone:1.75.1" + dig + "\n    environment:\n"
+      "      CI_STEP_IMAGE_CHECK: rclone/rclone:1.75.1" + dig + "\n"
+      "  - name: clickhouse-config-start\n    image: clickhouse/clickhouse-server:26.8.34.13-alpine\n    environment:\n"
+      "      CI_STEP_IMAGE_CHECK: clickhouse/clickhouse-server:26.8.34.13-alpine\n"
+      "  - name: rules-unit-tests\n    image: quay.io/prometheus/prometheus:v3.15.0\n"
+      "  - name: alertmanager-check\n    image: prom/alertmanager:v0.34.1\n"
+      "  - name: lint\n    image: alpine/helm:3.20.0\n  - name: kubeconform\n    image: ghcr.io/yannh/kubeconform:v0.7.0-alpine\n"
+      "  - name: init-users-script\n    image: postgres:17-alpine\n")
+prod = ("              image: alpine/k8s:1.35.9\n              image: rclone/rclone:1.75.1" + dig + "\n")
+values = "alertmanager:\n  image: prom/alertmanager:v0.34.1\nclickhouse:\n  image: clickhouse/clickhouse-server:26.8.34.13-alpine\n"
+print(found(".woodpecker/ci.yaml", ci))
+print(found("clusters/production/cluster-config/restore-check-age.yaml", prod), found("helm/schnappy-observability/values.yaml", values))
 PYPRESET
-)" "[('prom/alertmanager', 'v0.34.1')] [('prom/alertmanager', 'v0.34.1')]"
+)" "[('alpine/k8s', '1.35.9', False), ('rclone/rclone', '1.75.1', True), ('rclone/rclone', '1.75.1', True), ('clickhouse/clickhouse-server', '26.8.34.13-alpine', False), ('clickhouse/clickhouse-server', '26.8.34.13-alpine', False), ('prom/alertmanager', 'v0.34.1', False)]
+[('alpine/k8s', '1.35.9', False), ('rclone/rclone', '1.75.1', True)] [('prom/alertmanager', 'v0.34.1', False), ('clickhouse/clickhouse-server', '26.8.34.13-alpine', False)]"
 # a run rebases nothing that has no conflict (Woodpecker builds one at a time; infra's main moves many times a day - a
 # rebase of every branch at every run was a queue of builds ahead of the apps' deploys); no cap per repo (it split one
 # unit across the repos: its infra half waiting while its ops half was picked)

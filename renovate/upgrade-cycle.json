@@ -86,12 +86,12 @@
     },
     {
       "customType": "regex",
-      "description": "platform's CI check of Alertmanager's config runs the image the chart runs (.woodpecker/alertmanager-render.sh refuses the two apart): its image moved with the chart's, in the same branch - one depName, one update",
+      "description": "CI's copies of production's images: a CI check runs in the image production runs and refuses the two apart (platform's .woodpecker/alertmanager-render.sh and clickhouse-config-start.sh, infra's tests/stale-pr-envs-sweeper and tests/restore-check-age) - the step's image and its CI_STEP_IMAGE_CHECK moved with production's, digest kept, in the same branch: one depName, one update (a unit that moved production's alone stayed red: wave-patches 2026-11-16). These images alone - CI's own tools (helm, kubeconform, postgres, the scanner) are never a unit",
       "managerFilePatterns": [
         "/^\\.woodpecker/ci\\.ya?ml$/"
       ],
       "matchStrings": [
-        "image:\\s*(?<depName>prom/alertmanager):(?<currentValue>v[0-9][0-9.]*)\\s"
+        "(?:image|CI_STEP_IMAGE_CHECK):\\s*(?<depName>prom/alertmanager|clickhouse/clickhouse-server|alpine/k8s|rclone/rclone):(?<currentValue>[A-Za-z0-9][A-Za-z0-9._-]*)(?:@(?<currentDigest>sha256:[a-f0-9]{64}))?\\s"
       ],
       "datasourceTemplate": "docker"
     }
