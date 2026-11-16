@@ -1,0 +1,48 @@
+---
+# Caddy's package installed at the pin (caddy_version): Cloudsmith's source there for the install alone - a permanent
+# one made every apt run on the Pis (their package upgrades, setup-pi-services, setup-nexus...) fail while Cloudsmith did
+# not answer; removed even when the install fails (setup-caddy.yml removes it on every run as well: a run killed inside
+# this block skips its always). The package's own start and restart held back (policy-rc.d 101): Caddy restarted by
+# setup-caddy.yml's turns, under the Pi restart lock. Included by setup-caddy.yml where the package is absent (before its
+# unit names the binary) and by tasks/caddy-turn.yml to move an installed one to a new pin.
+- name: Caddy installed at the pin - its source there for the install alone
+  block:
+    - name: The gpg tool, for the key's check
+      ansible.builtin.apt:
+        name: gpg
+        state: present
+
+    - name: Caddy's apt key
+      ansible.builtin.include_tasks: apt-key-pinned.yml
+      vars:
+        apt_key_url: https://dl.cloudsmith.io/public/caddy/stable/gpg.key
+        apt_key_fingerprint: 65760C51EDEA2017CEA2CA15155B6D79CA56EA34  # Caddy Web Server's (read 2026-11-16)
+        apt_key_dest: /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+        apt_key_dearmor: true
+
+    - name: Caddy's apt repository, for this install
+      ansible.builtin.copy:
+        dest: /etc/apt/sources.list.d/caddy-stable.list
+        mode: '0644'
+        content: |
+          deb [signed-by=/usr/share/keyrings/caddy-stable-archive-keyring.gpg] https://dl.cloudsmith.io/public/caddy/stable/deb/debian any-version main
+
+    # any direction (a pin moved back is a rollback)
+    - name: Caddy, the version pinned
+      ansible.builtin.apt:
+        name: "caddy={{ caddy_version }}"
+        update_cache: true
+        allow_downgrade: true
+        allow_change_held_packages: true
+        policy_rc_d: 101
+  always:
+    - name: Caddy's apt repository removed again
+      ansible.builtin.file:
+        path: /etc/apt/sources.list.d/caddy-stable.list
+        state: absent
+
+# held: the Pis' package upgrades (deploy:pi-packages:upgrade) leave it to the pin
+- name: Caddy held at the pin
+  ansible.builtin.dpkg_selections:
+    name: caddy
+    selection: hold

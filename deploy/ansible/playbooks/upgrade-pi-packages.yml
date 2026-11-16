@@ -1,8 +1,9 @@
 ---
 # The Pis' apt packages upgraded - Debian's and the Raspberry Pi archive's (security updates, a kernel, firmware);
-# what the Pis run from releases (Vault, Consul, Forgejo, Keycloak, Nexus, Caddy, versitygw, Patroni's pip package) is
-# no apt package: their own upgrade-*.yml. One Pi at a time - the one not holding the VIP first, its holder last - each
-# rebooted after its upgrade (a library's users run its new code only once restarted, a kernel only once booted).
+# what the Pis run from releases (Vault, Consul, Forgejo, Keycloak, Nexus, versitygw, Patroni's pip package) is no
+# apt package: their own upgrade-*.yml; Caddy is held at its pin (setup-caddy.yml moves it). One Pi at a time - the
+# one not holding the VIP first, its holder last - each rebooted after its upgrade (a library's users run its new code
+# only once restarted, a kernel only once booted).
 # apt-get upgrade --with-new-pkgs: held packages stay, nothing is removed (a removal planned refuses the Pi before
 # anything changes), a config file the Pi has changed is kept (the playbooks own them).
 #

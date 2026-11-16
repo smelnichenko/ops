@@ -307,8 +307,8 @@ its pinned hashes with it, each read from what the vendor signs - never from the
   signature binds bytes, not a version: an older signed artifact under a new name is refused).
 - **TLS alone** (the vendor signs nothing - each pin's comment says so): node_exporter's sha256sums.txt, Nexus's
   `.sha256`, versitygw's checksums.txt (a map per version: a new version adds its entry, every entry verified),
-  PyTorch's cpu index (the wheels' `#sha256=`); a redirect off https refused. Caddy is built from source (xcaddy; Go's
-  checksum database checks every module).
+  PyTorch's cpu index (the wheels' `#sha256=`); a redirect off https refused. Caddy is Caddy's own apt package (since
+  2026-11-16): its signing key pinned, apt checks the signed index - no hash pin of its own.
 - **Keys age**: each run warns when a vendor's newest signing key expires within 60 days; `--refresh-keys` takes a
   vendor's key file again from its url only while every pinned primary is still in it (Forgejo's current signer, its
   2027-06-09 subkey; its 2027-01-10 subkey signs no release).

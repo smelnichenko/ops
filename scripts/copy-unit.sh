@@ -139,7 +139,7 @@ NODE_EXPORTER = {"node_exporter_version", "node_exporter_sha256"}
 # Argo CD itself (no Argo app holds it): its chart default and the image pinned on a chart - setup-argocd.yml on the copy
 # with the copy's Vault values (as test:copy:build installs it), its pods restarting
 ARGOCD = {"argocd_chart_default", "argocd_image_pins"}
-# Caddy on the Pis: its version - production's setup-caddy.yml on the copy's Pis, which builds the version pinned
+# Caddy on the Pis: its version - production's setup-caddy.yml on the copy's Pis, which installs the version pinned
 # (and its Verify play checks that version running)
 CADDY = {"caddy_version"}
 for path in changed:

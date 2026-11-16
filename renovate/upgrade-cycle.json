@@ -382,6 +382,18 @@
         ],
         "executionMode": "branch"
       }
+    },
+    {
+      "description": "Caddy on the Pis is Caddy's own apt package (setup-caddy.yml): its versions read from Cloudsmith's index, the Pis' architecture",
+      "matchDatasources": [
+        "deb"
+      ],
+      "matchPackageNames": [
+        "caddy"
+      ],
+      "registryUrls": [
+        "https://dl.cloudsmith.io/public/caddy/stable/deb/debian?suite=any-version&components=main&binaryArch=arm64"
+      ]
     }
   ],
   "ignorePresets": [

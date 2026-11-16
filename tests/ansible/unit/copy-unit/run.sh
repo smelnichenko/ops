@@ -103,6 +103,8 @@ unit ops istio-follow 's/"1.31.1"/"1.31.4"/' deploy/ansible/playbooks/setup-isti
 unit infra istio-task 's/a:1/a:5/' clusters/v.yaml
 unit ops istio-task 's/"1.31.1"/"1.31.4"/; s/tasks: \[\]/tasks: [{name: x, command: id}]/' deploy/ansible/playbooks/setup-istio.yml
 unit ops istio-alone 's/"1.31.1"/"1.31.4"/' deploy/ansible/playbooks/setup-istio.yml
+unit infra istio-other 's/a:1/a:6/' clusters/v.yaml
+unit ops istio-other 's/istio_version: "1.31.1"/istio_version: "1.31.1"\n    istio_cni_version: "1.31.4"/' deploy/ansible/playbooks/setup-istio.yml
 # what the copy hands Ansible on this workstation: a version or a hash, never a template, never a connection setting
 unit ops vault-jinja 's/"1.21.4"/"{{ lookup('"'"'pipe'"'"', '"'"'id'"'"') }}"/' deploy/ansible/vars/vault.yml
 unit ops forgejo-conn 's/^forgejo_version: "15.0.11"$/forgejo_version: "15.0.12"\nansible_ssh_common_args: "1"/' deploy/ansible/vars/forgejo.yml
@@ -227,6 +229,9 @@ check "Istio's version in setup-istio.yml beside infra's chart: no ops step of i
   "$rc $out" "0 test:copy:change INFRA_REF=renovate/istio-follow PLATFORM_REF=main"
 out=$(plan istio-task); rc=$?
 check "  setup-istio's tasks changed beside it: refused" "$rc $(grep -c 'REFUSED.*setup-istio.yml (its tasks)' <<< "$out")" "1 1"
+out=$(plan istio-other); rc=$?
+check "  another value in setup-istio.yml (not a chart's restated version): refused" \
+  "$rc $(grep -c 'REFUSED.*setup-istio.yml istio_cni_version' <<< "$out")" "1 1"
 out=$(plan istio-alone); rc=$?
 check "  setup-istio's version alone, no chart moving with it: nothing to prove - refused" "$rc $(grep -c 'nothing to prove' <<< "$out")" "1 1"
 out=$(plan vault-keyed); rc=$?

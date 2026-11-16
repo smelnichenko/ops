@@ -9,19 +9,22 @@ set -euo pipefail
 host=$(hostname -s)
 line() { echo "pi $host $1 $2"; }
 
-# a service's binary, asked for its version - unless the process runs a replaced (deleted) file or none runs
-binary() {  # name, unit, path, command printing the version
+# a service's binary, asked for its version - unless the process runs a replaced (deleted) file, another one, or none
+# runs; the version command runs with the process's own binary's directory first on PATH (the binary it runs, never
+# another of the name - sudo puts /usr/local/bin first)
+binary() {  # name, unit, path(s) its process may run (space-separated), command printing the version
   local pid exe
   pid=$(systemctl show -p MainPID --value "$2")
   if [ "$pid" = 0 ]; then line "$1" not-running; return; fi
   exe=$(readlink "/proc/$pid/exe")
-  if [ "$exe" != "$3" ]; then line "$1" stale; return; fi
-  line "$1" "$(eval "$4")"
+  case " $3 " in *" $exe "*) ;; *) line "$1" stale; return ;; esac
+  line "$1" "$(PATH="$(dirname "$exe"):$PATH"; eval "$4")"
 }
 binary versitygw versitygw /usr/bin/versitygw "versitygw --version | awk '/^Version/ {print \$3}'"
 binary vault vault /usr/local/bin/vault "vault version | awk '{print \$2}' | sed 's/^v//'"
 binary consul consul /usr/local/bin/consul "consul version | awk 'NR == 1 {print \$2}' | sed 's/^v//'"
-binary caddy caddy /usr/local/bin/caddy "caddy version | awk '{print \$1}' | sed 's/^v//'"
+# Caddy: the package's binary, or the xcaddy build on a Pi setup-caddy has not moved yet (until both are moved)
+binary caddy caddy "/usr/bin/caddy /usr/local/bin/caddy" "caddy version | awk '{print \$1}' | sed 's/^v//'"
 
 # Forgejo by the version it serves
 if v=$(curl -fsS --max-time 5 http://127.0.0.1:3000/api/v1/version 2>/dev/null); then
