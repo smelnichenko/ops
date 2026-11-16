@@ -601,6 +601,17 @@ tasks:
   # run's labels read before anything applies. SHADOW=true: the runner proves and reviews a unit, applies nothing (its
   # result on the pull requests). Until the cycle's first clean shadow proof (.upgrade-cycle/shadow-proven, the runner's
   # own record of it), the applying runner is refused - here and by the runner itself
+  renovate:apps:
+    desc: "monitor's and masi's Renovate, by hand on the workstation (scripts/upgrade-renovate.sh --apps): their dependency pull requests from each repo's renovate.json, as renovate-bot (ops/.env RENOVATE_TOKEN) - their weekly Woodpecker cron is gone. LOOKUP=true: read only"
+    dotenv: ['.env']
+    vars:
+      LOOKUP: '{{.LOOKUP | default "false"}}'
+    preconditions:
+      - sh: '[ "{{.LOOKUP}}" = true ] || [ "{{.LOOKUP}}" = false ]'
+        msg: "REFUSED: LOOKUP is true or false - not '{{.LOOKUP}}'"
+    cmds:
+      - cmd: scripts/upgrade-renovate.sh --apps {{if eq .LOOKUP "true"}}--lookup{{end}}
+
   upgrade:
     desc: "PRODUCTION: the upgrade cycle - Renovate on the workstation (its branches and pull requests in infra, platform, ops), then one unit proven on the Vagrant copy and applied (scripts/upgrade-cycle.sh; a major after its 24 h notice). Stop the radar first: the copy needs its memory. LOOKUP=true: Renovate reads only; RUNNER=false: Renovate's branches, no runner; SHADOW=true: a unit proven and reviewed, nothing applied"
     deps: [deploy:install]

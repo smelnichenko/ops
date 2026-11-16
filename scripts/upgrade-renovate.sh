@@ -10,18 +10,24 @@
 # no bind mount - Renovate clones into its own container. Its log in .copy/. Never beside a runner: the runner's lock
 # (.upgrade-cycle/lock) held while it runs.
 #
-# Usage: scripts/upgrade-renovate.sh [--lookup]   --lookup: the repos and registries read, nothing changed
+# --apps: monitor's and masi's Renovate instead (task renovate:apps) - their dependency pull requests, each repo's own
+# renovate.json; the same bot and image, by hand (their weekly Woodpecker cron and its CI-secret token gone,
+# 2026-11-16: the token could push to infra, platform and ops from any pipeline).
+#
+# Usage: scripts/upgrade-renovate.sh [--apps] [--lookup]   --lookup: the repos and registries read, nothing changed
 # Env:   RENOVATE_TOKEN (required), RENOVATE_GITHUB_TOKEN, UPGRADE_DOCKER (the harness's docker, default docker)
 set -euo pipefail
 ops=$(cd "$(dirname "$0")/.." && pwd)
 image=renovate/renovate:44.198.3
 repos=schnappy/infra,schnappy/platform,schnappy/ops
 dry=""
-case "${1:-}" in
-  "") ;;
-  --lookup) dry=lookup ;;
-  *) echo "REFUSED: upgrade-renovate.sh [--lookup]" >&2; exit 2 ;;
-esac
+for a in "$@"; do
+  case "$a" in
+    --lookup) dry=lookup ;;
+    --apps) repos=schnappy/monitor,schnappy/masi ;;
+    *) echo "REFUSED: upgrade-renovate.sh [--apps] [--lookup]" >&2; exit 2 ;;
+  esac
+done
 [ -n "${RENOVATE_TOKEN:-}" ] || { echo "REFUSED: RENOVATE_TOKEN is empty (ops/.env) - Renovate not run" >&2; exit 1; }
 # never beside a runner (its lock): Renovate rebasing a unit's branches mid-proof throws the proof away
 mkdir -p "$ops/.upgrade-cycle"

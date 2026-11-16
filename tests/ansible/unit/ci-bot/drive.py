@@ -671,13 +671,13 @@ yaml.safe_dump([{"name": "seed-vault-secrets' woodpecker-ci tasks", "hosts": "lo
                  "tasks": pick}], open(SEED_PLAY, "w"), sort_keys=False)
 BOTV = {"infra_repo_token": "bot-infra-0000", "clone_token": "bot-clone-0000", "registry_user": BOT,
         "registry_token": "bot-registry-0000", "pull_token": "bot-pull-0000"}
-# monitor's and masi's Renovate token: their own bot's (RENOVATE_APPS_TOKEN), never the upgrade cycle's (RENOVATE_TOKEN -
-# write on infra, platform and ops; every pipeline can mount this secret) - the cycle's is set here too, and never read
+# no Renovate token in this secret (2026-11-16: monitor's and masi's Renovate runs by hand) - the upgrade cycle's
+# (RENOVATE_TOKEN: write on infra, platform and ops; every pipeline can mount this secret) is set here, and never read
 SEED_ENV = {"SONARQUBE_TOKEN": "sonar-new", "NVD_API_KEY": "nvd", "PROMETHEUS_AUTH_TOKEN": "prom",
-            "RENOVATE_APPS_TOKEN": "renovate-new", "RENOVATE_TOKEN": "the-cycles-bot-NEVER"}
+            "RENOVATE_TOKEN": "the-cycles-bot-NEVER", "RENOVATE_GITHUB_TOKEN": "gh-NEVER"}
 SEED_OUT = {"sonar_token": "sonar-new", "sonar_host_url": "https://sonar.pmon.dev", "nexus_url": f"http://{VIP}:8081",
             "nexus_npm_registry": f"http://{VIP}:8081/repository/npm-public/", "nvd_api_key": "nvd",
-            "prometheus_auth_token": "prom", "renovate_token": "renovate-new", "renovate_github_token": ""}
+            "prometheus_auth_token": "prom"}
 OLD_ENV = {"WOODPECKER_INFRA_REPO_TOKEN": ADMIN_INFRA, "WOODPECKER_CLONE_TOKEN": ADMIN_CLONE,
            "WOODPECKER_REGISTRY_USER": "forgejo_admin", "WOODPECKER_REGISTRY_TOKEN": ADMIN_PW,
            "WOODPECKER_PULL_TOKEN": "an-old-pull-token"}
@@ -712,9 +712,13 @@ check("seed: a first install (the path missing) takes the CI bot's five from .en
 rc, after, out = seed_run({}, SEED_ENV)
 check("seed: a first install without them in .env leaves them missing (for setup-ci-bot) - never an empty value",
       (rc, wci(after)), (0, SEED_OUT))
-rc, after, out = seed_run({}, {k: v for k, v in SEED_ENV.items() if k != "RENOVATE_APPS_TOKEN"})
-check("seed: the apps' Renovate bot not set yet, the cycle's token in .env: renovate_token EMPTY - never the cycle's bot's",
-      (rc, (wci(after) or {}).get("renovate_token"), "the-cycles-bot-NEVER" in json.dumps(wci(after) or {})), (0, "", False))
+rc, after, out = seed_run({"schnappy/woodpecker-ci": {"data": dict(BOTV, renovate_token="the-old-bot-token",
+                                                                    renovate_github_token="gh-old"), "version": 4}}, SEED_ENV)
+check("seed: a Renovate token a former seed left in Vault dropped (kept over, it stayed readable to every pipeline); "
+      "the cycle's own token and GitHub's never written",
+      (rc, sorted(k for k in (wci(after) or {}) if k.startswith("renovate")),
+       any(x in json.dumps(wci(after) or {}) for x in ("the-cycles-bot-NEVER", "gh-NEVER", "the-old-bot-token"))),
+      (0, [], False))
 rc, after, out = seed_run({"schnappy/woodpecker-ci": {"data": dict(BOTV), "version": 2}}, SEED_ENV)
 check("seed: Vault's four kept when .env has none of them", (rc, wci(after)),
       (0, dict(SEED_OUT, **BOTV)))

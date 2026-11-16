@@ -67,6 +67,19 @@ check "no GitHub token: none passed (an empty one was a 401)" "$(grep -c GITHUB_
 ARGS=(--lookup)
 check "--lookup: Renovate reads only" "$(run RENOVATE_TOKEN=$TOKEN) $(grep -cx RENOVATE_DRY_RUN=lookup "$W/argv")" "0 1"
 ARGS=()
+# --apps: monitor's and masi's Renovate (task renovate:apps) - those two repos alone, read through; with --lookup too
+APPS_LOG=$(printf '%s\n' ' INFO: Repository started (repository=schnappy/monitor)' ' INFO: Repository finished (repository=schnappy/monitor)' \
+  '       "result": "done",' ' INFO: Repository started (repository=schnappy/masi)' ' INFO: Repository finished (repository=schnappy/masi)' \
+  '       "result": "done",')
+ARGS=(--apps)
+check "--apps: monitor and masi alone, a real run, both read through" \
+  "$(run RENOVATE_TOKEN=$TOKEN FAKE_LOG="$APPS_LOG") $(grep -cx 'RENOVATE_REPOSITORIES=schnappy/monitor,schnappy/masi' "$W/argv") $(grep -c RENOVATE_DRY_RUN "$W/argv") $(grep -c 'schnappy/infra' "$W/argv")" "0 1 0 0"
+check "  one of them not read through: the task fails" "$(run RENOVATE_TOKEN=$TOKEN FAKE_LOG="$(head -3 <<< "$APPS_LOG")")" "1"
+ARGS=(--apps --lookup)
+check "  with --lookup: read only" "$(run RENOVATE_TOKEN=$TOKEN FAKE_LOG="$APPS_LOG") $(grep -cx RENOVATE_DRY_RUN=lookup "$W/argv")" "0 1"
+ARGS=(--bogus)
+check "an argument it does not know: refused" "$(run RENOVATE_TOKEN=$TOKEN) $(grep -c REFUSED "$W/out")" "2 1"
+ARGS=()
 check "a GitHub token: passed by name, its value on no argument" \
   "$(run RENOVATE_TOKEN=$TOKEN RENOVATE_GITHUB_TOKEN=$GH) $(grep -cx GITHUB_COM_TOKEN "$W/argv") $(grep -c "$GH" "$W/argv") $(grep -c "^github=$GH$" "$W/env")" \
   "0 1 0 1"
