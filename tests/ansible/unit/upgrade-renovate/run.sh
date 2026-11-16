@@ -52,8 +52,12 @@ ARGS=()
 check "no bot token: refused, docker never run" "$(run) $([ -e "$W/argv" ] && echo ran || echo not-run) $(grep -c REFUSED "$W/out")" \
   "1 not-run 1"
 rc=$(run RENOVATE_TOKEN=$TOKEN)
-check "a run: docker run --rm, the image pinned exactly and last" "$rc $(head -2 "$W/argv" | tr '\n' ' ')$(tail -1 "$W/argv")" \
-  "0 run --rm renovate/renovate:44.198.3"
+# the pin read from the script (Renovate moves it: a literal here failed its own update's CI, ops#57 2026-11-16) - an exact
+# x.y.z, never a tag that moves
+pin=$(sed -n 's/^image=//p' scripts/upgrade-renovate.sh)
+[[ $pin =~ ^renovate/renovate:[0-9]+\.[0-9]+\.[0-9]+$ ]] && exact=exact || exact="not exact: $pin"
+check "a run: docker run --rm, the image pinned exactly (x.y.z) and last" "$rc $(head -2 "$W/argv" | tr '\n' ' ')$(tail -1 "$W/argv") $exact" \
+  "0 run --rm $pin exact"
 check "the bot's token by name - its value on no argument; the container given it" \
   "$(grep -cx RENOVATE_TOKEN "$W/argv") $(grep -c "$TOKEN" "$W/argv") $(grep -c "^token=$TOKEN$" "$W/env")" "1 0 1"
 check "no bind mount, no volume, no host network" "$(grep -cE '^(-v|--volume|--mount|--network|--net)(=|$)' "$W/argv")" "0"
