@@ -143,6 +143,11 @@ asked, CI_WAIT_LIVE=1); Sonar's two (an unused name, a nested conditional) fixed
 labels read (the shadow week checked them). Then `task upgrade SHADOW=true` proves and reviews a unit on the copy,
 applying nothing - the cycle's first proof; until it ends clean (the runner's own record,
 `.upgrade-cycle/shadow-proven`) the applying runner is refused, by the task and by the runner itself.
+**The first shadow run (2026-11-16 05:52 UTC) proved nothing:** preflight passed, Renovate made 35 units (five of the
+test environment), and the pick named `test-observability` - in a shadow run a test unit is a comment (no copy), and a
+test unit is picked whenever one is open, so every shadow run stopped there. Fixed: a shadow run's pick
+(`upgrade-units.py pick --shadow`) leaves the test environment's units out - the production units in their order, a
+twin still waiting for its test unit (on production's units: `prove wave-patches patch`).
 **Not yet:** a GitHub read token, or the six GitHub-sourced annotations moved to registries (RENOVATE_GITHUB_TOKEN in ops/.env is empty - ''; the 401 seen 2026-11-14 was the two quote characters sent as a token), `deploy:seed-secrets` for the bot's token (the operator's OK), Nexus
 annotated, a one-way change's store backups beyond etcd (Postgres, ScyllaDB, ...: blocked). Strimzi's Kafka version
 (`strimzi.kafkaVersion`, production's and the test environment's data values) is not annotated yet - a design point

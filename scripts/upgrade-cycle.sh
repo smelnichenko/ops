@@ -17,7 +17,8 @@
 #               cycle's notices (its loaded config); production settled and quiet (critical alerts included). The
 #               copy's memory (the operator stops the radar) for a unit that builds it - refused, never waited
 #   1. pick     scripts/upgrade-units.py pick - NOTHING / PAUSED end the run quietly; a one-way unit blocked at once, one
-#               without Renovate's labels (its kind not known) never applied
+#               without Renovate's labels (its kind not known) never applied. A shadow run's pick leaves the test
+#               environment's units out (pick --shadow): it merges none, so it would stop at one with nothing proven
 #   2. prove    the unit's heads read (and its bases); its branches, in every repo, on main but for CD's promotions
 #               (Renovate rebases only on a conflict: a unit behind brought up to date by Forgejo first, its new heads
 #               waited for - an empty answer never a head; never read as the unit's defect); then its CI green (a
@@ -258,7 +259,7 @@ gate_head=$(git -C "$ops" rev-parse HEAD)  # what ops' main may hold at the merg
 today_applied && exit 1
 
 # 1. the pick
-picked=$(scripts/upgrade-units.py pick) || { say "NOT READ: Forgejo - the run changes nothing ($picked)"; exit 1; }
+picked=$(scripts/upgrade-units.py pick ${shadow:+--shadow}) || { say "NOT READ: Forgejo - the run changes nothing ($picked)"; exit 1; }
 say "PICK $picked"
 case "$picked" in
   NOTHING|PAUSED) exit 0 ;;

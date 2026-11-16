@@ -947,6 +947,11 @@ rc, calls = night("prove wave-patches patch", plan=PLAN, args=("--shadow",))
 check("--shadow: proven and reviewed, the result a comment - no notice, no merge, no production command, the copy destroyed",
       (rc, [words(c, 3) for c in has(calls, "upgrade-label.py") if "--heads" not in c and "--green" not in c], notices(calls),
        has(calls, "task --yes"), bool(has(calls, "vagrant destroy"))), (0, ["upgrade-label.py wave-patches --comment"], [], [], True))
+check("  its pick the shadow's: no test environment's unit (a shadow merges none, so it would stop at one)",
+      has(calls, "upgrade-units.py pick"), ["upgrade-units.py pick --shadow"])
+rc, calls = night("prove wave-patches patch", plan=PLAN)
+check("  an applying run's pick the plain one (the test environment's units first)", has(calls, "upgrade-units.py pick"),
+      ["upgrade-units.py pick"])
 r = subprocess.run(["bash", os.path.join(OPS, "scripts/upgrade-cycle.sh"), "--apply-all"], capture_output=True, text=True)
 check("an option it does not take: refused", r.returncode, 2)
 for pick in ("prove Bad/Unit patch", "prove istio huge", "explode istio minor"):
