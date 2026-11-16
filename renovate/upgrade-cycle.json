@@ -94,6 +94,17 @@
         "(?:image|CI_STEP_IMAGE_CHECK):\\s*(?<depName>prom/alertmanager|clickhouse/clickhouse-server|alpine/k8s|rclone/rclone):(?<currentValue>[A-Za-z0-9][A-Za-z0-9._-]*)(?:@(?<currentDigest>sha256:[a-f0-9]{64}))?\\s"
       ],
       "datasourceTemplate": "docker"
+    },
+    {
+      "customType": "regex",
+      "description": "Renovate's own image (scripts/upgrade-renovate.sh: image=renovate/renovate:<version>) - nothing watched it: 44.198.3 (2026-10-30) stood while 44.246.4 was out (2026-11-16)",
+      "managerFilePatterns": [
+        "/^scripts/upgrade-renovate\\.sh$/"
+      ],
+      "matchStrings": [
+        "image=(?<depName>renovate/renovate):(?<currentValue>\\d+\\.\\d+\\.\\d+)"
+      ],
+      "datasourceTemplate": "docker"
     }
   ],
   "packageRules": [

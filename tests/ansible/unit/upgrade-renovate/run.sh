@@ -233,4 +233,22 @@ r = d["packageRules"][names[-1]] if names else {}
 print(r.get("additionalBranchPrefix"), (r.get("group") or {}).get("branchTopic"), r.get("groupSlug"), names[-1] == len(d["packageRules"]) - 1 if names else None)
 PYWOODPECKER
 )" "manual- woodpecker woodpecker True"
+# Renovate watches its own image: a custom manager whose file pattern and regex find upgrade-renovate.sh's image line,
+# the depName and version read from it (nothing did before - 44.198.3 stood while 44.246.4 was out, 2026-11-16)
+check "the preset: Renovate's own image in upgrade-renovate.sh watched, its name and version read from the line" \
+  "$("$PY" - <<'PYSELF'
+import json, re
+d = json.load(open("renovate/upgrade-cycle.json"))
+path = "scripts/upgrade-renovate.sh"
+text = open(path).read()
+pat = lambda p: re.search(p[1:p.rindex("/")], path) is not None
+found = []
+for m in d["customManagers"]:
+    if any(pat(p) for p in m.get("managerFilePatterns", [])):
+        for ms in m["matchStrings"]:
+            for g in re.finditer(ms.replace("(?<", "(?P<"), text):
+                found.append((g.group("depName"), bool(re.fullmatch(r"\d+\.\d+\.\d+", g.group("currentValue"))), m.get("datasourceTemplate")))
+print(found)
+PYSELF
+)" "[('renovate/renovate', True, 'docker')]"
 if [ "$fails" = 0 ]; then echo "upgrade-renovate: ALL-PASS"; else echo "upgrade-renovate: $fails FAILED"; exit 1; fi
