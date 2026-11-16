@@ -251,4 +251,16 @@ for m in d["customManagers"]:
 print(found)
 PYSELF
 )" "[('renovate/renovate', True, 'docker')]"
+# the Gateway API out of Istio's rule, on renovate/gateway-api-<X.Y> of its own (under istio's topic it was named by its own
+# version: istio-1.6, istio-1.7 - picked before istio-1.32)
+check "the preset: the Gateway API its own unit (gateway-api-<X.Y>), not in Istio's" \
+  "$("$PY" - <<'PYGATEWAY'
+import json
+d = json.load(open("renovate/upgrade-cycle.json"))
+gw = "https://github.com/kubernetes-sigs/gateway-api"
+istio = [r for r in d["packageRules"] if r.get("groupSlug") == "istio"]
+mine = [r for r in d["packageRules"] if r.get("groupSlug") == "gateway-api"]
+print(any(gw in r["matchPackageNames"] for r in istio), [(r["matchPackageNames"], r["group"]["branchTopic"]) for r in mine])
+PYGATEWAY
+)" "False [(['https://github.com/kubernetes-sigs/gateway-api'], 'gateway-api-{{{newMajor}}}.{{{newMinor}}}')]"
 if [ "$fails" = 0 ]; then echo "upgrade-renovate: ALL-PASS"; else echo "upgrade-renovate: $fails FAILED"; exit 1; fi

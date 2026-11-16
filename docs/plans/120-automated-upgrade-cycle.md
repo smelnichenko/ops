@@ -172,6 +172,12 @@ Woodpecker a unit of its own, applied by hand. The preset's last rule sends the 
 upgrade-units.py never picks a `manual-` unit. By hand: merge its pull request, then check a pipeline runs (a bad one is
 CI down, reverted by its commit).
 
+The Gateway API (2026-11-16): Istio's rule named its branches by each update's own version, so the Gateway API's v1.6 and
+v1.7 became units istio-1.6 and istio-1.7 - apart from Istio's istio-1.32 ("together" never held), and the family's lowest
+minor first would have picked them before it. Operator: a unit of its own, after Istio. The preset sends it to
+`renovate/gateway-api-<X.Y>` (one minor at a time); FAMILIES puts gateway-api right after istio; the copy's proof
+catches a Gateway API the running Istio does not support.
+
 **Rollout step 1 - the lookup, 2026-11-14** (Renovate 44.198.3, `local` platform, `RENOVATE_DRY_RUN=lookup`, each
 repo's branch exported to a scratch git directory under ops/.copy with the preset as its renovate.json - a `local>`
 preset does not resolve on the local platform; read-only: the repos untouched, the registries read). Its units

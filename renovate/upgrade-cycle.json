@@ -167,7 +167,7 @@
       }
     },
     {
-      "description": "Istio and its Gateway API: their minors together, one minor at a time - renovate/istio-<X.Y>",
+      "description": "Istio's minors together, one minor at a time - renovate/istio-<X.Y> (its Gateway API is a unit of its own, the next rule: named by its own version it made istio-1.6/istio-1.7, picked before istio-1.32)",
       "matchUpdateTypes": [
         "minor"
       ],
@@ -178,13 +178,26 @@
         "ztunnel",
         "gateway",
         "/^istio\\//",
-        "/^docker\\.io\\/istio\\//",
-        "https://github.com/kubernetes-sigs/gateway-api"
+        "/^docker\\.io\\/istio\\//"
       ],
       "groupName": "istio",
       "groupSlug": "istio",
       "group": {
         "branchTopic": "istio-{{{newMajor}}}.{{{newMinor}}}"
+      }
+    },
+    {
+      "description": "The Gateway API (its CRDs, ops' gateway_api_version), one minor at a time - renovate/gateway-api-<X.Y>, picked after the Istio family's units (upgrade-units.py's FAMILIES); the copy's proof catches a Gateway API the Istio running does not support (operator 2026-11-16)",
+      "matchUpdateTypes": [
+        "minor"
+      ],
+      "matchPackageNames": [
+        "https://github.com/kubernetes-sigs/gateway-api"
+      ],
+      "groupName": "gateway api",
+      "groupSlug": "gateway-api",
+      "group": {
+        "branchTopic": "gateway-api-{{{newMajor}}}.{{{newMinor}}}"
       }
     },
     {

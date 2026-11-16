@@ -16,7 +16,7 @@ grouped by branch (renovate/<unit> - the same name in each repo).
                  A unit carrying the agent's fix (labelled agent-fixed by the runner) waits for its notice as a major
                  does, whatever its kind: what an agent wrote reaches production only after the operator was mailed it
                  and 24 h passed unvetoed.
-                 The order: renovate/wave-patches, then the family minors (istio, kubernetes, cilium, observability,
+                 The order: renovate/wave-patches, then the family minors (istio, gateway-api, kubernetes, cilium, observability,
                  data-operators, argocd, pi-services - the first three one minor at a time, named <family>-<X.Y>, the
                  lowest first), then any other minor (a <name>-<X.Y> one by its version), then majors - a waiting
                  major's notice before a new one's. Left out:
@@ -55,7 +55,8 @@ API = os.environ.get("UPGRADE_FORGEJO_URL", "https://git.pmon.dev/api/v1").rstri
 TOKEN = os.environ.get("UPGRADE_FORGEJO_TOKEN", "")
 REPOS = ("schnappy/infra", "schnappy/platform", "schnappy/ops")
 BOT = "renovate-bot"
-FAMILIES = ("istio", "kubernetes", "cilium", "observability", "data-operators", "argocd", "pi-services")
+# gateway-api after istio (the operator, 2026-11-16): the control plane first, then the Gateway API it is proven with
+FAMILIES = ("istio", "gateway-api", "kubernetes", "cilium", "observability", "data-operators", "argocd", "pi-services")
 # a unit moved one minor at a time is named for its minor (renovate/upgrade-cycle.json: istio-1.32, scylladb-2026.3)
 VERSIONED = re.compile(r"(?P<base>[a-z0-9][a-z0-9.-]*?)-(?P<major>\d+)\.(?P<minor>\d+)")
 VETO_HOURS = 24

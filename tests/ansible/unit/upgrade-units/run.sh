@@ -130,6 +130,12 @@ fixture(infra=[pr(2, "observability"), pr(3, "cilium-1.21"), pr(4, "kubernetes-1
 check("the families' order: kubernetes, then cilium, before observability", run("pick"), (0, "prove kubernetes-1.37 minor"))
 fixture(infra=[pr(2, "scylladb-2026.10"), pr(3, "scylladb-2026.9"), pr(4, "zz-other-1.x")])
 check("another minor named for its minor: the lowest first, by number", run("pick"), (0, "prove scylladb-2026.9 minor"))
+# the Gateway API a unit of its own (renovate/gateway-api-<X.Y>), after the Istio family's - named by its own version under
+# istio it read as istio-1.6, picked before istio-1.32 (2026-11-16)
+fixture(ops=[pr(1, "gateway-api-1.7"), pr(2, "gateway-api-1.6"), pr(3, "istio-1.32")])
+check("Istio's minor before the Gateway API's", run("pick"), (0, "prove istio-1.32 minor"))
+fixture(ops=[pr(1, "gateway-api-1.7"), pr(2, "gateway-api-1.6"), pr(3, "kubernetes-1.37")])
+check("  the Gateway API one minor at a time, its lowest first - before the families after istio", run("pick"), (0, "prove gateway-api-1.6 minor"))
 # a test environment's unit (renovate/test-<unit>, the preset's): merged before its production twin
 fixture(infra=[pr(1, "wave-patches"), pr(2, "observability")], platform=[pr(3, "test-observability")])
 check("a test environment's unit first, before wave-patches", run("pick"), (0, "test test-observability minor"))
