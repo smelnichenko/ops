@@ -71,6 +71,16 @@ def pr(n, unit, sha, mergeable=True, user="renovate-bot", fork=False):
     return {"number": n, "head": {"ref": f"renovate/{unit}", "sha": SHA.get(sha, sha), "repo": "FORK" if fork else None},
             "user": {"login": user}, "mergeable": mergeable}
 BASE = "e" * 40
+def write_fixture(fx):
+    """the fake Forgejo's answers, replaced whole (a rename): the server reads the file at every request, and one read
+    while it was rewritten in place (open "w" empties it first) met half a file - the connection dropped, the script's
+    green wait refused, ops#46's CI red (2026-11-17)"""
+    tmp = os.path.join(W, "fixture.json.tmp")
+    with open(tmp, "w") as f:
+        json.dump(fx, f)
+    os.replace(tmp, os.path.join(W, "fixture.json"))
+
+
 def fixture(prs, states, labels=None, base=None, fail_post=(), merged=None, issues=None, drop_post=(), extra=None, fail_code=409):
     fx = {"fail_post": list(fail_post), "drop_post": list(drop_post), "fail_code": fail_code}
     for repo in ("infra", "platform", "ops"):
@@ -90,7 +100,7 @@ def fixture(prs, states, labels=None, base=None, fail_post=(), merged=None, issu
         for repo in ("infra", "platform", "ops"):
             fx[f"/repos/schnappy/{repo}/commits/{SHA.get(sha, sha)}/status"] = {"state": st}
     fx.update(extra or {})
-    json.dump(fx, open(os.path.join(W, "fixture.json"), "w"))
+    write_fixture(fx)
     for f in ("writes", "auth", "reads"):
         if os.path.exists(os.path.join(W, f)):
             os.remove(os.path.join(W, f))
@@ -274,7 +284,7 @@ def flip():
     time.sleep(0.6)
     fx = json.load(open(os.path.join(W, "fixture.json")))
     fx[f"/repos/schnappy/platform/commits/{SHA['b1']}/status"] = {"state": "success"}
-    json.dump(fx, open(os.path.join(W, "fixture.json"), "w"))
+    write_fixture(fx)
 t = threading.Thread(target=flip); t.start()
 env = {**os.environ, "UPGRADE_FORGEJO_URL": f"http://127.0.0.1:{PORT}/api/v1", "UPGRADE_FORGEJO_TOKEN": "t", "UPGRADE_GREEN_POLL": "0.1"}
 r = subprocess.run([sys.executable, "scripts/upgrade-label.py", "wave-patches", "--green", "60"], capture_output=True, text=True, env=env, timeout=60)
