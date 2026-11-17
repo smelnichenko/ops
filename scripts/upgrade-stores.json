@@ -43,8 +43,7 @@
         "check:production:scylla-backup"
       ],
       "missing": [
-        "no restore from its backup: no sctool restore task or runbook, never rehearsed on the copy - a release line cannot be downgraded, so the way back is a new cluster restored from it",
-        "its units move only the schema Job's cqlsh image (scylla.image); the cluster's version (scyllaOperator.version) has no renovate annotation - such a unit would change no ScyllaDB"
+        "no restore from its backup: no sctool restore task or runbook, never rehearsed on the copy - a release line cannot be downgraded, so the way back is a new cluster restored from it"
       ],
       "examples": [
         "scylladb-2026.3",

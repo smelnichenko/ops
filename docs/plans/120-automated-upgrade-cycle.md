@@ -329,16 +329,28 @@ production's backups for Postgres and ScyllaDB existing all along (deploy:postgr
 check:production:scylla-backup) without the runner calling them. Operator: fix it, and "we need the solution for such
 kind of issues in the future". Now:
 - scripts/upgrade-stores.json: each store a one-way change can touch - its packages (the preset's one-way rules), its
-  units' names, the backups the runner runs before the merge, or each part still missing and why. ScyllaDB: Scylla
-  Manager's backup, started and DONE before the merge. Postgres: production's cluster's base backup - but
-  woodpecker-postgres has no backup store, so Postgres stays blocked, saying so. Kafka/Strimzi, ClickHouse, Grafana
-  (SQLite on a local volume), Vault and Consul (the Pis' daily snapshot, none taken at a change): missing, each said.
-- the runner (stop_if_one_way, scripts/upgrade-stores.py): a test environment's unit needs none of it; a production
-  unit's store backed up whole goes on, its backups into the apply's pre-commands (a failing one: nothing merged); a part
-  missing, or a one-way unit of no store the table names: blocked before anything is built, the notice naming each part.
-- upgrade-renovate's harness fails a package the preset marks one-way that no store names (and the reverse), a store
-  with neither backups nor a named gap, a backup that is no task of ops' - a new kind of store is decided in the table
-  when Renovate starts tracking it, not met in a run.
+  units' names (real examples, checked), the backups the runner runs before the merge with their time bound, a production
+  command that takes the backup itself (taken_by), or each part still missing and why. As production is (the review read
+  it live): Vault - upgrade-vault.yml snapshots Consul and exports vault/ first (taken_by); ScyllaDB - Scylla Manager's
+  backup, but no restore from it (no sctool restore, never rehearsed on the copy): missing; Postgres - production's CNPG
+  cluster backed up, woodpecker-postgres (no backup store) and SonarQube's plain Postgres (no backup) missing;
+  Kafka/Strimzi, ClickHouse, Grafana (SQLite on a local volume), Consul (no upgrade path at all): missing, each said.
+- the runner (stop_if_one_way): a part missing, or a one-way unit of no store the table names - blocked before anything
+  is built, the notice naming each part (and that upgrade-blocked comes off once the table has it); a store backed up
+  whole - its backups before the merge, their bound in the apply's span; taken_by - that command in the unit's plan or
+  nothing merged; a test environment's unit takes no backup but runs only when its production twin could. The labels and
+  the table read again after the proof.
+- the pick: a one-way unit waits out the 24 h notice as a major does (ScyllaDB's release lines are minors by number).
+- the plan read before the copy is built: a part the copy cannot prove (Keycloak's, Consul's - copy-unit.sh has no proof
+  for them) refused there, labelled, nothing built and no fix agent.
+- ScyllaDB's version (the ScyllaCluster's, scyllaOperator.version) annotated beside the cqlsh image in both data values -
+  one depName, one unit - and infra's CI (.woodpecker/scylla-version-check.sh) fails the two apart (infra 6c518023): the
+  release-line units moved cqlsh alone and would have changed no ScyllaDB.
+- upgrade-renovate's harness fails a package the preset marks one-way that no store names (and the reverse), a store with
+  neither backups, taken_by nor a named gap, a backup that is no production task of ops'; upgrade-stores' own harness a
+  table not as described - a new kind of store is decided in the table when Renovate starts tracking it, not met in a run.
+- still to build: a ScyllaDB restore (sctool restore, rehearsed on the copy); a backup store for woodpecker-postgres;
+  SonarQube's Postgres backed up (or on CNPG); Kafka, ClickHouse and Grafana backups; Consul's upgrade path.
 
 **3. One-way changes and their backups.** One-way: Kubernetes (kubeadm does not downgrade, patches included),
 containerd, database majors and format changes (Postgres majors, ScyllaDB release lines, ClickHouse compatibility,
