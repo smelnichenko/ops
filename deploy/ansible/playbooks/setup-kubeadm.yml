@@ -54,7 +54,7 @@
     # renovate: datasource=helm depName=cert-manager registryUrl=https://charts.jetstack.io
     cert_manager_version: "v1.21.3"
     # renovate: datasource=helm depName=external-secrets registryUrl=https://charts.external-secrets.io
-    external_secrets_chart_version: "2.12.0"
+    external_secrets_chart_version: "2.15.0"
     # renovate: datasource=helm depName=metrics-server registryUrl=https://kubernetes-sigs.github.io/metrics-server
     metrics_server_chart_version: "3.14.0"
     prometheus_operator_crds_chart_version: "32.0.1"  # operator v0.94.1
