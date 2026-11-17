@@ -38,6 +38,9 @@
       sh -c 'test "$(grep -c "" "$0")" -eq 1 && grep -Eq "(^|[[:space:]])root=[^[:space:]]" "$0"' %s
     # production's CNPG databases (infra's schnappy-production-data values, postgres.databases)
     pi_restore_check_databases: [monitor, admin, chat, chess, masi]
+    # production's CNPG server in the store (infra's schnappy-production-data cnpg.backupServerName): the one restored -
+    # never the newest of any cluster's (SonarQube's and Woodpecker's back up there too)
+    pi_restore_check_pg_server: schnappy-production-postgres-pg18
     # production's Postgres image per major: the 17 its chart ran (by its tag alone, never a digest), the 18 its step 47
     # moved to, by the digest platform's schnappy-data runs
     pi_restore_check_pg_images:
@@ -113,6 +116,7 @@
           PI_RESTORE_NAME={{ inventory_hostname }}
           PI_RESTORE_PARITY={{ groups['pis'].index(inventory_hostname) % 2 }}
           PI_RESTORE_PG_DATABASES={{ pi_restore_check_databases | join(' ') }}
+          PI_RESTORE_PG_SERVER={{ pi_restore_check_pg_server }}
           {% for major, image in pi_restore_check_pg_images.items() %}
           PI_RESTORE_PG_IMAGE_{{ major }}={{ image }}
           {% endfor %}
