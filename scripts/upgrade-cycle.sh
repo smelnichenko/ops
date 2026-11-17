@@ -201,6 +201,18 @@ window_within() {  # a window meeting [now, now + $1 minutes] - "<from>-<to>" sa
 APPLY_SPAN=210; START_SPAN=330
 
 # 0. the gates
+# infra's and platform's local mains brought to origin's when only behind it - on main, clean, a fast-forward: the
+# runner merges there through Forgejo, so after a unit the next run found them behind and refused (test-curlimages-
+# curl-8.x, the first chained run, 2026-11-17); one ahead, dirty or on another branch is left as it is - the check after
+# refuses it, said
+mains_forward() {
+  local r
+  [ -n "$dry" ] && { say "RUN git fetch, merge --ff-only (infra, platform: a main only behind origin's brought to it)"; return 0; }
+  for r in ../infra ../platform; do
+    [ "$(git -C "$r" rev-parse --abbrev-ref HEAD 2> /dev/null)" = main ] && [ -z "$(git -C "$r" status --porcelain 2>&1)" ] || continue
+    git -C "$r" fetch -q origin main < /dev/null >> "$log" 2>&1 && git -C "$r" merge -q --ff-only origin/main < /dev/null >> "$log" 2>&1 || true
+  done
+}
 gates() {  # $1: the span (minutes) no backup window may meet; $2: start or merge
   local w open branch head origin am
   if w=$(window_within "$1"); then say "REFUSED: a backup window meets the run ($w UTC) - run when none is that near"; return 1; fi
@@ -231,6 +243,7 @@ gates() {  # $1: the span (minutes) no backup window may meet; $2: start or merg
   head=$(git -C "$ops" rev-parse HEAD 2> /dev/null); origin=$(git -C "$ops" rev-parse origin/main 2> /dev/null)
   [ -n "$head" ] && [ "$head" = "$origin" ] || { say "REFUSED: ops is not origin's main (${head:0:12} here, ${origin:0:12} there)"; return 1; }
   if [ "$2" = start ]; then  # the copy mirrors the local mains (before the merge the base pin stands for them)
+    mains_forward
     scripts/copy-main-current.sh ../infra ../platform >> "$log" 2>&1 \
       || { say "REFUSED: the local infra or platform main is not origin's (the copy mirrors them) - see the log"; return 1; }
   fi
