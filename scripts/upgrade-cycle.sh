@@ -83,7 +83,7 @@
 #        (seconds, 3600), UPGRADE_WORK (the agents' clones, default <ops>/../.upgrade-cycle-work - the agents' settings
 #        let them read that one), UPGRADE_HEADS_READS (12) / UPGRADE_HEADS_WAIT (10 s): Forgejo read after a push until
 #        it shows it; the harness's: UPGRADE_NOW_HM / UPGRADE_NOW_HM_FILE (HH:MM UTC - the file's lines one a read),
-#        UPGRADE_NOW_DOW (1-7), UPGRADE_TODAY (YYYY-MM-DD UTC), UPGRADE_MEMINFO, UPGRADE_FORGEJO_GIT (the bot's git URL
+#        UPGRADE_NOW_DOW (1-7), UPGRADE_MEMINFO, UPGRADE_FORGEJO_GIT (the bot's git URL
 #        base, default https://git.pmon.dev)
 set -uo pipefail
 # C's messages and byte order, UTF-8's encoding: what the runner starts includes Ansible (the copy's build, the apply's
@@ -246,20 +246,12 @@ memory() {  # the copy must fit: the guard's own figure (22.5 GB of VMs + its 2 
   avail=$(awk '/^MemAvailable:/ {print int($2/1024)}' "${UPGRADE_MEMINFO:-/proc/meminfo}")
   [ "${avail:-0}" -ge "$need" ] || { say "REFUSED: memory - $avail of $need MB free: stop the radar (sudo systemctl stop radar-live) - or a copy left running (vagrant status; vagrant destroy -f) - then run again"; return 1; }
 }
-today_applied() {  # one production apply a day
-  local rec
-  for rec in docs/upgrades/"${UPGRADE_TODAY:-$(date -u +%F)}"-*.md; do
-    [ -e "$rec" ] && { say "REFUSED: a production apply today already ($rec) - one a day"; return 0; }
-  done
-  return 1
-}
 if [ -n "$preflight" ]; then
-  gates "$START_SPAN" start && memory && ! today_applied && { say "PREFLIGHT: a run may start"; exit 0; }
+  gates "$START_SPAN" start && memory && { say "PREFLIGHT: a run may start"; exit 0; }
   exit 1
 fi
 gates "$START_SPAN" start || exit 1
 gate_head=$(git -C "$ops" rev-parse HEAD)  # what ops' main may hold at the merge: this, and the unit's own merge
-today_applied && exit 1
 
 # 1. the pick
 picked=$(scripts/upgrade-units.py pick ${shadow:+--shadow}) || { say "NOT READ: Forgejo - the run changes nothing ($picked)"; exit 1; }

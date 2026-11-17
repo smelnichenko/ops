@@ -242,7 +242,7 @@ def setup(pick, proofs=(0,), plan="test:copy:change INFRA_REF=renovate/x PLATFOR
         open(os.path.join(ST, f), "w").write(v)
 def environ(hm, dow, env=None):
     e = {**os.environ, "PATH": BIN + ":" + os.environ["PATH"], "ST": ST, "UPGRADE_NOW_DOW": dow, "UPGRADE_WORK": WORK,
-         "UPGRADE_MEMINFO": os.path.join(ST, "meminfo"), "UPGRADE_TODAY": "2026-11-20", "UPGRADE_HEADS_WAIT": "0",
+         "UPGRADE_MEMINFO": os.path.join(ST, "meminfo"), "UPGRADE_HEADS_WAIT": "0",
          "UPGRADE_HEADS_READS": "3", "ANTHROPIC_API_KEY": "sk-the-apps-key", "RENOVATE_TOKEN": "bot-token",
          "VAULT_ROOT_TOKEN": "root", "UPGRADE_FORGEJO_TOKEN": "bot-token"}
     if isinstance(hm, list):
@@ -357,10 +357,11 @@ check("memory short (the radar running), a unit that builds the copy: refused at
       (rc, has(calls, "task"), has(calls, "sleep")), (1, [], []))
 rc, calls = night("test test-observability minor", mem=20000)
 check("memory short, a test unit (no copy): on", (rc, merged(calls, "test-observability")), (0, True))
-rc, calls = night("prove wave-patches patch", records=("2026-11-20-istio.md",))
-check("a production apply recorded today: refused (one a day), nothing picked", (rc, picked(calls)), (1, False))
-rc, calls = night("prove wave-patches patch", records=("2026-11-19-istio.md",))
-check("one recorded yesterday: on", (rc, picked(calls)), (0, True))
+# units back to back (operator 2026-11-17, "run them back to back"): an apply recorded today stops no run - a
+# production unit's or a test environment's (one a day, counting the test unit's record, refused every later run)
+for rec in ("2026-11-20-istio.md", "2026-11-20-test-observability.md"):
+    rc, calls = night("prove wave-patches patch", records=(rec,))
+    check(f"an apply recorded today ({rec}): on - units back to back", (rc, picked(calls)), (0, True))
 rc, calls = night("prove wave-patches patch", args=("--preflight",))
 check("--preflight, the gates passing: exit 0, nothing picked or built", (rc, picked(calls), has(calls, "task")), (0, False, []))
 for files, mem, why in (({}, 20000, "memory"), ({"am": "email\n"}, 30000, "Alertmanager")):

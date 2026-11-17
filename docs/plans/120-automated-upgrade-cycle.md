@@ -406,7 +406,8 @@ Each step reviewed before the next.
    at once (2026-11-15: started by hand - the operator is there; no wait, no mail), and the copy is destroyed as soon as
    the review is done - the radar may start while the apply goes on. (A polkit rule
    letting the runner stop and start radar-live itself would remove the step - the operator's call, not assumed.)
-4. **No batches: one unit a run, one apply a day** (a wave can take a week).
+4. **No batches: one unit a run** (a wave can take a week). ~~One apply a day~~ - lifted 2026-11-17 (operator: "run
+   them back to back"): runs follow one another, each unit still proven, reviewed and verified (its 60 min hold) on its own.
 
 ## What wave 1 by hand taught the cycle (2026-11-14)
 
