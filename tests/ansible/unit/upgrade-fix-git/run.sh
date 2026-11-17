@@ -83,12 +83,15 @@ d=$(tr -d '\000' < "$W/fix/infra.diff" 2> /dev/null)
 check "the review's diffs: each clone's diff and commits beside it, as git holds them - no textconv, external diff or colour, a binary-looking file shown whole" \
   "$out $(grep -c '^+v: 2$' <<< "$d") $(grep -c '^+evil: key$' <<< "$d") $(grep -c -e TEXTCONV-SHOWN -e EXTERNAL-SHOWN -e 'Binary files' -e $'\033\[' <<< "$d") $(cut -d' ' -f2- "$W/fix/infra.commits") | $(wc -c < "$W/fix/ops.diff") $(wc -c < "$W/fix/ops.commits")" \
   "rc=0 1 1 0 t <t@t> the agent's fix | 0 0"
+# a directory where the diff goes: its write fails as any user (CI's container runs as root - a directory without
+# write permission stopped nobody there)
 rm -f "$W/fix/"*.diff "$W/fix/"*.commits
-chmod -w "$W/fix"
+mkdir "$W/fix/infra.diff"
 out=$(cd "$W" && heads=$W/heads log=$W/log bash -c "$funcs
   diffs \"$W/fix\"; echo rc=\$?" 2>&1 | tail -n 1)
-chmod u+w "$W/fix"
-check "  a diff not written (its directory not writable): diffs fails - the runner blocks the unit, no review run" "$out" "rc=1"
+check "  a diff not written: diffs fails at once (nothing after it written) - the runner blocks the unit, no review run" \
+  "$out $([ -e "$W/fix/infra.commits" ] && echo commits-written || echo none-after)" "rc=1 none-after"
+rmdir "$W/fix/infra.diff"
 
 setup
 printf '#!/bin/sh\ntouch "%s/hook-ran"\n' "$W" > "$W/fix/infra/.git/hooks/pre-push"; chmod +x "$W/fix/infra/.git/hooks/pre-push"
