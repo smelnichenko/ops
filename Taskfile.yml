@@ -1248,6 +1248,22 @@ tasks:
     cmds:
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/acme-check.yml {{.CLI_ARGS}}
 
+  deploy:scylla:restore:
+    desc: "PRODUCTION: ScyllaDB tables restored from Scylla Manager's backup - the keyspaces and snapshot given (-- -e snapshot=sm_<UTC> -e keyspaces=<ks>), rows added back into the cluster as it stands (scylla-restore.yml; --check: the dry run alone). Rehearsed on the copy: test:copy:scylla-restore"
+    dir: deploy/ansible
+    deps: [deploy:install]
+    dotenv: ['../../.env']
+    prompt: "Restore ScyllaDB tables on PRODUCTION?"
+    cmds:
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/scylla-restore.yml {{.CLI_ARGS}}
+
+  test:copy:scylla-restore:
+    desc: "Vagrant: ScyllaDB's backups restore - a marker keyspace backed up by Scylla Manager, truncated, restored with production's restore tasks (sctool restore --restore-tables), its token back (scylla-restore-check.yml)"
+    dir: deploy/ansible
+    deps: [deploy:install]
+    cmds:
+      - venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/scylla-restore-check.yml
+
   check:production:scylla-backup:
     desc: "PRODUCTION: each ScyllaDB cluster's Scylla Manager backup started now, DONE with a fresh snapshot (scylla-backup-check.yml)"
     dir: deploy/ansible

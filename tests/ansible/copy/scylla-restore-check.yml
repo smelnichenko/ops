@@ -1,0 +1,105 @@
+---
+# ScyllaDB's backups restore, rehearsed on the copy: a marker keyspace (as chat's is: SimpleStrategy, RF 1, no tablets)
+# holds a random marker; Scylla Manager backs that keyspace up (a task of its own, its snapshot removed after); the table
+# is truncated; production's restore (deploy/ansible/playbooks/tasks/scylla-restore.yml - sctool restore
+# --restore-tables) brings the marker back. Until now nothing had ever restored one of these backups. Not yet rehearsed:
+# the whole way back from a release line (a new cluster at the old version, its schema restored, then its tables).
+#
+# Usage: ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/scylla-restore-check.yml
+- name: Vagrant VMs only
+  ansible.builtin.import_playbook: ../vagrant-only-play.yml
+
+- name: ScyllaDB tables restore from Scylla Manager's backup
+  hosts: target
+  become: true
+  gather_facts: false
+  vars:
+    kubeconfig: /etc/kubernetes/admin.conf
+    kubectl: "kubectl --kubeconfig {{ kubeconfig }}"
+    manager: "{{ kubectl }} -n scylla-manager exec deploy/scylla-manager -c scylla-manager --"
+    ks: upgrade_restore_check
+    restore_cluster: schnappy-production/schnappy-production-scylla
+    restore_location: s3:scylla-backups
+    restore_keyspaces: "{{ ks }}"
+  tasks:
+    - name: Its names are the fixed ones - what it drops cannot be redirected with -e
+      ansible.builtin.assert:
+        that:
+          - ks == 'upgrade_restore_check'
+          - restore_keyspaces == 'upgrade_restore_check'
+        fail_msg: "REFUSED: ks={{ ks }} keyspaces={{ restore_keyspaces }}"
+        quiet: true
+
+    - name: A ScyllaDB pod of production's cluster to run cqlsh in
+      ansible.builtin.command: >-
+        {{ kubectl }} -n schnappy-production get pods -l scylla/cluster=schnappy-production-scylla
+        -o jsonpath={.items[0].metadata.name}
+      register: _pod
+      changed_when: false
+      failed_when: _pod.rc != 0 or _pod.stdout | length == 0
+
+    - name: The facts - cqlsh in that pod, a marker fixed once (a random value, no secret)
+      ansible.builtin.set_fact:
+        cqlsh: "{{ kubectl }} -n schnappy-production exec {{ _pod.stdout }} -c scylla -- cqlsh"
+        marker: "{{ lookup('ansible.builtin.password', '/dev/null', chars=['ascii_lowercase', 'digits'], length=24) }}"
+
+    - name: Nothing left from an earlier run, then the marker written
+      ansible.builtin.command:
+        argv: [sh, -c, '{{ cqlsh }} -e "$1"', _,
+               "DROP KEYSPACE IF EXISTS {{ ks }};
+                CREATE KEYSPACE {{ ks }} WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1}
+                  AND tablets = {'enabled': false};
+                CREATE TABLE {{ ks }}.t (k int PRIMARY KEY, v text);
+                INSERT INTO {{ ks }}.t (k, v) VALUES (1, '{{ marker }}');"]
+      changed_when: true
+
+    - name: Scylla Manager backs the marker up - a task of its own
+      ansible.builtin.command: "{{ manager }} sctool backup -c {{ restore_cluster }} -L {{ restore_location }} -K {{ ks }} --retention 1"
+      register: _backup
+      changed_when: true
+      failed_when: _backup.rc != 0 or _backup.stdout is not search('backup/[0-9a-f-]+')
+
+    - name: Its backup DONE
+      ansible.builtin.command: "{{ manager }} sctool progress -c {{ restore_cluster }} {{ _backup.stdout | regex_search('backup/[0-9a-f-]+') }}"
+      register: _bprogress
+      changed_when: false
+      retries: 60
+      delay: 10
+      until: _bprogress.stdout is search('Status:\s+(DONE|ERROR|ABORTED)')
+      failed_when: _bprogress.stdout is not search('Status:\s+DONE') or _bprogress.stdout is not search('sm_[0-9]{14}UTC')
+
+    - name: The snapshot it took
+      ansible.builtin.set_fact:
+        restore_snapshot: "{{ _bprogress.stdout | regex_findall('sm_[0-9]{14}UTC') | first }}"
+
+    - name: The marker's table truncated - empty
+      ansible.builtin.command:
+        argv: [sh, -c, '{{ cqlsh }} -e "$1"', _, "TRUNCATE {{ ks }}.t; SELECT count(*) FROM {{ ks }}.t;"]
+      register: _empty
+      changed_when: true
+      failed_when: _empty.rc != 0 or (_empty.stdout | regex_search('\n\s*0\s*\n') is none)
+
+    - name: Production's restore of the marker's keyspace from that snapshot
+      ansible.builtin.include_tasks: ../../../deploy/ansible/playbooks/tasks/scylla-restore.yml
+
+    - name: The marker back
+      ansible.builtin.command:
+        argv: [sh, -c, '{{ cqlsh }} -e "$1"', _, "SELECT v FROM {{ ks }}.t WHERE k = 1;"]
+      register: _back
+      changed_when: false
+      failed_when: _back.rc != 0 or marker not in _back.stdout
+
+    - name: The marker gone - its keyspace dropped, its backup task and snapshot removed
+      ansible.builtin.shell: |
+        set -euo pipefail
+        {{ cqlsh }} -e "DROP KEYSPACE IF EXISTS {{ ks }};"
+        {{ manager }} sctool backup delete -c {{ restore_cluster }} -L {{ restore_location }} -T {{ restore_snapshot }}
+        {{ manager }} sctool stop --delete -c {{ restore_cluster }} {{ _backup.stdout | regex_search('backup/[0-9a-f-]+') }}
+        {{ manager }} sctool stop --delete -c {{ restore_cluster }} {{ restore_task }} || true
+      args:
+        executable: /bin/bash
+      changed_when: true
+
+    - name: Restored
+      ansible.builtin.debug:
+        msg: "SCYLLA RESTORE OK: {{ ks }}.t truncated, restored from {{ restore_snapshot }} ({{ restore_task }}) - its marker back"
