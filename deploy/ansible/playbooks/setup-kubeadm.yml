@@ -70,10 +70,10 @@
     # renovate: datasource=helm depName=scylla-manager registryUrl=https://scylla-operator-charts.storage.googleapis.com/stable
     scylla_manager_chart_version: "v1.22.0"
     # renovate: datasource=git-tags depName=https://github.com/kubernetes-sigs/gateway-api versioning=semver
-    gateway_api_version: "v1.5.1"
+    gateway_api_version: "v1.6.3"
     # its standard-install.yaml - TLS alone, Gateway API signs no release (scripts/renovate-checksums.py - moved with the
     # version, never by hand); an upgrade run (-e gateway_api_version) passes its sha256 beside it
-    gateway_api_sha256: "751002b3b91a87f7ae3bd2517c79a47a8d7ed6702901808a1cf9bd97d284f9b8"
+    gateway_api_sha256: "356c2b8e286a964dc20995435659ad1095386329974793af10bbfe3eff977fe5"
     # renovate: datasource=docker depName=rancher/local-path-provisioner
     local_path_provisioner_version: "v0.0.37"
     # the provisioner's node paths - upstream's default, as ten runs (/opt/local-path-provisioner, on the NVMe root)
