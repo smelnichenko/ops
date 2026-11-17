@@ -636,9 +636,9 @@ push_fix() {
                 && { [ "$mode" = 000000 ] || plain_fix "$mirror" "$sha" "$tip" "$f" < /dev/null; }; } || echo "$f"
             done)
       [ -z "$bad" ] || { say "the fix changed what it may not in $repo: $(echo $bad) - nothing pushed"; return 1; }
-      { echo "=== $repo"; git -C "$mirror" diff --stat --no-renames "$sha" "$tip"; } < /dev/null >> "$fixdiff.stat"
+      { echo "=== $repo"; git -C "$mirror" diff --stat --no-ext-diff --no-textconv --no-color --no-renames "$sha" "$tip"; } < /dev/null >> "$fixdiff.stat"
       { echo "=== $repo"; git -C "$mirror" log --format='%h %s' "$sha..$tip" | LC_ALL=C tr -c '[:print:]\n' '?' | cut -c1-200
-        git -C "$mirror" diff --text --no-renames "$sha" "$tip"; } < /dev/null >> "$fixdiff"
+        git -C "$mirror" diff --text --no-ext-diff --no-textconv --no-color --no-renames "$sha" "$tip"; } < /dev/null >> "$fixdiff"
       # pushed as one commit of the runner's on the proven head - its tree the one judged: the agent's own commits (a
       # step in between with files it may not touch, its words - a closing keyword on the dashboard -, an author
       # it chose) never reach Forgejo
@@ -683,8 +683,25 @@ heads_pushed() {
 
 # 2. the proof, one fix - the copy destroyed when the run ends, however it ends (the radar may start again)
 build() { built=1; run task test:copy:build || { say "COPY NOT BUILT - the unit untouched (see the log); run again"; exit 1; }; }
+# the unit's plan read before the copy is built: a part the proof cannot take (an ops value copy-unit.sh has no proof for -
+# Keycloak's, Consul's) refused now - labelled upgrade-blocked, the parts named, nothing built and no agent: the refusal is
+# ops' to fix, never the unit's (it was built 49 min, refused, and handed to the fix agent as red - 2026-11-17's review)
+preplan() {
+  local out
+  [ -z "$dry" ] || { say "RUN task test:copy:unit UNIT=$unit PLAN=true (before the build)"; return 0; }
+  out=$(task test:copy:unit UNIT="$unit" PLAN=true 2>&1 < /dev/null 9>&-) && { printf '%s\n' "$out" >> "$log"; return 0; }
+  printf '%s\n' "$out" >> "$log"
+  if grep -q '^REFUSED:' <<< "$out"; then
+    run scripts/upgrade-label.py "$unit" upgrade-blocked || say "NOT LABELLED upgrade-blocked - the next run blocks it again"
+    notice blocked "$unit" "the copy cannot prove it - $(grep -m1 '^REFUSED:' <<< "$out" | cut -c10-400) (scripts/copy-unit.sh's proof paths; once there, upgrade-blocked off its pull requests) - nothing built" "$log"
+    exit 1
+  fi
+  notice blocked "$unit" "its plan not read before the build (see the log) - nothing built, no try counted" "$log"
+  exit 1
+}
 read_heads "$heads" || { notice blocked "$unit" "its pull requests not read - nothing proven" "$log"; exit 1; }
 fresh_or_end
+preplan
 build
 if ! run task test:copy:unit UNIT="$unit"; then
   say "RED: $unit - handed to the fix agent"
@@ -782,14 +799,14 @@ summary() {  # summary <file>: what the unit changes, for its notice's mail - ea
   { echo "=== renovate/$unit: what it changes"
     while read -r repo _ head _ <&3; do
       dir=$(repo_dir "$repo")
-      echo "=== $repo"; git -C "$dir" diff --stat --no-renames "origin/main...$head" < /dev/null 2>> "$log" || ok=""
+      echo "=== $repo"; git -C "$dir" diff --stat --no-ext-diff --no-textconv --no-color --no-renames "origin/main...$head" < /dev/null 2>> "$log" || ok=""
       git -C "$dir" log --format='%h %s' "origin/main..$head" < /dev/null 2>> "$log" | LC_ALL=C tr -c '[:print:]\n' '?' | cut -c1-200
       [ "${PIPESTATUS[0]}" = 0 ] || ok=""
     done 3< "$heads"
     echo "=== the review: $(grep -E '^(PASSES|VERDICT): ' "$review" 2> /dev/null | tr '\n' ' ')"
     echo "=== the diff"
     while read -r repo _ head _ <&3; do
-      git -C "$(repo_dir "$repo")" diff --text --no-renames "origin/main...$head" < /dev/null 2>> "$log" || ok=""
+      git -C "$(repo_dir "$repo")" diff --text --no-ext-diff --no-textconv --no-color --no-renames "origin/main...$head" < /dev/null 2>> "$log" || ok=""
     done 3< "$heads"
   } > "$out.whole"
   [ -n "$ok" ] || { rm -f "$out.whole"; return 1; }

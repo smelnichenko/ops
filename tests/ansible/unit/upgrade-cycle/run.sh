@@ -181,7 +181,7 @@ case "$args" in
   *"merge-tree --write-tree origin/main "*)  # merging a head into main: one tree whatever the head - unless a commit came
     # since the notice ($ST/sincenotice): then each head its own tree (the head now and the announced one differ)
     if [ -s "$ST/sincenotice" ]; then echo "tree-of-${*: -1}"; else echo tree-the-announced-ones; fi ;;
-  *"diff --stat --no-renames origin/main..."*) [ ! -e "$ST/summary.fail" ] || exit 128; echo " clusters/production/x.yaml | 2 +-" ;;
+  *"diff --stat --no-ext-diff --no-textconv --no-color --no-renames origin/main..."*) [ ! -e "$ST/summary.fail" ] || exit 128; echo " clusters/production/x.yaml | 2 +-" ;;
   *"log --format=%h %s origin/main.."*) printf 'abc1234 bump x to 2 \033[2J\n' ;;  # a subject with a terminal escape
   *" commit-tree "*) case "$dir" in  # the runner's commit of the fix's tree: the agent's tip for the case's purposes
       */ops) echo dddddddddddddddddddddddddddddddddddddddd ;; *) echo bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb ;; esac ;;
@@ -399,11 +399,12 @@ KEY = ("task ", "upgrade-label.py", "upgrade-record.sh", "vagrant", "claude", "u
        "upgrade-verify.sh AFTER", "upgrade-units.py held")
 seq = [words(c, 2 if c.startswith("upgrade-record.sh") else 3) for c in calls if c.startswith(KEY)
        or c.startswith("git -C " + OPS + " merge")]
-check("a patch unit: heads, green, built, proven, heads again, reviewed, the copy destroyed, the plan, the etcd snapshot, "
+check("a patch unit: heads, green, its plan read, built, proven, heads again, reviewed, the copy destroyed, the plan, the etcd snapshot, "
       "held, merged, ops fast-forwarded, Argo settled on the merge, Kubernetes, Forgejo, verified, the inventory read, "
       "recorded, reported - in that order (the copy gone once)",
       (rc, seq),
-      (0, ["upgrade-label.py wave-patches --heads", "upgrade-label.py wave-patches --green", "task test:copy:build",
+      (0, ["upgrade-label.py wave-patches --heads", "upgrade-label.py wave-patches --green",
+           "task test:copy:unit UNIT=wave-patches", "task test:copy:build",
            "task test:copy:unit UNIT=wave-patches", "upgrade-label.py wave-patches --heads", "claude -p upgrade-cycle",
            "vagrant destroy -f", "task test:copy:unit UNIT=wave-patches", "task --yes deploy:etcd:backup",
            "upgrade-units.py held wave-patches", "upgrade-label.py wave-patches --merge", "git -C " + OPS,
@@ -740,7 +741,7 @@ check("  its details a summary of the unit (each repo's files, its commits - a s
        "=== schnappy/ops", " clusters/production/x.yaml | 2 +-", "abc1234 bump x to 2 ?[2J",
        "=== the review: PASSES: correctness, security, architecture, reliability, tests VERDICT: CLEAN ", "=== the diff", ""])
 check("  the summary read from the heads proven (never the branches' names - Forgejo's head may lag its branch)",
-      sorted({c.split("origin/main...")[1] for c in calls if "diff --stat --no-renames origin/main..." in c}), ["a" * 40, "c" * 40])
+      sorted({c.split("origin/main...")[1] for c in calls if "diff --stat --no-ext-diff --no-textconv --no-color --no-renames origin/main..." in c}), ["a" * 40, "c" * 40])
 check("  the summary's file gone at the run's end (mailed by then)",
       [f for f in os.listdir(os.path.join(OPS, ".copy")) if f.startswith("upgrade-notice-")] if os.path.isdir(os.path.join(OPS, ".copy")) else [], [])
 rc2, calls2 = night("notice centrifugo-7.x major", files={"summary.fail": ""})
@@ -882,6 +883,20 @@ check("the labels not read: nothing built or merged (fails closed)", (rc, has(ca
 rc, calls = night("prove wave-patches patch", files={"list": "other-1.x minor schnappy/infra upgrade-cycle\n"})
 check("the unit gone from the open ones since its pick: nothing built or merged", (rc, has(calls, "task"), merged(calls, "wave-patches")),
       (1, [], False))
+# the plan read before the build: a part the copy cannot prove refused there - labelled, the part named, nothing built,
+# no agent (a refusal is ops' to fix; it was built 49 min, refused, handed to the fix agent - 2026-11-17's review)
+REFUSAL = "REFUSED: the unit changes ops values with no known proof: deploy/ansible/playbooks/setup-pi-services.yml\n"
+rc, calls = night("prove pi-services minor", files={"plan.fail": "", "plan": REFUSAL})
+check("a unit the copy cannot prove (its plan refused before the build): blocked, labelled, the part named - nothing "
+      "built, no agent",
+      (rc, has(calls, "task test:copy:build"), [c for c in calls if c.startswith("claude")],
+       has(calls, "upgrade-label.py pi-services upgrade-blocked"),
+       "setup-pi-services.yml" in " ".join(has(calls, "upgrade-notice.sh blocked"))),
+      (1, [], [], ["upgrade-label.py pi-services upgrade-blocked"], True))
+rc, calls = night("prove pi-services minor", files={"plan.fail": "", "plan": "task: some error\n"})
+check("  its plan not read (no refusal said): blocked, not labelled, nothing built",
+      (rc, has(calls, "task test:copy:build"), has(calls, "upgrade-label.py pi-services upgrade-blocked"), notices(calls)),
+      (1, [], [], ["upgrade-notice.sh blocked pi-services"]))
 # ── the plan ──────────────────────────────────────────────────────────────────────────────────────────────────────────
 rc, calls = night("prove wave-patches patch", plan=PLAN, files={"plan.fail": ""})
 check("the plan's task failing (even printing steps): blocked, nothing merged",
