@@ -230,6 +230,19 @@
         or _node_probe.stdout_lines | select('eq', 'public-blocked') | list | length != production_public | length
         or 'vagrant-reachable' not in _node_probe.stdout_lines
 
+    # the probe's image: one production runs with a real curl in it (num_connects and exit 28 tell a dropped SYN), the
+    # stale PR sweeper's alpine/k8s - a CronJob, so production's inventory always lists it and the copy holds it (this
+    # runs before Argo has synced the sweeper here). A pinned curlimages/curl stayed behind production's (its only users
+    # are hook Jobs, no object to read it from; Renovate reads nothing under tests/)
+    - name: The probe's image - alpine/k8s as production's inventory has it
+      tags: [proof]
+      ansible.builtin.set_fact:
+        probe_image: "alpine/k8s:{{ _k8s | first }}"
+      vars:
+        _k8s: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/prod-inventory.txt').splitlines()
+                  | select('match', '^image alpine/k8s [0-9]') | map('regex_replace', '^image alpine/k8s ', '') | list }}"
+      failed_when: _k8s | length != 1
+
     - name: Prove it - a pod cannot reach production's VIP nor its public addresses, and can reach the Vagrant VIP
       tags: [proof]
       ansible.builtin.shell: |
@@ -241,7 +254,7 @@
         {{ kubectl }} create namespace isolation-probe --dry-run=client -o yaml | {{ kubectl }} apply -f - > /dev/null
         if [ "$({{ kubectl }} get pod isolation-probe $N -o jsonpath='{.status.phase}' 2> /dev/null)" != Running ]; then
           {{ kubectl }} delete pod isolation-probe $N --ignore-not-found --wait=true > /dev/null
-          {{ kubectl }} run isolation-probe $N --restart=Never --image=curlimages/curl:8.12.1 \
+          {{ kubectl }} run isolation-probe $N --restart=Never --image={{ probe_image }} \
             --overrides='{"metadata":{"labels":{"sidecar.istio.io/inject":"false"}}}' --command -- sleep 2147483647 > /dev/null
           {{ kubectl }} wait pod/isolation-probe $N --for=condition=Ready --timeout=120s > /dev/null
         fi

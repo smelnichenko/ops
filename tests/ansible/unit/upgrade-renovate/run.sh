@@ -257,10 +257,7 @@ for root, dirs, files in os.walk("deploy/ansible"):
 production = {re.sub(r"^docker\.io/(library/)?", "", l.split()[1]) for l in open("tests/ansible/copy/prod-inventory.txt")
               if l.startswith("image ")}
 pinned = re.compile(r"(?<![\w./-])((?:docker\.io/)?[a-z0-9][a-z0-9._/-]*[a-z0-9]):[A-Za-z0-9][A-Za-z0-9._-]*")
-PIN_OK = {  # a production image a copy's check still pins - with why
-    "tests/ansible/copy/isolate-cluster.yml curlimages/curl":
-        "production runs curl only in Argo hook Jobs (k6 post-sync, Sonar's setup) - no object to read it from",
-}
+PIN_OK = {}  # a production image a copy's check still pins - with why (none: each reads it from the cluster or the inventory)
 copy_pins = set()
 for root, _, files in os.walk("tests/ansible/copy"):
     for f in files:
