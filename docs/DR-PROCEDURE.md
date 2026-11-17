@@ -125,6 +125,18 @@ In infra's `clusters/production/schnappy-production-data/values.yaml`, under `cn
 Rehearsed in Vagrant: `task test:dr` recovers Postgres on the image production's Cluster runs
 (`scripts/production-cnpg-image.py`; `TEST_PG_IMAGE=` for another).
 
+The other CNPG clusters back up to the same bucket under names of their own, and recover the same way:
+
+- **SonarQube** (`schnappy-sonarqube-pg`, infra's `clusters/production/schnappy-sonarqube/values.yaml`, `sonarqube.cnpg`):
+  `recovery`, `recoveryServerName: schnappy-sonarqube-pg18`, a new `backupServerName`; SonarQube at 0 replicas first,
+  and its `ci` token revoked after (the setup Job writes a new one to Vault) - plan 121's "Recovery from its backups".
+  Never re-created by deleting the Cluster: with `import` off that is an empty database.
+- **Grafana** (`schnappy-grafana-pg`, once infra's observability values turn `grafana.cnpg` on - until then its
+  SQLite file): re-created empty is acceptable (every dashboard and datasource is provisioned); users come back through
+  OAuth.
+- **Woodpecker** (`woodpecker-postgres`, infra's `clusters/production/woodpecker/manifests/postgres.yaml`, archive
+  `woodpecker-postgres-pg18`): a `bootstrap.recovery` from that server name, archiving under a new one.
+
 ## Component-Only Recovery
 
 If only specific components are down:
