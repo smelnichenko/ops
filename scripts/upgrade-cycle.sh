@@ -16,7 +16,8 @@
 #               origin's but for CD's app promotions (the copy mirrors them); production's Alertmanager routing the
 #               cycle's notices (its loaded config); production settled and quiet (critical alerts included). The
 #               copy's memory (the operator stops the radar) for a unit that builds it - refused, never waited
-#   1. pick     scripts/upgrade-units.py pick - NOTHING / PAUSED end the run quietly; a one-way unit blocked at once, one
+#   1. pick     scripts/upgrade-units.py pick - NOTHING / PAUSED end the run quietly; a one-way unit whose store has a part
+#               with no backup yet (scripts/upgrade-stores.json) blocked at once, the part named; one
 #               without Renovate's labels (its kind not known) never applied. A shadow run's pick leaves the test
 #               environment's units out (pick --shadow): it merges none, so it would stop at one with nothing proven
 #   2. prove    the unit's heads read (and its bases); its branches, in every repo, on main but for CD's promotions
@@ -54,8 +55,9 @@
 #               head now into main the very tree merging the announced one makes); a newer release, a fix since, an
 #               evil or octopus merge, a rebase, main's work dropped: noticed again
 #   5. plan     its production commands read from the proof's plan - a step with none, or a version that is none,
-#               refuses the unit, nothing merged; a one-way change with no backup path blocked
-#   6. apply    the gates again; the backup a one-way change needs (an etcd snapshot before Kubernetes) - failing,
+#               refuses the unit, nothing merged
+#   6. apply    the gates again; the backups a one-way change needs (an etcd snapshot before Kubernetes, its store's from
+#               scripts/upgrade-stores.json) - failing,
 #               nothing merged; held (a veto, upgrade-blocked, the kill switch) refused; a journal written (the
 #               snapshot's name, the pull requests merged, each command - a closed terminal stops nothing from here
 #               on); the unit's pull requests merged by the bot at the proven commits onto the proven bases (CD's app
@@ -366,22 +368,42 @@ fresh_or_end() {
   branches_are_heads || { notice blocked "$unit" "its branches' tips not the heads its pull requests name (Forgejo's record behind its git) - nothing proven, no try counted" "$log"; exit 1; }
 }
 
-# one-way with no backup path: Renovate's label (renovate/upgrade-cycle.json's rules) - the names a second net, failing
-# closed; the labels not read, nothing is applied
+# a one-way change: Renovate's label (renovate/upgrade-cycle.json's rules) or its name a store's (the second net) - what
+# its store needs before production, from scripts/upgrade-stores.json (scripts/upgrade-stores.py): the backups, run before
+# the merge (one_way_backups, into the apply's pre-commands), or a part with none yet - blocked before anything is built,
+# the notice naming each (a vague "no backup path" told the operator nothing, 2026-11-17). A test environment's unit needs
+# none (its data is no store to keep - the test environment is where a one-way change runs first). The labels or the
+# table not read: nothing applied
 unit_labels=""
+one_way_backups=() one_way_taken=() one_way_minutes=0
 stop_if_one_way() {
-  local labels line
+  local labels line need judged=$unit
   labels=$(scripts/upgrade-units.py list) || { notice blocked "$unit" "its labels not read from Forgejo - nothing applied" "$log"; exit 1; }
   line=$(awk -v u="$unit" '$1 == u' <<< "$labels")
   [ -n "$line" ] || { notice blocked "$unit" "not in the open units any more - nothing applied" "$log"; exit 1; }
   [[ $line != *" UNLABELLED" ]] || { notice blocked "$unit" "Renovate's labels not on it (its kind, its one-way mark not known) - nothing applied" "$log"; exit 1; }
   labels=$(awk '{print $4}' <<< "$line")
   unit_labels=$labels
-  if [[ ,$labels, == *,one-way,* ]] || grep -qE '(postgres|postgresql|scylla|scylladb|kafka|clickhouse|strimzi|grafana|consul|vault)-[0-9]+\.(x|[0-9]+)$' <<< "$unit"; then
-    run scripts/upgrade-label.py "$unit" upgrade-blocked || say "NOT LABELLED upgrade-blocked - the next run blocks it again"
-    notice blocked "$unit" "a one-way change with no backup path in the cycle yet - left for the operator" "$log"
-    exit 1
-  fi
+  # a test environment's unit takes no backup, but runs only when its production twin could (one merged ahead of a twin
+  # blocked for good left the test environment ahead of production - proving nothing after)
+  [ "$action" != test ] || judged=${unit#test-}
+  need=$(python3 -I scripts/upgrade-stores.py "$judged" "$labels" 2>> "$log") \
+    || { notice blocked "$unit" "what its one-way change needs not read (scripts/upgrade-stores.py, see the log) - nothing applied" "$log"; exit 1; }
+  case "$need" in
+    none) return 0 ;;
+    store\ *)
+      [ "$action" != test ] || { say "ONE-WAY $unit: its production twin's store can take it - no backup in the test environment"; return 0; }
+      mapfile -t one_way_backups < <(sed -n 's/^backup //p' <<< "$need")
+      mapfile -t one_way_taken < <(sed -n 's/^taken-by //p' <<< "$need")
+      one_way_minutes=$(awk 'NR == 1 {print $3}' <<< "$need")
+      [ "$(( ${#one_way_backups[@]} + ${#one_way_taken[@]} ))" -gt 0 ] && [[ $one_way_minutes =~ ^[0-9]+$ ]] \
+        || { notice blocked "$unit" "a one-way change, its store's backups not read - nothing applied" "$log"; exit 1; }
+      say "ONE-WAY $unit: ${need%%$'\n'*} - backed up before the merge: $(printf '%s; ' "${one_way_backups[@]}" "${one_way_taken[@]/#/its command }")"
+      return 0 ;;
+  esac
+  run scripts/upgrade-label.py "$unit" upgrade-blocked || say "NOT LABELLED upgrade-blocked - the next run blocks it again"
+  notice blocked "$unit" "a one-way change its store cannot take yet$([ "$judged" = "$unit" ] || echo " (its production twin $judged's)") - $(awk '{sub(/^(missing|unknown) /, ""); printf "%s%s", (NR > 1 ? "; " : ""), $0}' <<< "$need") (scripts/upgrade-stores.json; once there, upgrade-blocked off its pull requests) - nothing applied" "$log"
+  exit 1
 }
 held_now() {  # a veto, upgrade-blocked or the kill switch set since the pick: refused, nothing merged
   local held
@@ -475,7 +497,7 @@ sys.exit(0 if lines and test and len(test) + len(root) == len(lines) else 1)
 PY
 }
 # a test environment's unit: the copy leaves the test environment out - it is its own proof (the test environment before
-# production): no copy, no review; one-way left for the operator, else merged at the heads judged, settled, recorded
+# production): no copy, no review, no backup (its data is no store to keep); merged at the heads judged, settled, recorded
 if [ "$action" = test ]; then
   stop_if_one_way
   if [ -n "$shadow" ]; then
@@ -870,6 +892,12 @@ while IFS= read -r step; do
   esac
 done <<< "$plan"
 stop_if_one_way
+pre+=("${one_way_backups[@]}")  # a one-way store's backups, after the plan's own (an etcd snapshot) - each before the merge, the order theirs alone
+for c in "${one_way_taken[@]}"; do  # a store whose backup its own command takes: that command in the plan, or nothing
+  printf '%s\n' "${cmds[@]}" | grep -qx -- "$c" \
+    || { notice blocked "$unit" "a one-way change whose backup its command takes ($c) - not in its plan; nothing merged" "$log"; exit 1; }
+done
+APPLY_SPAN=$((APPLY_SPAN + one_way_minutes))  # the backups' bound: the apply's window holds them too
 
 # 6. the apply - the gates again (hours since the start), the backups a one-way change needs, still free, a journal
 gates "$APPLY_SPAN" merge || { notice blocked "$unit" "proven and reviewed, not applied: a gate refused it now (see the log) - the next run proves it again" "$log"; exit 1; }

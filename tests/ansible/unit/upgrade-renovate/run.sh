@@ -273,6 +273,26 @@ for root, _, files in os.walk("tests/ansible/copy"):
 print(bad, sorted(unproven), sorted(copy_pins - set(PIN_OK)))
 PYPROVABLE
 )" "[] ['Consul', 'Keycloak'] []"
+# a one-way change's needs are decided in one table (scripts/upgrade-stores.json): every package the preset marks one-way
+# is a store's there and every store's package is marked; each store has its backups or names what is missing; each
+# backup is a task ops has. A new kind of store fails here when the preset starts tracking it - never first met in a run
+# as a vague "no backup path" (2026-11-17)
+check "every one-way package a store's in scripts/upgrade-stores.json and back; each store backed up or its gap named; each backup a task; each store's real unit names its own alone" \
+  "$("$PY" - <<'PYSTORES'
+import json, re, yaml
+d = json.load(open("renovate/upgrade-cycle.json"))
+t = json.load(open("scripts/upgrade-stores.json"))
+marked = {p for r in d["packageRules"] if "one-way" in (r.get("addLabels") or []) for p in r.get("matchPackageNames", [])}
+named = {p for s in t["stores"] for p in s["packages"]}
+empty = [s["store"] for s in t["stores"] if not (s["backups"] or s.get("taken_by") or s["missing"])]
+tasks = set(yaml.safe_load(open("Taskfile.yml"))["tasks"])
+unknown = [b for s in t["stores"] for b in s["backups"] + s.get("taken_by", [])
+           if b.split()[0] not in tasks or not b.startswith(("deploy:", "check:production:"))]  # production's tasks alone
+# each store's example unit names (Renovate's for its packages) matched by its own units alone
+names = [(s["store"], e, [o["store"] for o in t["stores"] if re.search(o["units"], e)]) for s in t["stores"] for e in s["examples"]]
+print(sorted(marked - named), sorted(named - marked), empty, unknown, [n for n in names if n[2] != [n[0]]])
+PYSTORES
+)" "[] [] [] [] []"
 # a run rebases nothing that has no conflict (Woodpecker builds one at a time; infra's main moves many times a day - a
 # rebase of every branch at every run was a queue of builds ahead of the apps' deploys); no cap per repo (it split one
 # unit across the repos: its infra half waiting while its ops half was picked)

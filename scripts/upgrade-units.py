@@ -200,8 +200,9 @@ def order(name, u):
 
 
 def waits_notice(u):
-    """A major, or a unit with the agent's fix in it: applied only after a 24 h notice."""
-    return u["kind"] == "major" or "agent-fixed" in u["labels"]
+    """A major, a one-way change (ScyllaDB's release lines are minors by number), or a unit with the agent's fix in it:
+    applied only after a 24 h notice."""
+    return u["kind"] == "major" or bool({"agent-fixed", "one-way"} & set(u["labels"]))
 
 
 def pick(shadow=False):

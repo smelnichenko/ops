@@ -195,6 +195,12 @@ check("noticed more than once, on more than one pull request: the latest notice 
 fixture(infra=[pr(3, "postgresql-19.x", "major")],
         comments={("infra", 3): ["UPGRADE NOTICE 2026-11-17T00:00:00Z", "UPGRADE NOTICE 2026-11-19T20:00:00Z"]})
 check("a major noticed days ago, then again 7 h ago (its fix): still in its 24 h - nothing", run("pick"), (0, "NOTHING"))
+# a one-way change (ScyllaDB's release lines are minors by number): a 24 h notice first, as a major (it applied in the
+# run that proved it, 2026-11-17's review)
+fixture(infra=[pr(1, "scylladb-2026.3", "one-way"), pr(2, "observability")])
+check("a one-way minor: waits for its notice - the next minor proven first", run("pick"), (0, "prove observability minor"))
+fixture(infra=[pr(1, "scylladb-2026.3", "one-way")])
+check("  alone: its notice (kind kept)", run("pick"), (0, "notice scylladb-2026.3 minor"))
 # the agent's fix in a unit (agent-fixed): a 24 h notice first, whatever its kind
 fixture(infra=[pr(1, "istio-1.32", "agent-fixed"), pr(2, "observability")])
 check("a minor carrying the agent's fix: waits for its notice - the next minor proven first", run("pick"),

@@ -35,7 +35,8 @@ def check(name, got, want):
 OPS = os.path.join(W, "ops"); BIN = os.path.join(W, "bin"); ST = os.path.join(W, "state"); WORK = os.path.join(W, "work")
 for d in (os.path.join(OPS, "scripts"), BIN, ST, os.path.join(OPS, ".claude/agents")):
     os.makedirs(d, exist_ok=True)
-shutil.copy(os.path.join(REAL, "scripts/upgrade-cycle.sh"), os.path.join(OPS, "scripts"))
+for f in ("upgrade-cycle.sh", "upgrade-stores.py", "upgrade-stores.json"):  # the runner, what one-way stores need
+    shutil.copy(os.path.join(REAL, "scripts", f), os.path.join(OPS, "scripts"))
 for name in ("code-architecture-reviewer", "platform-reliability-reviewer", "test-quality-reviewer"):
     shutil.copy(os.path.join(REAL, ".claude/agents", name + ".md"), os.path.join(OPS, ".claude/agents"))
 # what the fix agent is handed as the runner's own: ops main's checksum script and keys
@@ -51,7 +52,9 @@ LOG = 'echo "$(basename "$0") $*" >> "$ST/calls"; [ ! -e /proc/$$/fd/9 ] || echo
 stub(os.path.join(OPS, "scripts/upgrade-units.py"), LOG + '''
 case "$1" in
   list) [ ! -e "$ST/list.fail" ] || exit 1
-    if [ -e "$ST/list" ]; then cat "$ST/list"; else read -r _ u k < "$ST/pick"; echo "$u $k schnappy/infra upgrade-cycle"; fi ;;
+    n=$(( $(cat "$ST/list.n" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$ST/list.n"  # list.later: from the second read on
+    if [ "$n" -gt 1 ] && [ -e "$ST/list.later" ]; then cat "$ST/list.later"
+    elif [ -e "$ST/list" ]; then cat "$ST/list"; else read -r _ u k < "$ST/pick"; echo "$u $k schnappy/infra upgrade-cycle"; fi ;;
   held) [ ! -e "$ST/held.fail" ] || exit 1; cat "$ST/held" 2>/dev/null; exit 0 ;;
   noticed) cat "$ST/noticed" 2>/dev/null || echo NONE ;;
   *) cat "$ST/pick"; exit "$(cat "$ST/pick.rc" 2>/dev/null || echo 0)" ;;
@@ -105,6 +108,7 @@ case "$*" in
     echo "etcd-backup OK: etcd-20261120-120000.db uploaded; current backups:"
     exit "$(cat "$ST/task.deploy_etcd_backup.rc" 2>/dev/null || echo 0)" ;;
   "--yes "*) [ ! -e "$ST/slow" ] || { touch "$ST/slow.started"; for _ in $(seq 30); do sleep 0.1; done; }
+    case "$2" in *" "*) echo "task: no task named '$2' (one word with its arguments in it)" >&2; exit 97 ;; esac
     c="${2//:/_}"; exit "$(cat "$ST/task.$c.rc" 2>/dev/null || echo 0)" ;;
 esac''')
 # the agent: its environment's names, its directory and its arguments kept per call; the fix "commits" (fix.heads) or
@@ -780,16 +784,92 @@ check("  a notice given (the unit further): its count of tries starts again", (r
 rc, calls = night("notice centrifugo-7.x major", files={"notice.veto.rc": "1"})
 check("a veto mail that failed: no comment, no clock started", (rc, has(calls, "upgrade-label.py centrifugo-7.x --comment")), (1, []))
 
+# one-way: what its store needs, from scripts/upgrade-stores.json - a part with no backup yet blocks it before anything is
+# built, the notice naming the part (a vague "no backup path" told the operator nothing, 2026-11-17); a store backed up
+# whole goes on, its backups run before the merge; one whose own command takes the backup goes on only with that command
+def blocked_why(calls):
+    return " ".join(c for c in calls if c.startswith("upgrade-notice.sh blocked"))
+TABLE = os.path.join(OPS, "scripts/upgrade-stores.json")
+REAL_TABLE = open(TABLE).read()
+def table_with(**stores):  # the real table, the named stores' fields replaced (a store backed up whole: none is, today)
+    t = json.loads(REAL_TABLE)
+    for s in t["stores"]:
+        s.update(stores.get(s["store"], {}))
+    open(TABLE, "w").write(json.dumps(t))
 rc, calls = night("apply postgresql-19.x major")
-check("a one-way unit with no backup path: blocked before its proof, never merged",
-      (rc, has(calls, "task"), has(calls, "upgrade-label.py postgresql-19.x upgrade-blocked")),
-      (1, [], ["upgrade-label.py postgresql-19.x upgrade-blocked"]))
-for unit in ("kafka-4.x", "clickhouse-26.x", "strimzi-1.x", "consul-2.x", "vault-2.x", "scylladb-2026.3", "postgres-18.x",
-             "grafana-grafana-13.x"):
+check("a one-way unit whose store has parts with no backup (Postgres: woodpecker's CNPG, SonarQube's): blocked before its "
+      "proof, never merged, the notice naming each part",
+      (rc, has(calls, "task"), has(calls, "upgrade-label.py postgresql-19.x upgrade-blocked"),
+       "woodpecker-postgres" in blocked_why(calls) and "SonarQube's Postgres" in blocked_why(calls)),
+      (1, [], ["upgrade-label.py postgresql-19.x upgrade-blocked"], True))
+for unit, part in (("kafka-4.x", "Kafka's topics"), ("clickhouse-clickhouse-server-27.x", "ClickHouse backup"),
+                   ("strimzi-kafka-operator-1.x", "Kafka's topics"), ("hashicorp-consul-2.x", "no upgrade path"),
+                   ("postgres-18.x", "SonarQube's Postgres"), ("grafana-grafana-13.x", "Grafana's database"),
+                   ("scylladb-2026.3", "no restore from its backup")):
     rc, calls = night(f"prove {unit} minor", files={"list": f"{unit} minor schnappy/infra upgrade-cycle\n"})
-    check(f"{unit}, its label missing: the names' net blocks it", (rc, merged(calls, unit)), (1, False))
+    check(f"{unit}, its label missing: the names' net finds its store - blocked, nothing built, the missing part named",
+          (rc, merged(calls, unit), has(calls, "task"), part in blocked_why(calls)), (1, False, [], True))
+SCYLLA_WHOLE = {"backups": ["check:production:scylla-backup"], "missing": [], "minutes": 30}
+try:
+    table_with(scylladb=SCYLLA_WHOLE)
+    rc, calls = night("prove scylladb-2026.3 minor", files={"list": "scylladb-2026.3 minor schnappy/infra one-way,upgrade-cycle\n"})
+    seq = [c for c in calls if c.startswith(("task --yes check:production:scylla-backup", "upgrade-label.py scylladb-2026.3 --merge"))]
+    check("a one-way unit whose store is backed up whole (a table where ScyllaDB is): proven, its backup run, then merged",
+          (rc, [words(c, 3) for c in seq], has(calls, "upgrade-label.py scylladb-2026.3 upgrade-blocked")),
+          (0, ["task --yes check:production:scylla-backup", "upgrade-label.py scylladb-2026.3 --merge"], []))
+    rc, calls = night("prove scylladb-2026.3 minor", files={"list": "scylladb-2026.3 minor schnappy/infra one-way,upgrade-cycle\n",
+                                                            "task.check_production_scylla-backup.rc": "1"})
+    check("  its backup failing: nothing merged, blocked (said)", (rc, merged(calls, "scylladb-2026.3"), notices(calls)),
+          (1, False, ["upgrade-notice.sh blocked scylladb-2026.3"]))
+    table_with(scylladb={**SCYLLA_WHOLE, "minutes": 900})
+    rc, calls = night("prove scylladb-2026.3 minor", files={"list": "scylladb-2026.3 minor schnappy/infra one-way,upgrade-cycle\n"})
+    check("  its backups' bound in the apply's span: one that reaches a backup window refuses the apply, nothing merged",
+          (rc, merged(calls, "scylladb-2026.3"), "a gate refused it now" in blocked_why(calls)), (1, False, True))
+    table_with(scylladb={**SCYLLA_WHOLE, "backups": ["check:production:scylla-backup -- -e a=b",
+                                                     "deploy:postgres:base-backup -- -e pg_namespace=x -e cluster=y"]})
+    rc, calls = night("prove scylladb-2026.3 minor", files={"list": "scylladb-2026.3 minor schnappy/infra one-way,upgrade-cycle\n"})
+    check("  backups with arguments: each reaches task whole, in the table's order, before the merge",
+          (rc, [c.split(" --expect")[0] for c in calls
+                if c.startswith(("task --yes check:production", "task --yes deploy:postgres", "upgrade-label.py scylladb-2026.3 --merge"))]),
+          (0, ["task --yes check:production:scylla-backup -- -e a=b",
+               "task --yes deploy:postgres:base-backup -- -e pg_namespace=x -e cluster=y", "upgrade-label.py scylladb-2026.3 --merge"]))
+    table_with(scylladb=SCYLLA_WHOLE)
+    rc, calls = night("test test-scylladb-2026.3 minor", files={"list": "test-scylladb-2026.3 minor schnappy/infra one-way\n"})
+    check("a test unit labelled one-way, its production twin's store backed up whole: merged - no backup taken (its data "
+          "is no store to keep)", (rc, merged(calls, "test-scylladb-2026.3"), has(calls, "task --yes check:production")),
+          (0, True, []))
+finally:
+    open(TABLE, "w").write(REAL_TABLE)
+rc, calls = night("test test-scylladb-2026.3 minor", files={"list": "test-scylladb-2026.3 minor schnappy/infra one-way\n"})
+check("a test unit whose production twin's store cannot take it (ScyllaDB, no restore): blocked, never merged, the twin's "
+      "parts named - a test environment ahead of production for good proves nothing",
+      (rc, merged(calls, "test-scylladb-2026.3"), "its production twin scylladb-2026.3's" in blocked_why(calls)), (1, False, True))
+VAULT_PLAN = "test:copy:change INFRA_REF=main PLATFORM_REF=main\ntest:copy:playbook PLAYBOOK=upgrade-vault.yml ARGS='-e @/x/vault.yml'\n"
+rc, calls = night("apply hashicorp-vault-2.x major", plan=VAULT_PLAN,
+                  files={"list": "hashicorp-vault-2.x major schnappy/ops major,one-way,upgrade-cycle\n", "noticed": ANNOUNCED})
+check("a one-way unit whose own command takes the backup (Vault: upgrade-vault.yml snapshots Consul first): its command "
+      "in the plan - merged, the command run", (rc, merged(calls, "hashicorp-vault-2.x"), has(calls, "task --yes deploy:vault:upgrade")),
+      (0, True, ["task --yes deploy:vault:upgrade"]))
+rc, calls = night("apply hashicorp-vault-2.x major", files={"list": "hashicorp-vault-2.x major schnappy/ops major,one-way,upgrade-cycle\n",
+                                                             "noticed": ANNOUNCED})
+check("  that command not in its plan: blocked, nothing merged, the command named",
+      (rc, merged(calls, "hashicorp-vault-2.x"), "deploy:vault:upgrade" in blocked_why(calls)), (1, False, True))
+rc, calls = night("prove centrifugo-6.x minor", files={"list": "centrifugo-6.x minor schnappy/infra upgrade-cycle\n",
+                                                     "list.later": "centrifugo-6.x minor schnappy/infra one-way,upgrade-cycle\n"})
+check("a one-way label put on during the proof (its labels read again after it): blocked, nothing merged - the copy built",
+      (rc, merged(calls, "centrifugo-6.x"), bool(has(calls, "task test:copy:build")), "scripts/upgrade-stores.json" in blocked_why(calls)),
+      (1, False, True, True))
 rc, calls = night("prove data-operators minor", files={"list": "data-operators minor schnappy/infra one-way,upgrade-cycle\n"})
-check("a unit labelled one-way: blocked, never merged", (rc, merged(calls, "data-operators")), (1, False))
+check("a unit labelled one-way, its name no store's: blocked, never merged, the table named (a new store is decided there)",
+      (rc, merged(calls, "data-operators"), "scripts/upgrade-stores.json" in blocked_why(calls)), (1, False, True))
+for broken, why in (("{not json", "not JSON"), (REAL_TABLE.replace('"units": "(^|-)(kafka', '"units": "((kafka', 1), "a bad regex")):
+    try:
+        open(TABLE, "w").write(broken)
+        rc, calls = night("prove scylladb-2026.3 minor", files={"list": "scylladb-2026.3 minor schnappy/infra one-way,upgrade-cycle\n"})
+        check(f"the table not read ({why}): blocked, nothing built or merged (fails closed), said - never a traceback",
+              (rc, has(calls, "task"), merged(calls, "scylladb-2026.3"), "not read" in blocked_why(calls)), (1, [], False, True))
+    finally:
+        open(TABLE, "w").write(REAL_TABLE)
 rc, calls = night("prove centrifugo-6.x minor", files={"list": "centrifugo-6.x minor schnappy/infra not-one-way,upgrade-cycle\n"})
 check("a label only containing the word (not-one-way) is not one-way: merged", (rc, merged(calls, "centrifugo-6.x")), (0, True))
 rc, calls = night("prove wave-patches patch", files={"list": "wave-patches patch schnappy/infra - UNLABELLED\n"})
@@ -970,8 +1050,6 @@ check("a test unit partly merged: paged, paused", (rc, notices(calls), paused(ca
 rc, calls = stopped(signal.SIGTERM, "slowverify.started", pick="test test-observability minor", files={"slowverify": ""})
 check("a test unit stopped after its merge (during its verify): paged and paused", (rc, notices(calls), paused(calls)),
       (1, ["upgrade-notice.sh one-way-failed test-observability"], True))
-rc, calls = night("test test-scylladb-2026.3 minor", files={"list": "test-scylladb-2026.3 minor schnappy/infra one-way\n"})
-check("a test unit labelled one-way: blocked, never merged", (rc, merged(calls, "test-scylladb-2026.3")), (1, False))
 rc, calls = night("test observability minor")
 check("a test action for a unit with no test- name: refused, nothing done", (rc, has(calls, "upgrade-label.py")), (1, []))
 # the log keeps every line when the terminal is gone (its stdout a pipe whose reader died)

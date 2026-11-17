@@ -322,6 +322,24 @@ workstation (a Woodpecker agent there would give any pipeline a shell on it). Ea
 8. **Record**: the run committed to ops (`docs/upgrades/<date>-<unit>.md`, its paths alone) and sent as a
    notification; `task test:copy:inventory` read again so the next copy is built to the new production.
 
+**One-way changes: one table, checked before anything is built (2026-11-17).** The first chained runs blocked both of
+the test environment's ScyllaDB units with "a one-way change with no backup path in the cycle yet" - a test unit whose
+data is no store to keep, a notice that named nothing (operator: "what the fuck is this no backup path?"), and
+production's backups for Postgres and ScyllaDB existing all along (deploy:postgres:base-backup,
+check:production:scylla-backup) without the runner calling them. Operator: fix it, and "we need the solution for such
+kind of issues in the future". Now:
+- scripts/upgrade-stores.json: each store a one-way change can touch - its packages (the preset's one-way rules), its
+  units' names, the backups the runner runs before the merge, or each part still missing and why. ScyllaDB: Scylla
+  Manager's backup, started and DONE before the merge. Postgres: production's cluster's base backup - but
+  woodpecker-postgres has no backup store, so Postgres stays blocked, saying so. Kafka/Strimzi, ClickHouse, Grafana
+  (SQLite on a local volume), Vault and Consul (the Pis' daily snapshot, none taken at a change): missing, each said.
+- the runner (stop_if_one_way, scripts/upgrade-stores.py): a test environment's unit needs none of it; a production
+  unit's store backed up whole goes on, its backups into the apply's pre-commands (a failing one: nothing merged); a part
+  missing, or a one-way unit of no store the table names: blocked before anything is built, the notice naming each part.
+- upgrade-renovate's harness fails a package the preset marks one-way that no store names (and the reverse), a store
+  with neither backups nor a named gap, a backup that is no task of ops' - a new kind of store is decided in the table
+  when Renovate starts tracking it, not met in a run.
+
 **3. One-way changes and their backups.** One-way: Kubernetes (kubeadm does not downgrade, patches included),
 containerd, database majors and format changes (Postgres majors, ScyllaDB release lines, ClickHouse compatibility,
 Kafka metadata, Strimzi CRD conversions), Vault/Consul majors (storage), Forgejo majors (migrations), Grafana majors.
