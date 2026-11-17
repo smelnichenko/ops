@@ -1,6 +1,6 @@
 # test-observability - applied 2026-11-17
 
-The upgrade cycle's run (task upgrade): proven on the Vagrant copy, reviewed, applied, verified.
+The upgrade cycle's run (task upgrade): the test environment's unit - merged, the test environment verified; no copy, no review.
 
 ## The run
 

@@ -19,7 +19,13 @@ mkdir -p docs/upgrades
 {
   echo "# $unit - applied $day"
   echo
-  echo "The upgrade cycle's run (task upgrade): proven on the Vagrant copy, reviewed, applied, verified."
+  # what the run did, as its pick says: a test environment's unit is merged and verified there - no copy, no review
+  # (its record said "proven on the Vagrant copy, reviewed" all the same, test-observability 2026-11-17)
+  if grep -qE ' PICK test ' "$log"; then
+    echo "The upgrade cycle's run (task upgrade): the test environment's unit - merged, the test environment verified; no copy, no review."
+  else
+    echo "The upgrade cycle's run (task upgrade): proven on the Vagrant copy, reviewed, applied, verified."
+  fi
   echo
   echo "## The run"
   echo
