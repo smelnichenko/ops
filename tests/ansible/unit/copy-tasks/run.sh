@@ -107,7 +107,8 @@ GUARDED = ("env -i HOME=\"$HOME\" PATH=\"$PATH\" bash -c 'cd deploy/ansible && v
 want = [PB + "../../tests/ansible/copy/" + f for f in ("barman-check.yml", "cert-check.yml", "restore-check.yml",
                                                         "backup-check.yml",
                                                         "backup-check.yml -e schedule=velero-full-weekly")] + \
-    [PB + "playbooks/scylla-backup-check.yml", PB + "../../tests/ansible/copy/sweeper-check.yml",
+    [PB + "playbooks/scylla-backup-check.yml", PB + "../../tests/ansible/copy/scylla-restore-check.yml",
+     PB + "../../tests/ansible/copy/clickhouse-restore-check.yml", PB + "../../tests/ansible/copy/sweeper-check.yml",
      PB + "../../tests/ansible/copy/offsite-mirror-check.yml", PB + "../../tests/ansible/copy/forgejo-plant.yml"] + \
     [GUARDED % f for f in ("setup-pi-services.yml --tags forgejo-config", "forgejo-doctor.yml --check",
                            "forgejo-doctor.yml -e forgejo_orphans_expected=1", "setup-velero.yml")] + \

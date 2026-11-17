@@ -803,7 +803,7 @@ check("a one-way unit whose store has a part with no backup (Postgres: SonarQube
       (rc, has(calls, "task"), has(calls, "upgrade-label.py postgresql-19.x upgrade-blocked"),
        "SonarQube's Postgres" in blocked_why(calls)),
       (1, [], ["upgrade-label.py postgresql-19.x upgrade-blocked"], True))
-for unit, part in (("kafka-4.x", "Kafka's topics"), ("clickhouse-clickhouse-server-27.x", "ClickHouse backup"),
+for unit, part in (("kafka-4.x", "Kafka's topics"), ("clickhouse-clickhouse-server-27.x", "restore not yet rehearsed on the copy"),
                    ("strimzi-kafka-operator-1.x", "Kafka's topics"), ("hashicorp-consul-2.x", "no upgrade path"),
                    ("postgres-18.x", "SonarQube's Postgres"), ("grafana-grafana-13.x", "Grafana's database"),
                    ("scylladb-2026.3", "no restore from its backup")):

@@ -658,7 +658,7 @@ tasks:
       - cmd: scripts/etcd-backup-now.sh
 
   test:copy:check:
-    desc: "Every check on the built copy: Argo settled; data, survival, storage, metrics, k6 smoke, production's data paths and isolation at once (scripts/copy-checks.sh); a barman base backup; every certificate renewed; Postgres recovered and a Velero volume restored (restore-check); a Velero backup from production's daily schedule; a Scylla Manager backup; the PR-env sweeper; the inventory against production's (after a change: its own differences printed, any it did not make judged). Run on its own it checks the refs the copy runs (.copy/copy-refs)"
+    desc: "Every check on the built copy: Argo settled; data, survival, storage, metrics, k6 smoke, production's data paths and isolation at once (scripts/copy-checks.sh); a barman base backup; every certificate renewed; Postgres recovered and a Velero volume restored (restore-check); a Velero backup from production's daily schedule; a Scylla Manager backup; ScyllaDB's and ClickHouse's backups restored; the PR-env sweeper; the inventory against production's (after a change: its own differences printed, any it did not make judged). Run on its own it checks the refs the copy runs (.copy/copy-refs)"
     deps: [deploy:install]
     vars:
       # the refs the copy runs (test:copy:argo or test:copy:change wrote them), unless given
@@ -695,6 +695,10 @@ tasks:
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/backup-check.yml -e schedule=velero-full-weekly
       # a Scylla Manager backup of each production cluster, DONE with a fresh snapshot, no failed backup or repair task
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/scylla-backup-check.yml
+      # ScyllaDB's backup restored (a marker keyspace backed up, truncated, restored with production's restore tasks) and
+      # ClickHouse's (production's backup taken, logs.podlogs restored beside it and counted)
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/scylla-restore-check.yml
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/clickhouse-restore-check.yml
       # the stale PR env sweeper against the copy's Vault: a dead token fails it, the replaced one is renewed and purges
       # a preview prefix, a wrong CA fails it
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/sweeper-check.yml
@@ -1263,6 +1267,22 @@ tasks:
     deps: [deploy:install]
     cmds:
       - venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/scylla-restore-check.yml
+
+  check:production:clickhouse-backup:
+    desc: "PRODUCTION: ClickHouse's logs backed up to the Pi store now - its prune, then BACKUP DATABASE logs as its backup user, each a Job from its CronJob (clickhouse-backup-check.yml); restored on the copy by test:copy:clickhouse-restore"
+    dir: deploy/ansible
+    deps: [deploy:install]
+    dotenv: ['../../.env']
+    prompt: "Take a ClickHouse backup on PRODUCTION?"
+    cmds:
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/clickhouse-backup-check.yml {{.CLI_ARGS}}
+
+  test:copy:clickhouse-restore:
+    desc: "Vagrant: ClickHouse's backup restores - production's backup taken (tasks/clickhouse-backup.yml), logs.podlogs restored beside the live table as the backup user, counted, dropped (clickhouse-restore-check.yml)"
+    dir: deploy/ansible
+    deps: [deploy:install]
+    cmds:
+      - venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/clickhouse-restore-check.yml
 
   check:production:scylla-backup:
     desc: "PRODUCTION: each ScyllaDB cluster's Scylla Manager backup started now, DONE with a fresh snapshot (scylla-backup-check.yml)"

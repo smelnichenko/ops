@@ -78,15 +78,17 @@
       "packages": [
         "/clickhouse-server$/"
       ],
-      "backups": [],
+      "backups": [
+        "check:production:clickhouse-backup"
+      ],
       "missing": [
-        "no ClickHouse backup in the cycle (logs and traces: no BACKUP TO a store, no volume snapshot)"
+        "its restore not yet rehearsed on the copy - test:copy:check restores production's backup (test:copy:clickhouse-restore) from the next copy run on; proven locally on 26.8 (BACKUP and RESTORE through the backup user)"
       ],
       "examples": [
         "clickhouse-clickhouse-server-27.x"
       ],
       "taken_by": [],
-      "minutes": 0
+      "minutes": 10
     },
     {
       "store": "grafana",
