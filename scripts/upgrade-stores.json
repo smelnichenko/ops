@@ -19,10 +19,10 @@
         "/(^|\\/)postgresql$/"
       ],
       "backups": [
-        "deploy:postgres:base-backup -- -e pg_namespace=schnappy-production -e cluster=schnappy-production-postgres"
+        "deploy:postgres:base-backup -- -e pg_namespace=schnappy-production -e cluster=schnappy-production-postgres",
+        "deploy:postgres:base-backup -- -e pg_namespace=woodpecker -e cluster=woodpecker-postgres"
       ],
       "missing": [
-        "woodpecker-postgres (CNPG) has no backup store (its spec.backup unset) - Woodpecker's CI history has no copy to restore a failed major from",
         "SonarQube's Postgres (a plain StatefulSet, postgres:<major>-alpine, its data on a local volume) has no backup - and a new major will not read the old one's data directory"
       ],
       "examples": [

@@ -798,10 +798,10 @@ def table_with(**stores):  # the real table, the named stores' fields replaced (
         s.update(stores.get(s["store"], {}))
     open(TABLE, "w").write(json.dumps(t))
 rc, calls = night("apply postgresql-19.x major")
-check("a one-way unit whose store has parts with no backup (Postgres: woodpecker's CNPG, SonarQube's): blocked before its "
-      "proof, never merged, the notice naming each part",
+check("a one-way unit whose store has a part with no backup (Postgres: SonarQube's - woodpecker's backed up since "
+      "2026-11-17): blocked before its proof, never merged, the notice naming the part",
       (rc, has(calls, "task"), has(calls, "upgrade-label.py postgresql-19.x upgrade-blocked"),
-       "woodpecker-postgres" in blocked_why(calls) and "SonarQube's Postgres" in blocked_why(calls)),
+       "SonarQube's Postgres" in blocked_why(calls)),
       (1, [], ["upgrade-label.py postgresql-19.x upgrade-blocked"], True))
 for unit, part in (("kafka-4.x", "Kafka's topics"), ("clickhouse-clickhouse-server-27.x", "ClickHouse backup"),
                    ("strimzi-kafka-operator-1.x", "Kafka's topics"), ("hashicorp-consul-2.x", "no upgrade path"),

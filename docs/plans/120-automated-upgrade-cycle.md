@@ -351,6 +351,10 @@ kind of issues in the future". Now:
   table not as described - a new kind of store is decided in the table when Renovate starts tracking it, not met in a run.
 - still to build: a ScyllaDB restore (sctool restore, rehearsed on the copy); a backup store for woodpecker-postgres;
   SonarQube's Postgres backed up (or on CNPG); Kafka, ClickHouse and Grafana backups; Consul's upgrade path.
+- 2026-11-17: woodpecker-postgres backed up (infra aeb0e31f egress, 8c6f7345 spec.backup as woodpecker-postgres-pg18,
+  daily 01:15; its first base backup completed 19:31 UTC, archiving True) - its base backup joins Postgres's backups in
+  the table, its missing part gone. The Pis' restore check restores production's server by name now (ops 486beef7), so
+  other clusters' backups in postgres-backups cannot stand in for it. SonarQube's Postgres: plan 121.
 
 **3. One-way changes and their backups.** One-way: Kubernetes (kubeadm does not downgrade, patches included),
 containerd, database majors and format changes (Postgres majors, ScyllaDB release lines, ClickHouse compatibility,
