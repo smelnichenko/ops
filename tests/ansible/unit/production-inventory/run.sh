@@ -80,5 +80,17 @@ reset_files
 NAMESPACES=$'namespace/default\n' TEN=$'image a/one 1\n' PI_LINES=$pi_lines PI2_EXTRA=$'pi pi2 patroni 0.0.1\n' run; rc=$?
 check "the pins not written (the Pis at two Patroni versions): refused, both files as they were - never one without the other" \
   "$rc $(unchanged)" "1 unchanged"
+# byte order whatever the caller's locale: under en_US kagent-crds sorted before kagent, under the runner's C.UTF-8 after
+# - a diff of nothing but order between a hand's read and the runner's (2026-11-17). A sort ahead on PATH records the
+# locale it ran in, so this holds on a host without en_US too (there both orders are alike)
+printf '#!/bin/bash\necho "${LC_ALL:-unset}" >> "$STUB_DIR/sort.locale"\nexec /usr/bin/sort "$@"\n' > "$T/bin/sort"
+chmod +x "$T/bin/sort"
+rm -f "$T/sort.locale"
+reset_files
+NAMESPACES=$'namespace/default\n' TEN=$'argo-chart kagent-crds kagent-crds@0.9.9\nargo-chart kagent kagent@0.9.9\n' \
+  PI_LINES=$pi_lines LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 run; rc=$?
+check "the inventory sorted in byte order whatever the caller's locale (en_US here: kagent before kagent-crds all the same)" \
+  "$rc $(grep '^argo-chart' "$INV" | cut -d' ' -f2 | tr '\n' ' ')$(/usr/bin/sort -u "$T/sort.locale" | tr '\n' ' ')" "0 kagent kagent-crds C "
+rm -f "$T/bin/sort"
 echo "production-inventory: $([ $fails = 0 ] && echo ALL-PASS || echo "$fails FAILED")"
 [ $fails = 0 ]

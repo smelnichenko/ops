@@ -8,6 +8,8 @@
 # refused - nothing pushed at all; a commit that rewrote the proven one refused; a Unicode line break or invisible
 # character refused; a merge of the agent's refused. The notice's check (notice_holds) against real repositories: main
 # merged in holds; an evil merge, a commit of its own, a side branch merged, a rebase, git failing - noticed again.
+# The review's diffs (diffs) against real clones whose content would steer a plain diff: what git holds, written beside
+# each clone.
 set -u
 cd "$(dirname "$0")/../../../.." || exit 1
 REAL=$PWD
@@ -21,7 +23,7 @@ funcs=$(python3 - "$REAL/scripts/upgrade-cycle.sh" <<'PY'
 import re, sys
 src = open(sys.argv[1]).read()
 out = []
-for name in ("allowed", "plain_fix", "push_fix"):
+for name in ("allowed", "plain_fix", "push_fix", "diffs"):
     i = src.index(f"\n{name}() {{") + 1
     out.append(src[i:].split("\n}\n", 1)[0] + "\n}")
 print("\n".join(out))
@@ -66,6 +68,27 @@ pushfix() {  # the runner's push_fix, as the runner calls it: its globals set, r
 branch() { git -C "$W/forgejo/schnappy/$1.git" rev-parse renovate/u; }
 tree() { git -C "$W/forgejo/schnappy/$1.git" rev-parse 'renovate/u^{tree}'; }
 proven() { awk -v r="schnappy/$1" '$1 == r {print $3}' "$W/heads"; }
+
+# the review's diffs: diffs() as the runner calls it, on clones whose content would steer a plain diff - a textconv
+# driver (named by a .gitattributes the unit carries), an external diff, colour forced on, a file git takes for binary
+# (a NUL hiding a key): the reviewers read what the commit holds, nothing a driver or a setting made of it
+setup
+git -C "$W/fix/infra" config diff.steer.textconv "printf TEXTCONV-SHOWN; true"
+git -C "$W/fix/infra" config diff.external "printf EXTERNAL-SHOWN; true"
+git -C "$W/fix/infra" config color.ui always
+agent infra sh -c 'echo "*.yaml diff=steer" > .gitattributes; echo "v: 2" > clusters/production/values.yaml; printf "plain: 1\000\nevil: key\n" > clusters/production/hidden.txt'
+out=$(cd "$W" && heads=$W/heads log=$W/log bash -c "$funcs
+  diffs \"$W/fix\"; echo rc=\$?" 2>&1 | tail -n 1)
+d=$(tr -d '\000' < "$W/fix/infra.diff" 2> /dev/null)
+check "the review's diffs: each clone's diff and commits beside it, as git holds them - no textconv, external diff or colour, a binary-looking file shown whole" \
+  "$out $(grep -c '^+v: 2$' <<< "$d") $(grep -c '^+evil: key$' <<< "$d") $(grep -c -e TEXTCONV-SHOWN -e EXTERNAL-SHOWN -e 'Binary files' -e $'\033\[' <<< "$d") $(cut -d' ' -f2- "$W/fix/infra.commits") | $(wc -c < "$W/fix/ops.diff") $(wc -c < "$W/fix/ops.commits")" \
+  "rc=0 1 1 0 t <t@t> the agent's fix | 0 0"
+rm -f "$W/fix/"*.diff "$W/fix/"*.commits
+chmod -w "$W/fix"
+out=$(cd "$W" && heads=$W/heads log=$W/log bash -c "$funcs
+  diffs \"$W/fix\"; echo rc=\$?" 2>&1 | tail -n 1)
+chmod u+w "$W/fix"
+check "  a diff not written (its directory not writable): diffs fails - the runner blocks the unit, no review run" "$out" "rc=1"
 
 setup
 printf '#!/bin/sh\ntouch "%s/hook-ran"\n' "$W" > "$W/fix/infra/.git/hooks/pre-push"; chmod +x "$W/fix/infra/.git/hooks/pre-push"

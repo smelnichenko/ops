@@ -528,6 +528,20 @@ clones() {  # into $1, one per repo of the unit (from $heads), each on renovate/
     git -C "$dir/${repo#*/}" checkout -q -B "renovate/$unit" "$sha" < /dev/null >> "$log" 2>&1 || return 1
   done 3< "$heads"
 }
+# beside each clone in $1: <repo>.diff and <repo>.commits, the unit's diff and commits against main - the review's
+# reviewers read them with Read alone (their Bash is plain read-only git, one command a call: a reviewer's `cd <path>`
+# then `git diff`, or a loop over `git -C`, is refused - the first unattended review, 2026-11-17, had its reviewers read
+# platform's and ops' files at HEAD instead of the diff); --text: a file git takes for binary shown whole, never "Binary
+# files differ" (a NUL or a stray encoding hiding a key from the review)
+diffs() {
+  local dir=$1 repo r
+  while read -r repo _ <&3; do
+    [ -n "$repo" ] || continue
+    r=$dir/${repo#*/}
+    git -C "$r" diff --text --no-ext-diff --no-textconv --no-color origin/main...HEAD > "$r.diff" 2>> "$log" < /dev/null || return 1
+    git -C "$r" log --no-color --format='%h %an <%ae> %s' origin/main..HEAD > "$r.commits" 2>> "$log" < /dev/null || return 1
+  done 3< "$heads"
+}
 # what the agent may change in each repo: the unit's own kind of files - never CI, scripts, tasks, the trust files or an
 # agent's instructions (each would run, or steer a later run, unproven)
 allowed() {  # allowed <repo> <path>
@@ -695,7 +709,8 @@ say "RUN $agent -p <the review of renovate/$unit>"
 if [ -z "$dry" ]; then
   reviewers=$(reviewers_json 2>> "$log") || { notice blocked "$unit" "the reviewers' definitions not read - not reviewed, nothing applied" "$log"; exit 1; }
   clones "$revdir" || { notice blocked "$unit" "its branches not cloned for the review - nothing applied" "$log"; exit 1; }
-  (cd "$revdir" && timeout "$agent_timeout" "${clean_env[@]}" "$agent" -p "upgrade-cycle review: review the unit renovate/$unit - its diff in each repo cloned here (one directory per repo) against origin/main - as the review instructions say. End with two lines: 'PASSES: <the passes that ran, comma-separated>' and 'VERDICT: CLEAN' or 'VERDICT: CRITICAL <what>'. Change nothing." \
+  diffs "$revdir" || { notice blocked "$unit" "its diffs not written for the review - nothing applied" "$log"; exit 1; }
+  (cd "$revdir" && timeout "$agent_timeout" "${clean_env[@]}" "$agent" -p "upgrade-cycle review: review the unit renovate/$unit - its diff in each repo cloned here (one directory per repo, its diff against origin/main in <repo>.diff and its commits in <repo>.commits beside it) - as the review instructions say. End with two lines: 'PASSES: <the passes that ran, comma-separated>' and 'VERDICT: CLEAN' or 'VERDICT: CRITICAL <what>'. Change nothing." \
      --restricted --tools "Bash,Read,Glob,Grep,Agent,Skill" --agents "$reviewers" \
      --append-system-prompt-file "$ops/.claude/upgrade-agent/review.md" --settings "$ops/.claude/upgrade-agent/review.json" \
      --strict-mcp-config --permission-mode dontAsk --permission-prompts none) < /dev/null > "$review" 2>&1 9>&-

@@ -237,11 +237,12 @@
     # every Velero resource fully qualified: `backup` alone is CNPG's Backup
     kubectl: "kubectl --kubeconfig {{ kubeconfig }}"
     velero: "kubectl --kubeconfig {{ kubeconfig }} -n velero"
-    # an image the cluster runs already (the etcd backup's upload), with a shell
-    image: rclone/rclone:1.75.1
   tasks:
     - name: Vagrant VMs only (fails closed on any other host)
       ansible.builtin.import_tasks: ../vagrant-only.yml
+
+    - name: An image the cluster runs already, with a shell
+      ansible.builtin.import_tasks: tasks/shell-image.yml
 
     - name: Facts (the backup's name fixed once)
       ansible.builtin.set_fact:
@@ -278,7 +279,7 @@
                   terminationGracePeriodSeconds: 1
                   containers:
                     - name: token
-                      image: "{{ image }}"
+                      image: "{{ shell_image }}"
                       command: [/bin/sh, -c]
                       args:
                         - >-

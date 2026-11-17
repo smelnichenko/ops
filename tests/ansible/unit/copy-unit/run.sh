@@ -28,6 +28,7 @@ cat > "$W/src/ops/deploy/ansible/playbooks/setup-kubeadm.yml" <<'Y'
     k8s_package_version: "1.36.6-1.1"
     cilium_version: "1.20.4"
     cert_manager_version: "v1.21.3"
+    cnpg_chart_version: "0.29.1"
     some_other_version: "1.0"
   tasks: []
 Y
@@ -101,6 +102,9 @@ unit ops caddy-bad 's/"2.10.0"/"2.10.2 -e x=y"/' deploy/ansible/playbooks/setup-
 unit infra istio-follow 's/a:1/a:4/' clusters/v.yaml
 unit ops istio-follow 's/"1.31.1"/"1.31.4"/' deploy/ansible/playbooks/setup-istio.yml
 unit infra istio-task 's/a:1/a:5/' clusters/v.yaml
+# a data operator's chart version restated in setup-kubeadm's play vars moves with infra's chart (2026-11-17)
+unit infra data-follow 's/a:1/a:7/' clusters/v.yaml
+unit ops data-follow 's/"0.29.1"/"0.29.2"/' deploy/ansible/playbooks/setup-kubeadm.yml
 unit ops istio-task 's/"1.31.1"/"1.31.4"/; s/tasks: \[\]/tasks: [{name: x, command: id}]/' deploy/ansible/playbooks/setup-istio.yml
 unit ops istio-alone 's/"1.31.1"/"1.31.4"/' deploy/ansible/playbooks/setup-istio.yml
 unit infra istio-other 's/a:1/a:6/' clusters/v.yaml
@@ -227,6 +231,9 @@ done
 out=$(plan istio-follow); rc=$?
 check "Istio's version in setup-istio.yml beside infra's chart: no ops step of its own (it moves with the chart, Argo on the copy)" \
   "$rc $out" "0 test:copy:change INFRA_REF=renovate/istio-follow PLATFORM_REF=main"
+out=$(plan data-follow); rc=$?
+check "a data operator's chart version in setup-kubeadm's play vars beside infra's chart: no ops step of its own (Argo on the copy)" \
+  "$rc $out" "0 test:copy:change INFRA_REF=renovate/data-follow PLATFORM_REF=main"
 out=$(plan istio-task); rc=$?
 check "  setup-istio's tasks changed beside it: refused" "$rc $(grep -c 'REFUSED.*setup-istio.yml (its tasks)' <<< "$out")" "1 1"
 out=$(plan istio-other); rc=$?

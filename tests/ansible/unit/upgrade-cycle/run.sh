@@ -114,7 +114,8 @@ n=$(ls "$ST"/agent.* 2>/dev/null | wc -l)
 { echo "pwd=$PWD"; env | cut -d= -f1 | sort | tr '\\n' ' '; echo; printf '%s\\n' "$@"; } > "$ST/agent.$n"
 echo "${GIT_AUTHOR_NAME:-} <${GIT_AUTHOR_EMAIL:-}> ${GIT_COMMITTER_NAME:-} <${GIT_COMMITTER_EMAIL:-}>" > "$ST/author.$n"
 case "$*" in
-  *"upgrade-cycle review"*) cat "$ST/verdict"; exit "$(cat "$ST/review.rc" 2>/dev/null || echo 0)" ;;
+  *"upgrade-cycle review"*) { ls; cat ./*.commits ./*.diff; } > "$ST/review.saw" 2>&1  # what lies beside its clones
+    cat "$ST/verdict"; exit "$(cat "$ST/review.rc" 2>/dev/null || echo 0)" ;;
   *"upgrade-cycle fix"*) [ -e "$PWD/proof.log" ] && touch "$ST/fix.saw-log"
     [ ! -e "$PWD/.trusted" ] || touch "$ST/fix.saw-trusted"
     [ ! -e "$ST/fix.heads" ] || touch "$ST/fixed"
@@ -165,7 +166,13 @@ case "$args" in
   *"cat-file blob"*) case "${*: -1}" in  # the proven head's file as it was; the fix's as the case gives it
       aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:*|cccccccccccccccccccccccccccccccccccccccc:*) echo "v: 1" ;;
       *) cat "$ST/blob" 2>/dev/null || echo "v: 2" ;; esac ;;
+  *" diff --text --no-ext-diff --no-textconv --no-color origin/main...HEAD"*)  # the review's diff of a clone
+    [ ! -e "$ST/revdiff.$(basename "$dir").rc" ] || exit "$(cat "$ST/revdiff.$(basename "$dir").rc")"
+    echo "the diff of $(basename "$dir")" ;;
   *" diff --text"*) cat "$ST/blob" 2>/dev/null; exit 0 ;;  # no blob: an empty diff (git's answer, exit 0)
+  *" log --no-color --format=%h %an <%ae> %s origin/main..HEAD"*)  # the review's commits of a clone
+    [ ! -e "$ST/revlog.$(basename "$dir").rc" ] || exit "$(cat "$ST/revlog.$(basename "$dir").rc")"
+    echo "the commits of $(basename "$dir")" ;;
   *"merge-tree --write-tree origin/main "*)  # merging a head into main: one tree whatever the head - unless a commit came
     # since the notice ($ST/sincenotice): then each head its own tree (the head now and the announced one differ)
     if [ -s "$ST/sincenotice" ]; then echo "tree-of-${*: -1}"; else echo tree-the-announced-ones; fi ;;
@@ -425,6 +432,13 @@ check("  its commits by an identity of its own - never Renovate's (Renovate take
 check("  the reviewers as their files define them (their prompt, their tools)",
       {k: (v["prompt"][:30], v["tools"]) for k, v in json.loads(flag(a[0]["args"], "--agents") or "{}").items()}.get("code-architecture-reviewer"),
       ("You are a senior reviewer for ", ["Read", "Grep", "Glob", "Bash"]))
+check("  beside each clone, before the review starts: its diff against main and its commits (<repo>.diff, <repo>.commits) "
+      "- its reviewers read files, their Bash runs one plain git command a call (2026-11-17: a reviewer's cd-then-diff "
+      "refused, platform's and ops' diffs never read) - as text, git's external diff and textconv off",
+      (open(os.path.join(ST, "review.saw")).read().splitlines(),
+       len([c for c in calls if c.startswith("git -C " + WORK) and "diff --text --no-ext-diff --no-textconv --no-color origin/main...HEAD" in c])),
+      (["infra", "infra.commits", "infra.diff", "ops", "ops.commits", "ops.diff", "the commits of infra", "the commits of ops",
+        "the diff of infra", "the diff of ops"], 2))
 rc, calls = night("prove centrifugo minor")
 check("a unit with no production command: ops brought to origin's main all the same (its ops part may be a file no "
       "command reads - the record commits on it), Argo's settle left to the verify",
@@ -657,6 +671,16 @@ for broken, why in (("no frontmatter at all\n", "no frontmatter"), ("---\nname: 
           (rc, [c for c in calls if c.startswith("claude")], merged(calls, "istio"), has(calls, "upgrade-label.py istio upgrade-blocked"),
            notices(calls)), (1, [], False, [], ["upgrade-notice.sh blocked istio"]))
 open(os.path.join(OPS, ".claude/agents/test-quality-reviewer.md"), "w").write(good)
+rc, calls = night("prove istio minor", files={"revlog.infra.rc": "128"})
+check("a clone's commits not written for the review (the first repo's): blocked, no review run, nothing merged",
+      (rc, [c for c in calls if c.startswith("claude")], merged(calls, "istio"), notices(calls),
+       "its diffs not written for the review" in " ".join(has(calls, "upgrade-notice.sh blocked"))),
+      (1, [], False, ["upgrade-notice.sh blocked istio"], True))
+rc, calls = night("prove istio minor", files={"revdiff.ops.rc": "128"})
+check("a clone's diff not written for the review: blocked, no review run, nothing merged, not labelled",
+      (rc, [c for c in calls if c.startswith("claude")], merged(calls, "istio"), has(calls, "upgrade-label.py istio upgrade-blocked"),
+       notices(calls), "its diffs not written for the review" in " ".join(has(calls, "upgrade-notice.sh blocked"))),
+      (1, [], False, [], ["upgrade-notice.sh blocked istio"], True))
 # the apply's span holds what it waits for: Argo's settle and verify's (each its settle default), verify's hold, the
 # commands (30 min at least)
 import re as _re

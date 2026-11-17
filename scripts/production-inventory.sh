@@ -36,7 +36,9 @@ for pi in "${pis[@]}"; do
   "${ssh_[@]}" "$pi" 'sudo -n bash -s' < scripts/version-inventory-pi.sh > "$work/pi.$pi"
   [ -s "$work/pi.$pi" ] || { echo "$pi's inventory came back empty"; exit 1; }
 done
-sort -u "$work/ten" "$work"/pi.* > "$work/inventory"
+# byte order, whoever runs it (the runner's C.UTF-8, a shell's en_US: kagent-crds before kagent or after - a diff of
+# nothing but order); every reader sorts again, so the order is the file's own
+LC_ALL=C sort -u "$work/ten" "$work"/pi.* > "$work/inventory"
 if grep -E '^pi .* (stale|not-running|unknown)$' "$work/inventory"; then
   echo "a Pi service above is stale, not running or of no known version - production's version is not known: fix the Pi, then read again"
   exit 1

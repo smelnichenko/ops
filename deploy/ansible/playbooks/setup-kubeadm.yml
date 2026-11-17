@@ -58,6 +58,17 @@
     # renovate: datasource=helm depName=metrics-server registryUrl=https://kubernetes-sigs.github.io/metrics-server
     metrics_server_chart_version: "3.14.0"
     prometheus_operator_crds_chart_version: "32.0.1"  # operator v0.94.1
+    # the data operators' charts as production's Argo apps run them (defaults-follow-production): play vars, annotated,
+    # so Renovate moves each with infra's chart in the same unit and the copy's proof follows them (copy-unit.sh's
+    # FOLLOW) - on the tasks themselves a moved version was a changed task, refused by the proof
+    # renovate: datasource=helm depName=cloudnative-pg registryUrl=https://cloudnative-pg.github.io/charts
+    cnpg_chart_version: "0.29.1"
+    # renovate: datasource=helm depName=strimzi-kafka-operator registryUrl=https://strimzi.io/charts/
+    strimzi_chart_version: "1.2.0"
+    # renovate: datasource=helm depName=scylla-operator registryUrl=https://scylla-operator-charts.storage.googleapis.com/stable
+    scylla_operator_chart_version: "v1.22.0"
+    # renovate: datasource=helm depName=scylla-manager registryUrl=https://scylla-operator-charts.storage.googleapis.com/stable
+    scylla_manager_chart_version: "v1.22.0"
     # renovate: datasource=git-tags depName=https://github.com/kubernetes-sigs/gateway-api versioning=semver
     gateway_api_version: "v1.5.1"
     # its standard-install.yaml - TLS alone, Gateway API signs no release (scripts/renovate-checksums.py - moved with the
@@ -1115,7 +1126,7 @@
         kubeconfig: /etc/kubernetes/admin.conf
         name: cnpg
         chart_ref: cnpg/cloudnative-pg
-        chart_version: "0.29.1"
+        chart_version: "{{ cnpg_chart_version }}"
         release_namespace: cnpg-system
         create_namespace: true
         values:
@@ -1142,7 +1153,7 @@
         kubeconfig: /etc/kubernetes/admin.conf
         name: strimzi
         chart_ref: strimzi/strimzi-kafka-operator
-        chart_version: "1.2.0"
+        chart_version: "{{ strimzi_chart_version }}"
         release_namespace: strimzi
         create_namespace: true
         values:
@@ -1167,7 +1178,7 @@
         kubeconfig: /etc/kubernetes/admin.conf
         name: scylla-operator
         chart_ref: scylla-operator/scylla-operator
-        chart_version: "v1.22.0"
+        chart_version: "{{ scylla_operator_chart_version }}"
         release_namespace: scylla-operator
         create_namespace: true
         wait: true
@@ -1179,7 +1190,7 @@
         kubeconfig: /etc/kubernetes/admin.conf
         name: scylla-manager
         chart_ref: scylla-operator/scylla-manager
-        chart_version: "v1.22.0"
+        chart_version: "{{ scylla_manager_chart_version }}"
         release_namespace: scylla-manager
         create_namespace: true
         values: "{{ scylla_manager_values }}"

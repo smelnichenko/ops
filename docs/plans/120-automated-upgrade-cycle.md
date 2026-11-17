@@ -169,14 +169,43 @@ cluster settled (upgrade-verify), recorded, reported - no copy, no review; red a
 Woodpecker (2026-11-16, SHADOW run 7): wave-patches carried the Woodpecker chart (3.7.3 -> 3.7.7), and the copy runs no
 Woodpecker (its overlay leaves it out), so the mirror refused the unit - the fix agent's "no fix", rightly. Operator:
 Woodpecker a unit of its own, applied by hand. The preset's last rule sends the chart to `renovate/manual-woodpecker`;
-upgrade-units.py never picks a `manual-` unit. By hand: merge its pull request, then check a pipeline runs (a bad one is
-CI down, reverted by its commit).
+upgrade-units.py never picks a `manual-` unit. By hand: merge infra's pull request, then ops' (setup-woodpecker.yml's
+default, since 2026-11-17), check a pipeline runs (a bad one is CI down, reverted by its commit), then read production's
+inventory again and commit it (`task test:copy:inventory`) - ops' main fails defaults-follow-production in between.
 
 The Gateway API (2026-11-16): Istio's rule named its branches by each update's own version, so the Gateway API's v1.6 and
 v1.7 became units istio-1.6 and istio-1.7 - apart from Istio's istio-1.32 ("together" never held), and the family's lowest
 minor first would have picked them before it. Operator: a unit of its own, after Istio. The preset sends it to
 `renovate/gateway-api-<X.Y>` (one minor at a time); FAMILIES puts gateway-api right after istio; the copy's proof
 catches a Gateway API the running Istio does not support.
+
+**The first clean shadow proof (2026-11-17, SHADOW run 10):** wave-patches proven on the copy (built 49 min, proven 48)
+and reviewed CLEAN, nothing applied - `.upgrade-cycle/shadow-proven` written; runs 8 and 9 ended on Woodpecker's queue
+(the CI wait), no try counted. A run may take its START_SPAN (330 min): it is started detached (setsid), never under a
+tool's time limit. Its review found two things, fixed before the first applying run:
+- the reviewers never read platform's and ops' diffs: their Bash (`cd <path>` then `git diff`, a loop over `git -C`) was
+  refused, the code-review skill could not run at all - they read files at HEAD instead. The runner now writes each
+  clone's `<repo>.diff` and `<repo>.commits` beside it (`diffs` in upgrade-cycle.sh), review.md hands their paths to the
+  reviewers and skills (Read alone); a diff not written blocks the unit, no review run.
+- defaults left behind: the Scylla operator's and Manager's, cnpg's and Strimzi's chart versions, written on
+  setup-kubeadm.yml's helm tasks, and Woodpecker's default inside `default('3.7.3')` (3.7.7 live; vars/woodpecker.yml
+  overrode it with 3.7.3 too) - none read by Renovate, so infra's chart moved alone and ops' main would go red once
+  production's inventory was read after the apply. The four chart versions are play vars now (`cnpg_chart_version`,
+  `strimzi_chart_version`, `scylla_operator_chart_version`, `scylla_manager_chart_version`), annotated, and copy-unit.sh
+  follows them (FOLLOW) - annotated on the tasks, a moved version was a changed task the proof refuses: built 49 min,
+  refused, handed to the fix agent as red (the full review's finding). Woodpecker's is `woodpecker_chart_version`, one
+  annotated value (renovate/manual-woodpecker - by hand: infra's pull request, then ops', then the inventory read again and
+  committed). defaults-follow-production fails a default the preset reads under another datasource or name than
+  production's chart, or not at all (containerd.io named as left by hand: no proof path yet); upgrade-renovate fails an
+  ops value the preset moves that copy-unit.sh cannot prove, unless its file is named (Woodpecker's: never picked;
+  Keycloak's setup-pi-services.yml and Consul's setup-consul.yml: no proof path yet - such a unit is refused by the
+  proof, after its build), both through one reading of the preset (tests/ansible/unit/renovate_preset.py: its managers,
+  ignorePaths, the rules turning a dependency off). Renovate reads nothing under tests/ (ignorePaths), so a copy's check
+  pins no image production runs (upgrade-renovate fails one): restore-check's rclone and storage-check's busybox read the
+  etcd backup's image from the cluster (tests/ansible/copy/tasks/shell-image.yml); the isolation probe's curl is named -
+  production runs curl only in Argo hook Jobs, no object to read it from; setup-velero's aws-cli stays a pin of its pre-Argo play (it ends
+  where infra's Velero app exists - no proof path, no unit); the DR drill's rclone is its own tool.
+  production-inventory.sh sorts in byte order (a hand's en_US read and the runner's C.UTF-8 one differed in order alone).
 
 **Rollout step 1 - the lookup, 2026-11-14** (Renovate 44.198.3, `local` platform, `RENOVATE_DRY_RUN=lookup`, each
 repo's branch exported to a scratch git directory under ops/.copy with the preset as its renovate.json - a `local>`

@@ -73,7 +73,10 @@ changed = subprocess.run(["git", "-C", OPS, "diff", "--name-only", f"main...{BRA
                          check=True).stdout.split()
 # the values ops restates from production's Argo charts (defaults-follow-production): they move with the infra unit
 FOLLOW = {"cert_manager_version", "external_secrets_chart_version", "metrics_server_chart_version", "istio_version",
-          "argocd_chart_version", "local_path_provisioner_version", "gateway_api_version", "gateway_api_sha256"}
+          "argocd_chart_version", "local_path_provisioner_version", "gateway_api_version", "gateway_api_sha256",
+          "cnpg_chart_version", "strimzi_chart_version", "scylla_operator_chart_version", "scylla_manager_chart_version"}
+# the packages kubeadm's upgrade brings along with Kubernetes (upgrade-kubeadm.yml's minor_packages): no step of their own
+KUBEADM_PACKAGES = {"k8s_version", "k8s_cni_version", "k8s_cri_tools_version"}
 def play_vars(text):
     doc = yaml.safe_load(text) or []
     return (doc[0].get("vars") or {}) if isinstance(doc, list) and doc and isinstance(doc[0], dict) else {}
@@ -159,7 +162,7 @@ for path in changed:
                 steps.append(("upgrade-kubeadm.yml", f"-e k8s_upgrade_to={version(new[k]).split('-')[0]}", True))
             elif k == "cilium_version":
                 steps.append(("setup-kubeadm.yml", f"--tags cilium -e cilium_version={version(new[k])}", False))
-            elif k in FOLLOW or k in ("k8s_version", "k8s_cni_version", "k8s_cri_tools_version"):
+            elif k in FOLLOW or k in KUBEADM_PACKAGES:
                 continue  # production's Argo charts, or the packages kubeadm's upgrade brings along
             else:
                 refused.append(f"{path} {k}")

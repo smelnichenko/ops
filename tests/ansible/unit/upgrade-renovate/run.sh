@@ -211,6 +211,68 @@ print(found("clusters/production/cluster-config/restore-check-age.yaml", prod), 
 PYPRESET
 )" "[('alpine/k8s', '1.35.9', False), ('rclone/rclone', '1.75.1', True), ('rclone/rclone', '1.75.1', True), ('clickhouse/clickhouse-server', '26.8.34.13-alpine', False), ('clickhouse/clickhouse-server', '26.8.34.13-alpine', False), ('prom/alertmanager', 'v0.34.1', False)]
 [('alpine/k8s', '1.35.9', False), ('rclone/rclone', '1.75.1', True)] [('prom/alertmanager', 'v0.34.1', False), ('clickhouse/clickhouse-server', '26.8.34.13-alpine', False)]"
+# what Renovate moves in ops, the copy can prove: each ops value the preset reads (renovate_preset.reads: its managers,
+# ignorePaths, the rules turning a dependency off) is one copy-unit.sh follows or proves - its file a vars file it hands
+# over, or its key one that file's branch accepts - unless every dependency in the file goes to a manual- unit (never
+# picked) or the file is named below with why. Tracked but unprovable, a unit carrying it was built (49 min), refused, and
+# handed to the fix agent as red (2026-11-17's review: the data operators' chart versions annotated on their helm tasks,
+# setup-velero's aws-cli). And the copy's checks pin no image production runs: Renovate reads nothing under tests/, so a
+# pin stays behind production's (rclone, busybox) - they read it from the cluster (tasks/shell-image.yml)
+check "every ops value Renovate moves has a proof on the copy (copy-unit.sh) or is named without one; the copy's checks pin no production image" \
+  "$("$PY" - <<'PYPROVABLE'
+import os, re, sys
+sys.path.insert(0, "tests/ansible/unit")
+import renovate_preset
+cu = open("scripts/copy-unit.sh").read()
+def pyset(name):
+    return set(re.findall(r'"([^"]+)"', re.search(r"^%s = \{(.*?)\}" % name, cu, re.S | re.M).group(1)))
+kubeadm_branch = cu[cu.index('if path == "deploy/ansible/playbooks/setup-kubeadm.yml":'):]
+kubeadm_branch = kubeadm_branch[:kubeadm_branch.index("    elif path ==")]
+PROVEN = {  # the keys each playbook's branch in copy-unit.sh accepts, read from it
+    "deploy/ansible/playbooks/setup-kubeadm.yml": pyset("FOLLOW") | pyset("KUBEADM_PACKAGES") | set(re.findall(r'k == "(\w+)"', kubeadm_branch)),
+    "deploy/ansible/playbooks/setup-istio.yml": pyset("FOLLOW"),
+    "deploy/ansible/playbooks/setup-argocd.yml": pyset("ARGOCD"),
+    "deploy/ansible/playbooks/setup-host-hardening.yml": pyset("NODE_EXPORTER"),
+    "deploy/ansible/playbooks/setup-caddy.yml": pyset("CADDY"),
+}
+VARS_FILES = set(re.findall(r'"(deploy/ansible/vars/[^"]+)": \(', cu))
+NO_PROOF = {  # tracked, with no proof path on the copy yet - such a unit is refused by the proof, after its build
+    "deploy/ansible/playbooks/setup-pi-services.yml": "Keycloak",
+    "deploy/ansible/playbooks/setup-consul.yml": "Consul",
+}
+bad, unproven = [], set()
+for root, dirs, files in os.walk("deploy/ansible"):
+    dirs[:] = [x for x in dirs if x not in ("collections", "venv")]
+    for f in files:
+        path = os.path.join(root, f)
+        reads = renovate_preset.reads(path)
+        if not reads or path in VARS_FILES or all(renovate_preset.manual(r["depName"]) for r in reads):
+            continue
+        if path in PROVEN:
+            bad += [f"{path} {k}" for k in sorted({r["key"] for r in reads} - PROVEN[path])]
+        elif path in NO_PROOF:
+            unproven.add(NO_PROOF[path])
+        else:
+            bad.append(path)
+production = {re.sub(r"^docker\.io/(library/)?", "", l.split()[1]) for l in open("tests/ansible/copy/prod-inventory.txt")
+              if l.startswith("image ")}
+pinned = re.compile(r"(?<![\w./-])((?:docker\.io/)?[a-z0-9][a-z0-9._/-]*[a-z0-9]):[A-Za-z0-9][A-Za-z0-9._-]*")
+PIN_OK = {  # a production image a copy's check still pins - with why
+    "tests/ansible/copy/isolate-cluster.yml curlimages/curl":
+        "production runs curl only in Argo hook Jobs (k6 post-sync, Sonar's setup) - no object to read it from",
+}
+copy_pins = set()
+for root, _, files in os.walk("tests/ansible/copy"):
+    for f in files:
+        if f.endswith((".yml", ".yaml")):
+            for line in open(os.path.join(root, f), encoding="utf-8", errors="replace"):
+                for m in pinned.finditer(re.sub(r"(^|\s)#.*", "", line)):  # a comment pins nothing
+                    name = re.sub(r"^docker[.]io/(library/)?", "", m.group(1))
+                    if name in production:
+                        copy_pins.add(f"{os.path.join(root, f)} {name}")
+print(bad, sorted(unproven), sorted(copy_pins - set(PIN_OK)))
+PYPROVABLE
+)" "[] ['Consul', 'Keycloak'] []"
 # a run rebases nothing that has no conflict (Woodpecker builds one at a time; infra's main moves many times a day - a
 # rebase of every branch at every run was a queue of builds ahead of the apps' deploys); no cap per repo (it split one
 # unit across the repos: its infra half waiting while its ops half was picked)

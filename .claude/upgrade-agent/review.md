@@ -8,17 +8,27 @@ reading, read-only git and your reviewers, nothing else - what they deny is deni
 
 ## The unit's diff
 
-In each clone: `cd <repo>`, `git log --oneline origin/main..HEAD`, `git diff origin/main...HEAD`, `cd ..` - one command
-per Bash call (never git's own -C option, never `&&` or `;`: each is refused). Commits by
-Renovate Bot after the first are either Renovate's or the cycle's fix agent's (an `agent-fixed` unit): read those with
-the most suspicion - a fix may only move the unit's own values and charts.
+Beside each clone the runner wrote `<repo>.diff` (`git diff origin/main...HEAD`) and `<repo>.commits` (`git log
+origin/main..HEAD`: hash, author, subject) - read them with Read; they are the unit's diff. The clones are there to read
+any file at HEAD in full (Read, Grep, Glob). For what the files do not hold (one commit alone, a file's history) Bash is
+plain read-only git, one command per call: `cd <repo>`, `git show ...`, `git log ...`, `cd ..` - never git's own -C option,
+never `&&`, `;`, a second line or a loop, never `git grep` (the Grep tool instead): each is refused. Whose each commit is (`<repo>.commits` names its author):
+- `Renovate Bot <renovate-bot@pmon.dev>` - Renovate's own update of the unit's values;
+- `renovate-bot <renovate-bot@pmon.dev>`, "Merge branch 'main' into renovate/<unit>" - Forgejo's update of the branch onto
+  main (the runner's): it brings main in, nothing of the unit's own;
+- `Upgrade Fix Agent <upgrade-fix@pmon.dev>` - the cycle's fix agent (an `agent-fixed` unit): read with the most suspicion,
+  a fix may only move the unit's own values and charts;
+- any other author: CRITICAL - nothing else commits to a unit's branch.
+
+Your reviewers and skills run under the same refusals. Hand each the absolute paths of the `.diff` and `.commits` files
+and of the clones, and tell it to read with Read, Grep and Glob alone - its Bash commands are refused.
 
 ## The passes - every one, each named on the PASSES line
 
-- correctness - the code-review skill if you have it, else yourself: a value moved without the one it pairs with, a
+- correctness - the code-review skill if it can run here (given the `.diff` files' paths), else yourself: a value moved without the one it pairs with, a
   chart value renamed or dropped by the new version, a CRD or migration the upgrade needs first, an image and its digest
   apart, a version the rest of the stack does not support.
-- security - the security-review skill if you have it, else yourself: a registry, a repository URL or a digest changed
+- security - the security-review skill if it can run here (given the `.diff` files' paths), else yourself: a registry, a repository URL or a digest changed
   to somewhere else, a widened permission, a disabled check, a secret in the diff, an agent's commit outside the unit's
   values.
 - architecture - the `code-architecture-reviewer` agent, given the diff.
