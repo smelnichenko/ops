@@ -7,7 +7,7 @@
     "names): renovate/wave-patches (every patch); renovate/<family>-<X.Y> for the families moved one minor at a time",
     "(istio, kubernetes, cilium); renovate/<family> for the other families' minors (observability, data-operators, argocd,",
     "pi-services); each other minor and every major on a branch of its own (Renovate's own name). Label one-way: a change",
-    "whose stores have no backup path in the cycle yet - the runner leaves it for the operator.",
+    "its store cannot undo - the runner backs the store up first (scripts/upgrade-stores.json), or blocks it, naming the part with none.",
     "A test environment's files: renovate/test-<unit>, merged before its production twin.",
     "Renovate rebases a branch only on a conflict (rebaseWhen conflicted): infra's main moves many times a day by CD, and a rebase of every branch at every run was a queue of CI builds ahead of the apps' deploys - the cycle brings the one unit it picks onto main itself (Forgejo's update). No cap on pull requests: a cap per repo split one unit across the repos."
   ],
@@ -360,7 +360,7 @@
       ]
     },
     {
-      "description": "One-way majors whose stores have no backup path in the cycle yet (Postgres, ScyllaDB, Kafka and Strimzi, ClickHouse, Grafana, Vault, Consul): label one-way - the runner leaves them for the operator",
+      "description": "One-way majors (Postgres, ScyllaDB, Kafka and Strimzi, ClickHouse, Grafana, Vault, Consul): label one-way - the runner backs the store up first or blocks the unit, naming the part with no backup (scripts/upgrade-stores.json: each package here a store's there, the harness checks)",
       "matchUpdateTypes": [
         "major"
       ],

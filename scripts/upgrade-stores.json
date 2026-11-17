@@ -1,0 +1,144 @@
+{
+  "_doc": [
+    "What a one-way change needs before it is applied to production - the upgrade cycle's one table of it (scripts/upgrade-stores.py reads it for the runner).",
+    "A one-way unit (Renovate's one-way label - renovate/upgrade-cycle.json's rules, the packages below - or its name matching a store's 'units') is one of these stores'.",
+    "units: the names Renovate gives the store's units (a major: its depName, '/' as '-', then '-<major>.x'; ScyllaDB's release lines: renovate/scylladb-<X.Y>) - examples: real ones, each matched by its own store's units alone (the harness); a group's name is a store's only when the group is that store's alone.",
+    "backups: the production tasks the runner runs before the merge (each must end well, or nothing is merged), minutes their bound (added to the apply's span) - every part of the store the unit may change.",
+    "taken_by: the unit's own production command takes the backup itself (its playbook, first) - the runner refuses the unit when its plan has not that command.",
+    "missing: the parts that have none yet, each with why - while any is listed, the store's units are blocked before anything is built, the notice naming each; once the part exists, the table says so and the label upgrade-blocked comes off the unit's pull requests.",
+    "A test environment's unit takes no backup (its data is no store to keep), but runs only when its production twin could: a test environment ahead of production for good is no proof of anything.",
+    "upgrade-renovate's harness fails a package the preset marks one-way that no store here names (and the reverse), a store with neither, a backup that is no production task - a new kind of store is decided here, not met in a run."
+  ],
+  "stores": [
+    {
+      "store": "postgres",
+      "units": "(^|-)(postgres|postgresql)-[0-9]+\\.(x|[0-9]+)$",
+      "packages": [
+        "postgres",
+        "/(^|\\/)postgres$/",
+        "/(^|\\/)postgresql$/"
+      ],
+      "backups": [
+        "deploy:postgres:base-backup -- -e pg_namespace=schnappy-production -e cluster=schnappy-production-postgres"
+      ],
+      "missing": [
+        "woodpecker-postgres (CNPG) has no backup store (its spec.backup unset) - Woodpecker's CI history has no copy to restore a failed major from",
+        "SonarQube's Postgres (a plain StatefulSet, postgres:<major>-alpine, its data on a local volume) has no backup - and a new major will not read the old one's data directory"
+      ],
+      "examples": [
+        "postgres-18.x",
+        "postgresql-19.x"
+      ],
+      "taken_by": [],
+      "minutes": 30
+    },
+    {
+      "store": "scylladb",
+      "units": "(^|-)(scylla|scylladb)-[0-9]+\\.(x|[0-9]+)$",
+      "packages": [
+        "/^(docker\\.io\\/)?scylladb\\/scylla$/",
+        "/scylladb\\/scylla$/"
+      ],
+      "backups": [
+        "check:production:scylla-backup"
+      ],
+      "missing": [
+        "no restore from its backup: no sctool restore task or runbook, never rehearsed on the copy - a release line cannot be downgraded, so the way back is a new cluster restored from it",
+        "its units move only the schema Job's cqlsh image (scylla.image); the cluster's version (scyllaOperator.version) has no renovate annotation - such a unit would change no ScyllaDB"
+      ],
+      "examples": [
+        "scylladb-2026.3",
+        "scylladb-scylla-2027.x"
+      ],
+      "taken_by": [],
+      "minutes": 30
+    },
+    {
+      "store": "kafka",
+      "units": "(^|-)(kafka|strimzi|strimzi-kafka-operator)-[0-9]+\\.(x|[0-9]+)$",
+      "packages": [
+        "/(^|\\/)kafka$/",
+        "strimzi-kafka-operator",
+        "/^quay\\.io\\/strimzi\\//"
+      ],
+      "backups": [],
+      "missing": [
+        "no backup of Kafka's topics in the cycle (nothing copies them: no MirrorMaker, no volume snapshot)"
+      ],
+      "examples": [
+        "strimzi-kafka-operator-1.x",
+        "quay.io-strimzi-kafka-1.x",
+        "apache-kafka-4.x"
+      ],
+      "taken_by": [],
+      "minutes": 0
+    },
+    {
+      "store": "clickhouse",
+      "units": "(^|-)(clickhouse|clickhouse-server)-[0-9]+\\.(x|[0-9]+)$",
+      "packages": [
+        "/clickhouse-server$/"
+      ],
+      "backups": [],
+      "missing": [
+        "no ClickHouse backup in the cycle (logs and traces: no BACKUP TO a store, no volume snapshot)"
+      ],
+      "examples": [
+        "clickhouse-clickhouse-server-27.x"
+      ],
+      "taken_by": [],
+      "minutes": 0
+    },
+    {
+      "store": "grafana",
+      "units": "(^|-)grafana-[0-9]+\\.(x|[0-9]+)$",
+      "packages": [
+        "grafana",
+        "grafana/grafana"
+      ],
+      "backups": [],
+      "missing": [
+        "no backup of Grafana's database in the cycle (its SQLite on a local volume)"
+      ],
+      "examples": [
+        "grafana-grafana-13.x",
+        "grafana-14.x"
+      ],
+      "taken_by": [],
+      "minutes": 0
+    },
+    {
+      "store": "vault",
+      "units": "(^|-)vault-[0-9]+\\.(x|[0-9]+)$",
+      "packages": [
+        "/(^|\\/)vault$/"
+      ],
+      "backups": [],
+      "missing": [],
+      "examples": [
+        "hashicorp-vault-2.x"
+      ],
+      "taken_by": [
+        "deploy:vault:upgrade"
+      ],
+      "_why": "its own command takes it: upgrade-vault.yml snapshots Consul (Vault's storage) and exports vault/ before it touches a Pi - the snapshot's restore exercised by the Pi restore check",
+      "minutes": 0
+    },
+    {
+      "store": "consul",
+      "units": "(^|-)consul-[0-9]+\\.(x|[0-9]+)$",
+      "packages": [
+        "/(^|\\/)consul$/"
+      ],
+      "backups": [],
+      "missing": [
+        "no upgrade path: setup-consul.yml installs Consul, nothing snapshots it at a change, and the copy has no proof for it (copy-unit.sh)"
+      ],
+      "examples": [
+        "hashicorp-consul-2.x"
+      ],
+      "taken_by": [],
+      "minutes": 0
+    }
+  ]
+}
