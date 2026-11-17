@@ -60,9 +60,11 @@
         "strimzi-kafka-operator",
         "/^quay\\.io\\/strimzi\\//"
       ],
-      "backups": [],
+      "backups": [
+        "check:production:kafka-backup"
+      ],
       "missing": [
-        "no backup of Kafka's topics in the cycle (nothing copies them: no MirrorMaker, no volume snapshot)"
+        "its restore not yet rehearsed on the copy - test:copy:kafka-restore restores a marker topic through production's backup and restore Jobs; the dump and restore proven locally on Kafka 4.3.1 and against a stub Kafka in platform CI"
       ],
       "examples": [
         "strimzi-kafka-operator-1.x",
@@ -70,7 +72,7 @@
         "apache-kafka-4.x"
       ],
       "taken_by": [],
-      "minutes": 0
+      "minutes": 10
     },
     {
       "store": "clickhouse",
@@ -132,13 +134,14 @@
         "/(^|\\/)consul$/"
       ],
       "backups": [],
-      "missing": [
-        "no upgrade path: setup-consul.yml installs Consul, nothing snapshots it at a change, and the copy has no proof for it (copy-unit.sh)"
-      ],
+      "missing": [],
       "examples": [
         "hashicorp-consul-2.x"
       ],
-      "taken_by": [],
+      "taken_by": [
+        "deploy:consul:upgrade"
+      ],
+      "_why": "its own command takes it: upgrade-consul.yml snapshots the whole state on pi1 (inspected) before any server restarts, the followers then the leader - proven on the copy by copy-unit (setup-consul.yml's version moved: upgrade-consul.yml there) and by test:consul-upgrade",
       "minutes": 0
     }
   ]

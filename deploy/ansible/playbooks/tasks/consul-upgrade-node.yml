@@ -1,0 +1,38 @@
+---
+# One Consul server's turn (upgrade-consul.yml): on the host named _turn - stopped (SIGTERM: a server keeps its raft
+# membership), its binary replaced by the unpacked release, started; then, seen from that server, every server back as a
+# healthy voter with one leader before the next turn. A server already on the version is not restarted.
+- name: "Stopped, its binary replaced, started - {{ _turn }}"
+  ansible.builtin.shell:
+    executable: /bin/bash
+    cmd: |
+      set -euo pipefail
+      systemctl stop consul
+      install -m 0755 /usr/local/lib/consul-{{ consul_version }}/consul /usr/local/bin/consul
+      systemctl start consul
+  changed_when: true
+  when:
+    - inventory_hostname == _turn
+    - _running != consul_version
+
+- name: "On the version, every server a healthy voter, one leader - seen from {{ _turn }}"
+  ansible.builtin.uri:
+    url: "{{ consul_http }}/v1/operator/autopilot/health"
+    return_content: true
+    status_code: [200, 429, 500]
+  register: _turn_health
+  retries: 60
+  delay: 5
+  until: >-
+    _turn_health.status == 200 and _turn_health.json.Healthy
+    and _turn_health.json.Servers | selectattr('Voter') | list | length == 3
+    and _turn_health.json.Servers | selectattr('Leader') | list | length == 1
+  when: inventory_hostname == _turn
+
+- name: "Its agent on the version - {{ _turn }}"
+  ansible.builtin.uri:
+    url: "{{ consul_http }}/v1/agent/self"
+    return_content: true
+  register: _turn_self
+  failed_when: _turn_self.json.Config.Version != consul_version
+  when: inventory_hostname == _turn

@@ -60,6 +60,17 @@ cat > "$W/src/ops/deploy/ansible/playbooks/setup-caddy.yml" <<'Y'
     peer_ip: "10.0.0.2"
   tasks: []
 Y
+cat > "$W/src/ops/deploy/ansible/playbooks/setup-consul.yml" <<'Y'
+- name: consul
+  hosts: pi1,pi2,target
+  vars:
+    consul_version: "1.20.6"
+    consul_checksums:
+      arm64: 96ba60faadde5d92f36d536818a6382159344983c79529015e5d991fd1199d4b
+      amd64: 37fc6f213a44c6db3a2b912966fb1415939e9b189ce1bc1eb07b7f87449a28c2
+    consul_datacenter: "schnappy"
+  tasks: []
+Y
 cat > "$W/src/ops/deploy/ansible/playbooks/setup-istio.yml" <<'Y'
 - name: istio
   hosts: target
@@ -95,6 +106,9 @@ unit ops argocd-bad 's/"10.9.7"/"10.18.0 -e x=y"/' deploy/ansible/playbooks/setu
 unit ops node-exporter 's/"1.12.1"/"1.13.0"/; s/b51d8a76aa2a9156a55d501aca6276fae09e262259a5e4e831d2c2222f084e63/'"$(printf 'ab%.0s' $(seq 32))"'/' deploy/ansible/playbooks/setup-host-hardening.yml
 unit ops node-exporter-port 's/node_exporter_port: 9100/node_exporter_port: 9101/' deploy/ansible/playbooks/setup-host-hardening.yml
 unit ops caddy 's/"2.10.0"/"2.10.2"/' deploy/ansible/playbooks/setup-caddy.yml
+unit ops consul 's/"1.20.6"/"1.20.7"/; s/96ba60faadde5d92f36d536818a6382159344983c79529015e5d991fd1199d4b/1111111111111111111111111111111111111111111111111111111111111111/; s/37fc6f213a44c6db3a2b912966fb1415939e9b189ce1bc1eb07b7f87449a28c2/2222222222222222222222222222222222222222222222222222222222222222/' deploy/ansible/playbooks/setup-consul.yml
+unit ops consul-dc 's/"1.20.6"/"1.20.7"/; s/"schnappy"/"other"/' deploy/ansible/playbooks/setup-consul.yml
+unit ops consul-task 's/"1.20.6"/"1.20.7"/; s/tasks: \[\]/tasks: [{name: x, command: id}]/' deploy/ansible/playbooks/setup-consul.yml
 unit ops caddy-peer 's/"2.10.0"/"2.10.2"/; s/10.0.0.2/10.0.0.3/' deploy/ansible/playbooks/setup-caddy.yml
 unit ops caddy-task 's/"2.10.0"/"2.10.2"/; s/tasks: \[\]/tasks: [{name: x, command: id}]/' deploy/ansible/playbooks/setup-caddy.yml
 unit ops caddy-bad 's/"2.10.0"/"2.10.2 -e x=y"/' deploy/ansible/playbooks/setup-caddy.yml
@@ -223,6 +237,15 @@ out=$(plan caddy); f=$(vars_of setup-caddy.yml "$out")
 check "Caddy's version: production's setup-caddy on the copy's Pis, the branch's version handed to it (it builds the pinned one)" \
   "$(sed "s|@$f|@VARS|" <<< "$out") | $( [ -n "$f" ] && tr '\n' ' ' < "$f")" \
   "test:copy:playbook PLAYBOOK=setup-caddy.yml ARGS='-e @VARS' | caddy_version: 2.10.2 "
+out=$(plan consul); f=$(vars_of upgrade-consul.yml "$out")
+check "Consul's version: production's upgrade-consul on the copy (the rolling upgrade), the branch's version and hashes handed to it" \
+  "$(sed "s|@$f|@VARS|" <<< "$out" | grep upgrade-consul) | $( [ -n "$f" ] && awk '{ gsub(/["\047]/, "") } /consul_version:/ { v = $2 } /amd64:/ { a = substr($2, 1, 4) } /arm64:/ { r = substr($2, 1, 4) } END { print v, a, r }' "$f")" \
+  "test:copy:playbook PLAYBOOK=upgrade-consul.yml ARGS='-e @VARS' | 1.20.7 2222 1111"
+for u in consul-dc consul-task; do
+  out=$(plan "$u"); rc=$?
+  check "  $u: another of its values, or its tasks: refused" \
+    "$rc $(grep -c '^REFUSED' <<< "$out") $(grep -c 'test:copy:playbook' <<< "$out")" "1 1 0"
+done
 for u in caddy-peer caddy-task caddy-bad; do
   out=$(plan "$u"); rc=$?
   check "  $u: another of its values, its tasks, or no version beside it: refused" \

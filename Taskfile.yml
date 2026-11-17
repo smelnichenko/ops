@@ -503,7 +503,7 @@ tasks:
       # does (scripts/clickhouse-expected.sh both; without them the seed expected none and production's 25.8 failed it)
       - cmd: |
           set -euo pipefail
-          ch=$(scripts/clickhouse-expected.sh main)  # its own assignment: inside the here-string a failure went unseen
+          ch=$(scripts/clickhouse-expected.sh main main)  # its own assignment: inside the here-string a failure went unseen
           read -r compat users <<< "$ch"
           [ "$compat" != - ] || compat=""
           cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/survival-check.yml -e mode=seed -e "clickhouse_compat=$compat" -e "clickhouse_users=$users"
@@ -1284,6 +1284,31 @@ tasks:
     cmds:
       - venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/clickhouse-restore-check.yml
 
+  check:production:kafka-backup:
+    desc: "PRODUCTION: Kafka's topics dumped to the Pi store now - a Job from its backup CronJob (every partition from its earliest offset, its count checked; DONE last), waited for (kafka-backup-check.yml); restored on the copy by test:copy:kafka-restore"
+    dir: deploy/ansible
+    deps: [deploy:install]
+    dotenv: ['../../.env']
+    prompt: "Take a Kafka backup on PRODUCTION?"
+    cmds:
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/kafka-backup-check.yml {{.CLI_ARGS}}
+
+  deploy:kafka:restore:
+    desc: "PRODUCTION: Kafka's topics produced back from a dump (-- -e kafka_dump=<UTC timestamp>|newest [-e kafka_topics='<t> <t>']) - the topics there and empty, their consumers stopped; the dump's groups moved to the end after (kafka-restore.yml). Rehearsed on the copy: test:copy:kafka-restore"
+    dir: deploy/ansible
+    deps: [deploy:install]
+    dotenv: ['../../.env']
+    prompt: "Restore Kafka topics on PRODUCTION?"
+    cmds:
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/kafka-restore.yml {{.CLI_ARGS}}
+
+  test:copy:kafka-restore:
+    desc: "Vagrant: Kafka's dump restores - a marker topic (headers, none, keys, a JSON header) backed up by production's backup Job, emptied, restored by production's restore Job (that topic alone), each key's messages back in order, exactly as many (kafka-restore-check.yml)"
+    dir: deploy/ansible
+    deps: [deploy:install]
+    cmds:
+      - venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/kafka-restore-check.yml
+
   check:production:scylla-backup:
     desc: "PRODUCTION: each ScyllaDB cluster's Scylla Manager backup started now, DONE with a fresh snapshot (scylla-backup-check.yml)"
     dir: deploy/ansible
@@ -1292,6 +1317,21 @@ tasks:
     prompt: "Start a Scylla Manager backup on PRODUCTION?"
     cmds:
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/scylla-backup-check.yml {{.CLI_ARGS}}
+
+  deploy:consul:upgrade:
+    desc: "PRODUCTION: Consul's three servers (pi1, pi2, ten) to setup-consul.yml's consul_version - a snapshot of the whole state first (pi1's /var/backups/consul-upgrade), the followers then the leader, each back as a healthy voter before the next, Vault answering after (upgrade-consul.yml)"
+    dir: deploy/ansible
+    deps: [deploy:install]
+    dotenv: ['../../.env']
+    prompt: "Upgrade Consul on PRODUCTION?"
+    cmds:
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/upgrade-consul.yml {{.CLI_ARGS}}
+
+  test:consul-upgrade:
+    desc: "Vagrant: Consul's servers set back to 1.20.5, a key written; a server down refused; upgrade-consul.yml as in production, sampled - every server on setup-consul.yml's version, never 15 s without a leader, the key back, the old binary kept, the snapshot this run's; again nothing to do; a downgrade refused"
+    deps: [deploy:install]
+    cmds:
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-consul-upgrade.yml {{.CLI_ARGS}}
 
   test:vault-upgrade:
     desc: "Vagrant: the Pis at production's Vault (1.21.3), a secret written, then upgrade-vault.yml as in production - both on the version, the failover older to newer, the secret read back"

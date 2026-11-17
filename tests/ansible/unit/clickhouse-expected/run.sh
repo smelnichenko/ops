@@ -52,5 +52,31 @@ expect no-such-ref
 check "a ref not there: refused, said" "$rc ${out:-none} $(grep -c 'not read from platform no-such-ref' <<< "$err")" "1 none 1"
 out=$(bash scripts/clickhouse-expected.sh 2>&1); rc=$?
 check "no ref given: usage, refused" "$((rc != 0)) $(grep -c 'usage' <<< "$out")" "1 1"
+# the extra users infra's values mount (the second argument, an infra ref): the backup job's, Grafana's - each from its
+# platform file; an infra ref not there refused
+git -C "$COPY_PLATFORM_DIR" checkout -q -B extras pinned
+printf '<clickhouse><users><backup/></users></clickhouse>\n' > "$COPY_PLATFORM_DIR/helm/schnappy-observability/files/clickhouse-backup-user.xml"
+printf '<clickhouse><profiles><grafana_read/></profiles><users><grafana_ro/></users></clickhouse>\n' > "$COPY_PLATFORM_DIR/helm/schnappy-observability/files/clickhouse-grafana-user.xml"
+git -C "$COPY_PLATFORM_DIR" add -A && git -C "$COPY_PLATFORM_DIR" -c user.name=t -c user.email=t@t commit -qm extras
+export COPY_INFRA_DIR="$W/infra"
+V=clusters/production/schnappy-observability/values.yaml
+git init -q "$COPY_INFRA_DIR"; mkdir -p "$COPY_INFRA_DIR/$(dirname "$V")"
+iref() {  # iref <name> <values>: an infra branch whose observability values are that
+  git -C "$COPY_INFRA_DIR" checkout -q -B "$1" 2> /dev/null
+  printf '%s\n' "$2" > "$COPY_INFRA_DIR/$V"
+  git -C "$COPY_INFRA_DIR" add -A && git -C "$COPY_INFRA_DIR" -c user.name=t -c user.email=t@t commit -qm "$1"
+}
+iref off 'clickhouse: {enabled: true, backup: {enabled: false}}'
+iref backup 'clickhouse: {enabled: true, backup: {enabled: true}}'
+iref both 'clickhouse: {enabled: true, backup: {enabled: true}, grafanaUser: true}'
+x() { out=$(bash scripts/clickhouse-expected.sh "$1" "$2" 2> "$W/err"); rc=$?; err=$(cat "$W/err"); }
+x extras off
+check "infra's values, backups off: the users file's alone" "$rc $out" "0 25.8 grafana,schnappy"
+x extras backup
+check "  backups on: the backup job's user too (its file's)" "$rc $out" "0 25.8 backup,grafana,schnappy"
+x extras both
+check "  Grafana's own user on as well: its file's user too" "$rc $out" "0 25.8 backup,grafana,grafana_ro,schnappy"
+x extras nosuch
+check "  an infra ref not there: refused, said" "$rc ${out:-none} $(grep -c 'values not read from infra nosuch' <<< "$err")" "1 none 1"
 echo "clickhouse-expected: $([ "$fails" -eq 0 ] && echo ALL-PASS || echo "$fails FAILED")"
 [ "$fails" -eq 0 ]

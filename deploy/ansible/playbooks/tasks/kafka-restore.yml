@@ -1,0 +1,129 @@
+---
+# A Kafka dump from the Pi store produced back into its topics: a Job built from the backup CronJob's own pod (its images,
+# its store keys, its resources, its labels - so its network policy reaches the store - and its annotations: in the mesh
+# with a native sidecar, Kafka's 9092 taking mTLS only): the dump fetched
+# (kafka_dump: a dump's UTC timestamp, or newest - the newest complete one, its DONE there), then the chart's restore.sh
+# (the console producer; a keyed message on its partition again) - kafka_topics (space-separated) restores those alone.
+# restore.sh refuses a topic missing, of other partitions, or holding other messages (kafka_force=true produces anyway),
+# and a consumer group live on a restored topic; it moves the dump's groups to the end after (kafka_reset_groups=false
+# leaves them). Never two restores at once. Waited for by the clock; its log must say what it restored. The Job removed
+# once it succeeded.
+#
+# Expects: kubectl; kafka_dump; kafka_namespace (default schnappy-production); kafka_topics (default: every topic).
+- name: The backup CronJob's pod (the restore Job is built from it)
+  ansible.builtin.command: >-
+    {{ kubectl }} -n {{ kafka_namespace | default('schnappy-production') }}
+    get cronjob {{ kafka_namespace | default('schnappy-production') }}-kafka-backup -o json
+  register: _kr_cronjob
+  changed_when: false
+
+- name: No other restore running (two would produce every message twice)
+  ansible.builtin.shell:
+    executable: /bin/bash
+    cmd: |
+      set -o pipefail
+      {{ kubectl }} -n {{ kafka_namespace | default('schnappy-production') }} get jobs -o json \
+        | python3 -c 'import json, sys; print(" ".join(j["metadata"]["name"] for j in json.load(sys.stdin)["items"]
+      if j["metadata"]["name"].startswith("kafka-restore-") and not (j.get("status", {}).get("succeeded") or j.get("status", {}).get("failed"))))'
+  register: _kr_running
+  changed_when: false
+  failed_when: _kr_running.rc != 0 or _kr_running.stdout | trim | length > 0
+
+- name: The restore Job
+  vars:
+    _ns: "{{ kafka_namespace | default('schnappy-production') }}"
+    _pod: "{{ (_kr_cronjob.stdout | from_json).spec.jobTemplate.spec.template }}"
+    _dump_c: "{{ _pod.spec.initContainers | selectattr('name', 'eq', 'dump') | first }}"
+    _upload_c: "{{ _pod.spec.containers | selectattr('name', 'eq', 'upload') | first }}"
+    _which: "{{ kafka_dump | mandatory }}"
+  ansible.builtin.set_fact:
+    _kr_name: "kafka-restore-{{ lookup('ansible.builtin.pipe', 'date +%s') }}"
+    _kr_job:
+      apiVersion: batch/v1
+      kind: Job
+      metadata:
+        namespace: "{{ _ns }}"
+        labels: "{{ _pod.metadata.labels }}"
+      spec:
+        backoffLimit: 0
+        activeDeadlineSeconds: 3600
+        template:
+          metadata:
+            labels: "{{ _pod.metadata.labels }}"
+            annotations: "{{ _pod.metadata.annotations | dict2items | rejectattr('key', 'match', '^checksum/') | items2dict }}"
+          spec:
+            restartPolicy: Never
+            serviceAccountName: "{{ _pod.spec.serviceAccountName | default('default') }}"
+            automountServiceAccountToken: false
+            securityContext: "{{ _pod.spec.securityContext }}"
+            volumes: "{{ _pod.spec.volumes }}"
+            initContainers:
+              - name: fetch
+                image: "{{ _upload_c.image }}"
+                env: "{{ _upload_c.env }}"
+                resources: "{{ _upload_c.resources }}"
+                securityContext: "{{ _upload_c.securityContext }}"
+                # the dump container's own mounts: its dump directory writable, its scratch, its scripts (unused here)
+                volumeMounts: "{{ _dump_c.volumeMounts }}"
+                command:
+                  - sh
+                  - -c
+                  - |
+                    set -eu
+                    d={{ _which }}
+                    if [ "$d" = newest ]; then
+                      d=""
+                      for n in $(rclone lsf --dirs-only "$STORE/" | sed 's#/$##' | grep -E '^[0-9]{8}T[0-9]{6}Z$' | sort -r); do
+                        if rclone lsf --files-only --max-depth 1 "$STORE/$n/" | grep -qxF DONE; then d=$n; break; fi
+                      done
+                      [ -n "$d" ] || { echo "no complete dump in $STORE"; exit 1; }
+                    fi
+                    echo "$d" | grep -qE '^[0-9]{8}T[0-9]{6}Z$' || { echo "not a dump's name: $d"; exit 1; }
+                    rclone copy "$STORE/$d" "/dump/$d"
+                    [ -f "/dump/$d/DONE" ] || { echo "the dump $d has no DONE: incomplete, not restored"; exit 1; }
+                    echo "fetched $d"
+            containers:
+              - name: restore
+                image: "{{ _dump_c.image }}"
+                env: >-
+                  {{ _dump_c.env + [{'name': 'TOPICS', 'value': kafka_topics | default('')},
+                                    {'name': 'FORCE', 'value': '1' if (kafka_force | default(false) | bool) else ''},
+                                    {'name': 'RESET_GROUPS', 'value': 'yes' if (kafka_reset_groups | default(true) | bool) else 'no'}] }}
+                resources: "{{ _dump_c.resources }}"
+                securityContext: "{{ _dump_c.securityContext }}"
+                volumeMounts: "{{ _dump_c.volumeMounts }}"
+                command: [bash, -c, 'bash /scripts/restore.sh "/dump/$(ls /dump)"']
+
+- name: The restore Job run, waited for - what it restored in its log
+  ansible.builtin.shell:
+    executable: /bin/bash
+    stdin: "{{ _kr_job | combine({'metadata': _kr_job.metadata | combine({'name': _kr_name})}) | to_json }}"
+    cmd: |
+      set -euo pipefail
+      k="{{ kubectl }} -n {{ kafka_namespace | default('schnappy-production') }}"
+      j={{ _kr_name }}
+      $k apply -f - > /dev/null
+      # by the clock, not the tries: /proc/uptime, which nothing sets back; 3700 s, past the Job's own hour
+      end=$(( $(cut -d. -f1 /proc/uptime) + 3700 ))
+      s=""
+      for _ in $(seq 370); do
+        s=$($k get "job/$j" -o jsonpath='{.status.succeeded}/{.status.failed}')
+        case "$s" in
+          1/*) break ;;
+          */1) $k logs "job/$j" -c fetch --tail=20 || true; $k logs "job/$j" -c restore --tail=20 || true
+               echo "the restore Job $j failed"; exit 1 ;;
+        esac
+        [ "$(cut -d. -f1 /proc/uptime)" -lt "$end" ] || break
+        sleep 10
+      done
+      case "$s" in 1/*) ;; *) echo "the restore Job $j not done 3700 s after its start"; exit 1 ;; esac
+      $k logs "job/$j" -c fetch | tail -1
+      $k logs "job/$j" -c restore | grep -E '^restored [0-9]+ messages from ' | tail -1
+      $k delete job "$j" --wait=false > /dev/null
+  register: _kr_run
+  changed_when: true
+  failed_when: _kr_run.rc != 0 or (_kr_run.stdout_lines | last | default('')) is not match('^restored [0-9]+ messages from [0-9]{8}T[0-9]{6}Z$')
+
+- name: What was restored
+  ansible.builtin.set_fact:
+    kafka_restored: "{{ _kr_run.stdout_lines | last }}"

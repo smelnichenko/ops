@@ -803,8 +803,8 @@ check("a one-way unit whose store has a part with no backup (Postgres: SonarQube
       (rc, has(calls, "task"), has(calls, "upgrade-label.py postgresql-19.x upgrade-blocked"),
        "SonarQube's Postgres" in blocked_why(calls)),
       (1, [], ["upgrade-label.py postgresql-19.x upgrade-blocked"], True))
-for unit, part in (("kafka-4.x", "Kafka's topics"), ("clickhouse-clickhouse-server-27.x", "restore not yet rehearsed on the copy"),
-                   ("strimzi-kafka-operator-1.x", "Kafka's topics"), ("hashicorp-consul-2.x", "no upgrade path"),
+for unit, part in (("kafka-4.x", "restore not yet rehearsed on the copy"), ("clickhouse-clickhouse-server-27.x", "restore not yet rehearsed on the copy"),
+                   ("strimzi-kafka-operator-1.x", "restore not yet rehearsed on the copy"),
                    ("postgres-18.x", "SonarQube's Postgres"), ("grafana-grafana-13.x", "Grafana's database"),
                    ("scylladb-2026.3", "no restore from its backup")):
     rc, calls = night(f"prove {unit} minor", files={"list": f"{unit} minor schnappy/infra upgrade-cycle\n"})
@@ -855,6 +855,16 @@ rc, calls = night("apply hashicorp-vault-2.x major", files={"list": "hashicorp-v
                                                              "noticed": ANNOUNCED})
 check("  that command not in its plan: blocked, nothing merged, the command named",
       (rc, merged(calls, "hashicorp-vault-2.x"), "deploy:vault:upgrade" in blocked_why(calls)), (1, False, True))
+CONSUL_PLAN = "test:copy:playbook PLAYBOOK=upgrade-consul.yml ARGS='-e @/x/upgrade-consul-vars.yml'\n"
+rc, calls = night("apply hashicorp-consul-2.x major", plan=CONSUL_PLAN,
+                  files={"list": "hashicorp-consul-2.x major schnappy/ops major,one-way,upgrade-cycle\n", "noticed": ANNOUNCED})
+check("a Consul unit (its own command takes the snapshot - upgrade-consul.yml): its command in the plan - merged, the command run",
+      (rc, merged(calls, "hashicorp-consul-2.x"), has(calls, "task --yes deploy:consul:upgrade")),
+      (0, True, ["task --yes deploy:consul:upgrade"]))
+rc, calls = night("apply hashicorp-consul-2.x major", files={"list": "hashicorp-consul-2.x major schnappy/ops major,one-way,upgrade-cycle\n",
+                                                              "noticed": ANNOUNCED})
+check("  that command not in its plan: blocked, nothing merged, the command named",
+      (rc, merged(calls, "hashicorp-consul-2.x"), "deploy:consul:upgrade" in blocked_why(calls)), (1, False, True))
 rc, calls = night("prove centrifugo-6.x minor", files={"list": "centrifugo-6.x minor schnappy/infra upgrade-cycle\n",
                                                      "list.later": "centrifugo-6.x minor schnappy/infra one-way,upgrade-cycle\n"})
 check("a one-way label put on during the proof (its labels read again after it): blocked, nothing merged - the copy built",
@@ -910,7 +920,8 @@ for step, why in (("test:copy:playbook PLAYBOOK=upgrade-kubeadm.yml ARGS='-e k8s
     rc, calls = night("prove wave-patches patch", plan=step + "\n")
     check(f"{why} in the plan: refused before the merge, no command", (rc, merged(calls, "wave-patches"), has(calls, "task --yes")),
           (1, False, []))
-for pb, cmd in (("upgrade-patroni.yml", "deploy:patroni:upgrade"), ("upgrade-vault.yml", "deploy:vault:upgrade"),
+for pb, cmd in (("upgrade-patroni.yml", "deploy:patroni:upgrade"), ("upgrade-consul.yml", "deploy:consul:upgrade"),
+                ("upgrade-vault.yml", "deploy:vault:upgrade"),
                 ("setup-host-hardening.yml", "deploy:host-hardening"), ("setup-argocd.yml", "deploy:argocd"),
                 ("upgrade-forgejo.yml", "deploy:forgejo:upgrade"), ("setup-caddy.yml", "deploy:caddy"),
                 ("setup-kubeadm.yml ARGS='--tags cilium -e cilium_version=1.20.5'", "deploy:cilium:upgrade -- -e cilium_version=1.20.5")):

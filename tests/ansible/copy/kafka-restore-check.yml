@@ -1,0 +1,133 @@
+---
+# Kafka's dump restored, on the copy: a marker topic (3 partitions, not a KafkaTopic - Strimzi's operator leaves it be)
+# holds keyed messages with headers, without headers, a header with commas and colons; production's backup takes it
+# (tasks/kafka-backup.yml); the topic deleted and made again empty; production's restore (tasks/kafka-restore.yml, that
+# topic alone) brings the messages back - each key's in its order, headers as they were. The topic removed after.
+#
+# Usage: ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/kafka-restore-check.yml
+- name: Vagrant VMs only
+  ansible.builtin.import_playbook: ../vagrant-only-play.yml
+
+- name: Kafka's topics restore from their dump
+  hosts: target
+  become: true
+  gather_facts: false
+  vars:
+    kubeconfig: /etc/kubernetes/admin.conf
+    kubectl: "kubectl --kubeconfig {{ kubeconfig }}"
+    kafka_namespace: schnappy-production
+    topic: upgrade-restore-check
+    # the broker's own tools, inside its pod (localhost:9092)
+    kbin: "{{ kubectl }} -n schnappy-production exec -i schnappy-production-kafka-0 -c kafka -- /opt/kafka/bin"
+    # what goes in: headers (0x1e between them), key, value - tab-separated, NO_HEADERS for none
+    markers:
+      - "__TypeId__:x.Y\x1espring_json_header_types:{\"a\":\"b\",\"c\":\"d\"}\tk1\t{\"n\":1,\"t\":\"one, two: three\"}"
+      - "NO_HEADERS\tk1\t{\"n\":2}"
+      - "h:v\tk2\t{\"n\":3}"
+      - "NO_HEADERS\tk1\t{\"n\":4}"
+      - "NO_HEADERS\tk3\t{\"n\":5}"
+  tasks:
+    - name: Its names are the fixed ones - what it drops cannot be redirected with -e
+      ansible.builtin.assert:
+        that:
+          - topic == 'upgrade-restore-check'
+          - kafka_namespace == 'schnappy-production'
+        fail_msg: "REFUSED: topic={{ topic }} namespace={{ kafka_namespace }}"
+        quiet: true
+
+    - name: The marker topic made again from nothing, its messages produced (headers parsed, and not, run by run)
+      ansible.builtin.shell:
+        executable: /bin/bash
+        stdin: "{{ markers | join('\n') }}"
+        cmd: |
+          set -euo pipefail
+          K="{{ kbin }}"
+          $K/kafka-topics.sh --bootstrap-server localhost:9092 --delete --if-exists --topic {{ topic }} > /dev/null 2>&1 || true
+          made=""
+          for _ in $(seq 30); do
+            $K/kafka-topics.sh --bootstrap-server localhost:9092 --create --topic {{ topic }} --partitions 3 > /dev/null 2>&1 && { made=1; break; }
+            sleep 2
+          done
+          [ -n "$made" ] || { echo "the marker topic not made"; exit 1; }
+          in=$(cat)
+          TAB=$'\t'
+          # the restore's own way of producing: the dump's format is what it reads
+          while IFS= read -r l; do
+            case "$l" in
+              NO_HEADERS*) printf '%s\n' "${l#NO_HEADERS$TAB}" | $K/kafka-console-producer.sh --bootstrap-server localhost:9092 \
+                --topic {{ topic }} --reader-property parse.key=true --reader-property key.separator=$'\t' --reader-property parse.headers=false ;;
+              *) printf '%s\n' "$l" | $K/kafka-console-producer.sh --bootstrap-server localhost:9092 --topic {{ topic }} \
+                --reader-property parse.key=true --reader-property key.separator=$'\t' --reader-property parse.headers=true \
+                --reader-property headers.delimiter=$'\t' --reader-property headers.separator=$'\x1e' --reader-property headers.key.separator=: ;;
+            esac
+          done <<< "$in"
+      changed_when: true
+
+    - name: Production's backup takes it
+      ansible.builtin.include_tasks: ../../../deploy/ansible/playbooks/tasks/kafka-backup.yml
+
+    - name: The topic deleted and made again - empty
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          K="{{ kbin }}"
+          $K/kafka-topics.sh --bootstrap-server localhost:9092 --delete --topic {{ topic }} > /dev/null
+          made=""
+          for _ in $(seq 30); do
+            $K/kafka-topics.sh --bootstrap-server localhost:9092 --create --topic {{ topic }} --partitions 3 > /dev/null 2>&1 && { made=1; break; }
+            sleep 2
+          done
+          [ -n "$made" ] || { echo "the marker topic not made again"; exit 1; }
+          # its 3 partitions, all empty: "<partitions> <messages>"
+          $K/kafka-get-offsets.sh --bootstrap-server localhost:9092 --topic {{ topic }} | awk -F: '{ n++; s += $3 } END { print n + 0, s + 0 }'
+      register: _emptied
+      changed_when: true
+      failed_when: _emptied.rc != 0 or (_emptied.stdout_lines | last) != '3 0'
+
+    - name: Production's restore brings it back (that topic alone, from this run's dump)
+      ansible.builtin.include_tasks: ../../../deploy/ansible/playbooks/tasks/kafka-restore.yml
+      vars:
+        kafka_dump: "{{ kafka_backup_name }}"
+        kafka_topics: "{{ topic }}"
+
+    - name: Exactly the markers' count in it - a restore produced twice would hold more
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -o pipefail
+          {{ kbin }}/kafka-get-offsets.sh --bootstrap-server localhost:9092 --topic {{ topic }} | awk -F: '{ s += $3 } END { print s + 0 }'
+      register: _count
+      changed_when: false
+      failed_when: (_count.stdout | trim | int) != (markers | length)
+
+    - name: Its messages read back - as written, each key's in order
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          K="{{ kbin }}"
+          $K/kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic {{ topic }} --from-beginning \
+            --max-messages {{ markers | length }} --timeout-ms 60000 --formatter-property print.headers=true \
+            --formatter-property print.key=true --formatter-property key.separator=$'\t' \
+            --formatter-property headers.separator=$'\x1e' --formatter-property null.literal=__NULL__ 2> /dev/null
+      register: _back
+      changed_when: false
+
+    - name: The same messages, each key's in its order
+      vars:
+        _got: "{{ _back.stdout_lines }}"
+      ansible.builtin.assert:
+        that:
+          - _got | sort == markers | sort
+          - _got | select('search', '\tk1\t') | list == markers | select('search', '\tk1\t') | list
+        fail_msg: "restored {{ _got }}, wrote {{ markers }}"
+        quiet: true
+
+    - name: The marker topic removed
+      ansible.builtin.command: "{{ kbin }}/kafka-topics.sh --bootstrap-server localhost:9092 --delete --topic {{ topic }}"
+      changed_when: true
+
+    - name: Restored
+      ansible.builtin.debug:
+        msg: "KAFKA RESTORE OK: {{ topic }} dumped ({{ kafka_backup_name }}), emptied, restored - {{ kafka_restored }}"

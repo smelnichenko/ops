@@ -1,0 +1,32 @@
+---
+# Kafka's topics produced back from a dump in the Pi store (tasks/kafka-restore.yml) - after a Kafka change that broke
+# its data: Kafka back at the version that ran, its topics there again (Strimzi's KafkaTopics) and empty, the services
+# that consume them stopped (a live consumer group refuses the restore - they would read a week of history again), then
+# this; the dump's groups moved to the topics' end after, the services started again. A topic holding other messages is
+# refused (-e kafka_force=true produces on top: duplicates); one holding the dump's already is skipped (a re-run).
+#
+# Usage: task deploy:kafka:restore -- -e kafka_dump=<UTC timestamp>|newest [-e "kafka_topics='<topic> <topic>'"]
+#        (rehearsed on the copy: test:copy:kafka-restore)
+- name: Kafka's topics restored from a dump
+  hosts: target
+  become: true
+  gather_facts: false
+  vars:
+    kubeconfig: /etc/kubernetes/admin.conf
+    kubectl: "kubectl --kubeconfig {{ kubeconfig }}"
+  tasks:
+    - name: The dump named - a timestamp or newest
+      ansible.builtin.assert:
+        that:
+          - kafka_dump is defined
+          - kafka_dump is match('^([0-9]{8}T[0-9]{6}Z|newest)$')
+        fail_msg: "-e kafka_dump=<UTC timestamp, as the store names it>|newest"
+        quiet: true
+
+    - name: Restored
+      ansible.builtin.include_tasks: tasks/kafka-restore.yml
+      when: not ansible_check_mode
+
+    - name: Done
+      ansible.builtin.debug:
+        msg: "KAFKA RESTORE: {{ kafka_restored | default('(a preview - nothing restored)') }}"

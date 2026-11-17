@@ -201,13 +201,13 @@ os.chmod(f"{SW}/deploy/ansible/venv/bin/ansible-playbook", 0o755)
 
 def seed_run(expected):
     with open(f"{SW}/scripts/clickhouse-expected.sh", "w") as f:
-        f.write(f'#!/bin/bash\n[ "$1" = main ] || exit 9\n{expected}\n')
+        f.write(f'#!/bin/bash\n[ "$1 $2" = "main main" ] || exit 9\n{expected}\n')
     os.chmod(f"{SW}/scripts/clickhouse-expected.sh", 0o755)
     r = subprocess.run(["bash", "-c", SEED], cwd=SW, capture_output=True, text=True)
     return r.returncode, r.stdout.strip()
 
 
-check("the survival seed: compatibility and users from clickhouse-expected.sh main; `-` none; a failed lookup stops it",
+check("the survival seed: compatibility and users from clickhouse-expected.sh main main (platform's and infra's); `-` none; a failed lookup stops it",
       (seed_run('echo "25.8 schnappy"'), seed_run('echo "- default,grafana"'), seed_run("exit 1")[0] != 0,
        seed_run("exit 1")[1]),
       ((0, "PLAYBOOK -i inventory/vagrant.yml ../../tests/ansible/copy/survival-check.yml -e mode=seed "
