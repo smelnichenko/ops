@@ -146,7 +146,8 @@ case "$args" in
       */ops) cat "$ST/fix.files.ops" 2>/dev/null || echo deploy/ansible/vars/vault.yml ;;
       *) cat "$ST/fix.files" 2>/dev/null || echo clusters/production/istio/values.yaml ;;
     esac ;;
-  *"rev-parse --abbrev-ref HEAD"*) cat "$ST/branch" 2>/dev/null || echo main ;;
+  *"rev-parse --abbrev-ref HEAD"*) f="$ST/branch.$(basename "$dir")"; [ -e "$f" ] || f="$ST/branch"  # one repo's own, or every one's
+    cat "$f" 2>/dev/null || echo main ;;
   *"status --porcelain"*) cat "$ST/dirty" 2>/dev/null ;;
   *"fetch -q origin main +refs/heads/renovate/"*)
     if [ -s "$ST/fetchunit.seq" ]; then rc=$(head -1 "$ST/fetchunit.seq"); sed -i 1d "$ST/fetchunit.seq"; exit "$rc"; fi  # one a call
@@ -242,7 +243,7 @@ def setup(pick, proofs=(0,), plan="test:copy:change INFRA_REF=renovate/x PLATFOR
         open(os.path.join(ST, f), "w").write(v)
 def environ(hm, dow, env=None):
     e = {**os.environ, "PATH": BIN + ":" + os.environ["PATH"], "ST": ST, "UPGRADE_NOW_DOW": dow, "UPGRADE_WORK": WORK,
-         "UPGRADE_MEMINFO": os.path.join(ST, "meminfo"), "UPGRADE_TODAY": "2026-11-20", "UPGRADE_HEADS_WAIT": "0",
+         "UPGRADE_MEMINFO": os.path.join(ST, "meminfo"), "UPGRADE_HEADS_WAIT": "0",
          "UPGRADE_HEADS_READS": "3", "ANTHROPIC_API_KEY": "sk-the-apps-key", "RENOVATE_TOKEN": "bot-token",
          "VAULT_ROOT_TOKEN": "root", "UPGRADE_FORGEJO_TOKEN": "bot-token"}
     if isinstance(hm, list):
@@ -357,12 +358,25 @@ check("memory short (the radar running), a unit that builds the copy: refused at
       (rc, has(calls, "task"), has(calls, "sleep")), (1, [], []))
 rc, calls = night("test test-observability minor", mem=20000)
 check("memory short, a test unit (no copy): on", (rc, merged(calls, "test-observability")), (0, True))
-rc, calls = night("prove wave-patches patch", records=("2026-11-20-istio.md",))
-check("a production apply recorded today: refused (one a day), nothing picked", (rc, picked(calls)), (1, False))
-rc, calls = night("prove wave-patches patch", records=("2026-11-19-istio.md",))
-check("one recorded yesterday: on", (rc, picked(calls)), (0, True))
+# units back to back (operator 2026-11-17, "run them back to back"): an apply recorded today stops no run - a
+# production unit's or a test environment's (one a day, counting the test unit's record, refused every later run)
+for rec in ("2026-11-20-istio.md", "2026-11-20-test-observability.md"):
+    rc, calls = night("prove wave-patches patch", records=(rec,))
+    check(f"an apply recorded today ({rec}): on - units back to back", (rc, picked(calls)), (0, True))
 rc, calls = night("prove wave-patches patch", args=("--preflight",))
 check("--preflight, the gates passing: exit 0, nothing picked or built", (rc, picked(calls), has(calls, "task")), (0, False, []))
+check("  infra's and platform's local mains brought to origin's (a fast-forward) before the check that they are current - the "
+      "runner's own merges there left them behind, the next run refused (2026-11-17)",
+      [c for c in calls if c.startswith(("git -C ../infra", "git -C ../platform", "copy-main-current.sh"))],
+      ["git -C ../infra rev-parse --abbrev-ref HEAD", "git -C ../infra status --porcelain", "git -C ../infra fetch -q origin main",
+       "git -C ../infra merge -q --ff-only origin/main", "git -C ../platform rev-parse --abbrev-ref HEAD",
+       "git -C ../platform status --porcelain", "git -C ../platform fetch -q origin main",
+       "git -C ../platform merge -q --ff-only origin/main", "copy-main-current.sh ../infra ../platform"])
+rc, calls = night("prove wave-patches patch", args=("--preflight",), files={"branch.infra": "feature\n"})
+check("  infra's checkout on another branch: left as it is (nothing fetched or merged there - the check after judges it), "
+      "platform's still brought forward",
+      [c for c in calls if c.startswith(("git -C ../infra f", "git -C ../infra m", "git -C ../platform f", "git -C ../platform m"))],
+      ["git -C ../platform fetch -q origin main", "git -C ../platform merge -q --ff-only origin/main"])
 for files, mem, why in (({}, 20000, "memory"), ({"am": "email\n"}, 30000, "Alertmanager")):
     rc, calls = night("prove wave-patches patch", args=("--preflight",), mem=mem, files=files)
     check(f"--preflight, a gate refusing ({why}): exit 1", rc, 1)

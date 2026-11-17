@@ -83,7 +83,7 @@
 #        (seconds, 3600), UPGRADE_WORK (the agents' clones, default <ops>/../.upgrade-cycle-work - the agents' settings
 #        let them read that one), UPGRADE_HEADS_READS (12) / UPGRADE_HEADS_WAIT (10 s): Forgejo read after a push until
 #        it shows it; the harness's: UPGRADE_NOW_HM / UPGRADE_NOW_HM_FILE (HH:MM UTC - the file's lines one a read),
-#        UPGRADE_NOW_DOW (1-7), UPGRADE_TODAY (YYYY-MM-DD UTC), UPGRADE_MEMINFO, UPGRADE_FORGEJO_GIT (the bot's git URL
+#        UPGRADE_NOW_DOW (1-7), UPGRADE_MEMINFO, UPGRADE_FORGEJO_GIT (the bot's git URL
 #        base, default https://git.pmon.dev)
 set -uo pipefail
 # C's messages and byte order, UTF-8's encoding: what the runner starts includes Ansible (the copy's build, the apply's
@@ -201,6 +201,18 @@ window_within() {  # a window meeting [now, now + $1 minutes] - "<from>-<to>" sa
 APPLY_SPAN=210; START_SPAN=330
 
 # 0. the gates
+# infra's and platform's local mains brought to origin's when only behind it - on main, clean, a fast-forward: the
+# runner merges there through Forgejo, so after a unit the next run found them behind and refused (test-curlimages-
+# curl-8.x, the first chained run, 2026-11-17); one ahead, dirty or on another branch is left as it is - the check after
+# refuses it, said
+mains_forward() {
+  local r
+  [ -n "$dry" ] && { say "RUN git fetch, merge --ff-only (infra, platform: a main only behind origin's brought to it)"; return 0; }
+  for r in ../infra ../platform; do
+    [ "$(git -C "$r" rev-parse --abbrev-ref HEAD 2> /dev/null)" = main ] && [ -z "$(git -C "$r" status --porcelain 2>&1)" ] || continue
+    git -C "$r" fetch -q origin main < /dev/null >> "$log" 2>&1 && git -C "$r" merge -q --ff-only origin/main < /dev/null >> "$log" 2>&1 || true
+  done
+}
 gates() {  # $1: the span (minutes) no backup window may meet; $2: start or merge
   local w open branch head origin am
   if w=$(window_within "$1"); then say "REFUSED: a backup window meets the run ($w UTC) - run when none is that near"; return 1; fi
@@ -231,6 +243,7 @@ gates() {  # $1: the span (minutes) no backup window may meet; $2: start or merg
   head=$(git -C "$ops" rev-parse HEAD 2> /dev/null); origin=$(git -C "$ops" rev-parse origin/main 2> /dev/null)
   [ -n "$head" ] && [ "$head" = "$origin" ] || { say "REFUSED: ops is not origin's main (${head:0:12} here, ${origin:0:12} there)"; return 1; }
   if [ "$2" = start ]; then  # the copy mirrors the local mains (before the merge the base pin stands for them)
+    mains_forward
     scripts/copy-main-current.sh ../infra ../platform >> "$log" 2>&1 \
       || { say "REFUSED: the local infra or platform main is not origin's (the copy mirrors them) - see the log"; return 1; }
   fi
@@ -246,20 +259,12 @@ memory() {  # the copy must fit: the guard's own figure (22.5 GB of VMs + its 2 
   avail=$(awk '/^MemAvailable:/ {print int($2/1024)}' "${UPGRADE_MEMINFO:-/proc/meminfo}")
   [ "${avail:-0}" -ge "$need" ] || { say "REFUSED: memory - $avail of $need MB free: stop the radar (sudo systemctl stop radar-live) - or a copy left running (vagrant status; vagrant destroy -f) - then run again"; return 1; }
 }
-today_applied() {  # one production apply a day
-  local rec
-  for rec in docs/upgrades/"${UPGRADE_TODAY:-$(date -u +%F)}"-*.md; do
-    [ -e "$rec" ] && { say "REFUSED: a production apply today already ($rec) - one a day"; return 0; }
-  done
-  return 1
-}
 if [ -n "$preflight" ]; then
-  gates "$START_SPAN" start && memory && ! today_applied && { say "PREFLIGHT: a run may start"; exit 0; }
+  gates "$START_SPAN" start && memory && { say "PREFLIGHT: a run may start"; exit 0; }
   exit 1
 fi
 gates "$START_SPAN" start || exit 1
 gate_head=$(git -C "$ops" rev-parse HEAD)  # what ops' main may hold at the merge: this, and the unit's own merge
-today_applied && exit 1
 
 # 1. the pick
 picked=$(scripts/upgrade-units.py pick ${shadow:+--shadow}) || { say "NOT READ: Forgejo - the run changes nothing ($picked)"; exit 1; }
