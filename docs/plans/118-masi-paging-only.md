@@ -39,7 +39,7 @@ search/list/etc" (after 2026-11-11: "make sure we use paging everywhere and neve
 |---|---|---|
 | 1 | masi #248: `Paging` on every paged endpoint (ArchUnit: controllers only through it; `PagedResponse` only from a Page); `@BoundedList` + `BoundedResultsTest` over every response record however deep (52 endpoints say their bound); `PagingEverywhereTest` (every GET with a size, from the handler mapping); a request's oversized read stopped in production; `/stats`, report generation and the retune read their large windows a page (500) at a time by id, the retune estimate counted; package artifacts read without their bytes; `GET /packages` needs `job`; `/persons/of-company` removed; caps: contact ids <= 200, connections <= 200, CV versions newest 200, deadlines <= 1,000, exact register name <= 26; the picture status counted in the database | none |
 | 2 | masi #255: `/stats/daily` in a fixed handful of queries grouped by the day in the zone (was ~9 a day, ~3,300 for a year), the caller's applications only; `/stats`' figures read by the database (median listing lifetime, tag bar, salary figures - PR 1's paging gone); the backlog re-tune and the face backfill behind the request (202; one a pod; 409 while one runs, 503 while the pod stops; the pod waits for the item in hand); a full-time month no int holds is no figure (Java wrapped it, SQL failed the read); a zone the database reads turned round (`+02:00`) fails the start | none |
-| 3 | Sources paged: `GET /sources` a page (sort and counts on the server), the dashboard's and the stats' sources a page or counts, reports storing a capped source health; the site's Sources page, dashboard and report detail with it - a rendered sample for the operator's OK first | Sources page, dashboard, reports |
+| 3 | masi #256 + site #69: `GET /sources` a page (search on key or name, a "Show" of 8 filters, sort on the server: name, kind, cap, health, last success, next run) and `/sources/counts` (each filter's rows counted, one snapshot); `source.next_run_at` stored (the scheduler's guarded write, an edit's at once); the dashboard's counts and its 10 sources wanting a look; reports name at most 50 unwell sources (an auto-disabled one as itself) and count them, stats the 25 busiest and the rest summed - old reports read into that shape; the site's Sources page (pages of 50), a source's own page, the overview, report and stats with it, reading both masi shapes (site first) | Sources page, overview, reports |
 
 ## Status
 
@@ -53,3 +53,10 @@ search/list/etc" (after 2026-11-11: "make sure we use paging everywhere and neve
   four new-code Sonar issues fixed. Merged 15:45 UTC (2b1d5d73), live in production 16:01 UTC (masi 2b1d5d7); the
   15:23 GitHub run the rollout cut kept its place for the next. Next: PR 3 (sources paged + the site, a rendered sample
   for the operator's OK first).
+- 2026-11-18, PR 3: the operator decided the next run is stored (a column, not a dropped sort), pages of 50, caps 10 / 25
+  / 50 (dashboard / stats rows / a report's unwell sources), and OK'd the rendered preview (twice: after the build, and
+  after the reviews). masi #256 (architecture review - Critical: the merge order; test-quality: about 100 reverts, every
+  gap closed) and site #69 (architecture, web UI measured in the DOM, test-quality - every finding fixed). Merge gate:
+  the site reads both shapes and goes live FIRST; site #69 merged and live 22:02 UTC (b5efe3d); masi #256 merged 22:45
+  UTC (68f4b7f), live 23:16 UTC - Liquibase 132 applied, 219 of 230 sources (every one that fires) hold their next run,
+  none that will not. Next: a site follow-up drops the old-shape readers (src/services/masiSourcesOld.ts).
