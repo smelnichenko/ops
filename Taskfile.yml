@@ -762,6 +762,9 @@ tasks:
       # ClickHouse's (production's backup taken, logs.podlogs restored beside it and counted)
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/scylla-restore-check.yml
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/clickhouse-restore-check.yml
+      # every mesh policy selects a pod with an Istio proxy in its own namespace (scripts/mesh-policy-audit.py): the
+      # namespace placement platform's render check cannot see
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/mesh-policy-audit.yml
       # the stale PR env sweeper against the copy's Vault: a dead token fails it, the replaced one is renewed and purges
       # a preview prefix, a wrong CA fails it
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/sweeper-check.yml

@@ -1,0 +1,27 @@
+---
+# Every mesh policy in the copy's schnappy namespaces selects a pod there that runs an Istio proxy (scripts/mesh-policy-
+# audit.py, as on production): what platform's render check cannot see - which namespace runs which workload. The copy
+# runs production's and schnappy-infra's namespaces (no schnappy-test), every policy there meant to be enforced.
+#
+# Usage: ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/mesh-policy-audit.yml
+- name: Vagrant VMs only
+  ansible.builtin.import_playbook: ../vagrant-only-play.yml
+
+- name: Every mesh policy enforced by a proxy
+  hosts: target
+  become: true
+  gather_facts: false
+  tasks:
+    - name: The audit, read-only against the copy's cluster
+      ansible.builtin.script:
+        cmd: ../../../scripts/mesh-policy-audit.py
+        executable: python3
+      environment:
+        KUBECTL: kubectl --kubeconfig /etc/kubernetes/admin.conf
+      register: _audit
+      changed_when: false
+      failed_when: _audit.rc != 0 or 'every policy enforced by a proxy' not in _audit.stdout
+
+    - name: What it read
+      ansible.builtin.debug:
+        msg: "{{ _audit.stdout_lines }}"
