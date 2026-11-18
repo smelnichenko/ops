@@ -77,11 +77,14 @@ check("E01 the pinned version: on", condition(nd["ansible.builtin.assert"]["that
 cd = next(t for t in tasks("deploy/ansible/playbooks/upgrade-containerd.yml") if t.get("register") == "_config_diff")
 check("E04 the live config differing: failed; the same: on",
       (condition(cd["failed_when"], _config_diff={"rc": 1}), condition(cd["failed_when"], _config_diff={"rc": 0})), (True, False))
-# E06: the data tier's sidecars waited for until none is left
-dl = next(t for t in tasks("deploy/ansible/playbooks/restart-mesh-workloads.yml") if t.get("register") == "_data_left")
-check("E06 a data-tier workload left on the old sidecar: still waiting; none left: done",
-      (condition(dl["until"], _data_left={"rc": 0, "stdout": "StatefulSet ns kafka"}),
-       condition(dl["until"], _data_left={"rc": 0, "stdout": ""})), (False, True))
+# E06: the data tier waited for one workload at a time - each restarted, then off the old sidecar AND ready, in a
+# bounded loop that stops the run before the apps (its behaviour: restart-mesh-order's one-at-a-time, slow and
+# never-ready cases - the wait gone there, 10 checks red)
+dl = next(t for t in tasks("deploy/ansible/playbooks/restart-mesh-workloads.yml") if t.get("register") == "_data")
+cmd = dl["ansible.builtin.shell"]["cmd"]
+check("E06 the data tier's loop: off the old sidecar and ready before the next, bounded, failing before the apps",
+      [x for x in ('grep -qx "$kind $ns $name" <<< "$left"', '[ "$(ready "$kind" "$ns" "$name")" = True ]',
+                   '[ "$n" -lt {{ data_tries }} ]', 'the apps not restarted"; exit 1') if x not in cmd], [])
 # K01: acme-check's certificate not Ready: the task fails (its script run against a kubectl stub)
 import subprocess, tempfile
 ac = task("deploy/ansible/playbooks/acme-check.yml", "The certificate, Ready")
