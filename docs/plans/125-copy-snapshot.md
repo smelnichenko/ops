@@ -109,7 +109,8 @@ Main against main (no change between the runs - a change would mix two effects):
    `COPY_FINGERPRINT=revert task test:copy:ready`: it reverts ("reverted:" in its log, never a build), the fingerprint
    in `.copy/base-fingerprint-revert.txt`; every check green.
 3. The two fingerprints diffed - packages, enabled units, timers, failed units, Consul's members, Vault's state,
-   Patroni's members and roles, Gluster's bricks, versitygw's buckets, the cluster's objects, the node's images: equal.
+   Patroni's members and roles, Gluster's bricks, versitygw's buckets, the cluster's objects, the node's images: equal,
+   and no "unreadable" line in either (a fact neither run could read is no fact the two share).
    Both runs' inventories (`.copy/vagrant-inventory.txt`) equal.
 4. Stale cases forced: a base file touched - the next ready builds; a domain's snapshot deleted - it builds; the copy
    marked used - change and check refuse it.

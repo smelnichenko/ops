@@ -89,7 +89,7 @@ rc=$(cat "$ST/verify.rc" 2>/dev/null || echo 0); [ "$rc" = 0 ] || cat "$ST/verif
 exit "$rc"''')
 stub(os.path.join(OPS, "scripts/upgrade-record.sh"), LOG + '\nexit "$(cat "$ST/record.rc" 2>/dev/null || echo 0)"')
 # the copy's snapshot: used (the copy halted after a run), forget (the proof after a fix on a base built fresh)
-stub(os.path.join(OPS, "scripts/copy-snapshot.sh"), LOG + '\nexit 0')
+stub(os.path.join(OPS, "scripts/copy-snapshot.sh"), LOG + '\nexit "$(cat "$ST/snap.rc" 2>/dev/null || echo 0)"')
 # the local mains (the start's gate) apart from the unit's branches (fresh: a list, one verdict a call)
 stub(os.path.join(OPS, "scripts/copy-main-current.sh"), LOG + '''
 case "$*" in
@@ -617,6 +617,9 @@ readies = [i for i, c in enumerate(calls) if c.startswith("task test:copy:ready"
 forgets = [i for i, c in enumerate(calls) if c.startswith("copy-snapshot.sh forget")]
 check("  the proof after the fix on a base built fresh: the snapshot forgotten between the two readies, once (never one base twice)",
       (len(forgets), len(readies) == 2 and len(forgets) == 1 and readies[0] < forgets[0] < readies[1]), (1, True))
+rc, calls = night("prove istio minor", proofs=(1, 0), files={"fix.heads": H3, "fixed.ops": "", "snap.rc": "1"})
+check("  the snapshot not forgotten, or the copy not marked used (its script failing): said, never silent",
+      [(m in night.out) for m in ("THE SNAPSHOT NOT FORGOTTEN", "THE COPY NOT MARKED USED")], [True, True])
 check("  the copy marked used before its halt, however the run ended",
       [c.split()[1] if c.startswith("copy-snapshot.sh") else c for c in calls if c.startswith(("copy-snapshot.sh used", "vagrant halt"))][-2:],
       ["used", "vagrant halt"])
