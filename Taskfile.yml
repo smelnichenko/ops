@@ -443,26 +443,32 @@ tasks:
       # every VM shut down and booted cold once, as a node and the Pis come back after an outage: the boot order of the
       # Pi stack (Gluster mounts, Consul, Patroni, Vault's unseal) is part of what the build proves
       - cmd: vagrant halt
+      # the base kept at this halt (plan 125): a libvirt snapshot of each domain - the next run reverts to it
+      # (test:copy:ready) and builds only the Argo layer; a save that fails never fails the build
+      - cmd: scripts/copy-snapshot.sh save
       - cmd: vagrant up --no-provision
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/vms-ready.yml
       - task: test:copy:argo
-      # the copy as built kept (plan 125): the VMs halted, a libvirt snapshot of each, the build's records beside it -
-      # the next run reverts to it (test:copy:ready) instead of building again; then the VMs up for this run
-      - cmd: scripts/copy-snapshot.sh save
 
   test:copy:ready:
-    desc: "The Vagrant copy as built, ready for a run (plan 125): its snapshot reverted when fresh (~5 min; main caught up when it moved), else built from nothing and snapshotted (test:copy:build, 49 min) - stale when a day old, production's inventory or the Pis' versions moved, ops' copy-building files changed, or a domain or its snapshot gone"
+    desc: "The Vagrant copy ready for a run (plan 125): its base (the Pis and the node, Argo not yet) reverted from its snapshot when fresh and booted cold, then the Argo layer built as test:copy:build builds it (~28 min) - else built from nothing and the base snapshotted (test:copy:build, 49 min). Stale when a day old, production's inventory or the Pis' versions moved, the files building the base changed, or a domain or its snapshot gone; COPY_SNAPSHOT=off builds always"
     deps: [deploy:install]
     cmds:
       # one copy run at a time (scripts/copy-lock.sh): a build called from here is the same run
       - cmd: scripts/copy-lock.sh
       - cmd: scripts/copy-main-current.sh ../infra ../platform
+      - cmd: scripts/copy-refs.sh reset
+      # production's inventory read now: the snapshot is stale when production moved since its build
+      - task: test:copy:inventory
+      - cmd: git status --short -- tests/ansible/copy/prod-inventory.txt tests/ansible/copy/pi-versions.yml
       - cmd: |
           set -euo pipefail
           rc=0
           scripts/copy-snapshot.sh revert || rc=$?
           case "$rc" in
-            0) ;;
+            0) vagrant up --no-provision
+               (cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/vms-ready.yml)
+               task test:copy:argo ;;
             3) task test:copy:build ;;
             *) exit "$rc" ;;
           esac
@@ -760,6 +766,8 @@ tasks:
     desc: Test ESO ↔ Pi Vault secret sync (ClusterSecretStore + ExternalSecret)
     deps: [deploy:install]
     cmds:
+      # the copy's VMs destroyed here: never beside a copy run (scripts/copy-lock.sh) - its base snapshot goes with them, the next run builds
+      - cmd: scripts/copy-lock.sh
       # from nothing: every VM destroyed, and proven gone, before the build
       - cmd: vagrant destroy -f
       - cmd: |
@@ -775,6 +783,8 @@ tasks:
     desc: Test Istio Gateway + HTTPRoute routing (hostname/path/header/404)
     deps: [deploy:install]
     cmds:
+      # the copy's VMs destroyed here: never beside a copy run (scripts/copy-lock.sh) - its base snapshot goes with them, the next run builds
+      - cmd: scripts/copy-lock.sh
       # from nothing: every VM destroyed, and proven gone, before the build
       - cmd: vagrant destroy -f
       - cmd: |
@@ -790,6 +800,8 @@ tasks:
     desc: Test ClickHouse + Fluent-bit log pipeline in Vagrant (replaced test:elk)
     deps: [deploy:install]
     cmds:
+      # the copy's VMs destroyed here: never beside a copy run (scripts/copy-lock.sh) - its base snapshot goes with them, the next run builds
+      - cmd: scripts/copy-lock.sh
       # from nothing: every VM destroyed, and proven gone, before the build
       - cmd: vagrant destroy -f
       - cmd: |
@@ -805,6 +817,8 @@ tasks:
     desc: Test Centrifugo + Kafka + Valkey realtime chart in Vagrant
     deps: [deploy:install]
     cmds:
+      # the copy's VMs destroyed here: never beside a copy run (scripts/copy-lock.sh) - its base snapshot goes with them, the next run builds
+      - cmd: scripts/copy-lock.sh
       # from nothing: every VM destroyed, and proven gone, before the build
       - cmd: vagrant destroy -f
       - cmd: |
@@ -820,6 +834,8 @@ tasks:
     desc: Test Keycloak SSO in Vagrant
     deps: [deploy:install]
     cmds:
+      # the copy's VMs destroyed here: never beside a copy run (scripts/copy-lock.sh) - its base snapshot goes with them, the next run builds
+      - cmd: scripts/copy-lock.sh
       # from nothing: every VM destroyed, and proven gone, before the build
       - cmd: vagrant destroy -f
       - cmd: |
@@ -835,6 +851,8 @@ tasks:
     desc: Test Hyperfoil report persistence + Nginx serving in Vagrant
     deps: [deploy:install]
     cmds:
+      # the copy's VMs destroyed here: never beside a copy run (scripts/copy-lock.sh) - its base snapshot goes with them, the next run builds
+      - cmd: scripts/copy-lock.sh
       # from nothing: every VM destroyed, and proven gone, before the build
       - cmd: vagrant destroy -f
       - cmd: |
@@ -850,6 +868,8 @@ tasks:
     desc: Test Grafana + Prometheus in Vagrant
     deps: [deploy:install]
     cmds:
+      # the copy's VMs destroyed here: never beside a copy run (scripts/copy-lock.sh) - its base snapshot goes with them, the next run builds
+      - cmd: scripts/copy-lock.sh
       # from nothing: every VM destroyed, and proven gone, before the build
       - cmd: vagrant destroy -f
       - cmd: |
@@ -865,6 +885,8 @@ tasks:
     desc: Test multi-environment (test + prod) isolation in Vagrant — full stack with ArgoCD
     deps: [deploy:install]
     cmds:
+      # the copy's VMs destroyed here: never beside a copy run (scripts/copy-lock.sh) - its base snapshot goes with them, the next run builds
+      - cmd: scripts/copy-lock.sh
       # from nothing: every VM destroyed, and proven gone, before the build
       - cmd: vagrant destroy -f
       - cmd: |
@@ -887,6 +909,8 @@ tasks:
     desc: Test Kafka + ScyllaDB infrastructure in Vagrant
     deps: [deploy:install]
     cmds:
+      # the copy's VMs destroyed here: never beside a copy run (scripts/copy-lock.sh) - its base snapshot goes with them, the next run builds
+      - cmd: scripts/copy-lock.sh
       # from nothing: every VM destroyed, and proven gone, before the build
       - cmd: vagrant destroy -f
       - cmd: |
@@ -902,6 +926,8 @@ tasks:
     desc: Rehearse statement statistics and exporter metrics on production's Postgres Cluster in Vagrant (the switchover's write gap, on and off)
     deps: [deploy:install]
     cmds:
+      # the copy's VMs destroyed here: never beside a copy run (scripts/copy-lock.sh) - its base snapshot goes with them, the next run builds
+      - cmd: scripts/copy-lock.sh
       # every task loads before a VM is built: a playbook that cannot load fails here, in seconds, not after the build
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-cnpg-stats.yml --list-tasks > /dev/null
       # from nothing: every VM destroyed, and proven gone, before the build
@@ -920,6 +946,8 @@ tasks:
     desc: Rehearse OpenSearch (schnappy-data) in Vagrant as production would run it - meshed, read-only, analyzers, a places index, masi alone
     deps: [deploy:install]
     cmds:
+      # the copy's VMs destroyed here: never beside a copy run (scripts/copy-lock.sh) - its base snapshot goes with them, the next run builds
+      - cmd: scripts/copy-lock.sh
       # every task loads before a VM is built: a playbook that cannot load fails here, in seconds, not after the build
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-opensearch.yml --list-tasks > /dev/null
       # from nothing: every VM destroyed, and proven gone, before the build
@@ -938,6 +966,8 @@ tasks:
     desc: Test SonarQube in Vagrant
     deps: [deploy:install]
     cmds:
+      # the copy's VMs destroyed here: never beside a copy run (scripts/copy-lock.sh) - its base snapshot goes with them, the next run builds
+      - cmd: scripts/copy-lock.sh
       # from nothing: every VM destroyed, and proven gone, before the build
       - cmd: vagrant destroy -f
       - cmd: |
@@ -953,6 +983,8 @@ tasks:
     desc: Test Argo CD GitOps in Vagrant
     deps: [deploy:install]
     cmds:
+      # the copy's VMs destroyed here: never beside a copy run (scripts/copy-lock.sh) - its base snapshot goes with them, the next run builds
+      - cmd: scripts/copy-lock.sh
       # from nothing: every VM destroyed, and proven gone, before the build
       - cmd: vagrant destroy -f
       - cmd: |
@@ -968,6 +1000,8 @@ tasks:
     desc: Test CI/CD pipeline with Forgejo container registry in Vagrant (image push/pull via registry)
     deps: [deploy:install]
     cmds:
+      # the copy's VMs destroyed here: never beside a copy run (scripts/copy-lock.sh) - its base snapshot goes with them, the next run builds
+      - cmd: scripts/copy-lock.sh
       # from nothing: every VM destroyed, and proven gone, before the build
       - cmd: vagrant destroy -f
       - cmd: |
@@ -983,6 +1017,8 @@ tasks:
     desc: Test Woodpecker CI pipeline execution in Vagrant (Forgejo + Woodpecker + Kubernetes backend)
     deps: [deploy:install]
     cmds:
+      # the copy's VMs destroyed here: never beside a copy run (scripts/copy-lock.sh) - its base snapshot goes with them, the next run builds
+      - cmd: scripts/copy-lock.sh
       # from nothing: every VM destroyed, and proven gone, before the build
       - cmd: vagrant destroy -f
       - cmd: |
@@ -998,6 +1034,8 @@ tasks:
     desc: Test Nexus HA (active-passive on pi1+pi2, Gluster-shared, Keepalived-controlled, ten arbiter)
     deps: [deploy:install]
     cmds:
+      # the copy's VMs destroyed here: never beside a copy run (scripts/copy-lock.sh) - its base snapshot goes with them, the next run builds
+      - cmd: scripts/copy-lock.sh
       # from nothing: every VM destroyed, and proven gone, before the build
       - cmd: vagrant destroy -f
       - cmd: |
@@ -1020,6 +1058,8 @@ tasks:
     desc: Test pod recovery + disaster recovery in Vagrant - Postgres on the image production's Cluster runs (scripts/production-cnpg-image.py), or TEST_PG_IMAGE
     deps: [deploy:install]
     cmds:
+      # the copy's VMs destroyed here: never beside a copy run (scripts/copy-lock.sh) - its base snapshot goes with them, the next run builds
+      - cmd: scripts/copy-lock.sh
       # from nothing: every VM destroyed, and proven gone, before the build
       - cmd: vagrant destroy -f
       - cmd: |
@@ -1058,6 +1098,8 @@ tasks:
     desc: Test failure modes under load in Vagrant (pod kill, pool exhaustion, Kafka outage, memory pressure, rate limiting)
     deps: [deploy:install]
     cmds:
+      # the copy's VMs destroyed here: never beside a copy run (scripts/copy-lock.sh) - its base snapshot goes with them, the next run builds
+      - cmd: scripts/copy-lock.sh
       # from nothing: every VM destroyed, and proven gone, before the build
       - cmd: vagrant destroy -f
       - cmd: |
@@ -1073,6 +1115,8 @@ tasks:
     desc: Test full microservice deployment in Vagrant
     deps: [deploy:install]
     cmds:
+      # the copy's VMs destroyed here: never beside a copy run (scripts/copy-lock.sh) - its base snapshot goes with them, the next run builds
+      - cmd: scripts/copy-lock.sh
       # from nothing: every VM destroyed, and proven gone, before the build
       - cmd: vagrant destroy -f
       - cmd: |
@@ -1579,6 +1623,8 @@ tasks:
     desc: Full clean ephemeral env test (destroy + up + full stack + test)
     deps: [deploy:install]
     cmds:
+      # the copy's VMs destroyed here: never beside a copy run (scripts/copy-lock.sh) - its base snapshot goes with them, the next run builds
+      - cmd: scripts/copy-lock.sh
       # from nothing: every VM destroyed, and proven gone, before the build
       - cmd: vagrant destroy -f
       - cmd: |
@@ -1627,6 +1673,8 @@ tasks:
     desc: Full clean dual-Pi test (destroy + up + deploy + assert)
     deps: [deploy:install]
     cmds:
+      # the copy's VMs destroyed here: never beside a copy run (scripts/copy-lock.sh) - its base snapshot goes with them, the next run builds
+      - cmd: scripts/copy-lock.sh
       - cmd: vagrant destroy -f
         ignore_error: true
       - cmd: vagrant up
@@ -1687,6 +1735,8 @@ tasks:
   vagrant:destroy:
     desc: Destroy Vagrant VMs
     cmds:
+      # the copy's VMs destroyed here: never beside a copy run (scripts/copy-lock.sh) - its base snapshot goes with them, the next run builds
+      - cmd: scripts/copy-lock.sh
       - vagrant destroy -f
 
   # ============== CLEAN ==============

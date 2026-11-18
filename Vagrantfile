@@ -169,6 +169,10 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
   # production runs Debian 13 (trixie) on ten and on both Pis
   config.vm.box = "debian/trixie64"
   config.vm.synced_folder ".", "/vagrant", disabled: true
+  # a halt waits for each VM's own shutdown up to 5 min (Vagrant's default 60 s then powered it off - the node's kubelet
+  # takes up to 180 s to drain, the Pis' Patroni and Gluster their own): the build's cold boot starts from a clean
+  # shutdown, and the base snapshot taken at it is one (scripts/copy-snapshot.sh refuses a forced power-off)
+  config.vm.graceful_halt_timeout = 300
 
   # ── Pi 1 ─────────────────────────────────────────────────────────────
   config.vm.define "pi1" do |pi1|

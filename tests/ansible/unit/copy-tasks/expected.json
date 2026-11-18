@@ -68,13 +68,13 @@
     "vars": {}
    },
    "vagrant halt",
+   "scripts/copy-snapshot.sh save",
    "vagrant up --no-provision",
    "cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/vms-ready.yml",
    {
     "task": "test:copy:argo",
     "vars": {}
-   },
-   "scripts/copy-snapshot.sh save"
+   }
   ],
   "vars": {}
  },
