@@ -1,0 +1,49 @@
+---
+# ClickHouse's backup restored, on the copy: production's backup taken (tasks/clickhouse-backup.yml - the prune, then
+# BACKUP DATABASE logs as the backup user), then RESTORE TABLE logs.podlogs AS logs.podlogs_restore_check from it - as
+# that user too, the one granted the store - its rows counted (some, and no more than the live table holds now), the
+# table dropped after. The way back after a ClickHouse release that broke its data: RESTORE ... FROM the newest backup.
+#
+# Usage: ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/clickhouse-restore-check.yml
+- name: Vagrant VMs only
+  ansible.builtin.import_playbook: ../vagrant-only-play.yml
+
+- name: ClickHouse's logs restore from its backup
+  hosts: target
+  become: true
+  gather_facts: false
+  vars:
+    kubeconfig: /etc/kubernetes/admin.conf
+    kubectl: "kubectl --kubeconfig {{ kubeconfig }}"
+    # the client in ClickHouse's own pod, as the backup user (its password is the pod's CLICKHOUSE_PASSWORD - never argv
+    # here: the shell in the pod reads it)
+    ch: >-
+      {{ kubectl }} -n schnappy-infra exec -i schnappy-clickhouse-0 -c clickhouse --
+      sh -c 'clickhouse-client --user backup --password "$CLICKHOUSE_PASSWORD" --multiquery'
+  tasks:
+    - name: Its backup taken now
+      ansible.builtin.include_tasks: ../../../deploy/ansible/playbooks/tasks/clickhouse-backup.yml
+
+    - name: Restored beside the live table, counted, dropped
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          {{ ch }} <<< "DROP TABLE IF EXISTS logs.podlogs_restore_check SYNC"
+          {{ ch }} <<< "RESTORE TABLE logs.podlogs AS logs.podlogs_restore_check FROM S3(backup_store, '{{ clickhouse_backup_name }}')"
+          restored=$({{ ch }} <<< "SELECT count() FROM logs.podlogs_restore_check")
+          live=$({{ ch }} <<< "SELECT count() FROM logs.podlogs")
+          {{ ch }} <<< "DROP TABLE logs.podlogs_restore_check SYNC"
+          echo "$restored $live"
+      register: _restored
+      changed_when: true
+      failed_when: >-
+        _restored.rc != 0 or (_restored.stdout_lines | last | default('0 0')).split() | length != 2
+        or ((_restored.stdout_lines | last).split()[0] | int) <= 0
+        or ((_restored.stdout_lines | last).split()[0] | int) > ((_restored.stdout_lines | last).split()[1] | int)
+
+    - name: Restored
+      ansible.builtin.debug:
+        msg: >-
+          CLICKHOUSE RESTORE OK: logs.podlogs restored from {{ clickhouse_backup_name }} -
+          {{ (_restored.stdout_lines | last).split()[0] }} rows (the live table {{ (_restored.stdout_lines | last).split()[1] }})

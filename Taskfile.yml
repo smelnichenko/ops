@@ -503,7 +503,7 @@ tasks:
       # does (scripts/clickhouse-expected.sh both; without them the seed expected none and production's 25.8 failed it)
       - cmd: |
           set -euo pipefail
-          ch=$(scripts/clickhouse-expected.sh main)  # its own assignment: inside the here-string a failure went unseen
+          ch=$(scripts/clickhouse-expected.sh main main)  # its own assignment: inside the here-string a failure went unseen
           read -r compat users <<< "$ch"
           [ "$compat" != - ] || compat=""
           cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/survival-check.yml -e mode=seed -e "clickhouse_compat=$compat" -e "clickhouse_users=$users"
@@ -658,7 +658,7 @@ tasks:
       - cmd: scripts/etcd-backup-now.sh
 
   test:copy:check:
-    desc: "Every check on the built copy: Argo settled; data, survival, storage, metrics, k6 smoke, production's data paths and isolation at once (scripts/copy-checks.sh); a barman base backup; every certificate renewed; Postgres recovered and a Velero volume restored (restore-check); a Velero backup from production's daily schedule; a Scylla Manager backup; the PR-env sweeper; the inventory against production's (after a change: its own differences printed, any it did not make judged). Run on its own it checks the refs the copy runs (.copy/copy-refs)"
+    desc: "Every check on the built copy: Argo settled; data, survival, storage, metrics, k6 smoke, production's data paths and isolation at once (scripts/copy-checks.sh); a barman base backup; every certificate renewed; Postgres recovered and a Velero volume restored (restore-check); a Velero backup from production's daily schedule; a Scylla Manager backup; ScyllaDB's and ClickHouse's backups restored; the PR-env sweeper; the inventory against production's (after a change: its own differences printed, any it did not make judged). Run on its own it checks the refs the copy runs (.copy/copy-refs)"
     deps: [deploy:install]
     vars:
       # the refs the copy runs (test:copy:argo or test:copy:change wrote them), unless given
@@ -695,6 +695,10 @@ tasks:
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/backup-check.yml -e schedule=velero-full-weekly
       # a Scylla Manager backup of each production cluster, DONE with a fresh snapshot, no failed backup or repair task
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/scylla-backup-check.yml
+      # ScyllaDB's backup restored (a marker keyspace backed up, truncated, restored with production's restore tasks) and
+      # ClickHouse's (production's backup taken, logs.podlogs restored beside it and counted)
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/scylla-restore-check.yml
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/clickhouse-restore-check.yml
       # the stale PR env sweeper against the copy's Vault: a dead token fails it, the replaced one is renewed and purges
       # a preview prefix, a wrong CA fails it
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/sweeper-check.yml
@@ -1248,6 +1252,63 @@ tasks:
     cmds:
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/acme-check.yml {{.CLI_ARGS}}
 
+  deploy:scylla:restore:
+    desc: "PRODUCTION: ScyllaDB tables restored from Scylla Manager's backup - the keyspaces and snapshot given (-- -e snapshot=sm_<UTC> -e keyspaces=<ks>), rows added back into the cluster as it stands (scylla-restore.yml; --check: the dry run alone). Rehearsed on the copy: test:copy:scylla-restore"
+    dir: deploy/ansible
+    deps: [deploy:install]
+    dotenv: ['../../.env']
+    prompt: "Restore ScyllaDB tables on PRODUCTION?"
+    cmds:
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/scylla-restore.yml {{.CLI_ARGS}}
+
+  test:copy:scylla-restore:
+    desc: "Vagrant: ScyllaDB's backups restore - a marker keyspace backed up by Scylla Manager, truncated, restored with production's restore tasks (sctool restore --restore-tables), its token back (scylla-restore-check.yml)"
+    dir: deploy/ansible
+    deps: [deploy:install]
+    cmds:
+      - venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/scylla-restore-check.yml
+
+  check:production:clickhouse-backup:
+    desc: "PRODUCTION: ClickHouse's logs backed up to the Pi store now - its prune, then BACKUP DATABASE logs as its backup user, each a Job from its CronJob (clickhouse-backup-check.yml); restored on the copy by test:copy:clickhouse-restore"
+    dir: deploy/ansible
+    deps: [deploy:install]
+    dotenv: ['../../.env']
+    prompt: "Take a ClickHouse backup on PRODUCTION?"
+    cmds:
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/clickhouse-backup-check.yml {{.CLI_ARGS}}
+
+  test:copy:clickhouse-restore:
+    desc: "Vagrant: ClickHouse's backup restores - production's backup taken (tasks/clickhouse-backup.yml), logs.podlogs restored beside the live table as the backup user, counted, dropped (clickhouse-restore-check.yml)"
+    dir: deploy/ansible
+    deps: [deploy:install]
+    cmds:
+      - venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/clickhouse-restore-check.yml
+
+  check:production:kafka-backup:
+    desc: "PRODUCTION: Kafka's topics dumped to the Pi store now - a Job from its backup CronJob (every partition from its earliest offset, its count checked; DONE last), waited for (kafka-backup-check.yml); restored on the copy by test:copy:kafka-restore"
+    dir: deploy/ansible
+    deps: [deploy:install]
+    dotenv: ['../../.env']
+    prompt: "Take a Kafka backup on PRODUCTION?"
+    cmds:
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/kafka-backup-check.yml {{.CLI_ARGS}}
+
+  deploy:kafka:restore:
+    desc: "PRODUCTION: Kafka's topics produced back from a dump (-- -e kafka_dump=<UTC timestamp>|newest [-e kafka_topics='<t> <t>']) - the topics there and empty, their consumers stopped; the dump's groups moved to the end after (kafka-restore.yml). Rehearsed on the copy: test:copy:kafka-restore"
+    dir: deploy/ansible
+    deps: [deploy:install]
+    dotenv: ['../../.env']
+    prompt: "Restore Kafka topics on PRODUCTION?"
+    cmds:
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/kafka-restore.yml {{.CLI_ARGS}}
+
+  test:copy:kafka-restore:
+    desc: "Vagrant: Kafka's dump restores - a marker topic (headers, none, keys, a JSON header) backed up by production's backup Job, emptied, restored by production's restore Job (that topic alone), each key's messages back in order, exactly as many (kafka-restore-check.yml)"
+    dir: deploy/ansible
+    deps: [deploy:install]
+    cmds:
+      - venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/kafka-restore-check.yml
+
   check:production:scylla-backup:
     desc: "PRODUCTION: each ScyllaDB cluster's Scylla Manager backup started now, DONE with a fresh snapshot (scylla-backup-check.yml)"
     dir: deploy/ansible
@@ -1256,6 +1317,21 @@ tasks:
     prompt: "Start a Scylla Manager backup on PRODUCTION?"
     cmds:
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/scylla-backup-check.yml {{.CLI_ARGS}}
+
+  deploy:consul:upgrade:
+    desc: "PRODUCTION: Consul's three servers (pi1, pi2, ten) to setup-consul.yml's consul_version - a snapshot of the whole state first (pi1's /var/backups/consul-upgrade), the followers then the leader, each back as a healthy voter before the next, Vault answering after (upgrade-consul.yml)"
+    dir: deploy/ansible
+    deps: [deploy:install]
+    dotenv: ['../../.env']
+    prompt: "Upgrade Consul on PRODUCTION?"
+    cmds:
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/upgrade-consul.yml {{.CLI_ARGS}}
+
+  test:consul-upgrade:
+    desc: "Vagrant: Consul's servers set back to 1.20.5, a key written; a server down refused; upgrade-consul.yml as in production, sampled - every server on setup-consul.yml's version, never 15 s without a leader, the key back, the old binary kept, the snapshot this run's; again nothing to do; a downgrade refused"
+    deps: [deploy:install]
+    cmds:
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-consul-upgrade.yml {{.CLI_ARGS}}
 
   test:vault-upgrade:
     desc: "Vagrant: the Pis at production's Vault (1.21.3), a secret written, then upgrade-vault.yml as in production - both on the version, the failover older to newer, the secret read back"

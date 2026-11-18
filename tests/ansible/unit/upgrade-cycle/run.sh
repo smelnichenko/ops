@@ -181,7 +181,7 @@ case "$args" in
   *"merge-tree --write-tree origin/main "*)  # merging a head into main: one tree whatever the head - unless a commit came
     # since the notice ($ST/sincenotice): then each head its own tree (the head now and the announced one differ)
     if [ -s "$ST/sincenotice" ]; then echo "tree-of-${*: -1}"; else echo tree-the-announced-ones; fi ;;
-  *"diff --stat --no-renames origin/main..."*) [ ! -e "$ST/summary.fail" ] || exit 128; echo " clusters/production/x.yaml | 2 +-" ;;
+  *"diff --stat --no-ext-diff --no-textconv --no-color --no-renames origin/main..."*) [ ! -e "$ST/summary.fail" ] || exit 128; echo " clusters/production/x.yaml | 2 +-" ;;
   *"log --format=%h %s origin/main.."*) printf 'abc1234 bump x to 2 \033[2J\n' ;;  # a subject with a terminal escape
   *" commit-tree "*) case "$dir" in  # the runner's commit of the fix's tree: the agent's tip for the case's purposes
       */ops) echo dddddddddddddddddddddddddddddddddddddddd ;; *) echo bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb ;; esac ;;
@@ -399,11 +399,12 @@ KEY = ("task ", "upgrade-label.py", "upgrade-record.sh", "vagrant", "claude", "u
        "upgrade-verify.sh AFTER", "upgrade-units.py held")
 seq = [words(c, 2 if c.startswith("upgrade-record.sh") else 3) for c in calls if c.startswith(KEY)
        or c.startswith("git -C " + OPS + " merge")]
-check("a patch unit: heads, green, built, proven, heads again, reviewed, the copy destroyed, the plan, the etcd snapshot, "
+check("a patch unit: heads, green, its plan read, built, proven, heads again, reviewed, the copy destroyed, the plan, the etcd snapshot, "
       "held, merged, ops fast-forwarded, Argo settled on the merge, Kubernetes, Forgejo, verified, the inventory read, "
       "recorded, reported - in that order (the copy gone once)",
       (rc, seq),
-      (0, ["upgrade-label.py wave-patches --heads", "upgrade-label.py wave-patches --green", "task test:copy:build",
+      (0, ["upgrade-label.py wave-patches --heads", "upgrade-label.py wave-patches --green",
+           "task test:copy:unit UNIT=wave-patches", "task test:copy:build",
            "task test:copy:unit UNIT=wave-patches", "upgrade-label.py wave-patches --heads", "claude -p upgrade-cycle",
            "vagrant destroy -f", "task test:copy:unit UNIT=wave-patches", "task --yes deploy:etcd:backup",
            "upgrade-units.py held wave-patches", "upgrade-label.py wave-patches --merge", "git -C " + OPS,
@@ -740,7 +741,7 @@ check("  its details a summary of the unit (each repo's files, its commits - a s
        "=== schnappy/ops", " clusters/production/x.yaml | 2 +-", "abc1234 bump x to 2 ?[2J",
        "=== the review: PASSES: correctness, security, architecture, reliability, tests VERDICT: CLEAN ", "=== the diff", ""])
 check("  the summary read from the heads proven (never the branches' names - Forgejo's head may lag its branch)",
-      sorted({c.split("origin/main...")[1] for c in calls if "diff --stat --no-renames origin/main..." in c}), ["a" * 40, "c" * 40])
+      sorted({c.split("origin/main...")[1] for c in calls if "diff --stat --no-ext-diff --no-textconv --no-color --no-renames origin/main..." in c}), ["a" * 40, "c" * 40])
 check("  the summary's file gone at the run's end (mailed by then)",
       [f for f in os.listdir(os.path.join(OPS, ".copy")) if f.startswith("upgrade-notice-")] if os.path.isdir(os.path.join(OPS, ".copy")) else [], [])
 rc2, calls2 = night("notice centrifugo-7.x major", files={"summary.fail": ""})
@@ -791,24 +792,47 @@ def blocked_why(calls):
     return " ".join(c for c in calls if c.startswith("upgrade-notice.sh blocked"))
 TABLE = os.path.join(OPS, "scripts/upgrade-stores.json")
 REAL_TABLE = open(TABLE).read()
-def table_with(**stores):  # the real table, the named stores' fields replaced (a store backed up whole: none is, today)
+def table_with(**stores):  # the real table, the named stores' fields replaced (every store backed up whole since 2026-11-18: a gap is made up)
     t = json.loads(REAL_TABLE)
     for s in t["stores"]:
         s.update(stores.get(s["store"], {}))
     open(TABLE, "w").write(json.dumps(t))
-rc, calls = night("apply postgresql-19.x major")
-check("a one-way unit whose store has parts with no backup (Postgres: woodpecker's CNPG, SonarQube's): blocked before its "
-      "proof, never merged, the notice naming each part",
-      (rc, has(calls, "task"), has(calls, "upgrade-label.py postgresql-19.x upgrade-blocked"),
-       "woodpecker-postgres" in blocked_why(calls) and "SonarQube's Postgres" in blocked_why(calls)),
-      (1, [], ["upgrade-label.py postgresql-19.x upgrade-blocked"], True))
-for unit, part in (("kafka-4.x", "Kafka's topics"), ("clickhouse-clickhouse-server-27.x", "ClickHouse backup"),
-                   ("strimzi-kafka-operator-1.x", "Kafka's topics"), ("hashicorp-consul-2.x", "no upgrade path"),
-                   ("postgres-18.x", "SonarQube's Postgres"), ("grafana-grafana-13.x", "Grafana's database"),
-                   ("scylladb-2026.3", "no restore from its backup")):
-    rc, calls = night(f"prove {unit} minor", files={"list": f"{unit} minor schnappy/infra upgrade-cycle\n"})
-    check(f"{unit}, its label missing: the names' net finds its store - blocked, nothing built, the missing part named",
-          (rc, merged(calls, unit), has(calls, "task"), part in blocked_why(calls)), (1, False, [], True))
+try:
+    table_with(grafana={"backups": [], "missing": ["Grafana's database: no backup of it in the cycle"]})
+    rc, calls = night("apply grafana-grafana-13.x major")
+finally:
+    open(TABLE, "w").write(REAL_TABLE)
+check("a one-way unit whose store has a part with no backup (a table where Grafana's database has none): blocked before "
+      "its proof, never merged, the notice naming the part",
+      (rc, has(calls, "task"), has(calls, "upgrade-label.py grafana-grafana-13.x upgrade-blocked"),
+       "Grafana's database" in blocked_why(calls)),
+      (1, [], ["upgrade-label.py grafana-grafana-13.x upgrade-blocked"], True))
+# Postgres backed up whole since 2026-11-18 (production's, Woodpecker's, SonarQube's and Grafana's CNPG clusters): a major
+# goes on - each cluster's base backup run before its merge
+PG_PLAN = "test:copy:change INFRA_REF=main PLATFORM_REF=main\n"
+rc, calls = night("apply postgresql-19.x major", plan=PG_PLAN,
+                  files={"list": "postgresql-19.x major schnappy/infra major,one-way,upgrade-cycle\n", "noticed": ANNOUNCED})
+backups = [c for c in has(calls, "task --yes deploy:postgres:base-backup")]
+check("a Postgres major (its store backed up whole): not blocked, merged - each of the four clusters' base backups run first",
+      (rc, merged(calls, "postgresql-19.x"), sorted(c.split("cluster=")[1] for c in backups)),
+      (0, True, ["schnappy-grafana-pg", "schnappy-production-postgres", "schnappy-sonarqube-pg", "woodpecker-postgres"]))
+# Grafana's database on its own CNPG cluster since stage 2: a major takes that cluster's base backup before its merge
+rc, calls = night("apply grafana-grafana-13.x major", plan=PG_PLAN,
+                  files={"list": "grafana-grafana-13.x major schnappy/infra major,one-way,upgrade-cycle\n", "noticed": ANNOUNCED})
+check("a Grafana major (its database on CNPG): not blocked, merged - its cluster's base backup run first",
+      (rc, merged(calls, "grafana-grafana-13.x"), [c.split("cluster=")[1] for c in has(calls, "task --yes deploy:postgres:base-backup")]),
+      (0, True, ["schnappy-grafana-pg"]))
+NET_GAPS = {"kafka": "Kafka: a part made up with no backup", "grafana": "Grafana: a part made up with no backup",
+            "scylladb": "ScyllaDB: a part made up with no backup"}
+try:
+    table_with(**{s: {"missing": [why]} for s, why in NET_GAPS.items()})
+    for unit, st in (("kafka-4.x", "kafka"), ("strimzi-kafka-operator-1.x", "kafka"), ("grafana-grafana-13.x", "grafana"),
+                     ("scylladb-2026.3", "scylladb")):
+        rc, calls = night(f"prove {unit} minor", files={"list": f"{unit} minor schnappy/infra upgrade-cycle\n"})
+        check(f"{unit}, its label missing: the names' net finds its store - blocked, nothing built, the missing part named",
+              (rc, merged(calls, unit), has(calls, "task"), NET_GAPS[st] in blocked_why(calls)), (1, False, [], True))
+finally:
+    open(TABLE, "w").write(REAL_TABLE)
 SCYLLA_WHOLE = {"backups": ["check:production:scylla-backup"], "missing": [], "minutes": 30}
 try:
     table_with(scylladb=SCYLLA_WHOLE)
@@ -840,8 +864,12 @@ try:
           (0, True, []))
 finally:
     open(TABLE, "w").write(REAL_TABLE)
-rc, calls = night("test test-scylladb-2026.3 minor", files={"list": "test-scylladb-2026.3 minor schnappy/infra one-way\n"})
-check("a test unit whose production twin's store cannot take it (ScyllaDB, no restore): blocked, never merged, the twin's "
+try:
+    table_with(scylladb={"missing": ["ScyllaDB: a part made up with no backup"]})
+    rc, calls = night("test test-scylladb-2026.3 minor", files={"list": "test-scylladb-2026.3 minor schnappy/infra one-way\n"})
+finally:
+    open(TABLE, "w").write(REAL_TABLE)
+check("a test unit whose production twin's store cannot take it (a table where ScyllaDB has a gap): blocked, never merged, the twin's "
       "parts named - a test environment ahead of production for good proves nothing",
       (rc, merged(calls, "test-scylladb-2026.3"), "its production twin scylladb-2026.3's" in blocked_why(calls)), (1, False, True))
 VAULT_PLAN = "test:copy:change INFRA_REF=main PLATFORM_REF=main\ntest:copy:playbook PLAYBOOK=upgrade-vault.yml ARGS='-e @/x/vault.yml'\n"
@@ -854,6 +882,16 @@ rc, calls = night("apply hashicorp-vault-2.x major", files={"list": "hashicorp-v
                                                              "noticed": ANNOUNCED})
 check("  that command not in its plan: blocked, nothing merged, the command named",
       (rc, merged(calls, "hashicorp-vault-2.x"), "deploy:vault:upgrade" in blocked_why(calls)), (1, False, True))
+CONSUL_PLAN = "test:copy:playbook PLAYBOOK=upgrade-consul.yml ARGS='-e @/x/upgrade-consul-vars.yml'\n"
+rc, calls = night("apply hashicorp-consul-2.x major", plan=CONSUL_PLAN,
+                  files={"list": "hashicorp-consul-2.x major schnappy/ops major,one-way,upgrade-cycle\n", "noticed": ANNOUNCED})
+check("a Consul unit (its own command takes the snapshot - upgrade-consul.yml): its command in the plan - merged, the command run",
+      (rc, merged(calls, "hashicorp-consul-2.x"), has(calls, "task --yes deploy:consul:upgrade")),
+      (0, True, ["task --yes deploy:consul:upgrade"]))
+rc, calls = night("apply hashicorp-consul-2.x major", files={"list": "hashicorp-consul-2.x major schnappy/ops major,one-way,upgrade-cycle\n",
+                                                              "noticed": ANNOUNCED})
+check("  that command not in its plan: blocked, nothing merged, the command named",
+      (rc, merged(calls, "hashicorp-consul-2.x"), "deploy:consul:upgrade" in blocked_why(calls)), (1, False, True))
 rc, calls = night("prove centrifugo-6.x minor", files={"list": "centrifugo-6.x minor schnappy/infra upgrade-cycle\n",
                                                      "list.later": "centrifugo-6.x minor schnappy/infra one-way,upgrade-cycle\n"})
 check("a one-way label put on during the proof (its labels read again after it): blocked, nothing merged - the copy built",
@@ -882,6 +920,20 @@ check("the labels not read: nothing built or merged (fails closed)", (rc, has(ca
 rc, calls = night("prove wave-patches patch", files={"list": "other-1.x minor schnappy/infra upgrade-cycle\n"})
 check("the unit gone from the open ones since its pick: nothing built or merged", (rc, has(calls, "task"), merged(calls, "wave-patches")),
       (1, [], False))
+# the plan read before the build: a part the copy cannot prove refused there - labelled, the part named, nothing built,
+# no agent (a refusal is ops' to fix; it was built 49 min, refused, handed to the fix agent - 2026-11-17's review)
+REFUSAL = "REFUSED: the unit changes ops values with no known proof: deploy/ansible/playbooks/setup-pi-services.yml\n"
+rc, calls = night("prove pi-services minor", files={"plan.fail": "", "plan": REFUSAL})
+check("a unit the copy cannot prove (its plan refused before the build): blocked, labelled, the part named - nothing "
+      "built, no agent",
+      (rc, has(calls, "task test:copy:build"), [c for c in calls if c.startswith("claude")],
+       has(calls, "upgrade-label.py pi-services upgrade-blocked"),
+       "setup-pi-services.yml" in " ".join(has(calls, "upgrade-notice.sh blocked"))),
+      (1, [], [], ["upgrade-label.py pi-services upgrade-blocked"], True))
+rc, calls = night("prove pi-services minor", files={"plan.fail": "", "plan": "task: some error\n"})
+check("  its plan not read (no refusal said): blocked, not labelled, nothing built",
+      (rc, has(calls, "task test:copy:build"), has(calls, "upgrade-label.py pi-services upgrade-blocked"), notices(calls)),
+      (1, [], [], ["upgrade-notice.sh blocked pi-services"]))
 # ── the plan ──────────────────────────────────────────────────────────────────────────────────────────────────────────
 rc, calls = night("prove wave-patches patch", plan=PLAN, files={"plan.fail": ""})
 check("the plan's task failing (even printing steps): blocked, nothing merged",
@@ -895,7 +947,8 @@ for step, why in (("test:copy:playbook PLAYBOOK=upgrade-kubeadm.yml ARGS='-e k8s
     rc, calls = night("prove wave-patches patch", plan=step + "\n")
     check(f"{why} in the plan: refused before the merge, no command", (rc, merged(calls, "wave-patches"), has(calls, "task --yes")),
           (1, False, []))
-for pb, cmd in (("upgrade-patroni.yml", "deploy:patroni:upgrade"), ("upgrade-vault.yml", "deploy:vault:upgrade"),
+for pb, cmd in (("upgrade-patroni.yml", "deploy:patroni:upgrade"), ("upgrade-consul.yml", "deploy:consul:upgrade"),
+                ("upgrade-vault.yml", "deploy:vault:upgrade"),
                 ("setup-host-hardening.yml", "deploy:host-hardening"), ("setup-argocd.yml", "deploy:argocd"),
                 ("upgrade-forgejo.yml", "deploy:forgejo:upgrade"), ("setup-caddy.yml", "deploy:caddy"),
                 ("setup-kubeadm.yml ARGS='--tags cilium -e cilium_version=1.20.5'", "deploy:cilium:upgrade -- -e cilium_version=1.20.5")):

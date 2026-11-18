@@ -1,0 +1,22 @@
+---
+# ClickHouse backs up: its logs database written to the Pi store now, as its CronJobs do each night (the prune, then
+# BACKUP DATABASE logs as its backup user) - before a change that ClickHouse cannot take back (a release whose formats
+# the old one cannot read: the upgrade cycle's one-way table, scripts/upgrade-stores.json), and after a change to
+# ClickHouse, its config or the store. A preview changes nothing (the Jobs write to the store).
+#
+# Usage: task check:production:clickhouse-backup   (production; the copy: test:copy:clickhouse-restore restores it too)
+- name: ClickHouse backs up
+  hosts: target
+  become: true
+  gather_facts: false
+  vars:
+    kubeconfig: /etc/kubernetes/admin.conf
+    kubectl: "kubectl --kubeconfig {{ kubeconfig }}"
+  tasks:
+    - name: Its backup taken now
+      ansible.builtin.include_tasks: tasks/clickhouse-backup.yml
+      when: not ansible_check_mode
+
+    - name: Backed up
+      ansible.builtin.debug:
+        msg: "CLICKHOUSE BACKUP OK: {{ clickhouse_backup_name | default('(a preview - none taken)') }}"

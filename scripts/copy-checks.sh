@@ -30,7 +30,7 @@ pools_gone=${COPY_SCRAPE_POOLS_GONE:-}
   || { echo "COPY_SCRAPE_POOLS_GONE='$pools_gone': scrape pool names, comma-separated"; exit 1; }
 # ClickHouse's compatibility setting and users as the copy runs them: what the platform ref under test sets (its
 # clickhouse-users.xml, read by scripts/clickhouse-expected.sh - the survival seed reads the same)
-ch=$(scripts/clickhouse-expected.sh "$platform_ref") || exit 1
+ch=$(scripts/clickhouse-expected.sh "$platform_ref" "$infra_ref") || exit 1
 read -r clickhouse_compat clickhouse_users <<< "$ch"
 [ "$clickhouse_compat" != - ] || clickhouse_compat=""
 # own_jobs, stop_groups

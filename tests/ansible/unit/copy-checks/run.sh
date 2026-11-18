@@ -51,6 +51,8 @@ ch_users() {  # ch_users <compat or empty> <replace attribute> <user...>
     "${c:+<compatibility>$c</compatibility>}" "$r" "$(printf '<%s/>' "$@")"
 }
 ch_users 25.8 ' replace="replace"' schnappy > "$T/platform/helm/schnappy-observability/files/clickhouse-users.xml"
+# the backup job's user, mounted when infra's values turn backups on
+printf '<clickhouse><users><backup/></users></clickhouse>\n' > "$T/platform/helm/schnappy-observability/files/clickhouse-backup-user.xml"
 git -C "$T/platform" init -q -b p && git -C "$T/platform" add -A \
   && git -C "$T/platform" -c user.name=t -c user.email=t@t commit -q -m p
 git -C "$T/platform" checkout -q -b q
@@ -61,6 +63,15 @@ git -C "$T/platform" checkout -q -b r
 ch_users "{{lookup('pipe','id')}}" '' grafana > "$T/platform/helm/schnappy-observability/files/clickhouse-users.xml"
 git -C "$T/platform" -c user.name=t -c user.email=t@t commit -q -am r
 export COPY_PLATFORM_DIR="$T/platform"
+# the infra ref (the script's first argument): branch i, ClickHouse's backups off; branch b, on (its backup user expected)
+mkdir -p "$T/infra/clusters/production/schnappy-observability"
+printf 'clickhouse:\n  enabled: true\n' > "$T/infra/clusters/production/schnappy-observability/values.yaml"
+git -C "$T/infra" init -q -b i && git -C "$T/infra" add -A && git -C "$T/infra" -c user.name=t -c user.email=t@t commit -q -m i
+git -C "$T/infra" checkout -q -b b
+printf 'clickhouse:\n  enabled: true\n  backup:\n    enabled: true\n' > "$T/infra/clusters/production/schnappy-observability/values.yaml"
+git -C "$T/infra" -c user.name=t -c user.email=t@t commit -q -am b
+git -C "$T/infra" checkout -q i
+export COPY_INFRA_DIR="$T/infra"
 t0=$(date +%s)
 out=$(echo "THE CALLER'S INPUT" | PATH="$T/bin:$PATH" timeout -k 5 60 bash "$T/scripts/copy-checks.sh" i p 2>&1)
 rc=$?
@@ -101,6 +112,10 @@ check "the failing one named, the run failed" "$rc $(grep -o 'COPY CHECKS FAILED
   "1 COPY CHECKS FAILED: metrics"
 check "it ends once its checks have: the bound's watchdog not waited out" "$([ "$took" -lt 15 ] && echo prompt || echo "$took s")" \
   prompt
+# infra's values turning ClickHouse's backups on: the backup job's user expected beside schnappy
+out=$(ALL_PASS=1 PATH="$T/bin:$PATH" timeout -k 5 60 bash "$T/scripts/copy-checks.sh" b p < /dev/null 2>&1); rc=$?
+check "ClickHouse's backups on in infra's values: the backup user expected too" \
+  "$rc $(grep -c 'survival-check.yml -e mode=verify -e clickhouse_compat=25.8 -e clickhouse_users=backup,schnappy read' <<< "$out")" "0 1"
 # a platform ref with no pin and no replaced list: no compatibility, the image's default user beside the file's
 out=$(ALL_PASS=1 PATH="$T/bin:$PATH" timeout -k 5 60 bash "$T/scripts/copy-checks.sh" i q < /dev/null 2>&1); rc=$?
 check "no pin: compatibility empty; no replace: the image's default user kept" \

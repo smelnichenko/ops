@@ -107,7 +107,8 @@ GUARDED = ("env -i HOME=\"$HOME\" PATH=\"$PATH\" bash -c 'cd deploy/ansible && v
 want = [PB + "../../tests/ansible/copy/" + f for f in ("barman-check.yml", "cert-check.yml", "restore-check.yml",
                                                         "backup-check.yml",
                                                         "backup-check.yml -e schedule=velero-full-weekly")] + \
-    [PB + "playbooks/scylla-backup-check.yml", PB + "../../tests/ansible/copy/sweeper-check.yml",
+    [PB + "playbooks/scylla-backup-check.yml", PB + "../../tests/ansible/copy/scylla-restore-check.yml",
+     PB + "../../tests/ansible/copy/clickhouse-restore-check.yml", PB + "../../tests/ansible/copy/sweeper-check.yml",
      PB + "../../tests/ansible/copy/offsite-mirror-check.yml", PB + "../../tests/ansible/copy/forgejo-plant.yml"] + \
     [GUARDED % f for f in ("setup-pi-services.yml --tags forgejo-config", "forgejo-doctor.yml --check",
                            "forgejo-doctor.yml -e forgejo_orphans_expected=1", "setup-velero.yml")] + \
@@ -200,13 +201,13 @@ os.chmod(f"{SW}/deploy/ansible/venv/bin/ansible-playbook", 0o755)
 
 def seed_run(expected):
     with open(f"{SW}/scripts/clickhouse-expected.sh", "w") as f:
-        f.write(f'#!/bin/bash\n[ "$1" = main ] || exit 9\n{expected}\n')
+        f.write(f'#!/bin/bash\n[ "$1 $2" = "main main" ] || exit 9\n{expected}\n')
     os.chmod(f"{SW}/scripts/clickhouse-expected.sh", 0o755)
     r = subprocess.run(["bash", "-c", SEED], cwd=SW, capture_output=True, text=True)
     return r.returncode, r.stdout.strip()
 
 
-check("the survival seed: compatibility and users from clickhouse-expected.sh main; `-` none; a failed lookup stops it",
+check("the survival seed: compatibility and users from clickhouse-expected.sh main main (platform's and infra's); `-` none; a failed lookup stops it",
       (seed_run('echo "25.8 schnappy"'), seed_run('echo "- default,grafana"'), seed_run("exit 1")[0] != 0,
        seed_run("exit 1")[1]),
       ((0, "PLAYBOOK -i inventory/vagrant.yml ../../tests/ansible/copy/survival-check.yml -e mode=seed "

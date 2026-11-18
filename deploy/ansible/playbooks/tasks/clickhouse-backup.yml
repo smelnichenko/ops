@@ -1,0 +1,59 @@
+---
+# ClickHouse's backup taken now, as its CronJobs take it each night (platform's clickhouse-backup.yaml): the prune first
+# (it makes the bucket - a fresh store has none - and keeps the newest complete backups), then the backup, each a Job
+# made from its CronJob and waited for; the backup's log must say BACKUP_CREATED. Each Job removed once it succeeded (a
+# failed one stays for its logs - KubeJobFailed then says so). Sets clickhouse_backup_name (logs/<UTC timestamp>).
+#
+# Expects: kubectl (the admin kubeconfig on the target).
+- name: The ClickHouse backup Jobs' names (fixed once - a lookup in vars is re-run on every use)
+  ansible.builtin.set_fact:
+    _chb_suffix: "{{ lookup('ansible.builtin.pipe', 'date +%s') }}"
+
+- name: The prune made from its CronJob, then waited for (the bucket made, the newest complete backups kept)
+  ansible.builtin.shell:
+    executable: /bin/bash
+    cmd: |
+      set -euo pipefail
+      k="{{ kubectl }} -n schnappy-infra"
+      j=clickhouse-backup-prune-check-{{ _chb_suffix }}
+      $k create job --from=cronjob/schnappy-clickhouse-backup-prune "$j" > /dev/null
+      if ! $k wait --for=condition=complete "job/$j" --timeout=600s > /dev/null; then
+        $k logs "job/$j" --tail=20 || true
+        echo "the prune Job $j did not complete"; exit 1
+      fi
+      $k logs "job/$j" | tail -1
+      $k delete job "$j" --wait=false > /dev/null
+  register: _chb_prune
+  changed_when: true
+
+- name: The backup made from its CronJob, then waited for - BACKUP_CREATED in its log
+  ansible.builtin.shell:
+    executable: /bin/bash
+    cmd: |
+      set -euo pipefail
+      k="{{ kubectl }} -n schnappy-infra"
+      j=clickhouse-backup-check-{{ _chb_suffix }}
+      $k create job --from=cronjob/schnappy-clickhouse-backup "$j" > /dev/null
+      # complete or failed, whichever comes first - by the clock, not the tries (each kubectl can hang): /proc/uptime,
+      # which nothing sets back; 3700 s, past the Job's own hour
+      end=$(( $(cut -d. -f1 /proc/uptime) + 3700 ))
+      s=""
+      for _ in $(seq 370); do
+        s=$($k get "job/$j" -o jsonpath='{.status.succeeded}/{.status.failed}')
+        case "$s" in 1/*) break ;; */1) $k logs "job/$j" -c backup --tail=20 || true; echo "the backup Job $j failed"; exit 1 ;; esac
+        [ "$(cut -d. -f1 /proc/uptime)" -lt "$end" ] || break
+        sleep 10
+      done
+      case "$s" in 1/*) ;; *) echo "the backup Job $j not done 3700 s after its start"; exit 1 ;; esac
+      log=$($k logs "job/$j" -c backup)
+      echo "$log" | tail -3
+      echo "$log" | grep -q BACKUP_CREATED || { echo "the backup Job $j ended without BACKUP_CREATED"; exit 1; }
+      echo "$log" | grep -oE 'clickhouse backup logs/[0-9]{8}T[0-9]{6}Z: rc=0' | sed 's/^clickhouse backup //; s/: rc=0$//' | tail -1
+      $k delete job "$j" --wait=false > /dev/null
+  register: _chb_backup
+  changed_when: true
+  failed_when: _chb_backup.rc != 0 or (_chb_backup.stdout_lines | last | default('')) is not match('^logs/[0-9]{8}T[0-9]{6}Z$')
+
+- name: The backup's name
+  ansible.builtin.set_fact:
+    clickhouse_backup_name: "{{ _chb_backup.stdout_lines | last }}"

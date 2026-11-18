@@ -19,18 +19,18 @@
         "/(^|\\/)postgresql$/"
       ],
       "backups": [
-        "deploy:postgres:base-backup -- -e pg_namespace=schnappy-production -e cluster=schnappy-production-postgres"
+        "deploy:postgres:base-backup -- -e pg_namespace=schnappy-production -e cluster=schnappy-production-postgres",
+        "deploy:postgres:base-backup -- -e pg_namespace=woodpecker -e cluster=woodpecker-postgres",
+        "deploy:postgres:base-backup -- -e pg_namespace=schnappy-infra -e cluster=schnappy-sonarqube-pg",
+        "deploy:postgres:base-backup -- -e pg_namespace=schnappy-infra -e cluster=schnappy-grafana-pg"
       ],
-      "missing": [
-        "woodpecker-postgres (CNPG) has no backup store (its spec.backup unset) - Woodpecker's CI history has no copy to restore a failed major from",
-        "SonarQube's Postgres (a plain StatefulSet, postgres:<major>-alpine, its data on a local volume) has no backup - and a new major will not read the old one's data directory"
-      ],
+      "missing": [],
       "examples": [
         "postgres-18.x",
         "postgresql-19.x"
       ],
       "taken_by": [],
-      "minutes": 30
+      "minutes": 40
     },
     {
       "store": "scylladb",
@@ -43,8 +43,7 @@
         "check:production:scylla-backup"
       ],
       "missing": [
-        "no restore from its backup: no sctool restore task or runbook, never rehearsed on the copy - a release line cannot be downgraded, so the way back is a new cluster restored from it",
-        "its units move only the schema Job's cqlsh image (scylla.image); the cluster's version (scyllaOperator.version) has no renovate annotation - such a unit would change no ScyllaDB"
+        "the way back from a release line (a new cluster at the old version, its schema restored by sctool restore --restore-schema, then its tables) not rehearsed on the copy - a release line cannot be downgraded; a table restore into the running cluster is (deploy:scylla:restore, test:copy:scylla-restore)"
       ],
       "examples": [
         "scylladb-2026.3",
@@ -61,9 +60,11 @@
         "strimzi-kafka-operator",
         "/^quay\\.io\\/strimzi\\//"
       ],
-      "backups": [],
+      "backups": [
+        "check:production:kafka-backup"
+      ],
       "missing": [
-        "no backup of Kafka's topics in the cycle (nothing copies them: no MirrorMaker, no volume snapshot)"
+        "its restore not yet rehearsed on the copy - test:copy:kafka-restore restores a marker topic through production's backup and restore Jobs; the dump and restore proven locally on Kafka 4.3.1 and against a stub Kafka in platform CI"
       ],
       "examples": [
         "strimzi-kafka-operator-1.x",
@@ -71,7 +72,7 @@
         "apache-kafka-4.x"
       ],
       "taken_by": [],
-      "minutes": 0
+      "minutes": 10
     },
     {
       "store": "clickhouse",
@@ -79,15 +80,15 @@
       "packages": [
         "/clickhouse-server$/"
       ],
-      "backups": [],
-      "missing": [
-        "no ClickHouse backup in the cycle (logs and traces: no BACKUP TO a store, no volume snapshot)"
+      "backups": [
+        "check:production:clickhouse-backup"
       ],
+      "missing": [],
       "examples": [
         "clickhouse-clickhouse-server-27.x"
       ],
       "taken_by": [],
-      "minutes": 0
+      "minutes": 10
     },
     {
       "store": "grafana",
@@ -96,16 +97,17 @@
         "grafana",
         "grafana/grafana"
       ],
-      "backups": [],
-      "missing": [
-        "no backup of Grafana's database in the cycle (its SQLite on a local volume)"
+      "backups": [
+        "deploy:postgres:base-backup -- -e pg_namespace=schnappy-infra -e cluster=schnappy-grafana-pg"
       ],
+      "missing": [],
       "examples": [
         "grafana-grafana-13.x",
         "grafana-14.x"
       ],
       "taken_by": [],
-      "minutes": 0
+      "_why": "its database on its own CNPG cluster since stage 2 (2026-11-18): a Grafana major migrates it - that cluster's base backup first (Postgres's entry takes it too); the way back a recovery from it (CNPG bootstrap.recovery, the path the copy rehearses on production's cluster every run); its dashboards and datasources provisioned",
+      "minutes": 10
     },
     {
       "store": "vault",
@@ -131,13 +133,14 @@
         "/(^|\\/)consul$/"
       ],
       "backups": [],
-      "missing": [
-        "no upgrade path: setup-consul.yml installs Consul, nothing snapshots it at a change, and the copy has no proof for it (copy-unit.sh)"
-      ],
+      "missing": [],
       "examples": [
         "hashicorp-consul-2.x"
       ],
-      "taken_by": [],
+      "taken_by": [
+        "deploy:consul:upgrade"
+      ],
+      "_why": "its own command takes it: upgrade-consul.yml snapshots the whole state on pi1 (inspected) before any server restarts, the followers then the leader - proven on the copy by copy-unit (setup-consul.yml's version moved: upgrade-consul.yml there) and by test:consul-upgrade",
       "minutes": 0
     }
   ]

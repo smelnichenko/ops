@@ -135,8 +135,10 @@ VARS_FILES = {  # a vars file -> its playbook and the arguments production's tas
     "deploy/ansible/vars/vault.yml": ("upgrade-vault.yml", "-e @vars/vault-vagrant.yml"),
     "deploy/ansible/vars/forgejo.yml": ("upgrade-forgejo.yml", ""),
 }
+# Consul before Vault: Consul is Vault's storage (and Patroni's DCS)
 ORDER = {"upgrade-kubeadm.yml": 0, "setup-kubeadm.yml": 1, "setup-argocd.yml": 2, "upgrade-patroni.yml": 3,
-         "upgrade-vault.yml": 4, "upgrade-forgejo.yml": 5, "setup-host-hardening.yml": 6, "setup-caddy.yml": 7}
+         "upgrade-consul.yml": 4, "upgrade-vault.yml": 5, "upgrade-forgejo.yml": 6, "setup-host-hardening.yml": 7,
+         "setup-caddy.yml": 8}
 # node_exporter on ten: its version and the hash that moves with it - production's setup-host-hardening.yml on the copy
 NODE_EXPORTER = {"node_exporter_version", "node_exporter_sha256"}
 # Argo CD itself (no Argo app holds it): its chart default and the image pinned on a chart - setup-argocd.yml on the copy
@@ -145,6 +147,9 @@ ARGOCD = {"argocd_chart_default", "argocd_image_pins"}
 # Caddy on the Pis: its version - production's setup-caddy.yml on the copy's Pis, which installs the version pinned
 # (and its Verify play checks that version running)
 CADDY = {"caddy_version"}
+# Consul's three servers: its version and the zips' hashes that move with it - production's upgrade-consul.yml on the
+# copy (setup-consul.yml installs only where Consul is not: a running one moves through the upgrade's rolling order)
+CONSUL = {"consul_version", "consul_checksums"}
 for path in changed:
     if not path.startswith("deploy/ansible/"):
         continue  # renovate.json and the like: no part of a deploy
@@ -191,6 +196,18 @@ for path in changed:
             moved_values = {k: new[k] for k in moved if k in new}
             refused += pins({k: old.get(k) for k in moved}, moved_values, path)
             steps.append(("setup-host-hardening.yml", f"-e @{vars_file(moved_values, 'setup-host-hardening-vars.yml')}", False))
+    elif path == "deploy/ansible/playbooks/setup-consul.yml":
+        old, new = play_vars(show("main", path) or ""), play_vars(show(BRANCH, path) or "")
+        moved = sorted(k for k in set(old) | set(new) if old.get(k) != new.get(k))
+        if without_vars(show("main", path)) != without_vars(show(BRANCH, path)):
+            refused.append(f"{path} (its tasks)")
+        elif not moved or set(moved) - CONSUL:
+            refused.append(f"{path} {' '.join(sorted(set(moved) - CONSUL)) or '(its tasks)'}")
+        else:
+            version(new["consul_version"])
+            moved_values = {k: new[k] for k in CONSUL if k in new}
+            refused += pins({k: old.get(k) for k in moved}, {k: new[k] for k in moved if k in new}, path)
+            steps.append(("upgrade-consul.yml", f"-e @{vars_file(moved_values, 'upgrade-consul-vars.yml')}", False))
     elif path == "deploy/ansible/playbooks/setup-caddy.yml":
         old, new = play_vars(show("main", path) or ""), play_vars(show(BRANCH, path) or "")
         moved = sorted(k for k in set(old) | set(new) if old.get(k) != new.get(k))

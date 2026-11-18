@@ -1,0 +1,21 @@
+---
+# Kafka backs up: its topics dumped to the Pi store now, as its CronJob does each night - before a change Kafka cannot
+# take back (a metadata version, a Strimzi conversion: the upgrade cycle's one-way table, scripts/upgrade-stores.json),
+# and after a change to Kafka, Strimzi or the store. A preview changes nothing (the Job writes to the store).
+#
+# Usage: task check:production:kafka-backup   (production; the copy: test:copy:kafka-restore restores one too)
+- name: Kafka backs up
+  hosts: target
+  become: true
+  gather_facts: false
+  vars:
+    kubeconfig: /etc/kubernetes/admin.conf
+    kubectl: "kubectl --kubeconfig {{ kubeconfig }}"
+  tasks:
+    - name: Its topics dumped now
+      ansible.builtin.include_tasks: tasks/kafka-backup.yml
+      when: not ansible_check_mode
+
+    - name: Backed up
+      ansible.builtin.debug:
+        msg: "KAFKA BACKUP OK: {{ kafka_backup_name | default('(a preview - none taken)') }}"

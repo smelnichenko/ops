@@ -187,6 +187,12 @@ store() {  # a store as production's, made relative to now
   # (END_MISSING: in 99, never archived - an idle database's unfinished segment), the newest still being written;
   # segments 25-27 archived
   mkdir -p "$pg/schnappy-postgres/base/20260410T140130"
+  # another cluster's server beside production's, its backup NEWER (SonarQube's 01:45 after production's 01:30): never
+  # the one restored
+  local other
+  other="$pg/schnappy-sonarqube-pg18/base/$(utc '-30 minutes' +%Y%m%dT%H%M%S)"
+  mkdir -p "$other"
+  printf 'status=DONE\nend_wal=000000010000000000000009\n' > "$other/backup.info"
   printf 'status=DONE\nend_wal=000000010000000000000001\n' > "$pg/schnappy-postgres/base/20260410T140130/backup.info"
   local b end
   for h in 3 2 1; do
@@ -255,7 +261,7 @@ run() {  # run <env...>: the script as the unit runs it (its lock held: PI_RESTO
   env "$@" > /dev/null  # (a bad env word fails here, not as a red check)
   env -i PATH="$W/bin:$(dirname "$(command -v python3)"):/usr/bin:/bin" W="$W" HOME="$W" TZ=Europe/Tallinn PI_RESTORE_PG_ROOT="$W/pgroot" STORE_ENDPOINT=http://192.168.11.5:9000 \
     AWS_ACCESS_KEY_ID=a AWS_SECRET_ACCESS_KEY=s PI_RESTORE_NAME=pi1 PI_RESTORE_PARITY=0 PI_RESTORE_ANY_DAY=1 \
-    PI_RESTORE_LOCKED=1 PI_RESTORE_PG_DATABASES="monitor admin chat chess masi" \
+    PI_RESTORE_LOCKED=1 PI_RESTORE_PG_DATABASES="monitor admin chat chess masi" PI_RESTORE_PG_SERVER=schnappy-production-postgres \
     PI_RESTORE_TIMESYNC_MARKER="$W/no-timesync-marker" PI_RESTORE_CGROUP_CONTROLLERS="$W/cgroup-controllers" \
     PI_RESTORE_PG_IMAGE_17=ghcr.io/cloudnative-pg/postgresql:17 PI_RESTORE_ETCD_IMAGE=registry.k8s.io/etcd:3.6.5-0 \
     PI_RESTORE_PG_BASE_MAX_AGE_H="$BASE_MAX" PI_RESTORE_PG_BACKUPS_LOOKED_AT=30 PI_RESTORE_PG_WAIT_POLLS=3 PI_RESTORE_ETCD_MAX_AGE_H=3 \
@@ -287,7 +293,7 @@ store
 check "every part restores: green" "$(run)" "rc=0"
 check "  last-success this run's" "$(success | grep -cE '^[0-9]{8}T[0-9]{6}Z$') $(success | grep -c 2020)" "1 0"
 check "  last-report: the three parts OK" "$(report | grep -cE '^(POSTGRES|ETCD|TIER0) OK')" 3
-check "  production's server (not the old one), its newest RESTORABLE backup (not the one still written)" \
+check "  production's server, named (not the old one, not another cluster's newer one), its newest RESTORABLE backup (not the one still written)" \
   "$(report | grep -oE 'schnappy-production-postgres/[0-9T]+' | sed 's#.*/##')" "$(utc '-2 hours' +%Y%m%dT%H0130)"
 (export END_MISSING=1; store)
 check "an idle database (the newest complete backup's end segment unarchived): the backup before it restored, green" \
@@ -297,6 +303,10 @@ check "an idle database (the newest complete backup's end segment unarchived): t
 check "a base backup without its backup.info (still uploading): the one before it restored, green" \
   "$(run NO_INFO=1) $(report | grep -oE 'schnappy-production-postgres/[0-9T]+' | sed 's#.*/##')" \
   "rc=0 $(utc '-3 hours' +%Y%m%dT%H0130)"
+store
+check "production's server named but without a base backup (a rename not followed): red, the name said - no other server's taken" \
+  "$(run PI_RESTORE_PG_SERVER=schnappy-production-postgres-pg19) $(report | grep -A1 '^POSTGRES FAILED:$' | grep -c '^  schnappy-production-postgres-pg19: no base backup') $(grep -c '^podman run.*pi-restore-pg' "$W/calls" || true)" \
+  "rc=1 1 0"
 store
 check "the registry down, the images here already: green" "$(run PULL_FAIL=1)" "rc=0"
 store
