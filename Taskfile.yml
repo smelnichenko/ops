@@ -446,6 +446,32 @@ tasks:
       - cmd: vagrant up --no-provision
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/vms-ready.yml
       - task: test:copy:argo
+      # the copy as built kept (plan 125): the VMs halted, a libvirt snapshot of each, the build's records beside it -
+      # the next run reverts to it (test:copy:ready) instead of building again; then the VMs up for this run
+      - cmd: scripts/copy-snapshot.sh save
+
+  test:copy:ready:
+    desc: "The Vagrant copy as built, ready for a run (plan 125): its snapshot reverted when fresh (~5 min; main caught up when it moved), else built from nothing and snapshotted (test:copy:build, 49 min) - stale when a day old, production's inventory or the Pis' versions moved, ops' copy-building files changed, or a domain or its snapshot gone"
+    deps: [deploy:install]
+    cmds:
+      # one copy run at a time (scripts/copy-lock.sh): a build called from here is the same run
+      - cmd: scripts/copy-lock.sh
+      - cmd: scripts/copy-main-current.sh ../infra ../platform
+      - cmd: |
+          set -euo pipefail
+          rc=0
+          scripts/copy-snapshot.sh revert || rc=$?
+          case "$rc" in
+            0) ;;
+            3) task test:copy:build ;;
+            *) exit "$rc" ;;
+          esac
+
+  test:copy:drop:
+    desc: "The Vagrant copy destroyed with its snapshot (plan 125): its disk back, the next run builds from nothing"
+    cmds:
+      - cmd: scripts/copy-lock.sh
+      - cmd: scripts/copy-snapshot.sh drop
 
   test:copy:argo:
     desc: On the built VMs, add the Argo layer as on ten - seed Vault, mirror infra/platform main, preload app images, install Argo CD - and wait until every app is green; seed the data the checks read, record the scrape pools; the copy's inventory against production's

@@ -73,7 +73,8 @@
    {
     "task": "test:copy:argo",
     "vars": {}
-   }
+   },
+   "scripts/copy-snapshot.sh save"
   ],
   "vars": {}
  },

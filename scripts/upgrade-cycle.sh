@@ -25,7 +25,7 @@
 #               waited for - an empty answer never a head; never read as the unit's defect); then its CI green (a
 #               running one waited for an hour - still running: said, no try, the same heads still so a run later a
 #               try; a red one a try, none at all a try) and main read again (it moved meanwhile: said, no try), each
-#               checkout's branch the head its pull request names (Forgejo's record may lag); task test:copy:build (a copy that does not build ends the run - the unit
+#               checkout's branch the head its pull request names (Forgejo's record may lag); task test:copy:ready (the copy as built - its snapshot reverted, or built: plan 125; a copy that does not get ready ends the run - the unit
 #               untouched), task test:copy:unit UNIT=<it>; red: the agent's fix - it commits in clones of the proven
 #               commits outside every checkout; the runner fetches its commits into a repository of its own (the
 #               agent's hooks and config never run), keeps them only on top of the proven head, inside the unit's own
@@ -259,7 +259,7 @@ gates() {  # $1: the span (minutes) no backup window may meet; $2: start or merg
 memory() {  # the copy must fit: the guard's own figure (22.5 GB of VMs + its 2 GB)
   local avail need=$(( 22528 + 2048 + 300 ))
   avail=$(awk '/^MemAvailable:/ {print int($2/1024)}' "${UPGRADE_MEMINFO:-/proc/meminfo}")
-  [ "${avail:-0}" -ge "$need" ] || { say "REFUSED: memory - $avail of $need MB free: stop the radar (sudo systemctl stop radar-live) - or a copy left running (vagrant status; vagrant destroy -f) - then run again"; return 1; }
+  [ "${avail:-0}" -ge "$need" ] || { say "REFUSED: memory - $avail of $need MB free: stop the radar (sudo systemctl stop radar-live) - or a copy left running (vagrant status; vagrant halt) - then run again"; return 1; }
 }
 if [ -n "$preflight" ]; then
   gates "$START_SPAN" start && memory && { say "PREFLIGHT: a run may start"; exit 0; }
@@ -280,8 +280,9 @@ read -r action unit kind <<< "$picked"
 [ "$action" != test ] || [[ $unit == test-* ]] || { say "REFUSED: a test action for '$unit' (no test- unit)"; exit 1; }
 heads=$state/heads-$unit-$$
 dirs=(); built=""
-cleanup() {  # however the run ends: the copy destroyed when it was built (the radar may start), the clones gone
-  [ -z "$built" ] || run vagrant destroy -f || say "THE COPY NOT DESTROYED - the radar stays off: vagrant destroy -f by hand"
+cleanup() {  # however the run ends: the copy halted when it was readied (the radar may start; its snapshot kept for
+  # the next run - plan 125), the clones gone
+  [ -z "$built" ] || run vagrant halt || say "THE COPY NOT HALTED - the radar stays off: vagrant halt by hand"
   [ -n "$dry" ] || { chmod -R u+w "${dirs[@]}" 2> /dev/null; rm -rf "${dirs[@]}" "$heads" "$heads.after" "$heads.expected"; }
   [ -z "${notice_summary:-}" ] || rm -f "$notice_summary"  # mailed by then (the details of a veto go whole)
 }
@@ -681,8 +682,9 @@ heads_pushed() {
   return 1
 }
 
-# 2. the proof, one fix - the copy destroyed when the run ends, however it ends (the radar may start again)
-build() { built=1; run task test:copy:build || { say "COPY NOT BUILT - the unit untouched (see the log); run again"; exit 1; }; }
+# 2. the proof, one fix - the copy as built (its snapshot reverted when fresh, else built and snapshotted: plan 125), halted
+# when the run ends, however it ends (the radar may start again)
+build() { built=1; run task test:copy:ready || { say "COPY NOT READY - the unit untouched (see the log); run again"; exit 1; }; }
 # the unit's plan read before the copy is built: a part the proof cannot take (an ops value copy-unit.sh has no proof for -
 # Keycloak's; Consul's has its own since 2026-11-18) refused now - labelled upgrade-blocked, the parts named, nothing built and no agent: the refusal is
 # ops' to fix, never the unit's (it was built 49 min, refused, and handed to the fix agent as red - 2026-11-17's review)
@@ -775,9 +777,9 @@ if [ -z "$dry" ]; then
     retry "its review did not finish (${verdict:-no verdict}; passes missing:${missing:- none}; exit $rc)" "$review"
   fi
 fi
-# proven and reviewed: the copy goes now - the radar may start, the apply needs none of it
-copy_gone="the copy is gone: the radar may start"
-if run vagrant destroy -f; then built=""; else copy_gone="THE COPY NOT DESTROYED - the radar stays off"; say "$copy_gone"; fi
+# proven and reviewed: the copy halted now (its snapshot kept for the next run) - the radar may start, the apply needs none of it
+copy_gone="the copy halted: the radar may start"
+if run vagrant halt; then built=""; else copy_gone="THE COPY NOT HALTED - the radar stays off"; say "$copy_gone"; fi
 
 # shadow: proven and reviewed is where the run ends - the result on the pull requests, nothing applied; the cycle's
 # first such proof lets applying runs start
