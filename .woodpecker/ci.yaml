@@ -8,9 +8,15 @@
 # in the one slot.
 when:
   - event: pull_request
+    # documents alone run nothing - but an upgrade's record (docs/upgrades/, with production's inventory or alone) does:
+    # it is the commit ops' CI judges after a unit (its merge commit skips; a record of docs alone skipped too would leave
+    # main unjudged)
     path: &docs_only
       exclude:
-        - 'docs/**'
+        - 'docs/*.md'
+        - 'docs/plans/**'
+        - 'docs/research/**'
+        - 'docs/runbooks/**'
   # AND the merge commit on main. Not a duplicate: the pull_request run tests the PR's own head, and two
   # PRs that were each green apart can still break main together. This repo has no other gate - Argo
   # applies main to the live cluster - so the tree that actually lands is checked here.
