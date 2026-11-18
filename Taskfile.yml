@@ -1422,6 +1422,15 @@ tasks:
     cmds:
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/kafka-restore.yml {{.CLI_ARGS}}
 
+  deploy:kafka-backup-baseline:
+    desc: "PRODUCTION: the Kafka backups' BASELINE moved to now (-- -e kafka_baseline_why='<topic removed, why>') - the backup's guard compares with dumps from now on; for a topic removed on purpose, never to quiet a lost-data refusal (kafka-backup-baseline.yml)"
+    dir: deploy/ansible
+    deps: [deploy:install]
+    dotenv: ['../../.env']
+    prompt: "Move the Kafka backups' baseline on PRODUCTION?"
+    cmds:
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/kafka-backup-baseline.yml {{.CLI_ARGS}}
+
   test:copy:kafka-restore:
     desc: "Vagrant: Kafka's dump restores - a marker topic (headers, none, keys, a JSON header) backed up by production's backup Job, emptied, restored by production's restore Job (that topic alone), each key's messages back in order, exactly as many (kafka-restore-check.yml)"
     dir: deploy/ansible

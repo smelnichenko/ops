@@ -2,12 +2,17 @@
 # A Kafka dump from the Pi store produced back into its topics: a Job built from the backup CronJob's own pod (its images,
 # its store keys, its resources, its labels - so its network policy reaches the store - and its annotations: in the mesh
 # with a native sidecar, Kafka's 9092 taking mTLS only): the dump fetched
-# (kafka_dump: a dump's UTC timestamp, or newest - the newest complete one, its DONE there), then the chart's restore.sh
+# (kafka_dump: a dump's UTC timestamp, or newest - the newest complete one holding messages, its DONE there) and PINNED
+# in the store (the prune never removes it - the operator unpins it once Kafka is whole), then the chart's restore.sh
 # (the console producer; a keyed message on its partition again) - kafka_topics (space-separated) restores those alone.
-# restore.sh refuses a topic missing, of other partitions, or holding other messages (kafka_force=true produces anyway),
-# and a consumer group live on a restored topic; it moves the dump's groups to the end after (kafka_reset_groups=false
-# leaves them). Never two restores at once. Waited for by the clock; its log must say what it restored. The Job removed
-# once it succeeded.
+# A dump of 0 messages is refused (kafka_allow_empty=true restores one). restore.sh checks the dump against itself, and
+# refuses a topic missing, of other partitions, or holding other messages (kafka_force=true produces anyway), and a
+# consumer group live on a restored topic; it moves the dump's groups to the end after (kafka_reset_groups=false leaves
+# them). Never two restores at once, nor one beside a dump: the nightly dump held off for the restore's span by the lock
+# its CronJob mounts (its name read from the CronJob: a chart without it refuses the restore), kept when the restore
+# failed (a Kafka half restored: a dump now would capture the half - KafkaBackupRestoreLockStale says so). Waited for
+# by the clock; its log must say what it restored. After it, the store's BASELINE: the next dumps compare Kafka with
+# dumps from now on (the backup's guard). The Job removed once it succeeded.
 #
 # Expects: kubectl; kafka_dump; kafka_namespace (default schnappy-production); kafka_topics (default: every topic).
 - name: The backup CronJob's pod (the restore Job is built from it)
@@ -28,6 +33,18 @@
   register: _kr_running
   changed_when: false
   failed_when: _kr_running.rc != 0 or _kr_running.stdout | trim | length > 0
+
+- name: The restore's lock as the backup CronJob mounts it (its dump refuses while that ConfigMap is there)
+  ansible.builtin.set_fact:
+    _kr_lock: >-
+      {{ ((_kr_cronjob.stdout | from_json).spec.jobTemplate.spec.template.spec.volumes | selectattr('name', 'eq', 'restoring')
+          | map(attribute='configMap') | map(attribute='name') | first) | default('') }}
+
+- name: The backup CronJob holds the lock's mount - else no restore (its dump would run beside it)
+  ansible.builtin.assert:
+    that: _kr_lock | length > 0
+    fail_msg: "the backup CronJob mounts no restoring ConfigMap - its chart predates the restore's lock: not restored"
+    quiet: true
 
 - name: The restore Job
   vars:
@@ -56,7 +73,9 @@
             serviceAccountName: "{{ _pod.spec.serviceAccountName | default('default') }}"
             automountServiceAccountToken: false
             securityContext: "{{ _pod.spec.securityContext }}"
-            volumes: "{{ _pod.spec.volumes }}"
+            # the CronJob's, its scratch as large as its dump (restore.sh stages a partition's messages there; the
+            # CronJob's own is bounded for the upload)
+            volumes: "{{ _pod.spec.volumes | rejectattr('name', 'eq', 'tmp') | list + [{'name': 'tmp', 'emptyDir': {'sizeLimit': '2Gi'}}] }}"
             initContainers:
               - name: fetch
                 image: "{{ _upload_c.image }}"
@@ -71,17 +90,27 @@
                   - |
                     set -eu
                     d={{ _which }}
+                    empty={{ 'yes' if (kafka_allow_empty | default(false) | bool) else 'no' }}
+                    msgs() { rclone cat "$STORE/$1/DONE" | awk 'NR == 1 { print $4 }'; }
                     if [ "$d" = newest ]; then
                       d=""
-                      for n in $(rclone lsf --dirs-only "$STORE/" | sed 's#/$##' | grep -E '^[0-9]{8}T[0-9]{6}Z$' | sort -r); do
-                        if rclone lsf --files-only --max-depth 1 "$STORE/$n/" | grep -qxF DONE; then d=$n; break; fi
+                      dirs=$(rclone lsf --dirs-only "$STORE/")
+                      for n in $(printf '%s\n' "$dirs" | sed 's#/$##' | grep -E '^[0-9]{8}T[0-9]{6}Z$' | sort -r || true); do
+                        rclone lsf --files-only --max-depth 1 "$STORE/$n/" | grep -qxF DONE || continue
+                        # the newest holding messages: a Kafka that lost them dumped 0 since
+                        m=$(msgs "$n"); [ "$empty" = yes ] || [ "${m:-0}" -gt 0 ] || continue
+                        d=$n; break
                       done
-                      [ -n "$d" ] || { echo "no complete dump in $STORE"; exit 1; }
+                      [ -n "$d" ] || { echo "no complete dump holding messages in $STORE"; exit 1; }
                     fi
                     echo "$d" | grep -qE '^[0-9]{8}T[0-9]{6}Z$' || { echo "not a dump's name: $d"; exit 1; }
                     rclone copy "$STORE/$d" "/dump/$d"
                     [ -f "/dump/$d/DONE" ] || { echo "the dump $d has no DONE: incomplete, not restored"; exit 1; }
-                    echo "fetched $d"
+                    m=$(awk 'NR == 1 { print $4 }' "/dump/$d/DONE")
+                    [ "$empty" = yes ] || [ "${m:-0}" -gt 0 ] || { echo "the dump $d holds 0 messages: not restored (kafka_allow_empty=true restores it)"; exit 1; }
+                    # its source pinned: the prune never removes it (the nights after a restore dump what it brought back)
+                    date -u +%Y%m%dT%H%M%SZ | rclone rcat "$STORE/$d/PINNED"
+                    echo "fetched $d ($m messages), pinned"
             containers:
               - name: restore
                 image: "{{ _dump_c.image }}"
@@ -94,24 +123,26 @@
                 volumeMounts: "{{ _dump_c.volumeMounts }}"
                 command: [bash, -c, 'bash /scripts/restore.sh "/dump/$(ls /dump)"']
 
-# the nightly dump refused for the restore's span: platform's kafka-backup CronJob mounts <cronjob>-restoring (optional)
-# and its dump stops while the ConfigMap is there - a dump of a Kafka half restored would be pruned in as the newest
-# complete one. Made before the Job (create: one already there is another restore's, or a stale one to look at), a dump
-# already running waited out of it by refusing, removed always after
+# the nightly dump refused for the restore's span: the backup CronJob mounts the lock (optional) and its dump stops while
+# the ConfigMap is there - a dump of a Kafka half restored would be pruned in as the newest complete one. Made before the
+# Job by create (one already there is another restore's, or a stale one to look at - never removed by this run), not
+# Velero's (a DR restore would bring it back unseen), a dump not yet finished refused, removed after - by the run that
+# made it, and only when the restore succeeded or never started: a failed restore keeps it (KafkaBackupRestoreLockStale)
 - name: The restore, the nightly dump held off for its span
-  vars:
-    _kr_lock: "{{ kafka_namespace | default('schnappy-production') }}-kafka-backup-restoring"
   block:
-    - name: The restoring ConfigMap made - the nightly dump refuses while it is there
+    - name: The restoring ConfigMap made (not Velero's) - the nightly dump refuses while it is there
       ansible.builtin.shell:
         executable: /bin/bash
         cmd: |
           set -euo pipefail
-          {{ kubectl }} -n {{ kafka_namespace | default('schnappy-production') }} create configmap {{ _kr_lock }} \
-            --from-literal=since="$(date -u +%Y%m%dT%H%M%SZ)"
+          k="{{ kubectl }} -n {{ kafka_namespace | default('schnappy-production') }}"
+          $k create configmap {{ _kr_lock }} --from-literal=since="$(date -u +%Y%m%dT%H%M%SZ)" --dry-run=client -o json \
+            | python3 -c 'import json, sys; d = json.load(sys.stdin); d["metadata"]["labels"] = {"velero.io/exclude-from-backup": "true"}; print(json.dumps(d))' \
+            | $k create -f - > /dev/null
+      register: _kr_locked
       changed_when: true
 
-    - name: No dump running (one started before the ConfigMap would read Kafka as the restore fills it)
+    - name: No dump unfinished (one started before the ConfigMap would read Kafka as the restore fills it)
       ansible.builtin.shell:
         executable: /bin/bash
         cmd: |
@@ -119,7 +150,7 @@
           {{ kubectl }} -n {{ kafka_namespace | default('schnappy-production') }} get jobs -o json \
             | python3 -c 'import json, sys; print(" ".join(j["metadata"]["name"] for j in json.load(sys.stdin)["items"]
           if any(o.get("kind") == "CronJob" and o.get("name", "").endswith("-kafka-backup") for o in j["metadata"].get("ownerReferences", []))
-          and (j.get("status", {}).get("active") or 0) > 0))'
+          and not any(c.get("type") in ("Complete", "Failed") and c.get("status") == "True" for c in j.get("status", {}).get("conditions", []))))'
       register: _kr_dumping
       changed_when: false
       failed_when: _kr_dumping.rc != 0 or _kr_dumping.stdout | trim | length > 0
@@ -154,10 +185,20 @@
       changed_when: true
       failed_when: _kr_run.rc != 0 or (_kr_run.stdout_lines | last | default('')) is not match('^restored [0-9]+ messages from [0-9]{8}T[0-9]{6}Z$')
 
+    - name: The store's BASELINE now - the backup's guard compares Kafka with dumps from here on (this Kafka is the one)
+      ansible.builtin.include_tasks: kafka-baseline.yml
+      vars:
+        kafka_baseline_why: "a restore from {{ kafka_dump }}{{ (' of ' ~ kafka_topics) if (kafka_topics | default('')) else '' }}"
+
   always:
-    - name: The restoring ConfigMap removed - the nightly dump runs again
+    - name: The restoring ConfigMap removed - by the run that made it, the restore succeeded or never started
       ansible.builtin.command: >-
         {{ kubectl }} -n {{ kafka_namespace | default('schnappy-production') }} delete configmap {{ _kr_lock }} --ignore-not-found
+      when: _kr_locked is defined and _kr_locked is succeeded and (_kr_run is not defined or _kr_run is succeeded)
+      register: _kr_unlocked
+      retries: 3
+      delay: 5
+      until: _kr_unlocked.rc == 0
       changed_when: true
 
 - name: What was restored

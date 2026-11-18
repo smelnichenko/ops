@@ -1,0 +1,14 @@
+---
+# The Kafka backups' BASELINE written now (tasks/kafka-store.yml): the backup's guard (platform's kafka-backup-guard.sh)
+# compares Kafka with the store's dumps from now on only. Its second line says why, cut to plain characters before it
+# reaches the shell's text (no quote, no $, no backtick).
+#
+# Expects: kubectl; kafka_namespace (default schnappy-production); kafka_baseline_why.
+- name: The BASELINE written
+  ansible.builtin.include_tasks: kafka-store.yml
+  vars:
+    kafka_store_what: baseline
+    kafka_store_cmd: |
+      b=$(date -u +%Y%m%dT%H%M%SZ)
+      printf '%s\n%s\n' "$b" "{{ kafka_baseline_why | mandatory | regex_replace('[^A-Za-z0-9 ._,:/()-]', '_') }}" | rclone rcat "$STORE/BASELINE"
+      echo "baseline $b"

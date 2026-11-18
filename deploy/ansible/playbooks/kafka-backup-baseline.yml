@@ -1,0 +1,28 @@
+---
+# The Kafka backups' BASELINE moved to now (tasks/kafka-store.yml): the backup's guard (platform's kafka-backup-guard.sh)
+# compares Kafka with the store's dumps from now on only. For a topic removed on purpose (its KafkaTopic deleted) - the
+# guard refuses every dump after it ("<topic> gone") until this; a restore writes the BASELINE itself. Never to quiet a
+# refusal that says Kafka lost data: that is a restore (task deploy:kafka:restore).
+#
+# Usage: task deploy:kafka-backup-baseline -- -e kafka_baseline_why="<the topic removed, and why>"
+- name: Kafka's backup baseline moved to now
+  hosts: target
+  become: true
+  gather_facts: false
+  vars:
+    kubeconfig: /etc/kubernetes/admin.conf
+    kubectl: "kubectl --kubeconfig {{ kubeconfig }}"
+  tasks:
+    - name: Why, said (the store's BASELINE file keeps it beside the time)
+      ansible.builtin.assert:
+        that: kafka_baseline_why is defined and kafka_baseline_why | trim | length > 0
+        fail_msg: '-e kafka_baseline_why="<the topic removed on purpose, and why>"'
+        quiet: true
+
+    - name: The BASELINE written
+      ansible.builtin.include_tasks: tasks/kafka-baseline.yml
+      when: not ansible_check_mode
+
+    - name: Done
+      ansible.builtin.debug:
+        msg: "KAFKA BACKUP BASELINE: {{ kafka_store_said | default('(a preview - nothing written)') }}"

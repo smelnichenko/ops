@@ -129,10 +129,90 @@
         fail_msg: "restored {{ _got }}, wrote {{ markers }}"
         quiet: true
 
+    # what the restore left behind: its source dump pinned in the store, the BASELINE moved to it
+    - name: The restore's source pinned and the baseline written - read in the store
+      ansible.builtin.include_tasks: ../../../deploy/ansible/playbooks/tasks/kafka-store.yml
+      vars:
+        kafka_store_what: read
+        kafka_store_cmd: |
+          rclone lsf --files-only --max-depth 1 "$STORE/{{ kafka_backup_name }}/" | grep -qxF PINNED || { echo "not pinned"; exit 1; }
+          echo "pinned {{ kafka_backup_name }}, baseline $(rclone cat "$STORE/BASELINE" | head -1)"
+
+    - name: Pinned, a baseline there
+      ansible.builtin.assert:
+        that: kafka_store_said is match('^pinned ' ~ kafka_backup_name ~ ', baseline [0-9]{8}T[0-9]{6}Z$')
+        fail_msg: "the store after the restore: {{ kafka_store_said }}"
+        quiet: true
+
+    # the lock: with the restore's ConfigMap there (named as the CronJob mounts it), the CronJob's dump refuses
+    - name: A dump while the restore's lock is there - refused, said
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          k="{{ kubectl }} -n schnappy-production"
+          lock=$($k get cronjob schnappy-production-kafka-backup -o jsonpath='{.spec.jobTemplate.spec.template.spec.volumes[?(@.name=="restoring")].configMap.name}')
+          [ -n "$lock" ] || { echo "the CronJob mounts no lock"; exit 1; }
+          j=kafka-lock-check-$(date +%s)
+          trap '$k delete configmap "$lock" --ignore-not-found > /dev/null; $k delete job "$j" --ignore-not-found --wait=false > /dev/null' EXIT
+          $k create configmap "$lock" --from-literal=since=20261118T000000Z > /dev/null
+          $k create job --from=cronjob/schnappy-production-kafka-backup "$j" > /dev/null
+          end=$(( $(cut -d. -f1 /proc/uptime) + 600 )); s=""
+          while [ "$(cut -d. -f1 /proc/uptime)" -lt "$end" ]; do
+            s=$($k get job "$j" -o jsonpath='{.status.succeeded}/{.status.failed}')
+            case "$s" in 1/*|*/1) break ;; esac
+            sleep 5
+          done
+          echo "job $s"
+          $k logs "job/$j" -c dump --tail=5 2> /dev/null | tail -1
+      register: _lockcheck
+      changed_when: true
+      failed_when: >-
+        _lockcheck.rc != 0 or (_lockcheck.stdout_lines | first | default('')) != 'job /1'
+        or 'a restore running since 20261118T000000Z' not in _lockcheck.stdout
+
+    # the guard: a dump holding the marker topic, the topic removed, the next dump refused (Kafka lost a topic the
+    # store's newest dump held); production's baseline task (a topic removed on purpose), then a dump passes
+    - name: A dump after the restore (the marker topic in it)
+      ansible.builtin.include_tasks: ../../../deploy/ansible/playbooks/tasks/kafka-backup.yml
+
     - name: The marker topic removed
       ansible.builtin.command: "{{ kbin }}/kafka-topics.sh --bootstrap-server localhost:9092 --delete --topic {{ topic }}"
       changed_when: true
 
+    - name: A dump now - the guard refuses it, nothing uploaded
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          k="{{ kubectl }} -n schnappy-production"
+          j=kafka-guard-check-$(date +%s)
+          trap '$k delete job "$j" --ignore-not-found --wait=false > /dev/null' EXIT
+          $k create job --from=cronjob/schnappy-production-kafka-backup "$j" > /dev/null
+          end=$(( $(cut -d. -f1 /proc/uptime) + 900 )); s=""
+          while [ "$(cut -d. -f1 /proc/uptime)" -lt "$end" ]; do
+            s=$($k get job "$j" -o jsonpath='{.status.succeeded}/{.status.failed}')
+            case "$s" in 1/*|*/1) break ;; esac
+            sleep 5
+          done
+          echo "job $s"
+          $k logs "job/$j" -c upload --tail=5 2> /dev/null | tail -1
+      register: _guardcheck
+      changed_when: true
+      failed_when: >-
+        _guardcheck.rc != 0 or (_guardcheck.stdout_lines | first | default('')) != 'job /1'
+        or ('Kafka lost data since the dump' not in _guardcheck.stdout) or ((topic ~ ' gone') not in _guardcheck.stdout)
+
+    - name: The baseline moved, as production's task does for a topic removed on purpose
+      ansible.builtin.include_tasks: ../../../deploy/ansible/playbooks/tasks/kafka-baseline.yml
+      vars:
+        kafka_baseline_why: "the copy's restore check removed its marker topic"
+
+    - name: A dump now passes the guard
+      ansible.builtin.include_tasks: ../../../deploy/ansible/playbooks/tasks/kafka-backup.yml
+
     - name: Restored
       ansible.builtin.debug:
-        msg: "KAFKA RESTORE OK: {{ topic }} dumped ({{ kafka_backup_name }}), emptied, restored - {{ kafka_restored }}"
+        msg: >-
+          KAFKA RESTORE OK: {{ topic }} dumped ({{ kafka_backup_name }}), emptied, restored - {{ kafka_restored }}; pinned,
+          the lock refused a dump, the guard refused one after the topic went, the baseline let the next one by
