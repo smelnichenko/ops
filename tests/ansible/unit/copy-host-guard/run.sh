@@ -254,6 +254,17 @@ bash scripts/copy-host-guard.sh watch > "$W/w2.out" 2>&1 & w2=$!
 wait "$w1" "$w2"
 loops=$(for e in /proc/[0-9]*/environ; do { tr '\0' '\n' < "$e"; } 2> /dev/null | grep -qxF "COPY_HOST_DIR=$COPY_HOST_DIR" && grep -q '_loop' "${e%environ}cmdline" 2> /dev/null && echo x; done | wc -l)
 check "two watch calls at once: one watcher, the other says it watches" "$loops $(cat "$W/w1.out" "$W/w2.out" | grep -c 'watches already')" "1 1"
+stop_watcher
+# a watcher slow to start (a loaded host: 6 s): its caller waits for it by the clock - never "did not start" - and the
+# second caller finds it watching, one watcher
+fresh 9000 ops_kubeadm
+COPY_HOST_LOOP_DELAY=6 bash scripts/copy-host-guard.sh watch > "$W/w1.out" 2>&1 & w1=$!
+sleep 1
+bash scripts/copy-host-guard.sh watch > "$W/w2.out" 2>&1 & w2=$!
+wait "$w1"; r1=$?; wait "$w2"
+loops=$(for e in /proc/[0-9]*/environ; do { tr '\0' '\n' < "$e"; } 2> /dev/null | grep -qxF "COPY_HOST_DIR=$COPY_HOST_DIR" && grep -q '_loop' "${e%environ}cmdline" 2> /dev/null && echo x; done | wc -l)
+check "a watcher 6 s slow to start: its caller waited (rc 0, no REFUSED), the other found it, one watcher" \
+  "$r1 $(grep -c REFUSED "$W/w1.out") $(grep -c 'watches already' "$W/w2.out") $loops" "0 0 1 1"
 p=$(watcher)
 read -r st < "/proc/$p/stat"; st=${st##*) }; set -- $st; loop_sid=$4   # after the name: state ppid pgrp session
 read -r st < "/proc/$$/stat"; st=${st##*) }; set -- $st; my_sid=$4
