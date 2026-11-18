@@ -35,25 +35,40 @@
       no_log: true
 
     # the root token is optional (it may have been purged after setup): locked down when the fetch brought it, and
-    # nothing else excused - a failed chmod on the unseal keys would leave them readable
-    - name: Is the root token in the local backup
+    # nothing else excused - a failed chmod on the unseal keys would leave them readable. In check mode the fetch brings
+    # nothing: what is there is locked down, and the unseal keys' absence is said, not failed
+    - name: The local backup's files
       ansible.builtin.stat:
-        path: "{{ vault_recovery_dir }}/root-token"
+        path: "{{ vault_recovery_dir }}/{{ item }}"
       delegate_to: localhost
       become: false
-      register: _root_token_copy
+      loop: [unseal-keys, root-token]
+      register: _backup_files
 
-    - name: Lock down the local backup (0700 dir, 0600 files)
+    - name: The unseal keys are in the local backup
+      ansible.builtin.assert:
+        that: _backup_files.results[0].stat.exists or ansible_check_mode
+        fail_msg: "no {{ vault_recovery_dir }}/unseal-keys after the fetch - nothing to keep"
+        quiet: true
+
+    - name: Lock down the local backup's directory (0700)
       ansible.builtin.file:
-        path: "{{ item.path }}"
-        mode: "{{ item.mode }}"
-        state: "{{ item.state | default('file') }}"
+        path: "{{ vault_recovery_dir }}"
+        mode: '0700'
+        state: directory
       delegate_to: localhost
       become: false
-      loop: >-
-        {{ [{'path': vault_recovery_dir, 'mode': '0700', 'state': 'directory'},
-            {'path': vault_recovery_dir ~ '/unseal-keys', 'mode': '0600'}]
-           + ([{'path': vault_recovery_dir ~ '/root-token', 'mode': '0600'}] if _root_token_copy.stat.exists else []) }}
+
+    - name: Lock down the local backup's files (0600) - each one there
+      ansible.builtin.file:
+        path: "{{ item.stat.path }}"
+        mode: '0600'
+        state: file
+      delegate_to: localhost
+      become: false
+      loop: "{{ _backup_files.results | selectattr('stat.exists') | list }}"
+      loop_control:
+        label: "{{ item.item }}"
 
     - name: Confirm what landed (filenames only, never contents)
       ansible.builtin.find:

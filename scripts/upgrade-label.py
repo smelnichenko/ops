@@ -272,8 +272,9 @@ def ready(repo, pr, proven):
 
 # ops' merge commit runs no CI of its own: its tree is the pull request's head, green already, and defaults-follow-
 # production fails ops' main until the record (upgrade-cycle.sh step 8) reads production's inventory after the apply -
-# a red main and WoodpeckerBuildFailed for every unit's verify hour (2026-11-18). The record's commit, the merge in it,
-# is the one ops' CI judges. infra's and platform's main pipelines deploy: never skipped.
+# a red main and WoodpeckerBuildFailed for every unit's verify hour (2026-11-18). The record's commit
+# (scripts/upgrade-record.sh: not skipped), the merge and production's inventory together, is the one ops' CI judges.
+# infra's and platform's main pipelines deploy: never skipped.
 OPS_MERGE_MESSAGE = ("[CI SKIP] ops' CI judges the record that follows (production's inventory read after the apply, "
                      "scripts/upgrade-cycle.sh step 8): before it, defaults-follow-production fails main by design")
 

@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # The upgrade cycle's record of an applied unit: docs/upgrades/<date>-<unit>.md - the unit, its run's steps (the log's
 # RUN/PICK/APPLIED lines) and production's inventory as read after it (tests/ansible/copy/prod-inventory.txt, its diff;
-# the Pis' versions, pi-versions.yml) - committed to ops main as the renovate-bot and pushed, [CI SKIP]. Only those
-# paths are committed (a commit of the whole index pushed whatever else was staged, as the bot).
+# the Pis' versions, pi-versions.yml) - committed to ops main as the renovate-bot and pushed. CI runs on it: ops' merge
+# commit skips its own (its inventory not read yet, defaults-follow-production red by design), this one - the merge and
+# the inventory together - is the tree judged. Only those paths are committed (a commit of the whole index pushed
+# whatever else was staged, as the bot).
 # Usage: scripts/upgrade-record.sh <unit> <the run's log>
 # Env:   UPGRADE_FORGEJO_TOKEN (the bot's PAT: the push), UPGRADE_RECORD_REMOTE (default git.pmon.dev/schnappy/ops.git),
 #        UPGRADE_RECORD_NO_PUSH=1 (commit only - the harness's)
@@ -42,7 +44,7 @@ mkdir -p docs/upgrades
 paths=("$rec" tests/ansible/copy/prod-inventory.txt)
 [ ! -e tests/ansible/copy/pi-versions.yml ] || paths+=(tests/ansible/copy/pi-versions.yml)
 git add -- "${paths[@]}"
-git -c user.name="Renovate Bot" -c user.email=renovate-bot@pmon.dev commit -q -m "upgrade cycle: $unit applied $day [CI SKIP]" -- "${paths[@]}"
+git -c user.name="Renovate Bot" -c user.email=renovate-bot@pmon.dev commit -q -m "upgrade cycle: $unit applied $day" -- "${paths[@]}"
 echo "RECORDED $rec"
 [ -z "${UPGRADE_RECORD_NO_PUSH:-}" ] || exit 0
 [ -n "${UPGRADE_FORGEJO_TOKEN:-}" ] || { echo "NOT PUSHED: no UPGRADE_FORGEJO_TOKEN"; exit 1; }

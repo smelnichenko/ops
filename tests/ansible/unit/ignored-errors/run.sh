@@ -61,18 +61,28 @@ for t in unloads:
     fw = t["failed_when"]
     got = (condition(fw, _unload={"failed": True, "msg": "modprobe: FATAL: Module bluetooth is builtin."}),
            condition(fw, _unload={"failed": True, "msg": "modprobe: FATAL: Module btusb is in use."}),
+           condition(fw, _unload={"failed": True, "msg": "[Errno 2] No such file or directory: '/lib/modules/6.12.0/modules.builtin'"}),
            condition(fw, _unload={"changed": True, "failed": False}),
            condition(fw, _unload={"changed": False}))
-    check("I02 %s: builtin passes, in use fails, unloaded / not loaded pass" % t["name"], got, (False, True, False, False))
+    check("I02 %s: builtin passes; in use, modules.builtin unreadable fail; unloaded / not loaded pass" % t["name"], got,
+          (False, True, True, False, False))
+check("I02 the bluetooth leaves unloaded before its core, those holding it after bluetoothd ran among them",
+      all(m in unloads[0]["loop"] for m in ("bnep", "rfcomm", "hidp", "hci_uart", "btusb")), True)
 
 # I03: backup-vault-keys' lock-down - the unseal keys always 0600 (no failure excused), the root token only when fetched
 bk = "deploy/ansible/playbooks/backup-vault-keys.yml"
-ld = task(bk, "Lock down the local backup")
-check("I03 the lock-down excuses no failure", ("failed_when" in ld, "ignore_errors" in ld), (False, False))
-items = lambda exists: render(ld["loop"], vault_recovery_dir="/r", _root_token_copy={"stat": {"exists": exists}})
-paths = lambda exists: [(i["path"], i["mode"]) for i in items(exists)]
-check("I03 the root token fetched: dir, unseal keys, root token", paths(True), [("/r", "0700"), ("/r/unseal-keys", "0600"), ("/r/root-token", "0600")])
-check("I03 no root token: dir and unseal keys", paths(False), [("/r", "0700"), ("/r/unseal-keys", "0600")])
+lds = [t for t in tasks(bk) if str(t.get("name", "")).startswith("Lock down the local backup")]
+check("I03 the lock-down excuses no failure (its directory, its files)", [("failed_when" in t, "ignore_errors" in t) for t in lds], [(False, False)] * 2)
+res = lambda keys, token: {"results": [{"item": "unseal-keys", "stat": {"exists": keys, **({"path": "/r/unseal-keys"} if keys else {})}},
+                                       {"item": "root-token", "stat": {"exists": token, **({"path": "/r/root-token"} if token else {})}}]}
+files = lambda keys, token: [render(lds[1]["ansible.builtin.file"]["path"], item=i) for i in render(lds[1]["loop"], _backup_files=res(keys, token))]
+check("I03 the directory 0700, the files 0600", (lds[0]["ansible.builtin.file"]["mode"], lds[1]["ansible.builtin.file"]["mode"]), ("0700", "0600"))
+check("I03 the root token fetched: the unseal keys and the root token locked down", files(True, True), ["/r/unseal-keys", "/r/root-token"])
+check("I03 no root token: the unseal keys alone", files(True, False), ["/r/unseal-keys"])
+ak = task(bk, "The unseal keys are in the local backup")["ansible.builtin.assert"]["that"]
+check("I03 no unseal keys after the fetch: failed; in check mode (the fetch brings nothing) said, not failed",
+      (condition(ak, _backup_files=res(False, False), ansible_check_mode=False), condition(ak, _backup_files=res(False, False), ansible_check_mode=True),
+       condition(ak, _backup_files=res(True, False), ansible_check_mode=False)), (False, True, True))
 
 # I04: the seed's retired-path delete and create-environment's KV mount excuse nothing
 for path, prefix in (("deploy/ansible/playbooks/seed-vault-secrets.yml", "Delete retired vault path"),

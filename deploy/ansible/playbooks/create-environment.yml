@@ -101,8 +101,8 @@
       ansible.builtin.shell: |
         set -o pipefail
         {{ vault_cli_env }}
-        vault secrets list -format=json | grep -q '"secret/"' || \
-        vault secrets enable -path=secret kv-v2
+        # mounted (its own read, no pipe a grep could cut short) or enabled now; any other failure fails the enable too
+        vault read sys/mounts/secret > /dev/null 2>&1 || vault secrets enable -path=secret kv-v2
       args:
         executable: /bin/bash
       changed_when: false

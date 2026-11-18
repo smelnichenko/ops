@@ -5,18 +5,23 @@ platform's CI (.woodpecker/mesh-selectors.py) sees every chart's pods but not wh
 workload that runs elsewhere (ClickHouse's, rendered in production and test while ClickHouse runs in schnappy-infra)
 passes there. This reads the cluster: for every AuthorizationPolicy and PeerAuthentication with a selector, the pods it
 selects in its own namespace and how many of them carry istio-proxy (a container, or a native sidecar: an init
-container that restarts always). One selecting none - or only pods without a proxy - is enforced by nothing (2026-11-18:
-eight were, PostgreSQL's among them). Read-only.
+container that restarts always). One selecting none is enforced by nothing (2026-11-18: eight were, PostgreSQL's among
+them); one selecting a pod without a proxy leaves that pod open (a CNPG instance started without injection: its 5432
+unguarded while its peer's policy holds). Read three times, READ_GAP seconds apart: only a policy failing every read
+fails - a pod between its deletion and its new one (a StatefulSet's roll) is no finding. A policy attached by targetRef
+(none today) is named, not judged. Read-only.
 
 usage: KUBECTL="kubectl ..." mesh-policy-audit.py [--allow <namespace>/<name>]...
   --allow   a policy armed for a component that namespace does not run (schnappy-test's centrifugo, opensearch)
-exit 0 all enforced, 3 a policy enforced by nothing, 1 the cluster not read
+env:  READS (default 3), READ_GAP (default 20)
+exit 0 all enforced, 3 a policy enforced by nothing (or not on every pod it selects), 1 the cluster not read
 """
 import json
 import os
 import shlex
 import subprocess
 import sys
+import time
 
 KINDS = ("authorizationpolicies.security.istio.io", "peerauthentications.security.istio.io",
          "requestauthentications.security.istio.io")
@@ -45,29 +50,54 @@ def main(argv):
             return 1
         allow.add(next(it, ""))
     kubectl = os.environ.get("KUBECTL", "kubectl")
+    reads, gap = int(os.environ.get("READS", "3")), float(os.environ.get("READ_GAP", "20"))
+    failing = None
+    for n in range(reads):
+        if n:
+            time.sleep(gap)
+        bad, table = read_once(kubectl, allow)
+        failing = bad if failing is None else failing & bad
+        if not failing:
+            break
+    print("\n".join(table))
+    print("mesh policy audit: " + ("every policy enforced by a proxy" if not failing else
+                                   "%d enforced by nothing, every read: %s" % (len(failing), " ".join(sorted(failing)))))
+    return 3 if failing else 0
+
+
+def read_once(kubectl, allow):
+    """The policies failing this read (namespace/name) and the read's table."""
     pods = {}
     for p in get(kubectl, "pods"):
         if (p.get("status") or {}).get("phase") in ("Succeeded", "Failed"):
             continue  # a finished pod enforces nothing
         pods.setdefault(p["metadata"]["namespace"], []).append(p)
-    bad = []
+    bad, table = set(), []
     for kind in KINDS:
         for pol in get(kubectl, kind):
             ns, name = pol["metadata"]["namespace"], pol["metadata"]["name"]
             if not ns.startswith("schnappy-"):
                 continue
-            sel = ((pol.get("spec") or {}).get("selector") or {}).get("matchLabels")
+            spec = pol.get("spec") or {}
+            if spec.get("targetRef") or spec.get("targetRefs"):
+                table.append("%-4s %-20s %-42s attached by targetRef - not judged" % (pol["kind"][:4], ns, name))
+                continue
+            sel = (spec.get("selector") or {}).get("matchLabels")
             if not sel:
                 continue  # namespace-wide
             hit = [p for p in pods.get(ns, []) if all((p["metadata"].get("labels") or {}).get(k) == v for k, v in sel.items())]
-            prox = [p for p in hit if proxied(p)]
-            ok = bool(prox) or "%s/%s" % (ns, name) in allow
-            print("%-4s %-20s %-42s pods %d, with a proxy %d%s" % (
-                pol["kind"][:4], ns, name, len(hit), len(prox), "" if prox else (" (allowed)" if ok else " - ENFORCED BY NOTHING")))
-            if not ok:
-                bad.append("%s/%s" % (ns, name))
-    print("mesh policy audit: " + ("every policy enforced by a proxy" if not bad else "%d enforced by nothing: %s" % (len(bad), " ".join(bad))))
-    return 3 if bad else 0
+            bare = [p["metadata"]["name"] for p in hit if not proxied(p)]
+            allowed = "%s/%s" % (ns, name) in allow
+            if hit and not bare:
+                note = ""
+            elif not hit:
+                note = " (allowed)" if allowed else " - ENFORCED BY NOTHING"
+            else:
+                note = " - NO PROXY ON %s" % " ".join(bare)
+            table.append("%-4s %-20s %-42s pods %d, with a proxy %d%s" % (pol["kind"][:4], ns, name, len(hit), len(hit) - len(bare), note))
+            if bare or (not hit and not allowed):
+                bad.add("%s/%s/%s" % (pol["kind"], ns, name))  # kinds share names (Kafka's policy and its PeerAuthentication)
+    return bad, table
 
 
 if __name__ == "__main__":

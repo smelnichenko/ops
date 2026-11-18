@@ -1,7 +1,7 @@
 #!/bin/bash
 # scripts/upgrade-record.sh - the upgrade cycle's record of an applied unit - in a throwaway git repo (the script copied
 # into it, an inventory record beside): docs/upgrades/<date>-<unit>.md with the night's steps (its other lines left out,
-# a secret in them masked) and production's inventory diff, committed as the renovate-bot, [CI SKIP], the inventory
+# a secret in them masked) and production's inventory diff, committed as the renovate-bot (CI not skipped), the inventory
 # with it; not pushed without the bot's token (said, exit 1); refused: a name that is no unit's, a log not readable.
 set -u
 cd "$(dirname "$0")/../../../.." || exit 1
@@ -39,9 +39,9 @@ check "the run's steps alone, the secret masked" "$(sed -n '/^```$/,/^```$/p' "$
 check "a production unit's record: proven on the copy, reviewed" "$(sed -n 3p "$rec")" \
   "The upgrade cycle's run (task upgrade): proven on the Vagrant copy, reviewed, applied, verified."
 check "production's inventory diff in it" "$(sed -n '/^```diff$/,/^```$/p' "$rec" | grep -E '^[-+]' | tr '\n' ' ')" "-image a 1 +image a 2 "
-check "committed as the renovate-bot, [CI SKIP], with the inventory - nothing else staged (only its paths)" \
+check "committed as the renovate-bot, CI not skipped (ops' merge commit skips it: this commit, merge and inventory together, is the one ops' CI judges), with the inventory - nothing else staged (only its paths)" \
   "$(git -C "$R" log -1 --format='%an <%ae>|%s' ) $(git -C "$R" show --name-only --format= HEAD | sort | tr '\n' ' ')" \
-  "Renovate Bot <renovate-bot@pmon.dev>|upgrade cycle: wave-patches applied $day [CI SKIP] docs/upgrades/$day-wave-patches.md tests/ansible/copy/prod-inventory.txt "
+  "Renovate Bot <renovate-bot@pmon.dev>|upgrade cycle: wave-patches applied $day docs/upgrades/$day-wave-patches.md tests/ansible/copy/prod-inventory.txt "
 check "  the other staged change still staged, not committed" "$(git -C "$R" diff --cached --name-only)" "scripts/staged-elsewhere.sh"
 printf 'pis: 2\n' > "$R/tests/ansible/copy/pi-versions.yml" && git -C "$R" add tests/ansible/copy/pi-versions.yml \
   && git -C "$R" -c user.name=t -c user.email=t@t commit -qm pis -- tests/ansible/copy/pi-versions.yml
