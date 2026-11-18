@@ -31,29 +31,42 @@ a=" $* "
 after() { [ "$1" = "${SLOW:-}" ] && echo 6 || echo "${READY_AFTER:-3}"; }
 ready() { [ -e "$S/$1" ] && [ "$(cat "$S/polls.$1" 2>/dev/null || echo 0)" -ge "$(after "$1")" ]; }
 poll() { [ -e "$S/$1" ] && echo $(( $(cat "$S/polls.$1" 2>/dev/null || echo 0) + 1 )) > "$S/polls.$1"; }
-v() { [ -e "$S/$1" ] || [ -n "${SAME_VERSION:-}" ] && echo 1.27.9 || echo 1.26.8; }
+# TARGET: the version restarted onto (1.27.9; 1.26.9 - before native was Istio's default); the old one before it
+v() { [ -e "$S/$1" ] || [ -n "${SAME_VERSION:-}" ] && echo "${TARGET:-1.27.9}" || echo 1.26.8; }
 # the sidecar's mode: OLD_MODE before its owner restarts it, NEW_MODE after (classic | native)
 m() { [ -e "$S/$1" ] && echo "${NEW_MODE:-classic}" || echo "${OLD_MODE:-classic}"; }
 case "$a" in
   *" rollout status "*) exit 0 ;;
-  *" get deployment istiod "*ENABLE_NATIVE_SIDECARS*) printf '%s' "${NATIVE_ENV-false}" ;;
-  *" get deployment istiod "*) echo "docker.io/istio/pilot:1.27.9" ;;
-  *" get daemonset istio-cni-node "*) echo "docker.io/istio/install-cni:1.27.9" ;;
+  # the env's value by the playbook's exact jsonpath (a malformed one reads nothing)
+  *" get deployment istiod -o jsonpath={.spec.template.spec.containers[0].env[?(@.name==\"ENABLE_NATIVE_SIDECARS\")].value} "*)
+    printf '%s' "${NATIVE_ENV-false}" ;;
+  *" get deployment istiod "*ENABLE_NATIVE*) exit 0 ;;
+  *" get deployment istiod "*) echo "docker.io/istio/pilot:${TARGET:-1.27.9}" ;;
+  *" get daemonset istio-cni-node "*) echo "docker.io/istio/install-cni:${TARGET:-1.27.9}" ;;
   *" get pods,replicasets -A -o json "*)
-    pod() {  # pod <ns> <name> <owner kind> <owner> <version> [<mode> [<its nativeSidecar annotation>]]
-      local proxy="{\"name\": \"istio-proxy\", \"image\": \"istio/proxyv2:$5\"" ann=""
+    pod() {  # pod <ns> <name> <owner kind> <owner> <version> [<mode> [<its nativeSidecar annotation> [<labels json>]]]
+      # mode: classic, native, or init (an istio-proxy init container without restartPolicy Always - no native sidecar)
+      local proxy="{\"name\": \"istio-proxy\", \"image\": \"istio/proxyv2:$5\"" ann="" lab=""
       [ -z "${7:-}" ] || ann=", \"annotations\": {\"sidecar.istio.io/nativeSidecar\": \"$7\"}"
-      if [ "${6:-classic}" = native ]; then spec="\"initContainers\": [$proxy, \"restartPolicy\": \"Always\"}], \"containers\": [{\"name\": \"app\"}]"
-      else spec="\"containers\": [$proxy}]"; fi
-      echo "{\"kind\": \"Pod\", \"metadata\": {\"namespace\": \"$1\", \"name\": \"$2\", \"ownerReferences\": [{\"kind\": \"$3\", \"name\": \"$4\"}]$ann},
+      [ -z "${8:-}" ] || lab=", \"labels\": $8"
+      case "${6:-classic}" in
+        native) spec="\"initContainers\": [$proxy, \"restartPolicy\": \"Always\"}], \"containers\": [{\"name\": \"app\"}]" ;;
+        init) spec="\"initContainers\": [$proxy}], \"containers\": [{\"name\": \"app\"}]" ;;
+        *) spec="\"containers\": [$proxy}]" ;;
+      esac
+      echo "{\"kind\": \"Pod\", \"metadata\": {\"namespace\": \"$1\", \"name\": \"$2\", \"ownerReferences\": [{\"kind\": \"$3\", \"name\": \"$4\"}]$ann$lab},
       \"status\": {\"phase\": \"Running\"}, \"spec\": {$spec}}"; }
     echo "{\"items\": [$(pod d db-0 StatefulSet db "$(v db)" "$(m db)"), $(pod d pg-1 Cluster pg "$(v pg)" "$(m pg)"),
-      $(pod d kafka-0 StrimziPodSet kafka "$(v kafka)" "$(m kafka)"), $(pod a web-x ReplicaSet web-rs "$(v web)" "$(m web)" "${WEB_ANN:-}"),
+      $(pod d kafka-0 StrimziPodSet kafka "$(v kafka)" "$(m kafka)"), $(pod a web-x ReplicaSet web-rs "$(v web)" "$( [ -e "$S/web" ] && m web || echo "${WEB_MODE:-$(m web)}")" "${WEB_ANN:-}"),
+      $(pod g gw-x ReplicaSet gw-rs "$(v gw)" classic "" '{"sidecar.istio.io/inject": "false", "gateway.networking.k8s.io/gateway-name": "gw"}'),
+      {\"kind\": \"ReplicaSet\", \"metadata\": {\"namespace\": \"g\", \"name\": \"gw-rs\", \"ownerReferences\": [{\"kind\": \"Deployment\", \"name\": \"gw\"}]}}
+      ${JOB:+, $(pod a job-x Job job-1 "$(v job)" classic)},
       {\"kind\": \"ReplicaSet\", \"metadata\": {\"namespace\": \"a\", \"name\": \"web-rs\", \"ownerReferences\": [{\"kind\": \"Deployment\", \"name\": \"web\"}]}}
       ${ODD:+, $(pod a odd-0 Lonely odd 1.26.8)}]}" ;;
   *" rollout restart statefulset/db "*) touch "$S/db" ;;
   *" annotate clusters.postgresql.cnpg.io pg "*) touch "$S/pg" ;;
   *" annotate strimzipodsets.core.strimzi.io kafka "*) touch "$S/kafka" ;;
+  *" rollout restart deployment/gw "*) touch "$S/gw" ;;
   *" rollout restart deployment/web "*)
     touch "$S/web"
     { ready db && ready pg && ready kafka && echo "web restarted: data tier ready" || echo "web restarted: data tier NOT ready"; } >> "$W/order" ;;
@@ -81,10 +94,12 @@ yaml.safe_dump(play, open(os.path.join(W, "play.yml"), "w"), sort_keys=False)
 open(os.path.join(W, "hosts.yml"), "w").write(
     "all:\n  hosts:\n    target: {ansible_connection: local, ansible_python_interpreter: '{{ ansible_playbook_python }}'}\n")
 PY
-run() {  # run <env...>: rc
+run() {  # run <env...>: rc - TARGET=<version> among them the version restarted onto (its -e istio_version too)
+  local t=1.27.9 a
+  for a in "$@"; do case "$a" in TARGET=*) t=${a#TARGET=} ;; esac; done
   rm -f "$W"/s/* "$W/calls" "$W/order"
   env "$@" PATH="$W/bin:$PATH" W="$W" ANSIBLE_NOCOLOR=1 "$AP" -i "$W/hosts.yml" "$W/play.yml" -e kubeconfig=/x \
-    -e istio_version=1.27.9 > "$W/out" 2>&1
+    -e istio_version="$t" > "$W/out" 2>&1
   echo "rc=$?"
 }
 check "the data tier ready (3 reads after its restart): green" "$(run X=1)" "rc=0"
@@ -115,5 +130,19 @@ check "  a pod native by its own annotation (the Kafka backup's kind): left alon
   "$(run SAME_VERSION=1 NATIVE_ENV=false OLD_MODE=native NEW_MODE=classic WEB_ANN=true) $(grep -c 'deployment/web' "$W/calls")" "rc=0 0"
 check "  restarted pods coming back in the wrong mode: never green (the wait for the mode, not the version alone)" \
   "$(run SAME_VERSION=1 NATIVE_ENV=true NEW_MODE=classic | cut -c1-4)" "rc=2"
+# a gateway's pod (the proxy its workload): its version judged, never its mode - native switched on, it stays classic
+check "  a gateway's pod (inject false, its Gateway's label): never restarted for its mode, the run green" \
+  "$(run SAME_VERSION=1 NATIVE_ENV=true NEW_MODE=native) $(grep -c 'deployment/gw' "$W/calls")" "rc=0 0"
+check "  but restarted for its version (an Istio upgrade)" "$(run NATIVE_ENV=false) $(grep -c 'deployment/gw' "$W/calls")" "rc=0 1"
+check "unset below 1.27 (classic was Istio's default then): classic pods left alone" \
+  "$(run TARGET=1.26.9 SAME_VERSION=1 NATIVE_ENV=) $(restarted)" "rc=0 0"
+check "  a value neither true nor false: Istio's default for the version (1.27: native) - classic pods restarted" \
+  "$(run SAME_VERSION=1 NATIVE_ENV=maybe NEW_MODE=native) $(restarted)" "rc=0 4"
+check "  an annotation True (any case): native for that pod" \
+  "$(run SAME_VERSION=1 NATIVE_ENV=false OLD_MODE=native NEW_MODE=classic WEB_ANN=True) $(grep -c 'deployment/web' "$W/calls")" "rc=0 0"
+check "an istio-proxy init container without restartPolicy Always: no native sidecar - restarted onto one" \
+  "$(run SAME_VERSION=1 NATIVE_ENV=true OLD_MODE=native NEW_MODE=native WEB_MODE=init) $(grep -c 'deployment/web' "$W/calls")" "rc=0 1"
+check "a Job's pod of the other mode: listed, never restarted (it ends on its own), the run green" \
+  "$(run SAME_VERSION=1 NATIVE_ENV=true OLD_MODE=native NEW_MODE=native JOB=1) $(restarted)" "rc=0 0"
 echo "restart-mesh-order: $([ $fails = 0 ] && echo ALL-PASS || echo "$fails FAILED")"
 [ $fails = 0 ]

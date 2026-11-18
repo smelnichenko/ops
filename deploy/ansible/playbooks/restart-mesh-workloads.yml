@@ -4,7 +4,9 @@
 # in-place minor upgrade needs this before the next one. And every one whose sidecar is of the other mode than istiod
 # injects now - a classic container where istiod injects native sidecars (an init container restarting Always), or the
 # other way round - so a change of istiod's ENABLE_NATIVE_SIDECARS reaches every pod: the mode istiod's (unset: native,
-# Istio's default since 1.27), a pod's own sidecar.istio.io/nativeSidecar annotation deciding for it.
+# Istio's default since 1.27), a pod's own sidecar.istio.io/nativeSidecar annotation deciding for it. A gateway's pod
+# (the proxy its workload: sidecar.istio.io/inject "false", or a Gateway's name label) has no sidecar mode - its
+# version alone judged.
 #
 # Each kind is restarted the way its owner restarts it:
 #   Deployment, StatefulSet, DaemonSet  `kubectl rollout restart` (the gateway too: istiod made it, but it is a
@@ -51,7 +53,10 @@
                           for c in p["spec"].get("initContainers", []))
           own = ((p["metadata"].get("annotations") or {}).get("sidecar.istio.io/nativeSidecar") or "").lower()
           want = own == "true" if own in ("true", "false") else native
-          if all(i.rsplit(":", 1)[-1] == target for i in proxies) and is_native == want:
+          labels = p["metadata"].get("labels") or {}
+          gateway = (labels.get("sidecar.istio.io/inject") == "false" or "gateway.networking.k8s.io/gateway-name" in labels
+                     or "istio.io/gateway-name" in labels)
+          if all(i.rsplit(":", 1)[-1] == target for i in proxies) and (gateway or is_native == want):
               continue
           ns = p["metadata"]["namespace"]
           o = (p["metadata"].get("ownerReferences") or [{"kind": "none", "name": p["metadata"]["name"]}])[0]
