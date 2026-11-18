@@ -1,7 +1,9 @@
 # Plan 126 - Istio's native sidecars mesh-wide, without losing a byte of production data
 
 **Status:** 2026-11-18 - asked (operator: "please recheck if native sidecars will work now", then "make sure we will
-not lose prod data"); drafted; its copy run after plan 123's push.
+not lose prod data"); drafted; DECIDED (operator 2026-11-18: "switch it!") - production once its copy run is green (the
+way back too), its full review clean and the data-safety gates below pass. Its copy run after plan 123's push and the
+hooks/Kafka batch's copy run; this ops branch on main before it (the copy runs ops' own playbook).
 
 ## Why
 
