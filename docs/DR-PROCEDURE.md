@@ -6,7 +6,8 @@
 - Vault Pi (192.168.11.4) running with transit engine
 - `/home/sm/src/` has clones of: ops, infra, platform repos
 - The Pi backup store (versitygw on the Pi VIP, 192.168.11.5:9000): Velero's backups (bucket `velero`), CNPG's barman
-  archive and base backups (`postgres-backups`); nothing writes the retired upgrade tooling's Wave 0
+  archive and base backups (`postgres-backups`), Kafka's nightly dumps (`kafka-backups`), ClickHouse's logs backups
+  (`clickhouse-backups`), Scylla Manager's (`scylla-backups`); nothing writes the retired upgrade tooling's Wave 0
   bucket (`upgrade-backups`) any more
 
 ## Full Cluster Rebuild
@@ -90,7 +91,8 @@ kubectl get apps -n argocd
 
 If you have a Velero backup and want to restore Kubernetes objects (secrets, config): Velero holds manifests only -
 no volume data (production's PVs are local-path hostPath, which its file-system backup never copies). The data comes
-back from its own backups: CNPG's object store, Scylla Manager, the Pis' tier-0 backup.
+back from its own backups: CNPG's object store, Scylla Manager, Kafka's dumps (below), ClickHouse's backups (restored as
+`tests/ansible/copy/clickhouse-restore-check.yml` does), the Pis' tier-0 backup.
 
 ### After Step 5 (Argo CD has installed Velero):
 
@@ -142,11 +144,28 @@ The other CNPG clusters back up to the same bucket under names of their own, and
   `recovery`, `recoveryServerName: schnappy-sonarqube-pg18`, a new `backupServerName`; SonarQube at 0 replicas first,
   and its `ci` token revoked after (the setup Job writes a new one to Vault) - plan 121's "Recovery from its backups".
   Never re-created by deleting the Cluster: with `import` off that is an empty database.
-- **Grafana** (`schnappy-grafana-pg`, once infra's observability values turn `grafana.cnpg` on - until then its
-  SQLite file): re-created empty is acceptable (every dashboard and datasource is provisioned); users come back through
-  OAuth.
+- **Grafana** (`schnappy-grafana-pg`, archive `schnappy-grafana-pg18`, Grafana's database since 2026-11-18): re-created
+  empty is acceptable (every dashboard and datasource is provisioned); users come back through OAuth.
 - **Woodpecker** (`woodpecker-postgres`, infra's `clusters/production/woodpecker/manifests/postgres.yaml`, archive
   `woodpecker-postgres-pg18`): a `bootstrap.recovery` from that server name, archiving under a new one.
+
+## Kafka from its dumps
+
+Kafka's topics are dumped to the Pi store each night at 02:30 UTC (platform's `kafka-backup.yaml`, bucket
+`kafka-backups`, the newest 7 complete dumps kept): every partition's messages, the topics' descriptions, the consumer
+groups' offsets. The Strimzi Kafka comes back from git (Argo CD) with its KafkaTopics, empty; the messages from a dump:
+
+1. The services that consume the topics stopped (a live consumer group refuses the restore - they would read a week of
+   history again), Kafka at the version that ran, its topics there and empty.
+2. `task deploy:kafka:restore -- -e kafka_dump=newest` (or a dump's UTC timestamp; `-e "kafka_topics='<t> <t>'"` for some
+   topics alone). It holds the nightly dump off for its span, pins its source dump in the store, produces the messages
+   back (a keyed message on its partition again), moves the dump's groups to the topics' end, writes the store's
+   BASELINE for the topics it restored, then dumps the restored Kafka.
+3. The services started again. Once Kafka is whole and its services run on it: `task deploy:kafka-backup-unpin -- -e
+   kafka_dump=<the dump restored>` (the restore's last line names it) - the prune keeps the newest complete dumps again.
+
+A restore that failed keeps its lock (`<namespace>-kafka-backup-restoring`): every nightly dump refuses while it is there
+(KafkaBackupRestoreLockStale says so - its runbook). Rehearsed on the copy: `task test:copy:kafka-restore`.
 
 ## Component-Only Recovery
 

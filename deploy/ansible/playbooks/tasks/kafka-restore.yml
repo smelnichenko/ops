@@ -2,8 +2,9 @@
 # A Kafka dump from the Pi store produced back into its topics: a Job built from the backup CronJob's own pod (its images,
 # its store keys, its resources, its labels - so its network policy reaches the store - and its annotations: in the mesh
 # with a native sidecar, Kafka's 9092 taking mTLS only): the dump fetched
-# (kafka_dump: a dump's UTC timestamp, or newest - the newest complete one holding messages, its DONE there) and PINNED
-# in the store (the prune never removes it - the operator unpins it once Kafka is whole), then the chart's restore.sh
+# (kafka_dump: a dump's UTC timestamp, or newest - the newest complete one holding messages, its DONE there; a store
+# read that fails stops it) and PINNED in the store (the prune never removes it - the operator unpins it once Kafka is
+# whole: task deploy:kafka-backup-unpin, the marker says so), then the chart's restore.sh
 # (the console producer; a keyed message on its partition again) - kafka_topics (space-separated) restores those alone.
 # A dump of 0 messages is refused (kafka_allow_empty=true restores one). restore.sh checks the dump against itself, and
 # refuses a topic missing, of other partitions, or holding other messages (kafka_force=true produces anyway), and a
@@ -11,8 +12,9 @@
 # them). Never two restores at once, nor one beside a dump: the nightly dump held off for the restore's span by the lock
 # its CronJob mounts (its name read from the CronJob: a chart without it refuses the restore), kept when the restore
 # failed (a Kafka half restored: a dump now would capture the half - KafkaBackupRestoreLockStale says so). Waited for
-# by the clock; its log must say what it restored. After it, the store's BASELINE: the next dumps compare Kafka with
-# dumps from now on (the backup's guard). The Job removed once it succeeded.
+# by the clock; its log must say what it restored. After it, the store's BASELINE for the topics restored (kafka_topics,
+# or all): the next dumps compare them with dumps from now on (the backup's guard), every other topic as before. The Job
+# removed once it succeeded. Sets kafka_restored (restore.sh's last line) and kafka_restored_from (the dump).
 #
 # Expects: kubectl; kafka_dump; kafka_namespace (default schnappy-production); kafka_topics (default: every topic).
 - name: The backup CronJob's pod (the restore Job is built from it)
@@ -91,25 +93,31 @@
                     set -eu
                     d={{ _which }}
                     empty={{ 'yes' if (kafka_allow_empty | default(false) | bool) else 'no' }}
-                    msgs() { rclone cat "$STORE/$1/DONE" | awk 'NR == 1 { print $4 }'; }
+                    # a store read that fails stops it - never read as "not complete" or "empty", which would pass over
+                    # the newest dump for an older one
                     if [ "$d" = newest ]; then
                       d=""
-                      dirs=$(rclone lsf --dirs-only "$STORE/")
+                      dirs=$(rclone lsf --dirs-only "$STORE/") || { echo "listing $STORE failed"; exit 1; }
                       for n in $(printf '%s\n' "$dirs" | sed 's#/$##' | grep -E '^[0-9]{8}T[0-9]{6}Z$' | sort -r || true); do
-                        rclone lsf --files-only --max-depth 1 "$STORE/$n/" | grep -qxF DONE || continue
+                        files=$(rclone lsf --files-only --max-depth 1 "$STORE/$n/") || { echo "listing $STORE/$n failed"; exit 1; }
+                        printf '%s\n' "$files" | grep -qxF DONE || continue
                         # the newest holding messages: a Kafka that lost them dumped 0 since
-                        m=$(msgs "$n"); [ "$empty" = yes ] || [ "${m:-0}" -gt 0 ] || continue
+                        done_line=$(rclone cat "$STORE/$n/DONE") || { echo "reading $STORE/$n/DONE failed"; exit 1; }
+                        m=$(printf '%s\n' "$done_line" | awk 'NR == 1 { print $4 }')
+                        [ "$empty" = yes ] || [ "${m:-0}" -gt 0 ] || continue
                         d=$n; break
                       done
                       [ -n "$d" ] || { echo "no complete dump holding messages in $STORE"; exit 1; }
                     fi
                     echo "$d" | grep -qE '^[0-9]{8}T[0-9]{6}Z$' || { echo "not a dump's name: $d"; exit 1; }
-                    rclone copy "$STORE/$d" "/dump/$d"
+                    rclone copy "$STORE/$d" "/dump/$d" || { echo "fetching $d failed"; exit 1; }
                     [ -f "/dump/$d/DONE" ] || { echo "the dump $d has no DONE: incomplete, not restored"; exit 1; }
                     m=$(awk 'NR == 1 { print $4 }' "/dump/$d/DONE")
                     [ "$empty" = yes ] || [ "${m:-0}" -gt 0 ] || { echo "the dump $d holds 0 messages: not restored (kafka_allow_empty=true restores it)"; exit 1; }
-                    # its source pinned: the prune never removes it (the nights after a restore dump what it brought back)
-                    date -u +%Y%m%dT%H%M%SZ | rclone rcat "$STORE/$d/PINNED"
+                    # its source pinned: the prune never removes it (the nights after a restore dump what it brought back) -
+                    # until the operator unpins it, Kafka whole again: the marker says when, why and how
+                    printf '%s\nwhy the source of a restore (ops tasks/kafka-restore.yml)\nunpin task deploy:kafka-backup-unpin -- -e kafka_dump=%s\n' \
+                      "$(date -u +%Y%m%dT%H%M%SZ)" "$d" | rclone rcat "$STORE/$d/PINNED" || { echo "pinning $d failed"; exit 1; }
                     echo "fetched $d ($m messages), pinned"
             containers:
               - name: restore
@@ -185,10 +193,13 @@
       changed_when: true
       failed_when: _kr_run.rc != 0 or (_kr_run.stdout_lines | last | default('')) is not match('^restored [0-9]+ messages from [0-9]{8}T[0-9]{6}Z$')
 
-    - name: The store's BASELINE now - the backup's guard compares Kafka with dumps from here on (this Kafka is the one)
+    # the restored topics alone: every other topic's loss still refused by the next dump
+    - name: The store's BASELINE now - the backup's guard compares the restored topics with dumps from here on
       ansible.builtin.include_tasks: kafka-baseline.yml
       vars:
-        kafka_baseline_why: "a restore from {{ kafka_dump }}{{ (' of ' ~ kafka_topics) if (kafka_topics | default('')) else '' }}"
+        _kr_from: "{{ (_kr_run.stdout_lines | last).split() | last }}"
+        kafka_baseline_why: "a restore from {{ _kr_from }}{{ (' of ' ~ kafka_topics) if (kafka_topics | default('') | trim) else '' }}"
+        kafka_baseline_topics: "{{ kafka_topics | default('') | trim or 'all' }}"
 
   always:
     - name: The restoring ConfigMap removed - by the run that made it, the restore succeeded or never started
@@ -204,3 +215,4 @@
 - name: What was restored
   ansible.builtin.set_fact:
     kafka_restored: "{{ _kr_run.stdout_lines | last }}"
+    kafka_restored_from: "{{ (_kr_run.stdout_lines | last).split() | last }}"
