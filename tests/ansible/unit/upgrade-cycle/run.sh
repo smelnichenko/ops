@@ -797,15 +797,24 @@ def table_with(**stores):  # the real table, the named stores' fields replaced (
     for s in t["stores"]:
         s.update(stores.get(s["store"], {}))
     open(TABLE, "w").write(json.dumps(t))
-rc, calls = night("apply postgresql-19.x major")
-check("a one-way unit whose store has a part with no backup (Postgres: SonarQube's - woodpecker's backed up since "
-      "2026-11-17): blocked before its proof, never merged, the notice naming the part",
-      (rc, has(calls, "task"), has(calls, "upgrade-label.py postgresql-19.x upgrade-blocked"),
-       "SonarQube's Postgres" in blocked_why(calls)),
-      (1, [], ["upgrade-label.py postgresql-19.x upgrade-blocked"], True))
-for unit, part in (("kafka-4.x", "restore not yet rehearsed on the copy"), ("clickhouse-clickhouse-server-27.x", "restore not yet rehearsed on the copy"),
+rc, calls = night("apply grafana-grafana-13.x major")
+check("a one-way unit whose store has a part with no backup (Grafana's database, still its SQLite): blocked before its "
+      "proof, never merged, the notice naming the part",
+      (rc, has(calls, "task"), has(calls, "upgrade-label.py grafana-grafana-13.x upgrade-blocked"),
+       "Grafana's database" in blocked_why(calls)),
+      (1, [], ["upgrade-label.py grafana-grafana-13.x upgrade-blocked"], True))
+# Postgres backed up whole since 2026-11-18 (production's, Woodpecker's, SonarQube's and Grafana's CNPG clusters): a major
+# goes on - each cluster's base backup run before its merge
+PG_PLAN = "test:copy:change INFRA_REF=main PLATFORM_REF=main\n"
+rc, calls = night("apply postgresql-19.x major", plan=PG_PLAN,
+                  files={"list": "postgresql-19.x major schnappy/infra major,one-way,upgrade-cycle\n", "noticed": ANNOUNCED})
+backups = [c for c in has(calls, "task --yes deploy:postgres:base-backup")]
+check("a Postgres major (its store backed up whole): not blocked, merged - each of the four clusters' base backups run first",
+      (rc, merged(calls, "postgresql-19.x"), sorted(c.split("cluster=")[1] for c in backups)),
+      (0, True, ["schnappy-grafana-pg", "schnappy-production-postgres", "schnappy-sonarqube-pg", "woodpecker-postgres"]))
+for unit, part in (("kafka-4.x", "restore not yet rehearsed on the copy"),
                    ("strimzi-kafka-operator-1.x", "restore not yet rehearsed on the copy"),
-                   ("postgres-18.x", "SonarQube's Postgres"), ("grafana-grafana-13.x", "Grafana's database"),
+                   ("grafana-grafana-13.x", "Grafana's database"),
                    ("scylladb-2026.3", "no restore from its backup")):
     rc, calls = night(f"prove {unit} minor", files={"list": f"{unit} minor schnappy/infra upgrade-cycle\n"})
     check(f"{unit}, its label missing: the names' net finds its store - blocked, nothing built, the missing part named",

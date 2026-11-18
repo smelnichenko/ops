@@ -1,7 +1,16 @@
 # Plan 121 - SonarQube's Postgres on CloudNativePG
 
-**Status:** stage 0 (chart: platform f7c2180, d1060e5) on main; stages 1a-3 not started. Operator's choice 2026-11-17:
+**Status: DONE 2026-11-18** (stages 1a-3, infra 597bbd75, ba035115, 479836ed, 47a79764). Operator's choice 2026-11-17:
 "a" - move it to CNPG. Reviewed twice (2026-11-17); the second review's findings are folded in below.
+- 02:51 1a: SonarQube stopped (its compute-engine queue empty), the counts unchanged after the stop.
+- 02:52 1b: schnappy-sonarqube-pg healthy in 60 s; the import's counts every one equal (projects 20, users 1,
+  user_tokens 2, ce_activity 2292, issues 791, project_measures 42957, measures 3627, 164 tables - all sonarqube's) on
+  PostgreSQL 18.6; its first base backup completed 02:58, archiving on.
+- 03:00 2: SonarQube UP on schnappy-sonarqube-pg-rw, its setup Job completed; a CI analysis green on it (platform
+  pipeline 590 - two analyses in ce_activity, the newest SUCCESS).
+- 04:13 3: the import off, the old StatefulSet at 0 pods - its volume (data-schnappy-sonarqube-postgres-0) kept until its
+  removal is decided (a stateful delete: the operator's OK).
+- Left: that volume's removal; the restore drill.
 
 ## Why
 
@@ -121,5 +130,6 @@ database, owner, the -owner secret, the store's egress with backups off).
 ## Left after stage 3
 
 - The StatefulSet and its PVC removed - a stateful delete, the operator's OK first.
-- The restore drill (above); DR-PROCEDURE's CNPG section names SonarQube's cluster; then the one-way table's Postgres
-  entry drops SonarQube's missing part.
+- The restore drill (above); DR-PROCEDURE's CNPG section names SonarQube's cluster. The one-way table's Postgres entry
+  dropped SonarQube's missing part at stage 3: the cycle takes its base backup before a major
+  (`scripts/upgrade-stores.json`), and CNPG's recovery is the path the copy rehearses on production's cluster every run.

@@ -20,17 +20,17 @@
       ],
       "backups": [
         "deploy:postgres:base-backup -- -e pg_namespace=schnappy-production -e cluster=schnappy-production-postgres",
-        "deploy:postgres:base-backup -- -e pg_namespace=woodpecker -e cluster=woodpecker-postgres"
+        "deploy:postgres:base-backup -- -e pg_namespace=woodpecker -e cluster=woodpecker-postgres",
+        "deploy:postgres:base-backup -- -e pg_namespace=schnappy-infra -e cluster=schnappy-sonarqube-pg",
+        "deploy:postgres:base-backup -- -e pg_namespace=schnappy-infra -e cluster=schnappy-grafana-pg"
       ],
-      "missing": [
-        "SonarQube's Postgres (a plain StatefulSet, postgres:<major>-alpine, its data on a local volume) has no backup - and a new major will not read the old one's data directory"
-      ],
+      "missing": [],
       "examples": [
         "postgres-18.x",
         "postgresql-19.x"
       ],
       "taken_by": [],
-      "minutes": 30
+      "minutes": 40
     },
     {
       "store": "scylladb",
@@ -83,9 +83,7 @@
       "backups": [
         "check:production:clickhouse-backup"
       ],
-      "missing": [
-        "its restore not yet rehearsed on the copy - test:copy:check restores production's backup (test:copy:clickhouse-restore) from the next copy run on; proven locally on 26.8 (BACKUP and RESTORE through the backup user)"
-      ],
+      "missing": [],
       "examples": [
         "clickhouse-clickhouse-server-27.x"
       ],
