@@ -684,7 +684,7 @@ heads_pushed() {
 # 2. the proof, one fix - the copy destroyed when the run ends, however it ends (the radar may start again)
 build() { built=1; run task test:copy:build || { say "COPY NOT BUILT - the unit untouched (see the log); run again"; exit 1; }; }
 # the unit's plan read before the copy is built: a part the proof cannot take (an ops value copy-unit.sh has no proof for -
-# Keycloak's, Consul's) refused now - labelled upgrade-blocked, the parts named, nothing built and no agent: the refusal is
+# Keycloak's; Consul's has its own since 2026-11-18) refused now - labelled upgrade-blocked, the parts named, nothing built and no agent: the refusal is
 # ops' to fix, never the unit's (it was built 49 min, refused, and handed to the fix agent as red - 2026-11-17's review)
 preplan() {
   local out

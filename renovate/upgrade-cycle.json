@@ -63,13 +63,13 @@
     },
     {
       "customType": "regex",
-      "description": "Images written as one string in values and manifests (image: repo:tag, CNPG's imageName: repo:tag@digest)",
+      "description": "Images written as one string in values and manifests (image: repo:tag, CNPG's imageName: repo:tag@digest, a key named <x>Image - platform's rcloneImage, CNPG's ephemeralImage: missed until 2026-11-18, rclone 1.71.2 stood still)",
       "managerFilePatterns": [
         "/^clusters/.+\\.ya?ml$/",
         "/^helm/.+\\.ya?ml$/"
       ],
       "matchStrings": [
-        "(?:image|imageName):\\s*\"?(?<depName>[a-z0-9][a-z0-9._/-]*[a-z0-9]):(?<currentValue>[A-Za-z0-9][A-Za-z0-9._-]*)(?:@(?<currentDigest>sha256:[a-f0-9]{64}))?\"?\\s"
+        "(?:image|imageName|[a-z][A-Za-z0-9]*Image):\\s*\"?(?<depName>[a-z0-9][a-z0-9._/-]*[a-z0-9]):(?<currentValue>[A-Za-z0-9][A-Za-z0-9._-]*)(?:@(?<currentDigest>sha256:[a-f0-9]{64}))?\"?\\s"
       ],
       "datasourceTemplate": "docker"
     },

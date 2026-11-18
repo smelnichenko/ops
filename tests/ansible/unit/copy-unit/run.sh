@@ -290,5 +290,20 @@ check "run: a unit with no ops branch: no build-hash check (infra's and platform
   "$rc $(grep -c '^pins' "$W/ran")" "0 0"
 check "the clones stay on main (the unit's branches fetched beside, never checked out)" \
   "$(for r in infra platform ops; do git -C "$W/src/$r" branch --show-current; done | sort -u)" "main"
+# every playbook a proof can run on the copy (copy-unit.sh's ORDER - its vars files' playbooks among them) has a
+# production command in the runner's apply (scripts/upgrade-cycle.sh): one without was proven for an hour, then blocked
+# at the apply as "a part with no production command"
+check "each playbook copy-unit.sh can hand the copy has a production command in upgrade-cycle.sh's apply" \
+  "$(python3 - "$OPS" <<'PYSTEPS'
+import ast, os, re, sys
+ops = sys.argv[1]
+cu = open(os.path.join(ops, "scripts/copy-unit.sh")).read()
+order = ast.literal_eval(re.search(r"^ORDER = (\{.*?\})", cu, re.S | re.M).group(1))
+varsf = set(re.findall(r'\("([a-z-]+\.yml)", ', cu[cu.index("VARS_FILES = {"):cu.index("}", cu.index("VARS_FILES = {"))]))
+run = open(os.path.join(ops, "scripts/upgrade-cycle.sh")).read()
+mapped = set(re.findall(r'"test:copy:playbook PLAYBOOK=([a-z-]+\.yml)"\*\)', run))
+print(sorted((set(order) | varsf) - mapped), sorted(varsf - set(order)))
+PYSTEPS
+)" "[] []"
 echo "copy-unit: $([ $fails -eq 0 ] && echo ALL-PASS || echo "$fails FAILED")"
 [ $fails -eq 0 ]
