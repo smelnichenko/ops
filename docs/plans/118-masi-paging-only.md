@@ -38,7 +38,7 @@ search/list/etc" (after 2026-11-11: "make sure we use paging everywhere and neve
 | # | What | Visible |
 |---|---|---|
 | 1 | masi #248: `Paging` on every paged endpoint (ArchUnit: controllers only through it; `PagedResponse` only from a Page); `@BoundedList` + `BoundedResultsTest` over every response record however deep (52 endpoints say their bound); `PagingEverywhereTest` (every GET with a size, from the handler mapping); a request's oversized read stopped in production; `/stats`, report generation and the retune read their large windows a page (500) at a time by id, the retune estimate counted; package artifacts read without their bytes; `GET /packages` needs `job`; `/persons/of-company` removed; caps: contact ids <= 200, connections <= 200, CV versions newest 200, deadlines <= 1,000, exact register name <= 26; the picture status counted in the database | none |
-| 2 | `/stats/daily` in a fixed number of queries (about 9 a day today, ~3,300 for a year); the picture backfill as background work answering 202 | none |
+| 2 | masi #255: `/stats/daily` in a fixed handful of queries grouped by the day in the zone (was ~9 a day, ~3,300 for a year), the caller's applications only; `/stats`' figures read by the database (median listing lifetime, tag bar, salary figures - PR 1's paging gone); the backlog re-tune and the face backfill behind the request (202; one a pod; 409 while one runs, 503 while the pod stops; the pod waits for the item in hand); a full-time month no int holds is no figure (Java wrapped it, SQL failed the read); a zone the database reads turned round (`+02:00`) fails the start | none |
 | 3 | Sources paged: `GET /sources` a page (sort and counts on the server), the dashboard's and the stats' sources a page or counts, reports storing a capped source health; the site's Sources page, dashboard and report detail with it - a rendered sample for the operator's OK first | Sources page, dashboard, reports |
 
 ## Status
@@ -46,3 +46,10 @@ search/list/etc" (after 2026-11-11: "make sure we use paging everywhere and neve
 - 2026-11-13: audit done; PR 1 = masi #248, both reviews' findings fixed (the architecture review's critical: the guard
   would have stopped `/stats`, report generation and the retune - their windows now read by page in PR 1); merge held
   for the 15:23 UTC GitHub sweep (a deploy cuts it), then the next :45 window.
+- 2026-11-13 19:45 UTC: #248 merged; its image failed on GitHub's API quota (the face models' download) - fixed by #249.
+- 2026-11-16 12:01 UTC: #248 + #249 live in production (masi d663a89).
+- 2026-11-18: PR 2 = masi #255 - rebased on main 61d276d2; architecture review (no critical; W1-W4, S1-S6 fixed) and
+  test-quality review (89 reverts; its gaps closed, the round's 24 fixes each bite) done; full gate green; the PR gate's
+  four new-code Sonar issues fixed. Merged 15:45 UTC (2b1d5d73), live in production 16:01 UTC (masi 2b1d5d7); the
+  15:23 GitHub run the rollout cut kept its place for the next. Next: PR 3 (sources paged + the site, a rendered sample
+  for the operator's OK first).
