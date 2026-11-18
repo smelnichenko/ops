@@ -113,7 +113,10 @@ for a in apps["items"]:
 for p in pods["items"]:
     if (p.get("status") or {}).get("phase") != "Running" or p["metadata"].get("namespace") in preview:
         continue
-    unready = [c["name"] for c in p["status"].get("containerStatuses") or [] if not c.get("ready")]
+    # its containers and its native sidecars (init containers restarting Always - Istio's istio-proxy when native)
+    sidecars = {c.get("name") for c in (p.get("spec") or {}).get("initContainers") or [] if c.get("restartPolicy") == "Always"}
+    unready = [c["name"] for c in (p["status"].get("containerStatuses") or [])
+               + [i for i in p["status"].get("initContainerStatuses") or [] if i.get("name") in sidecars] if not c.get("ready")]
     if unready:
         bad.append(f"pod {p['metadata']['namespace']}/{p['metadata']['name']} unready: {', '.join(unready)}")
 if os.environ["CRIT"]:

@@ -56,9 +56,13 @@ def app(name, sync="Synced", health="Healthy", op="Succeeded", sources=None, rev
             a["spec"]["sources"] = srcs; st["sync"]["revisions"] = revisions
             st["sync"]["comparedTo"] = {"sources": compared if compared else srcs}
     return a
-def pod(ns, name, phase="Running", ready=(True,)):
-    return {"metadata": {"namespace": ns, "name": name},
-            "status": {"phase": phase, "containerStatuses": [{"name": f"c{i}", "ready": r} for i, r in enumerate(ready)]}}
+def pod(ns, name, phase="Running", ready=(True,), native=None):
+    out = {"metadata": {"namespace": ns, "name": name},
+           "status": {"phase": phase, "containerStatuses": [{"name": f"c{i}", "ready": r} for i, r in enumerate(ready)]}}
+    if native is not None:  # Istio's native sidecar (an init container restarting Always) and a plain init container, done
+        out["spec"] = {"initContainers": [{"name": "istio-proxy", "restartPolicy": "Always"}, {"name": "setup"}]}
+        out["status"]["initContainerStatuses"] = [{"name": "istio-proxy", "ready": native}, {"name": "setup", "ready": False}]
+    return out
 def run(apps, pods, alerts=(), alert_after=None, down=False, settle="0", hold="2", pods_raw=None, streak="5", revs="",
         alert_until=None, alert_looks=None, bad_app_looks=None, bad_apps=None, apps_by_look=None, pods_by_look=None):
     for f in [x for x in os.listdir(W) if x.startswith(("apps-bad.", "pods."))] + ["down", "looks", "alert-after", "alert-until", "alert-looks", "bad-app-looks"]:
@@ -101,6 +105,10 @@ for name, apps in (("an app out of sync", [app("x", sync="OutOfSync")]), ("an ap
     check(f"{name}: not settled, named", (rc, "NOT SETTLED" in out, "app x" in out), (1, True, True))
 rc, out = run(OK_APPS, [pod("schnappy-production", "monitor-1", ready=(True, False))])
 check("a running pod unready: not settled, named", (rc, "pod schnappy-production/monitor-1 unready: c1" in out), (1, True))
+rc, out = run(OK_APPS, [pod("schnappy-production", "chat-1", native=False)])
+check("a running pod's native sidecar unready: not settled, named", (rc, "pod schnappy-production/chat-1 unready: istio-proxy" in out), (1, True))
+rc, out = run(OK_APPS, [pod("schnappy-production", "chat-2", native=True)])
+check("  its native sidecar ready, a plain init container done (not ready): settled", rc, 0)
 CRIT = [{"labels": {"alertname": "PostgresDown", "severity": "critical"}}]
 rc, out = run(OK_APPS, OK_PODS, alerts=CRIT, alert_after=1, streak="1")
 check("a critical alert during the hold (one look in a row enough): not quiet, named",

@@ -32,7 +32,7 @@ def app(name):
                        "health": {"status": "Healthy"}, "operationState": {"phase": "Succeeded"}}}
 
 
-def pod(name, uid, restarts=0, finished="2026-10-06T10:00:00Z", ns="ns", ready=True, owner=None):
+def pod(name, uid, restarts=0, finished="2026-10-06T10:00:00Z", ns="ns", ready=True, owner=None, native=None):
     c = {"ready": ready, "restartCount": restarts}
     if restarts:
         c["lastState"] = {"terminated": {"finishedAt": finished}}
@@ -40,7 +40,12 @@ def pod(name, uid, restarts=0, finished="2026-10-06T10:00:00Z", ns="ns", ready=T
     if owner:  # a Deployment's pod: its ReplicaSet the controller, the template hash in its labels
         meta["ownerReferences"] = [{"controller": True, "kind": "ReplicaSet", "name": f"{owner}-{uid}h"}]
         meta["labels"] = {"pod-template-hash": f"{uid}h"}
-    return {"metadata": meta, "status": {"phase": "Running", "containerStatuses": [c]}}
+    out = {"metadata": meta, "status": {"phase": "Running", "containerStatuses": [c]}}
+    if native is not None:  # Istio's native sidecar: an init container restarting Always, its status among the init ones
+        out["spec"] = {"initContainers": [{"name": "istio-proxy", "restartPolicy": "Always"}, {"name": "setup"}]}
+        out["status"]["initContainerStatuses"] = [dict({"name": "istio-proxy", "ready": True, "restartCount": 0}, **native),
+                                                  {"name": "setup", "ready": False, "restartCount": 0}]
+    return out
 
 
 def run(apps, pods, *args, env=None):
@@ -240,6 +245,13 @@ errored = oomed(pod("big", "o4"), "2026-10-06T10:40:00Z")
 errored["status"]["containerStatuses"][0]["lastState"]["terminated"]["reason"] = "Error"
 gate("  killed otherwise (Error) after it: settled", A, [errored], 0, "", *OS)
 gate("  the one-shot mode without --oom-since: not judged", A, [oomed(pod("big", "o5"), "2026-10-06T10:40:00Z")], 0, "")
+# Istio's native sidecar (an init container restarting Always): its readiness and its OOM kills the pod's; a finished
+# init container's "not ready" none of its business
+gate("a pod whose native sidecar is not ready: not settled", A, [pod("n1", "n1", native={"ready": False})], 1, "ns/n1")
+gate("  its native sidecar ready, a plain init container done (not ready): settled", A, [pod("n2", "n2", native={})], 0, "")
+gate("  its native sidecar OOM-killed during the wait: not settled, named", A,
+     [pod("n3", "n3", native={"restartCount": 1, "lastState": {"terminated": {"reason": "OOMKilled", "finishedAt": "2026-10-06T10:40:00Z"}}})],
+     1, "ns/n3/istio-proxy at 2026-10-06T10:40:00Z", *OS)
 rc, out = run(A, [pod("p2", "u3")], "--failing-cronjobs", "kube-system/restore check")
 check("  a malformed entry: refused (exit 2), said", (rc, "is no <namespace>/<name>" in out), (2, True), out)
 # the copy's list and its wiring: the playbook passes the file's names (comments and blank lines dropped)
