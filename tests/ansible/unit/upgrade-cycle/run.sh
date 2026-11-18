@@ -88,6 +88,8 @@ echo "upgrade-verify.sh AFTER ${UPGRADE_VERIFY_REVISIONS:-}" >> "$ST/calls"
 rc=$(cat "$ST/verify.rc" 2>/dev/null || echo 0); [ "$rc" = 0 ] || cat "$ST/verify.out" 2>/dev/null
 exit "$rc"''')
 stub(os.path.join(OPS, "scripts/upgrade-record.sh"), LOG + '\nexit "$(cat "$ST/record.rc" 2>/dev/null || echo 0)"')
+# the copy's snapshot: used (the copy halted after a run), forget (the proof after a fix on a base built fresh)
+stub(os.path.join(OPS, "scripts/copy-snapshot.sh"), LOG + '\nexit 0')
 # the local mains (the start's gate) apart from the unit's branches (fresh: a list, one verdict a call)
 stub(os.path.join(OPS, "scripts/copy-main-current.sh"), LOG + '''
 case "$*" in
@@ -396,17 +398,17 @@ rc, calls = night("prove wave-patches patch", plan=PLAN)
 check("the copy built in a UTF-8 locale - Ansible refuses any other (the first build through the runner, 2026-11-16: "
       "LC_ALL=C, 'Detected None')", open(os.path.join(ST, "build.locale")).read().strip().lower().replace("-", ""), "utf8")
 KEY = ("task ", "upgrade-label.py", "upgrade-record.sh", "vagrant", "claude", "upgrade-notice.sh applied", "upgrade-verify.sh ARGO",
-       "upgrade-verify.sh AFTER", "upgrade-units.py held")
+       "upgrade-verify.sh AFTER", "upgrade-units.py held", "copy-snapshot.sh")
 seq = [words(c, 2 if c.startswith("upgrade-record.sh") else 3) for c in calls if c.startswith(KEY)
        or c.startswith("git -C " + OPS + " merge")]
-check("a patch unit: heads, green, its plan read, built, proven, heads again, reviewed, the copy halted, the plan, the etcd snapshot, "
+check("a patch unit: heads, green, its plan read, built, proven, heads again, reviewed, the copy marked used and halted, the plan, the etcd snapshot, "
       "held, merged, ops fast-forwarded, Argo settled on the merge, Kubernetes, Forgejo, verified, the inventory read, "
       "recorded, reported - in that order (the copy gone once)",
       (rc, seq),
       (0, ["upgrade-label.py wave-patches --heads", "upgrade-label.py wave-patches --green",
            "task test:copy:unit UNIT=wave-patches", "task test:copy:ready",
            "task test:copy:unit UNIT=wave-patches", "upgrade-label.py wave-patches --heads", "claude -p upgrade-cycle",
-           "vagrant halt", "task test:copy:unit UNIT=wave-patches", "task --yes deploy:etcd:backup",
+           "copy-snapshot.sh used", "vagrant halt", "task test:copy:unit UNIT=wave-patches", "task --yes deploy:etcd:backup",
            "upgrade-units.py held wave-patches", "upgrade-label.py wave-patches --merge", "git -C " + OPS,
            "upgrade-verify.sh ARGO " + REVS, "task --yes deploy:kubeadm:upgrade", "task --yes deploy:forgejo:upgrade",
            "upgrade-verify.sh AFTER " + REVS, "task test:copy:inventory", "upgrade-record.sh wave-patches",
@@ -611,6 +613,13 @@ check("a fix in two repos (the clone and its list read past every step that read
       "agent-fixed BEFORE the first push, both pushed, proven again on both heads Forgejo shows",
       (rc, [p[1][:4] for p in pushes(calls)], bool(pushed_at) and labelled_at < min(pushed_at), len(has(calls, "task test:copy:ready")),
        notices(calls)), (0, ["bbbb", "dddd"], True, 2, ["upgrade-notice.sh veto istio"]))
+readies = [i for i, c in enumerate(calls) if c.startswith("task test:copy:ready")]
+forgets = [i for i, c in enumerate(calls) if c.startswith("copy-snapshot.sh forget")]
+check("  the proof after the fix on a base built fresh: the snapshot forgotten between the two readies, once (never one base twice)",
+      (len(forgets), len(readies) == 2 and len(forgets) == 1 and readies[0] < forgets[0] < readies[1]), (1, True))
+check("  the copy marked used before its halt, however the run ended",
+      [c.split()[1] if c.startswith("copy-snapshot.sh") else c for c in calls if c.startswith(("copy-snapshot.sh used", "vagrant halt"))][-2:],
+      ["used", "vagrant halt"])
 rc, calls = night("prove istio minor", proofs=(1, 0), files={"fix.heads": H3, "fixed.ops": "", "fix.files.ops": "Taskfile.yml\n"})
 check("a fix fine in infra, outside the unit's files in ops: NOTHING pushed (never half a fix, unlabelled), blocked",
       (rc, pushes(calls), has(calls, "upgrade-label.py istio agent-fixed"), notices(calls)), (1, [], [], ["upgrade-notice.sh blocked istio"]))

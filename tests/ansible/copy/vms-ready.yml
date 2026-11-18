@@ -21,6 +21,20 @@
 - name: The Pi VMs are isolated from production
   ansible.builtin.import_playbook: ../isolate-pis.yml
 
+# the package lists of today, whether the VMs were built or their base reverted from a snapshot up to a day old: an
+# install after this (Caddy's gpg) reads the archive as a build would - the base's own packages stay as built (pinned)
+- name: The VMs' package lists fresh
+  hosts: target:pi1:pi2
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Vagrant VMs only (fails closed on any other host)
+      ansible.builtin.import_tasks: ../vagrant-only.yml
+
+    - name: apt's lists updated
+      ansible.builtin.command: apt-get -o DPkg::Lock::Timeout=600 update -qq
+      changed_when: false
+
 # The Gluster volumes mount at boot by themselves (setup-gluster's gluster-volumes-ready) - checked
 # here, never mounted by the harness: a copy that needs a hand after a reboot hides the gap production has.
 - name: The Pis' Gluster volumes are mounted and their services up

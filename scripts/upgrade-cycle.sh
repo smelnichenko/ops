@@ -25,7 +25,7 @@
 #               waited for - an empty answer never a head; never read as the unit's defect); then its CI green (a
 #               running one waited for an hour - still running: said, no try, the same heads still so a run later a
 #               try; a red one a try, none at all a try) and main read again (it moved meanwhile: said, no try), each
-#               checkout's branch the head its pull request names (Forgejo's record may lag); task test:copy:ready (the copy as built - its snapshot reverted, or built: plan 125; a copy that does not get ready ends the run - the unit
+#               checkout's branch the head its pull request names (Forgejo's record may lag); task test:copy:ready (the copy as built - its base snapshot reverted, or built; a copy that does not get ready ends the run - the unit
 #               untouched), task test:copy:unit UNIT=<it>; red: the agent's fix - it commits in clones of the proven
 #               commits outside every checkout; the runner fetches its commits into a repository of its own (the
 #               agent's hooks and config never run), keeps them only on top of the proven head, inside the unit's own
@@ -44,7 +44,8 @@
 #   3. review   the review of the unit's diff (the agent, headless, --restricted: no instructions from the clones; the
 #               reviewers' own agents handed to it, a definition that does not read refusing the review) - VERDICT:
 #               CLEAN and every pass named exactly, or blocked (labelled only on a VERDICT: CRITICAL line, any of them -
-#               an INCOMPLETE or unfinished review is reviewed again, a try). The copy destroyed then
+#               an INCOMPLETE or unfinished review is reviewed again, a try). The copy halted then, marked used (no
+#               change or check on it until the next run readies it - its base snapshot kept)
 #   4. gate     patch/minor: on; a major's first run, or any unit carrying the agent's fix (this run's or an earlier
 #               one's - its diff on record, under 100 KB, or blocked): labelled stop-updating (a newer release pushed
 #               by Renovate would void the notice), its notice mailed (what it changes: each repo's stat, its commits,
@@ -280,8 +281,10 @@ read -r action unit kind <<< "$picked"
 [ "$action" != test ] || [[ $unit == test-* ]] || { say "REFUSED: a test action for '$unit' (no test- unit)"; exit 1; }
 heads=$state/heads-$unit-$$
 dirs=(); built=""
-cleanup() {  # however the run ends: the copy halted when it was readied (the radar may start; its snapshot kept for
-  # the next run - plan 125), the clones gone
+cleanup() {  # however the run ends: the copy halted when it was readied (the radar may start; its base snapshot kept
+  # for the next run) and marked used - its Argo layer and this unit on it: no change or check until a run readies it -
+  # the clones gone
+  [ -z "$built" ] || run scripts/copy-snapshot.sh used || say "THE COPY NOT MARKED USED - task test:copy:drop by hand"
   [ -z "$built" ] || run vagrant halt || say "THE COPY NOT HALTED - the radar stays off: vagrant halt by hand"
   [ -n "$dry" ] || { chmod -R u+w "${dirs[@]}" 2> /dev/null; rm -rf "${dirs[@]}" "$heads" "$heads.after" "$heads.expected"; }
   [ -z "${notice_summary:-}" ] || rm -f "$notice_summary"  # mailed by then (the details of a veto go whole)
@@ -682,7 +685,7 @@ heads_pushed() {
   return 1
 }
 
-# 2. the proof, one fix - the copy as built (its snapshot reverted when fresh, else built and snapshotted: plan 125), halted
+# 2. the proof, one fix - the copy as built (its base snapshot reverted when fresh, else built and snapshotted), halted
 # when the run ends, however it ends (the radar may start again)
 build() { built=1; run task test:copy:ready || { say "COPY NOT READY - the unit untouched (see the log); run again"; exit 1; }; }
 # the unit's plan read before the copy is built: a part the proof cannot take (an ops value copy-unit.sh has no proof for -
@@ -734,6 +737,9 @@ if ! run task test:copy:unit UNIT="$unit"; then
   fi
   heads_pushed || retry "its fix pushed, Forgejo not showing it on its pull requests"
   green  # the fix's own CI
+  # the proof after a fix on a base built fresh: the two proofs never share one base (a defect of the base read as the
+  # unit's twice - "red after its fix")
+  run scripts/copy-snapshot.sh forget "the proof after a fix builds its base fresh" || say "THE SNAPSHOT NOT FORGOTTEN - the proof may revert it"
   build
   if ! run task test:copy:unit UNIT="$unit"; then
     run scripts/upgrade-label.py "$unit" upgrade-blocked || say "NOT LABELLED upgrade-blocked - the next run proves it again"
@@ -779,6 +785,7 @@ if [ -z "$dry" ]; then
 fi
 # proven and reviewed: the copy halted now (its snapshot kept for the next run) - the radar may start, the apply needs none of it
 copy_gone="the copy halted: the radar may start"
+run scripts/copy-snapshot.sh used || say "THE COPY NOT MARKED USED - task test:copy:drop by hand"
 if run vagrant halt; then built=""; else copy_gone="THE COPY NOT HALTED - the radar stays off"; say "$copy_gone"; fi
 
 # shadow: proven and reviewed is where the run ends - the result on the pull requests, nothing applied; the cycle's

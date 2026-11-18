@@ -218,6 +218,15 @@ check("the survival seed: compatibility and users from clickhouse-expected.sh ma
 check("the copy tasks on running VMs (argo, change, playbook, check): the host guard's watcher right after the lock",
       [[c for _, c, _ in cmds(n)][:2] for n in ("test:copy:argo", "test:copy:change", "test:copy:playbook", "test:copy:check")],
       [["scripts/copy-lock.sh", "scripts/copy-host-guard.sh watch"]] * 4)
+# every task that boots, stops, destroys or plays on the copy's VMs (vagrant up/halt/destroy/reload/provision/ssh, the
+# Vagrant inventory, the copy's scripts) takes the copy's lock first: the copy persists between runs now (its base
+# snapshotted, halted after a run) - a task beside a run halts it, or a revert halts the task (a nested task shares its
+# caller's lock)
+uses = sorted(n for n, v in T.items() if isinstance(v, dict) and re.search(
+    r"\bvagrant (up|halt|destroy|reload|provision|ssh|resume)\b|inventory/vagrant\.yml|vagrant-[a-z-]+\.(sh|py)|copy-snapshot\.sh (save|revert|drop)",
+    "\n".join(c for _, c, _ in cmds(n))))
+check("every task on the copy's VMs takes the lock first (%d of them)" % len(uses),
+      [n for n in uses if not cmds(n) or cmds(n)[0][1] != "scripts/copy-lock.sh"], [])
 # every copy task whole - each command, in order, and its vars - against expected.json beside this file: a seed dropped,
 # an env -i lost (production's .env into the copy), a default moved, an argument left off passes every check above that
 # reads one line. A Taskfile change to these tasks changes expected.json in the same commit (its diff is the review)

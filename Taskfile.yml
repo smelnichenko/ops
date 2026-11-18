@@ -358,6 +358,8 @@ tasks:
       # extra arguments for the Pi service playbooks (the Vagrant copy pins the Pis' versions to production's)
       PI_ARGS: '{{.PI_ARGS | default ""}}'
     cmds:
+      # the copy's VMs used: one run at a time (scripts/copy-lock.sh - a nested task shares its caller's lock)
+      - cmd: scripts/copy-lock.sh
       # before anything is installed: the Pi VMs would otherwise resolve *.pmon.dev to production and route to its LAN
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/isolate-pis.yml
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-consul.yml {{.PI_ARGS}}
@@ -376,6 +378,8 @@ tasks:
     vars:
       PI_ARGS: '{{.PI_ARGS | default ""}}'
     cmds:
+      # the copy's VMs used: one run at a time (scripts/copy-lock.sh - a nested task shares its caller's lock)
+      - cmd: scripts/copy-lock.sh
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-pgbouncer.yml
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-pi-services.yml {{.PI_ARGS}}
 
@@ -383,6 +387,8 @@ tasks:
     internal: true
     deps: [_vagrant:pi-stack]
     cmds:
+      # the copy's VMs used: one run at a time (scripts/copy-lock.sh - a nested task shares its caller's lock)
+      - cmd: scripts/copy-lock.sh
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-kubeadm.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-host-hardening.yml
 
@@ -401,12 +407,16 @@ tasks:
     internal: true
     deps: [deploy:install]
     cmds:
+      # the copy's VMs used: one run at a time (scripts/copy-lock.sh - a nested task shares its caller's lock)
+      - cmd: scripts/copy-lock.sh
       # from nothing: every VM destroyed, and proven gone, before the build
       - cmd: vagrant destroy -f
       - cmd: |
           set -euo pipefail
           left=$(vagrant status --machine-readable | awk -F, '$3 == "state" && $4 != "not_created" {print $2 "=" $4}')
           [ -z "$left" ] || { echo "VMs not destroyed: $left"; exit 1; }
+      # what builds this base hashed now (a file changed while it builds is none it was built from), the host's disk
+      - cmd: scripts/copy-snapshot.sh begin
       - cmd: vagrant up
       # the Pis at production's versions (pi-versions.yml: what the Pis run, where the playbooks pin another)
       - task: _vagrant:pi-stack
@@ -426,6 +436,8 @@ tasks:
       # as on ten: Argo CD owns Istio, cert-manager, metrics-server, the Prometheus stack and the data operators
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-kubeadm.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml -e platform_by_argo_override=true
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-host-hardening.yml
+      # the base this build made, complete: only it is ever saved as a base
+      - cmd: scripts/copy-snapshot.sh based
 
   test:copy:build:
     desc: Build the Vagrant copy of production from nothing - production's inventory read first, the Pis and the node at its versions, every VM booted cold once, then the Argo layer on infra/platform main; ends with the copy's inventory against production's (VMs stay up)
@@ -443,15 +455,20 @@ tasks:
       # every VM shut down and booted cold once, as a node and the Pis come back after an outage: the boot order of the
       # Pi stack (Gluster mounts, Consul, Patroni, Vault's unseal) is part of what the build proves
       - cmd: vagrant halt
-      # the base kept at this halt (plan 125): a libvirt snapshot of each domain - the next run reverts to it
+      # the base kept at this halt: a libvirt snapshot of each domain, unproven until this build's Argo layer is up
       # (test:copy:ready) and builds only the Argo layer; a save that fails never fails the build
       - cmd: scripts/copy-snapshot.sh save
       - cmd: vagrant up --no-provision
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/vms-ready.yml
+      # the base's fingerprint at its cold boot, before Argo, when COPY_FINGERPRINT=<label> (a revert's proof diffs a
+      # build's and a revert's: tests/ansible/copy/base-fingerprint.yml)
+      - cmd: '[ -z "${COPY_FINGERPRINT:-}" ] || (cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/base-fingerprint.yml -e "label=$COPY_FINGERPRINT")'
       - task: test:copy:argo
+      # the base booted cold and the Argo layer up on it: its snapshot reusable from now
+      - cmd: scripts/copy-snapshot.sh proven
 
   test:copy:ready:
-    desc: "The Vagrant copy ready for a run (plan 125): its base (the Pis and the node, Argo not yet) reverted from its snapshot when fresh and booted cold, then the Argo layer built as test:copy:build builds it (~28 min) - else built from nothing and the base snapshotted (test:copy:build, 49 min). Stale when a day old, production's inventory or the Pis' versions moved, the files building the base changed, or a domain or its snapshot gone; COPY_SNAPSHOT=off builds always"
+    desc: "The Vagrant copy ready for a run: its base (the Pis and the node, Argo not yet) reverted from its snapshot when fresh and booted cold, then the Argo layer built as test:copy:build builds it (~28 min) - else built from nothing and the base snapshotted (test:copy:build, 49 min). Stale when a day old, never proven, production's inventory lines the base holds or the Pis' versions moved, the files building the base changed, a domain or its snapshot gone, or the host's disk short; a reverted base that does not come up is forgotten; COPY_SNAPSHOT=off builds always"
     deps: [deploy:install]
     cmds:
       # one copy run at a time (scripts/copy-lock.sh): a build called from here is the same run
@@ -466,15 +483,21 @@ tasks:
           rc=0
           scripts/copy-snapshot.sh revert || rc=$?
           case "$rc" in
-            0) vagrant up --no-provision
-               (cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/vms-ready.yml)
-               task test:copy:argo ;;
+            # a reverted base that does not come up - its cold boot, the VMs' readiness, the Argo layer - is forgotten:
+            # the next run builds, never the same base again for a day
+            0) if ! { vagrant up --no-provision \
+                      && (cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/vms-ready.yml) \
+                      && { [ -z "${COPY_FINGERPRINT:-}" ] || (cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/base-fingerprint.yml -e "label=$COPY_FINGERPRINT"); } \
+                      && task test:copy:argo; }; then
+                 scripts/copy-snapshot.sh forget "the reverted base did not come up"
+                 exit 1
+               fi ;;
             3) task test:copy:build ;;
             *) exit "$rc" ;;
           esac
 
   test:copy:drop:
-    desc: "The Vagrant copy destroyed with its snapshot (plan 125): its disk back, the next run builds from nothing"
+    desc: "The Vagrant copy destroyed with its snapshot: its disk back, the next run builds from nothing"
     cmds:
       - cmd: scripts/copy-lock.sh
       - cmd: scripts/copy-snapshot.sh drop
@@ -548,6 +571,8 @@ tasks:
       - cmd: scripts/inventory-diff.sh tests/ansible/copy/prod-inventory.txt .copy/vagrant-inventory.txt {{.ALLOWED_MISSING}}
       # production's, judged: the baseline a change's inventory is judged from
       - cmd: cp .copy/vagrant-inventory.txt .copy/vagrant-inventory-build.txt
+      # a fresh Argo layer: a copy marked used (halted after a run) takes changes and checks again
+      - cmd: scripts/copy-snapshot.sh layered
 
   test:copy:change:
     desc: "Apply a change to the built copy as production receives it - INFRA_REF and/or PLATFORM_REF (branches of ../infra, ../platform; main where not given) mirrored to the copy's Forgejo, Argo settled on them - then every check (test:copy:check). APPS_CHANGED=true when the change adds or removes Argo apps; SCRAPE_POOLS_GONE=<pool>,<pool> for scrape pools it removes on purpose"
@@ -563,6 +588,8 @@ tasks:
       # the host guard watching the VMs while the run works on them - the radar station shares the workstation
       # (scripts/copy-host-guard.sh: one watcher at a time; every vagrant up starts it too, the Vagrantfile's hook)
       - cmd: scripts/copy-host-guard.sh watch
+      # never on a copy halted after a run (its Argo layer and the last unit on it): test:copy:ready first
+      - cmd: scripts/copy-snapshot.sh unused
       # each ref holds production's main (origin/main), and the local main the mirror clones is it
       - cmd: scripts/copy-main-current.sh ../infra:{{.INFRA_REF}} ../platform:{{.PLATFORM_REF}}
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/vms-ready.yml
@@ -599,6 +626,8 @@ tasks:
       # the host guard watching the VMs while the run works on them - the radar station shares the workstation
       # (scripts/copy-host-guard.sh: one watcher at a time; every vagrant up starts it too, the Vagrantfile's hook)
       - cmd: scripts/copy-host-guard.sh watch
+      # never on a copy halted after a run (its Argo layer and the last unit on it): test:copy:ready first
+      - cmd: scripts/copy-snapshot.sh unused
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/vms-ready.yml
       # the guard first in the same run: a host that is no Vagrant VM is dropped from the playbook's plays
       # marked first, before it runs (one that fails half-way still left a change on the copy): a later test:copy:check
@@ -711,6 +740,8 @@ tasks:
       # the host guard watching the VMs while the run works on them - the radar station shares the workstation
       # (scripts/copy-host-guard.sh: one watcher at a time; every vagrant up starts it too, the Vagrantfile's hook)
       - cmd: scripts/copy-host-guard.sh watch
+      # never on a copy halted after a run (its Argo layer and the last unit on it): test:copy:ready first
+      - cmd: scripts/copy-snapshot.sh unused
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/argo-settled.yml -e expect_mirror=true -e expect_apps=true -e restart_stage=check-$(date +%Y%m%d%H%M%S) -e stable_polls=1 -e poll_seconds=3
       # the independent checks at the same time (scripts/copy-checks.sh says what each proves): the slowest, not the sum
       - cmd: COPY_SCRAPE_POOLS_GONE='{{.SCRAPE_POOLS_GONE}}' scripts/copy-checks.sh '{{.INFRA_REF}}' '{{.PLATFORM_REF}}'
@@ -1172,6 +1203,8 @@ tasks:
     desc: "Vagrant: re-running the Pi playbooks is safe - setup-patroni refuses while Patroni is stopped (its data untouched), passes while it runs and keeps the database port; setup-consul keeps the key and restarts nothing; setup-keepalived reloads a changed config (PgBouncer put in front first, as on the Pis, where missing)"
     deps: [deploy:install]
     cmds:
+      # the copy's VMs used: one run at a time (scripts/copy-lock.sh - a nested task shares its caller's lock)
+      - cmd: scripts/copy-lock.sh
       - task: _vagrant:pi-pgbouncer
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-pi-rerun-guards.yml
 
@@ -1179,6 +1212,8 @@ tasks:
     desc: "Vagrant: the Pis' tier-0 backup (setup-pi-backups.yml) taken and every piece restored - Consul's snapshot into a throwaway agent, each database into a scratch one, each realm export read"
     deps: [deploy:install]
     cmds:
+      # the copy's VMs used: one run at a time (scripts/copy-lock.sh - a nested task shares its caller's lock)
+      - cmd: scripts/copy-lock.sh
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-pi-backups.yml
 
   deploy:pi-backups:
@@ -1194,6 +1229,8 @@ tasks:
     desc: "Vagrant: the Pis' restore check (setup-pi-restore-check.yml) against the copy's real backups - its CNPG base backups and WAL, its etcd snapshots, the Pis' tier-0 backup (one taken first) - green on pi1, nothing left behind, nothing archived; on pi2 a stale etcd snapshot and a missing database each red alone; a killed run's leftovers cleared by the next"
     deps: [deploy:install]
     cmds:
+      # the copy's VMs used: one run at a time (scripts/copy-lock.sh - a nested task shares its caller's lock)
+      - cmd: scripts/copy-lock.sh
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-pi-restore-check.yml
 
   deploy:pi-restore-check:
@@ -1227,18 +1264,24 @@ tasks:
     desc: "Vagrant (containerd.io installed, as on ten): the kubelet stopped by hand, upgrade-containerd.yml run again - it checks the containers the first run kept against the runtime and starts the kubelet (it used to end 'already there' with the node NotReady)"
     deps: [deploy:install]
     cmds:
+      # the copy's VMs used: one run at a time (scripts/copy-lock.sh - a nested task shares its caller's lock)
+      - cmd: scripts/copy-lock.sh
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-containerd-takeup.yml {{.CLI_ARGS}}
 
   test:patroni-keycloak-restore:
     desc: "Vagrant: setup-patroni's restore of a first install's Keycloak dump, run with HAProxy stopped on pi1 - the rows in the leader's keycloak database, the dump moved aside; HAProxy started again, the test's table and dump removed"
     deps: [deploy:install]
     cmds:
+      # the copy's VMs used: one run at a time (scripts/copy-lock.sh - a nested task shares its caller's lock)
+      - cmd: scripts/copy-lock.sh
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-patroni-keycloak-restore.yml {{.CLI_ARGS}}
 
   test:patroni-upgrade:
     desc: "Vagrant: the Pis set to production's Patroni (4.1.0), then upgrade-patroni.yml as in production, checked from outside (version, no failover, HAProxy kept the leader, not paused, Forgejo answering); run again; refused: a downgrade, one node, a paused cluster; a failed install still resumes"
     deps: [deploy:install]
     cmds:
+      # the copy's VMs used: one run at a time (scripts/copy-lock.sh - a nested task shares its caller's lock)
+      - cmd: scripts/copy-lock.sh
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-patroni-upgrade.yml {{.CLI_ARGS}}
 
   deploy:vault:upgrade:
@@ -1336,6 +1379,8 @@ tasks:
     dir: deploy/ansible
     deps: [deploy:install]
     cmds:
+      # the copy's VMs used: one run at a time (scripts/copy-lock.sh - a nested task shares its caller's lock)
+      - cmd: scripts/copy-lock.sh
       - venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/scylla-restore-check.yml
 
   check:production:clickhouse-backup:
@@ -1352,6 +1397,8 @@ tasks:
     dir: deploy/ansible
     deps: [deploy:install]
     cmds:
+      # the copy's VMs used: one run at a time (scripts/copy-lock.sh - a nested task shares its caller's lock)
+      - cmd: scripts/copy-lock.sh
       - venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/clickhouse-restore-check.yml
 
   check:production:kafka-backup:
@@ -1377,6 +1424,8 @@ tasks:
     dir: deploy/ansible
     deps: [deploy:install]
     cmds:
+      # the copy's VMs used: one run at a time (scripts/copy-lock.sh - a nested task shares its caller's lock)
+      - cmd: scripts/copy-lock.sh
       - venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/kafka-restore-check.yml
 
   check:production:scylla-backup:
@@ -1401,18 +1450,24 @@ tasks:
     desc: "Vagrant: Consul's servers set back to 1.20.5, a key written; a server down refused; upgrade-consul.yml as in production, sampled - every server on setup-consul.yml's version, never 15 s without a leader, the key back, the old binary kept, the snapshot this run's; again nothing to do; a downgrade refused"
     deps: [deploy:install]
     cmds:
+      # the copy's VMs used: one run at a time (scripts/copy-lock.sh - a nested task shares its caller's lock)
+      - cmd: scripts/copy-lock.sh
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-consul-upgrade.yml {{.CLI_ARGS}}
 
   test:vault-upgrade:
     desc: "Vagrant: the Pis at production's Vault (1.21.3), a secret written, then upgrade-vault.yml as in production - both on the version, the failover older to newer, the secret read back"
     deps: [deploy:install]
     cmds:
+      # the copy's VMs used: one run at a time (scripts/copy-lock.sh - a nested task shares its caller's lock)
+      - cmd: scripts/copy-lock.sh
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-vault-upgrade.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml {{.CLI_ARGS}}
 
   test:forgejo-upgrade:
     desc: "Vagrant: the Pis set to production's Forgejo (15.0.3) on a fresh database with a marker repository, then upgrade-forgejo.yml as in production, checked from outside (sampled versions, schema, marker, kept binary, dump), run again, a downgrade and a partial run refused"
     deps: [deploy:install]
     cmds:
+      # the copy's VMs used: one run at a time (scripts/copy-lock.sh - a nested task shares its caller's lock)
+      - cmd: scripts/copy-lock.sh
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-forgejo-upgrade.yml {{.CLI_ARGS}}
 
   deploy:versitygw:
@@ -1615,6 +1670,8 @@ tasks:
     desc: Test ephemeral environment create/destroy lifecycle in Vagrant (assumes stack is up)
     deps: [deploy:install]
     cmds:
+      # the copy's VMs used: one run at a time (scripts/copy-lock.sh - a nested task shares its caller's lock)
+      - cmd: scripts/copy-lock.sh
       # an empty environment with the copy's test values: ops/.env (loaded into every task) holds production's API and
       # mail keys, which create-environment.yml would otherwise write into the Vagrant Vault
       - cmd: env -i HOME="$HOME" PATH="$PATH" bash -c 'set -a && . tests/ansible/copy/vagrant-secrets.env && set +a && cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-ephemeral-env.yml'
@@ -1651,6 +1708,8 @@ tasks:
     desc: Dual-Pi HA — deploy + assert (no destroy; fast iteration)
     deps: [deploy:install]
     cmds:
+      # the copy's VMs used: one run at a time (scripts/copy-lock.sh - a nested task shares its caller's lock)
+      - cmd: scripts/copy-lock.sh
       - cmd: vagrant up
       # deploy
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-consul.yml
@@ -1667,6 +1726,8 @@ tasks:
     desc: Test Vault auto-unseal after cold start (regressions from 2026-04-20)
     deps: [deploy:install]
     cmds:
+      # the copy's VMs used: one run at a time (scripts/copy-lock.sh - a nested task shares its caller's lock)
+      - cmd: scripts/copy-lock.sh
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-vault-unseal.yml
 
   test:dual-pi-clean:
@@ -1675,8 +1736,12 @@ tasks:
     cmds:
       # the copy's VMs destroyed here: never beside a copy run (scripts/copy-lock.sh) - its base snapshot goes with them, the next run builds
       - cmd: scripts/copy-lock.sh
+      # a destroy that fails stops it (one of nothing exits 0): never a vagrant up beside a half-destroyed copy
       - cmd: vagrant destroy -f
-        ignore_error: true
+      - cmd: |
+          set -euo pipefail
+          left=$(vagrant status --machine-readable | awk -F, '$3 == "state" && $4 != "not_created" {print $2 "=" $4}')
+          [ -z "$left" ] || { echo "VMs not destroyed: $left"; exit 1; }
       - cmd: vagrant up
       # deploy (each idempotent, final-state)
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-consul.yml
@@ -1725,11 +1790,15 @@ tasks:
   vagrant:up:
     desc: Start Vagrant VMs
     cmds:
+      # the copy's VMs used: one run at a time (scripts/copy-lock.sh - a nested task shares its caller's lock)
+      - cmd: scripts/copy-lock.sh
       - vagrant up
 
   vagrant:halt:
     desc: Stop Vagrant VMs
     cmds:
+      # the copy's VMs used: one run at a time (scripts/copy-lock.sh - a nested task shares its caller's lock)
+      - cmd: scripts/copy-lock.sh
       - vagrant halt
 
   vagrant:destroy:
