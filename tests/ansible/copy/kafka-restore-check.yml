@@ -119,7 +119,9 @@
 
     - name: The same messages, each key's in its order
       vars:
-        _got: "{{ _back.stdout_lines }}"
+        # split at newlines alone: stdout_lines is Python's splitlines, which also splits at \x1e - the headers'
+        # separator (copy run 6b, 2026-11-19: a two-header message read back as two lines)
+        _got: "{{ _back.stdout.split('\n') | reject('equalto', '') | list }}"
       ansible.builtin.assert:
         that:
           - _got | sort == markers | sort
