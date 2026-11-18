@@ -1,8 +1,7 @@
 ---
-# A Kafka dump unpinned in the Pi store (tasks/kafka-store.yml): a restore pins its source (PINNED - the prune never
-# removes a dump holding it); once Kafka is whole again and its services run on it, the source goes back to the prune -
-# which keeps the newest complete dumps as before. Its PINNED read first and said (when and why it was pinned); a dump
-# not pinned is said, nothing changed.
+# A Kafka dump unpinned in the Pi store (tasks/kafka-unpin.yml): a restore pins its source and every complete dump newer
+# than it; once Kafka is whole again and its services run on it, each goes back to the prune. Its PINNED said (when and
+# why); a dump not pinned is said, nothing changed; one not in the store refuses.
 #
 # Usage: task deploy:kafka-backup-unpin -- -e kafka_dump=<UTC timestamp, as the store names it>
 - name: A Kafka dump unpinned
@@ -13,27 +12,9 @@
     kubeconfig: /etc/kubernetes/admin.conf
     kubectl: "kubectl --kubeconfig {{ kubeconfig }}"
   tasks:
-    - name: The dump named - a timestamp
-      ansible.builtin.assert:
-        that:
-          - kafka_dump is defined
-          - kafka_dump is match('^[0-9]{8}T[0-9]{6}Z$')
-        fail_msg: "-e kafka_dump=<UTC timestamp, as the store names it>"
-        quiet: true
-
-    - name: Its PINNED removed
-      ansible.builtin.include_tasks: tasks/kafka-store.yml
+    - name: Unpinned
+      ansible.builtin.include_tasks: tasks/kafka-unpin.yml
       when: not ansible_check_mode
-      vars:
-        kafka_store_what: unpin
-        kafka_store_cmd: |
-          d={{ kafka_dump }}
-          files=$(rclone lsf --files-only --max-depth 1 "$STORE/$d/")
-          if ! printf '%s\n' "$files" | grep -qxF PINNED; then echo "$d not pinned: nothing changed"; exit 0; fi
-          was=$(rclone cat "$STORE/$d/PINNED")
-          echo "$d was pinned: $(printf '%s\n' "$was" | head -2 | tr '\n' ' ')"
-          rclone deletefile "$STORE/$d/PINNED"
-          echo "$d unpinned (pinned $(printf '%s\n' "$was" | head -1)) - the prune keeps the newest complete dumps again"
 
     - name: Done
       ansible.builtin.debug:

@@ -2,7 +2,10 @@
 
 **Status:** 2026-11-18 - built (platform fix/backup-guards, ops fix/batch3), reviewed (architecture, reliability: two
 Criticals answered), round two built (the BASELINE per topic, the restore's store reads, the unpin, a dump after a
-restore, the rehearsal re-runnable); its copy run after plan 123's push.
+restore, the rehearsal re-runnable), round three built (the retention check, a restore's BASELINE from the topics it
+restored, an older source refused unless allowed and the newer dumps pinned, the lock naming its Job and kept only once
+Kafka was touched, a damaged reference retired by a task, a Kafka dump in the copy's build and checks); its copy run
+after plan 123's push.
 
 ## Why
 
@@ -20,7 +23,11 @@ message after a loss.
   `task deploy:kafka-backup-baseline -- -e kafka_baseline_topics=<topic>` for a topic removed on purpose) bounds what
   is compared for the topics it names - every other topic is still compared with the dump before: a restore of one
   topic never hides another's loss (review, round one: a BASELINE for every topic did). The prune never removes a
-  `PINNED` dump; it deletes a dump's marker before its files. The dump refuses while the restore's lock is mounted, at
+  `PINNED` dump; it deletes a dump's marker before its files. The retention check (both reviews, round two): the dump
+  records each topic's retention in force and per partition its first offset at daily checkpoints; the guard refuses
+  when the new earliest offset passes the reference's offset for "now - the reference's retention" - a retention cut
+  short, records deleted, a clock stepped forward. Nothing judged reads nothing (a damaged reference a BASELINE excused
+  blocks nothing). The dump refuses while the restore's lock is mounted, at
   its start and before DONE. The restore checks the dump against itself first. KafkaBackupRestoreLockStale (lock over 2 h).
 - **Ops:** `tasks/kafka-restore.yml` reads the lock's name from the CronJob (a chart without the mount: no restore),
   makes it by create, out of Velero's backups, refuses while a dump is unfinished, pins its source (`PINNED` says when,
@@ -31,12 +38,20 @@ message after a loss.
   not a night later). `tasks/kafka-baseline.yml`: the topics named; an earlier BASELINE no complete dump followed keeps
   its topics covered (a restore, then a topic removed the same day). `task deploy:kafka-backup-unpin` gives a restore's
   source back to the prune. `tasks/kafka-store.yml` runs one rclone command in a Job from the CronJob's upload
-  container. DR-PROCEDURE's Kafka step.
+  container. DR-PROCEDURE's Kafka step. Round three: the BASELINE names the topics restore.sh restored (a full restore
+  wrote `all` - a topic not in an older source went unjudged: the reliability review's Critical); a source older than a
+  complete dump holding messages is refused (`kafka_allow_older=true` restores it) and every newer complete dump pinned;
+  the lock names its Job and is removed when the restore container never began; the wait survives an API blip; a
+  BASELINE failing after a restore says so; `task deploy:kafka-backup-retire` retires a damaged dump; the copy's build
+  takes a Kafka dump and every copy check another (a Kafka change's describe and configs read by the guard before
+  production does).
 - **Copy rehearsal** (`test:copy:kafka-restore`): after the restore - its source pinned (its unpin said) and the
   BASELINE written for that topic alone; with the lock there a dump refuses; the marker topic removed, the next dump
   refused by the guard; the baseline task for that topic; a dump passing. Re-runnable on the same copy: a lock a failed
   run left removed first, the marker topic under a BASELINE before its first dump; a failure after the topic went
-  still writes its baseline.
+  still writes its baseline. Round three: a second marker never restored, deleted after the restore - the next dump
+  refused naming it alone while the restored marker (a new TopicId) is excused; its baseline merged with the restore's;
+  the source unpinned by production's task.
 
 ## Order
 

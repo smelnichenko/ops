@@ -4,9 +4,10 @@
 # that consume them stopped (a live consumer group refuses the restore - they would read a week of history again), then
 # this; the dump's groups moved to the topics' end after, the services started again. A topic holding other messages is
 # refused (-e kafka_force=true produces on top: duplicates); one holding the dump's already is skipped (a re-run).
-# Then a dump of the restored Kafka (tasks/kafka-backup.yml): the store holds it now, not a night later - its guard
-# compares the topics not restored with the dump before, as every night. The restore's source stays pinned until
-# task deploy:kafka-backup-unpin (Kafka whole again, its services running on it).
+# A dump older than a complete one holding messages is refused (-e kafka_allow_older=true restores it; the newer ones
+# pinned too). Then a dump of the restored Kafka (tasks/kafka-backup.yml): the store holds it now, not a night later - its
+# guard compares the topics not restored with the dump before, as every night. The dumps it pinned stay until task
+# deploy:kafka-backup-unpin for each (Kafka whole again, its services running on it) - the last line names them.
 #
 # Usage: task deploy:kafka:restore -- -e kafka_dump=<UTC timestamp>|newest [-e "kafka_topics='<topic> <topic>'"]
 #        (rehearsed on the copy: test:copy:kafka-restore)
@@ -38,5 +39,6 @@
       ansible.builtin.debug:
         msg: >-
           KAFKA RESTORE: {{ kafka_restored | default('(a preview - nothing restored)') }}{{
-          ('; dumped after it: ' ~ kafka_backup_name ~ '; its source pinned - once Kafka is whole: task deploy:kafka-backup-unpin -- -e kafka_dump=' ~ kafka_restored_from)
+          ('; dumped after it: ' ~ kafka_backup_name ~ '; pinned: ' ~ kafka_restore_pinned
+           ~ ' - once Kafka is whole, each: task deploy:kafka-backup-unpin -- -e kafka_dump=<it>')
           if kafka_backup_name is defined else '' }}

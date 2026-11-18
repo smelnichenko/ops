@@ -36,6 +36,7 @@
             serviceAccountName: "{{ _pod.spec.serviceAccountName | default('default') }}"
             automountServiceAccountToken: false
             securityContext: "{{ _pod.spec.securityContext }}"
+            # the upload container's scratch: its own mount of the CronJob's tmp volume, a small emptyDir here
             volumes: [{name: tmp, emptyDir: {sizeLimit: 64Mi}}]
             containers:
               - name: store
@@ -43,7 +44,7 @@
                 env: "{{ _upload_c.env }}"
                 resources: "{{ _upload_c.resources }}"
                 securityContext: "{{ _upload_c.securityContext }}"
-                volumeMounts: [{name: tmp, mountPath: /tmp}]
+                volumeMounts: "{{ _upload_c.volumeMounts | selectattr('name', 'eq', 'tmp') | list }}"
                 command: [sh, -c, "set -eu\n{{ kafka_store_cmd | mandatory }}"]
 
 - name: The store Job run, waited for - its last line said
@@ -59,10 +60,11 @@
       end=$(( $(cut -d. -f1 /proc/uptime) + 660 ))
       s=""
       for _ in $(seq 66); do
-        s=$($k get "job/$j" -o jsonpath='{.status.succeeded}/{.status.failed}')
+        # a read that fails is tried again till the deadline - the Job runs on without it
+        s=$($k get "job/$j" -o jsonpath='{.status.succeeded}/{.status.failed}') || s=""
         case "$s" in
           1/*) break ;;
-          */1) $k logs "job/$j" -c store --tail=20 || true; echo "the store Job $j failed"; exit 1 ;;
+          */1) $k logs "job/$j" -c store --tail=20 || echo "(its log not read)"; echo "the store Job $j failed"; exit 1 ;;
         esac
         [ "$(cut -d. -f1 /proc/uptime)" -lt "$end" ] || break
         sleep 10

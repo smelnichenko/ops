@@ -47,6 +47,7 @@
    "cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/data-check.yml -e mode=seed",
    "set -euo pipefail ch=$(scripts/clickhouse-expected.sh main main) # its own assignment: inside the here-string a failure went unseen read -r compat users <<< \"$ch\" [ \"$compat\" != - ] || compat=\"\" cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/survival-check.yml -e mode=seed -e \"clickhouse_compat=$compat\" -e \"clickhouse_users=$users\"",
    "cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/metrics-check.yml -e record_scrape_pools=true",
+   "cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/kafka-backup-check.yml",
    "scripts/vagrant-smoke.sh main main",
    "scripts/vagrant-inventory.sh",
    "scripts/inventory-diff.sh tests/ansible/copy/prod-inventory.txt .copy/vagrant-inventory.txt {{.ALLOWED_MISSING}}",

@@ -564,6 +564,9 @@ tasks:
           cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/survival-check.yml -e mode=seed -e "clickhouse_compat=$compat" -e "clickhouse_users=$users"
       # the scrape pools and their target counts, the record the metrics check compares with
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/metrics-check.yml -e record_scrape_pools=true
+      # a Kafka dump by production's backup Job (its guard): the reference each check's dump is judged against - a Kafka
+      # change's describe, configs and offsets read by the guard here before production's nightly dump reads them
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/kafka-backup-check.yml
       # production's k6 smoke once more, on demand (the chart's PostSync hook ran it already, as in production)
       - cmd: scripts/vagrant-smoke.sh main main
       # every version the Vagrant copy runs is production's (minus the documented left-outs)
@@ -1414,7 +1417,7 @@ tasks:
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/kafka-backup-check.yml {{.CLI_ARGS}}
 
   deploy:kafka:restore:
-    desc: "PRODUCTION: Kafka's topics produced back from a dump (-- -e kafka_dump=<UTC timestamp>|newest [-e kafka_topics='<t> <t>']) - the topics there and empty, their consumers stopped; the dump's groups moved to the end after (kafka-restore.yml). Rehearsed on the copy: test:copy:kafka-restore"
+    desc: "PRODUCTION: Kafka's topics produced back from a dump (-- -e kafka_dump=<UTC timestamp>|newest [-e kafka_topics='<t> <t>'] [-e kafka_allow_older=true]) - the topics there and empty, their consumers stopped; the dump's groups moved to the end after, the restored Kafka dumped (kafka-restore.yml). Rehearsed on the copy: test:copy:kafka-restore"
     dir: deploy/ansible
     deps: [deploy:install]
     dotenv: ['../../.env']
@@ -1439,6 +1442,15 @@ tasks:
     prompt: "Unpin a Kafka dump on PRODUCTION (the prune may remove it)?"
     cmds:
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/kafka-backup-unpin.yml {{.CLI_ARGS}}
+
+  deploy:kafka-backup-retire:
+    desc: "PRODUCTION: a damaged Kafka dump retired (-- -e kafka_dump=<UTC timestamp> -e kafka_retire_why='<what is damaged>') - its DONE removed: never the guard's reference again, pruned a day later; never to quiet a lost-data refusal (kafka-backup-retire.yml)"
+    dir: deploy/ansible
+    deps: [deploy:install]
+    dotenv: ['../../.env']
+    prompt: "Retire a Kafka dump on PRODUCTION (the prune removes it a day later)?"
+    cmds:
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/kafka-backup-retire.yml {{.CLI_ARGS}}
 
   test:copy:kafka-restore:
     desc: "Vagrant: Kafka's dump restores - a marker topic (headers, none, keys, a JSON header) backed up by production's backup Job, emptied, restored by production's restore Job (that topic alone), each key's messages back in order, exactly as many (kafka-restore-check.yml)"

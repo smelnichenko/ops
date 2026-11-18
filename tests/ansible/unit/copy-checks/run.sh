@@ -97,17 +97,19 @@ check "no check read the caller's stdin" "$(grep -c "THE CALLER'S INPUT" <<< "$o
 check "every check's ssh: vagrant's own config, then keepalives 15 s x4 and a 30 s connect bound - a stalled VM ends its check" \
   "$(grep -c '^sshcfg: ServerAliveInterval 15,ServerAliveCountMax 4,ConnectTimeout 30 after: Host kubeadm$' <<< "$out")" 1
 # each check's own command, exactly (the stubs echo their arguments): the data check VERIFIES (a seed there re-seeds
-# and passes), the isolation's proof alone, none in check mode, the smoke on the refs in their order
+# and passes), the isolation's proof alone, none in check mode, the smoke on the refs in their order, Kafka's dump by
+# production's backup check (its guard against the build's dump)
 for want in "check -i inventory/vagrant.yml ../../tests/ansible/copy/data-check.yml -e mode=verify read stdin: []" \
     "check -i inventory/vagrant.yml ../../tests/ansible/copy/storage-check.yml read stdin: []" \
     "check -i inventory/vagrant.yml playbooks/production-data-check.yml read stdin: []" \
     "check -i inventory/vagrant.yml ../../tests/ansible/copy/isolate-cluster.yml --tags proof read stdin: []" \
+    "check -i inventory/vagrant.yml playbooks/kafka-backup-check.yml read stdin: []" \
     "smoke i p read stdin: []"; do
   check "the exact command: ${want% read stdin*}" "$(grep -cxF -- "$want" <<< "$out")" 1
 done
 check "the survival check is given ClickHouse's compatibility and users as the platform ref sets them" \
   "$(grep -c 'survival-check.yml -e mode=verify -e clickhouse_compat=25.8 -e clickhouse_users=schnappy read' <<< "$out")" 1
-check "seven checks judged" "$(grep -c '^===== check ' <<< "$out")" 7
+check "eight checks judged" "$(grep -c '^===== check ' <<< "$out")" 8
 check "the failing one named, the run failed" "$rc $(grep -o 'COPY CHECKS FAILED: metrics' <<< "$out")" \
   "1 COPY CHECKS FAILED: metrics"
 check "it ends once its checks have: the bound's watchdog not waited out" "$([ "$took" -lt 15 ] && echo prompt || echo "$took s")" \

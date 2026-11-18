@@ -24,10 +24,12 @@
       end=$(( $(cut -d. -f1 /proc/uptime) + 3700 ))
       s=""
       for _ in $(seq 370); do
-        s=$($k get "job/$j" -o jsonpath='{.status.succeeded}/{.status.failed}')
+        # a read that fails is tried again till the deadline - the Job runs on without it
+        s=$($k get "job/$j" -o jsonpath='{.status.succeeded}/{.status.failed}') || s=""
         case "$s" in
           1/*) break ;;
-          */1) $k logs "job/$j" -c dump --tail=20 || true; $k logs "job/$j" -c upload --tail=20 || true
+          */1) $k logs "job/$j" -c dump --tail=20 || echo "(the dump's log not read)"
+               $k logs "job/$j" -c upload --tail=20 || echo "(the upload's log not read)"
                echo "the backup Job $j failed"; exit 1 ;;
         esac
         [ "$(cut -d. -f1 /proc/uptime)" -lt "$end" ] || break

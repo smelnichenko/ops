@@ -12,7 +12,10 @@
 #       marker says how to unpin); a store read that fails stops it - never an older dump taken for the newest
 #   R05 tasks/kafka-baseline.yml: the topics named (or all), why; an earlier BASELINE no dump followed kept covered, one
 #       a dump followed replaced; a store read that fails writes nothing. The restore's: its topics, or all, its dump
-#   R06 playbooks/kafka-backup-unpin.yml: a pinned dump unpinned, said; one not pinned said, nothing changed
+#   R06 tasks/kafka-unpin.yml: a pinned dump unpinned, said; one not pinned said, nothing changed; one not there refused
+#   R07 playbooks/kafka-backup-retire.yml: a dump's DONE removed (no longer complete), why kept; a pinned one refused
+#   R08 the copy's refused dump (tests/ansible/copy/tasks/kafka-guard-refused.yml): each topic named gone, none excused named
+#   R09 the restore's wait: an API read that fails is tried again (the Job runs on); its fetch, topics and restored lines
 set -u
 cd "$(dirname "$0")/../../../.." || exit 1
 PY=$(command -v python3)
@@ -74,24 +77,45 @@ check("R02 the lock's name read from the CronJob's restoring volume; none there 
 need = next(t for t in tasks if str(t.get("name", "")).startswith("The backup CronJob holds the lock's mount"))["ansible.builtin.assert"]["that"]
 check("R02   the assert: a name passes, none refuses", (condition(need, _kr_lock="x"), condition(need, _kr_lock="")), (True, False))
 inner = [t["name"] for t in blk["block"]]
-check("R02 inside: the ConfigMap made, no dump unfinished, the restore Job run, the baseline - in that order",
-      [n.split(" ")[1] for n in inner], ["restoring", "dump", "restore", "store's"])
+check("R02 inside: the ConfigMap made, no dump unfinished, the restore Job run, what it restored, the baseline - in that order",
+      [n.split(" ")[1] for n in inner], ["restoring", "dump", "restore", "it", "store's"])
 mkcmd = blk["block"][0]["ansible.builtin.shell"]["cmd"]
 check("R02 made by create (one there already: another restore's, or stale - stops), its since a UTC stamp, out of Velero's backups",
       ("create configmap {{ _kr_lock }}" in mkcmd, "| $k create -f -" in mkcmd, "apply" in mkcmd,
        '--from-literal=since="$(date -u +%Y%m%dT%H%M%SZ)"' in mkcmd, '"velero.io/exclude-from-backup": "true"' in mkcmd), (True, True, False, True, True))
+check("R02   it names the restore Job (the stale lock's runbook judges that Job, never another restore's)",
+      "--from-literal=job={{ _kr_name }}" in mkcmd, True)
 alw = blk.get("always") or []
+rm = next(t for t in alw if str(t.get("name", "")).startswith("The restoring ConfigMap removed"))
 check("R02 always: the ConfigMap removed, a missing one no error, retried",
-      [("delete configmap {{ _kr_lock }}" in str(t.get("ansible.builtin.command")), "--ignore-not-found" in str(t.get("ansible.builtin.command")),
-        t.get("retries")) for t in alw], [(True, True, 3)])
-w = alw[0]["when"]
+      ("delete configmap {{ _kr_lock }}" in str(rm.get("ansible.builtin.command")), "--ignore-not-found" in str(rm.get("ansible.builtin.command")),
+       rm.get("retries")), (True, True, 3))
+w = rm["when"]
 ok, bad = {"failed": False, "changed": True}, {"failed": True}
+nb, began, unread = {"rc": 0, "stdout": "not-began"}, {"rc": 0, "stdout": "began"}, {"rc": 1, "stdout": ""}
 check("R02   removed by the run that made it alone: its create failed (another's lock) - kept",
       condition(w, _kr_locked=bad, _kr_run=ok), False)
 check("R02   the restore succeeded, or never started (a dump unfinished refused it) - removed",
       (condition(w, _kr_locked=ok, _kr_run=ok), condition(w, _kr_locked=ok)), (True, True))
-check("R02   the restore failed - kept (a Kafka half restored; a dump now would capture the half)",
-      condition(w, _kr_locked=ok, _kr_run=bad), False)
+check("R02   the restore failed after its restore container began - kept (a Kafka half restored)",
+      condition(w, _kr_locked=ok, _kr_run=bad, _kr_began=began), False)
+check("R02   the Job failed, its restore container never began (the fetch failed: Kafka untouched) - removed",
+      condition(w, _kr_locked=ok, _kr_run=bad, _kr_began=nb), True)
+check("R02   that answer not read - kept (never removed on a guess)",
+      (condition(w, _kr_locked=ok, _kr_run=bad, _kr_began=unread), condition(w, _kr_locked=ok, _kr_run=bad)), (False, False))
+bc = next(t for t in alw if str(t.get("name", "")).startswith("Whether the restore container began"))
+bsh = bc["ansible.builtin.shell"]["cmd"]
+bpy = bsh[bsh.index("python3 -c '") + len("python3 -c '"):bsh.rindex("'")]
+def began_of(pods):
+    r = subprocess.run(["python3", "-c", bpy], input=json.dumps({"items": pods}), capture_output=True, text=True)
+    return r.returncode, r.stdout.strip()
+pod = lambda *cs: {"status": {"containerStatuses": list(cs)}}
+check("R02   began: the restore container running, ended, or restarted; not: only the fetch's status, or no pod (never applied)",
+      [began_of([pod({"name": "restore", "state": {"running": {}}})])[1], began_of([pod({"name": "restore", "state": {"terminated": {"exitCode": 1}}})])[1],
+       began_of([pod({"name": "restore", "state": {"waiting": {}}, "lastState": {"terminated": {}}})])[1],
+       began_of([pod({"name": "restore", "state": {"waiting": {"reason": "PodInitializing"}}})])[1], began_of([{"status": {}}])[1], began_of([])[1]],
+      ["began", "began", "began", "not-began", "not-began", "not-began"])
+check("R02   asked only when the Job failed", condition(bc["when"], _kr_locked=ok, _kr_run=ok), False)
 fw = blk["block"][1]["failed_when"]
 check("R02 a dump unfinished refuses: named Jobs fail it, none passes, a broken read fails",
       (condition(fw, _kr_dumping={"rc": 0, "stdout": "schnappy-production-kafka-backup-29371530"}),
@@ -134,11 +158,12 @@ p() { echo "$W/store/${1#store:}"; }
 path=$(eval echo "\\${$#}"); [ "$1" = rcat ] || [ "$1" = cat ] || [ "$1" = deletefile ] && path=$2; [ "$1" = copy ] && path=$2
 case "$1:$path" in $FAIL) echo "rclone: $1 $path: connection reset" >&2; exit 1 ;; esac
 case "$1" in
-  lsf) dd=$(p "$path"); [ -d "$dd" ] || exit 0
+  lsf) dd=$(p "$path"); [ -d "$dd" ] || { echo "rclone: directory not found" >&2; exit 3; }
        case "$*" in *--dirs-only*) for e in "$dd"/*/; do [ -d "$e" ] && basename "$e" | sed 's#$#/#'; done ;;
                     *--files-only*) for e in "$dd"/*; do [ -f "$e" ] && basename "$e"; done ;; esac ;;
   cat) cat "$(p "$2")" ;;
-  copy) mkdir -p "$3"; cp -r "$(p "$2")"/. "$3"/ ;;
+  copy) [ -d "$(p "$2")" ] || exit 3; mkdir -p "$3"; cp -r "$(p "$2")"/. "$3"/ ;;
+  mkdir) mkdir -p "$(p "$2")" ;;
   rcat) cat > "$(p "$2")" ;;
   deletefile) rm "$(p "$2")" ;;
   *) exit 2 ;;
@@ -151,10 +176,10 @@ def run_store(d, script, fail="__none__"):
                        env={"PATH": d + "/bin:/usr/bin:/bin", "W": d, "STORE": "store:b", "FAIL": fail})
     # stderr first: the script's own last line last
     return r.returncode, (r.stderr + r.stdout).strip().split("\n")
-def fetch(which, allow=False, store=None, fail="__none__"):
+def fetch(which, allow=False, store=None, fail="__none__", older=False):
     with tempfile.TemporaryDirectory() as d:
         store_dir(d, store); os.makedirs(d + "/dump")
-        script = render(fetch_src, _which=which, kafka_allow_empty=allow).replace("/dump/", d + "/dump/")
+        script = render(fetch_src, _which=which, kafka_allow_empty=allow, kafka_allow_older=older).replace("/dump/", d + "/dump/")
         rc, out = run_store(d, script, fail)
         fetched = sorted(os.listdir(d + "/dump"))
         pinned = sorted(n for n in os.listdir(d + "/store/b") if os.path.exists("%s/store/b/%s/PINNED" % (d, n)))
@@ -163,8 +188,12 @@ def fetch(which, allow=False, store=None, fail="__none__"):
 S = {"20261101T023000Z": ("20261101T023000Z 2 topics 5 messages", []), "20261102T023000Z": ("20261102T023000Z 2 topics 0 messages", []),
      "20261103T023000Z": (None, [])}
 rc, fetched, pinned, last, pin_text = fetch("newest", store=S)
-check("R04 newest: the newest complete dump holding messages - the empty newer one and the incomplete passed over; it pinned",
-      (rc, fetched, pinned), (0, ["20261101T023000Z"], ["20261101T023000Z"]))
+check("R04 newest: the newest complete dump holding messages - the empty newer one and the incomplete passed over; it pinned, the newer complete one too",
+      (rc, fetched, pinned, last), (0, ["20261101T023000Z"], ["20261101T023000Z", "20261102T023000Z"],
+                                   "fetched 20261101T023000Z (5 messages), pinned: 20261102T023000Z 20261101T023000Z"))
+check("R04   the newer one's PINNED: newer than the source, how to unpin it",
+      pin_text["20261102T023000Z"].split("\n")[1:3], ["why newer than the source of a restore (20261101T023000Z)",
+                                                     "unpin task deploy:kafka-backup-unpin -- -e kafka_dump=20261102T023000Z"])
 pl = pin_text.get("20261101T023000Z", "").rstrip("\n").split("\n")
 check("R04   its PINNED: when, why, how to unpin it",
       (bool(re.fullmatch(r"[0-9]{8}T[0-9]{6}Z", pl[0])), pl[1:]),
@@ -185,6 +214,15 @@ for fail, why in (("lsf:store:b/20261102T023000Z/", "listing the newest dump"), 
           (rc, "20261101T023000Z" in fetched, pinned, "failed" in last), (1, False, [], True))
 rc, fetched, pinned, last, _ = fetch("newest", store=S2)
 check("R04   the same store, no failure: the newest taken", (rc, fetched, pinned), (0, ["20261102T023000Z"], ["20261102T023000Z"]))
+rc, fetched, pinned, last, _ = fetch("20261101T023000Z", store=S2)
+check("R04 an older dump named, a newer complete one holding messages: refused, nothing pinned (its messages after the source)",
+      (rc, fetched, pinned, "newer complete dumps hold messages: 20261102T023000Z" in last), (1, [], [], True))
+rc, fetched, pinned, last, pin_text = fetch("20261101T023000Z", store=S2, older=True)
+check("R04   allowed (kafka_allow_older): restored from, the newer pinned beside it",
+      (rc, fetched, pinned), (0, ["20261101T023000Z"], ["20261101T023000Z", "20261102T023000Z"]))
+rc, fetched, pinned, last, _ = fetch("20261103T023000Z", store=S)
+check("R04 a dump named that is not complete (no DONE): refused before anything is fetched or pinned",
+      (rc, fetched, pinned, "not a complete one" in last), (1, [], [], True))
 
 # R05: the BASELINE
 bt = yaml.safe_load(open(os.path.join(ops, "deploy/ansible/playbooks/tasks/kafka-baseline.yml")))
@@ -207,6 +245,12 @@ rc, lines, last = baseline("chat-events", "the topic removed: chat's events move
 check("R05 none there: its time, why (cut to plain characters), the topic; said",
       (rc, bool(ts.match(lines[0])), lines[1:], last.split(":")[1:] and last.endswith(": chat-events")),
       (0, True, ["why the topic removed: chat_s events moved_ it_s _done _x_", "topic chat-events"], True))
+with tempfile.TemporaryDirectory() as d:
+    store_dir(d, None); os.rmdir(d + "/store/b")
+    kb = render(inc["vars"]["_kb_topics"], kafka_baseline_topics="b")
+    rc, out = run_store(d, render(inc["vars"]["kafka_store_cmd"], _kb_topics=kb, kafka_baseline_why="x"))
+    check("R05 a fresh store (no bucket until the first upload): made, the BASELINE written - never 'directory not found'",
+          (rc, os.path.exists(d + "/store/b/BASELINE")), (0, True))
 rc, lines, _ = baseline("all", "a restore from 20261101T023000Z")
 check("R05 all: the line all", (rc, lines[1:]), (0, ["why a restore from 20261101T023000Z", "all"]))
 OLD = "20261101T120000Z\nwhy a restore from 20261101T023000Z of a\ntopic a\n"
@@ -227,19 +271,36 @@ check("R05 an earlier one with no timestamp: replaced, b alone", (rc, lines[1:])
 for fail in ("lsf:store:b/", "cat:store:b/BASELINE", "lsf:store:b/20261102T023000Z/", "rcat:store:b/BASELINE"):
     rc, lines, _ = baseline("b", "b removed", top={"BASELINE": OLD}, store={"20261102T023000Z": ("x 1 topics 5 messages", [])}, fail=fail)
     check("R05 %s fails: the task fails, the earlier BASELINE as it was" % fail, (rc != 0, lines), (True, OLD.rstrip("\n").split("\n")))
-rb = next(t for t in blk["block"] if str(t.get("name", "")).startswith("The store's BASELINE now"))["vars"]
-run_ok = {"stdout_lines": ["fetched x", "restored 12 messages from 20261101T023000Z"]}
-got = [(render(rb["kafka_baseline_topics"], **v), render(rb["kafka_baseline_why"], _kr_from=render(rb["_kr_from"], _kr_run=run_ok), **v))
-       for v in ({"kafka_topics": "a b"}, {"kafka_topics": ""}, {}, {"kafka_topics": "  "})]
-check("R05 the restore's BASELINE: its topics, or all - from the dump it restored (newest named by its time)",
-      got, [("a b", "a restore from 20261101T023000Z of a b"), ("all", "a restore from 20261101T023000Z"),
-            ("all", "a restore from 20261101T023000Z"), ("all", "a restore from 20261101T023000Z")])
+sf = next(t for t in blk["block"] if str(t.get("name", "")).startswith("What it restored"))["ansible.builtin.set_fact"]
+bb = next(t for t in blk["block"] if str(t.get("name", "")).startswith("The store's BASELINE now"))
+inc_v = bb["block"][0]["vars"]
+run_ok = {"stdout_lines": ["fetched 20261101T023000Z (12 messages), pinned: 20261102T023000Z 20261101T023000Z",
+                           "topics chat.messages user.events ", "restored 12 messages from 20261101T023000Z"]}
+facts = {k: render(v, _kr_run=run_ok) for k, v in sf.items()}
+check("R05 the restore's BASELINE: the topics restore.sh says it restored (never all), from the dump it restored; what it pinned",
+      (render(inc_v["kafka_baseline_topics"], **facts), render(inc_v["kafka_baseline_why"], **facts), facts["_kr_pinned"]),
+      ("chat.messages user.events", "a restore from 20261101T023000Z of chat.messages user.events", "20261102T023000Z 20261101T023000Z"))
+fwr = next(t for t in blk["block"] if str(t.get("name", "")).startswith("The restore Job run"))["failed_when"]
+check("R05   the restore's log without its topics line (no BASELINE could be named): failed; with it: passed",
+      (condition(fwr, _kr_run={"rc": 0, "stdout_lines": [run_ok["stdout_lines"][0], run_ok["stdout_lines"][2]]}),
+       condition(fwr, _kr_run=dict(run_ok, rc=0))), (True, False))
+check("R05   the BASELINE failing after the restore: says so with the baseline task to run - never the restore again",
+      [("deploy:kafka-backup-baseline" in str(t), "kafka_baseline_topics='{{ _kr_topics }}'" in str(t), "deploy:kafka:restore" in str(t))
+       for t in bb["rescue"]], [(True, True, False)])
+need_r = tasks[0]["ansible.builtin.assert"]["that"]
+check("R05 kafka_topics checked before anything: names or none pass; a tab, a quote, a $ refused",
+      [condition(need_r, kafka_topics=t) for t in ("a.b c-d", "", "  ", "a\tb", "a'b", "a$b")] + [condition(need_r)],
+      [True, True, True, False, False, False, True])
 
 # R06: the unpin
-up = yaml.safe_load(open(os.path.join(ops, "deploy/ansible/playbooks/kafka-backup-unpin.yml")))[0]["tasks"]
+up = yaml.safe_load(open(os.path.join(ops, "deploy/ansible/playbooks/tasks/kafka-unpin.yml")))
 ucmd = next(t for t in up if t.get("name") == "Its PINNED removed")["vars"]["kafka_store_cmd"]
 check("R06 the dump named by its time alone", [condition(up[0]["ansible.builtin.assert"]["that"], kafka_dump=x)
-      for x in ("20261101T023000Z", "newest", "20261101T023000Z/../x")], [True, False, False])
+      for x in ("20261101T023000Z", "newest", "20261101T023000Z/../x")] + [condition(up[0]["ansible.builtin.assert"]["that"])],
+      [True, False, False, False])
+upb = yaml.safe_load(open(os.path.join(ops, "deploy/ansible/playbooks/kafka-backup-unpin.yml")))[0]["tasks"]
+check("R06   the playbook: the tasks file (the copy's rehearsal runs the same)",
+      [t.get("ansible.builtin.include_tasks") for t in upb if "ansible.builtin.include_tasks" in t], ["tasks/kafka-unpin.yml"])
 def unpin(store, fail="__none__"):
     with tempfile.TemporaryDirectory() as d:
         store_dir(d, store)
@@ -251,6 +312,74 @@ rc, still, done_kept, last = unpin({"20261101T023000Z": ("x", [])})
 check("R06 a dump not pinned: said, nothing changed", (rc, still, done_kept, "not pinned: nothing changed" in last), (0, False, True, True))
 rc, still, done_kept, last = unpin({"20261101T023000Z": ("x", ["PINNED"])}, fail="lsf:store:b/20261101T023000Z/")
 check("R06 its listing fails: the task fails, still pinned (never read as not pinned)", (rc != 0, still), (True, True))
+rc, still, done_kept, last = unpin({"20261102T023000Z": ("x", ["PINNED"])})
+check("R06 a dump not in the store: refused, said (never 'not pinned')", (rc != 0, "no dump 20261101T023000Z in the store" in last), (True, True))
+
+# R07: the retire
+rt = yaml.safe_load(open(os.path.join(ops, "deploy/ansible/playbooks/kafka-backup-retire.yml")))[0]["tasks"]
+rneed = rt[0]["ansible.builtin.assert"]["that"]
+check("R07 the dump by its time, and why", [condition(rneed, kafka_dump="20261101T023000Z", kafka_retire_why="topics.txt lost"),
+      condition(rneed, kafka_dump="20261101T023000Z", kafka_retire_why=" "), condition(rneed, kafka_dump="newest", kafka_retire_why="x")],
+      [True, False, False])
+rcmd = next(t for t in rt if t.get("name") == "Its DONE removed")["vars"]["kafka_store_cmd"]
+def retire(store, fail="__none__"):
+    with tempfile.TemporaryDirectory() as d:
+        store_dir(d, store)
+        rc, out = run_store(d, render(rcmd, kafka_dump="20261101T023000Z", kafka_retire_why="its topics.txt lost; $x 'y'"), fail)
+        b = d + "/store/b/20261101T023000Z/"
+        return (rc, os.path.exists(b + "DONE"), open(b + "RETIRED").read().split("\n")[1:3] if os.path.exists(b + "RETIRED") else None, out[-1])
+rc, done_left, why, last = retire({"20261101T023000Z": ("20261101T023000Z 2 topics 5 messages", [])})
+check("R07 a damaged dump: its DONE gone (no longer complete - never the guard's reference), why and its DONE kept beside it",
+      (rc, done_left, why, "retired" in last), (0, False, ["why its topics.txt lost_ _x _y_", "DONE was 20261101T023000Z 2 topics 5 messages"], True))
+rc, done_left, why, last = retire({"20261101T023000Z": ("x", ["PINNED"])})
+check("R07   a pinned one (a restore's source): refused, its DONE kept", (rc != 0, done_left, "unpin it first" in last), (True, True, True))
+rc, done_left, why, last = retire({"20261101T023000Z": (None, [])})
+check("R07   no DONE: retired already, nothing changed", (rc, "nothing changed" in last), (0, True))
+rc, done_left, why, last = retire({"20261101T023000Z": ("x", [])}, fail="lsf:store:b/20261101T023000Z/")
+check("R07   its listing failing: refused, its DONE kept", (rc != 0, done_left), (True, True))
+
+# R08: the copy's refused dump - its judgement of the upload's line
+gr = yaml.safe_load(open(os.path.join(ops, "tests/ansible/copy/tasks/kafka-guard-refused.yml")))[0]["failed_when"]
+line = lambda body: {"rc": 0, "stdout": "job /1\n" + body, "stdout_lines": ["job /1", body]}
+both = "Kafka lost data: b gone (since 20261101T023000Z) - not uploaded, nothing pruned"
+check("R08 refused naming the gone topic, the excused one not named: passed",
+      condition(gr, _guardcheck=line(both), kafka_guard_gone=["b"], kafka_guard_excused=["a"]), False)
+check("R08   the excused one named too (gone, or made again): failed - a restored topic judged",
+      (condition(gr, _guardcheck=line(both + "; a gone (since x)"), kafka_guard_gone=["b"], kafka_guard_excused=["a"]),
+       condition(gr, _guardcheck=line("Kafka lost data: a made again (TopicId p -> q, since x); b gone (since x)"), kafka_guard_gone=["b"], kafka_guard_excused=["a"])),
+      (True, True))
+check("R08   a prefix is no name: b-other gone does not name b",
+      condition(gr, _guardcheck=line("Kafka lost data: b-other gone (since x)"), kafka_guard_gone=["b"], kafka_guard_excused=[]), True)
+check("R08   the dump uploaded (the Job succeeded), or no refusal line: failed",
+      (condition(gr, _guardcheck={"rc": 0, "stdout": "job 1/\nuploaded", "stdout_lines": ["job 1/", "uploaded"]}, kafka_guard_gone=["b"], kafka_guard_excused=[]),
+       condition(gr, _guardcheck=line("connection reset"), kafka_guard_gone=["b"], kafka_guard_excused=[])), (True, True))
+
+# R09: the restore's wait, against a stub kubectl - one read failing, then the Job done
+wt = next(t for t in blk["block"] if str(t.get("name", "")).startswith("The restore Job run"))["ansible.builtin.shell"]["cmd"]
+def wait(fail_reads, done="1/"):
+    with tempfile.TemporaryDirectory() as d:
+        os.makedirs(d + "/bin")
+        open(d + "/bin/kubectl", "w").write("""#!/bin/bash
+case "$*" in
+  *" apply "*) cat > /dev/null ;;
+  *" get job/"*) n=$(cat "$W/reads" 2> /dev/null || echo 0); echo $((n + 1)) > "$W/reads"
+                 [ "$n" -ge "$FAILS" ] || { echo "error: the server is currently unable to handle the request" >&2; exit 1; }; echo "$DONE" ;;
+  *"logs "*"-c fetch"*) echo "fetched 20261101T023000Z (5 messages), pinned: 20261101T023000Z" ;;
+  *"logs "*"-c restore"*) printf 'topics a b\nrestored 5 messages from 20261101T023000Z\n' ;;
+  *" delete "*) ;;
+esac
+""")
+        open(d + "/bin/sleep", "w").write("#!/bin/sh\nexit 0\n")
+        os.chmod(d + "/bin/kubectl", 0o755); os.chmod(d + "/bin/sleep", 0o755)
+        script = render(wt, kubectl="kubectl", _kr_name="kafka-restore-1", kafka_namespace="ns")
+        r = subprocess.run(["bash", "-c", script], input="{}", capture_output=True, text=True, timeout=120,
+                           env={"PATH": d + "/bin:/usr/bin:/bin", "W": d, "FAILS": str(fail_reads), "DONE": done})
+        return r.returncode, r.stdout.strip().split("\n")
+rc, out = wait(2)
+check("R09 the restore's wait: two reads failing, then done - its fetch, topics and restored lines (the Job ran on)",
+      (rc, out), (0, ["fetched 20261101T023000Z (5 messages), pinned: 20261101T023000Z", "topics a b", "restored 5 messages from 20261101T023000Z"]))
+rc, out = wait(10000)
+check("R09   every read failing: not done by its deadline, said", (rc, out[-1]), (1, "the restore Job kafka-restore-1 not done 3700 s after its start"))
 
 print("kafka-restore: " + ("ALL-PASS" if not fails else "%d FAILED" % fails))
 sys.exit(1 if fails else 0)

@@ -158,11 +158,12 @@ groups' offsets. The Strimzi Kafka comes back from git (Argo CD) with its KafkaT
 1. The services that consume the topics stopped (a live consumer group refuses the restore - they would read a week of
    history again), Kafka at the version that ran, its topics there and empty.
 2. `task deploy:kafka:restore -- -e kafka_dump=newest` (or a dump's UTC timestamp; `-e "kafka_topics='<t> <t>'"` for some
-   topics alone). It holds the nightly dump off for its span, pins its source dump in the store, produces the messages
-   back (a keyed message on its partition again), moves the dump's groups to the topics' end, writes the store's
-   BASELINE for the topics it restored, then dumps the restored Kafka.
-3. The services started again. Once Kafka is whole and its services run on it: `task deploy:kafka-backup-unpin -- -e
-   kafka_dump=<the dump restored>` (the restore's last line names it) - the prune keeps the newest complete dumps again.
+   topics alone; a dump older than one holding messages needs `-e kafka_allow_older=true`). It holds the nightly dump off
+   for its span, pins its source dump and every complete dump newer than it, produces the messages back (a keyed message
+   on its partition again), moves the dump's groups to the topics' end, writes the store's BASELINE for the topics it
+   restored, then dumps the restored Kafka.
+3. The services started again. Once Kafka is whole and its services run on it, each dump it pinned (its last line names
+   them): `task deploy:kafka-backup-unpin -- -e kafka_dump=<it>` - the prune keeps the newest complete dumps again.
 
 A restore that failed keeps its lock (`<namespace>-kafka-backup-restoring`): every nightly dump refuses while it is there
 (KafkaBackupRestoreLockStale says so - its runbook). Rehearsed on the copy: `task test:copy:kafka-restore`.

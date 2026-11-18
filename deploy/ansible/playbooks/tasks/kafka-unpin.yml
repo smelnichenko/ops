@@ -1,0 +1,29 @@
+---
+# A Kafka dump unpinned in the Pi store (tasks/kafka-store.yml): a restore pins its source and every complete dump newer
+# than it (PINNED - the prune never removes a dump holding it); once Kafka is whole again and its services run on it, each
+# goes back to the prune - which keeps the newest complete dumps as before. Its PINNED read first and said (when and why
+# it was pinned); a dump not pinned is said, nothing changed; a dump not in the store refuses.
+#
+# Expects: kubectl; kafka_namespace (default schnappy-production); kafka_dump (a dump's UTC timestamp).
+- name: The dump named - a timestamp
+  ansible.builtin.assert:
+    that: kafka_dump | default('') is match('^[0-9]{8}T[0-9]{6}Z$')
+    fail_msg: "kafka_dump: a dump's UTC timestamp, as the store names it - got '{{ kafka_dump | default('') }}'"
+    quiet: true
+
+- name: Its PINNED removed
+  ansible.builtin.include_tasks: kafka-store.yml
+  vars:
+    kafka_store_what: unpin
+    kafka_store_cmd: |
+      d={{ kafka_dump }}
+      rc=0
+      files=$(rclone lsf --files-only --max-depth 1 "$STORE/$d/") || rc=$?
+      # 3: rclone's "directory not found"
+      [ "$rc" -ne 3 ] || { echo "no dump $d in the store"; exit 1; }
+      [ "$rc" -eq 0 ] || { echo "listing $STORE/$d failed (rclone rc=$rc)"; exit 1; }
+      if ! printf '%s\n' "$files" | grep -qxF PINNED; then echo "$d not pinned: nothing changed"; exit 0; fi
+      was=$(rclone cat "$STORE/$d/PINNED")
+      echo "$d was pinned: $(printf '%s\n' "$was" | head -2 | tr '\n' ' ')"
+      rclone deletefile "$STORE/$d/PINNED"
+      echo "$d unpinned (pinned $(printf '%s\n' "$was" | head -1)) - the prune keeps the newest complete dumps again"

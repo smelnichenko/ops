@@ -25,6 +25,7 @@
       b=$(date -u +%Y%m%dT%H%M%SZ)
       cover='{{ "all" if _kb_topics == ["all"] else ("topic " ~ (_kb_topics | join("\ntopic "))) }}'
       why='why {{ kafka_baseline_why | mandatory | regex_replace("[^A-Za-z0-9 ._,:/()-]", "_") }}'
+      rclone mkdir "$STORE"  # a fresh store: no bucket until the first upload makes it
       top=$(rclone lsf --files-only --max-depth 1 "$STORE/")
       if printf '%s\n' "$top" | grep -qxF BASELINE; then
         old=$(rclone cat "$STORE/BASELINE")
@@ -32,7 +33,7 @@
         if printf '%s\n' "$ob" | grep -qE '^[0-9]{8}T[0-9]{6}Z$'; then
           dirs=$(rclone lsf --dirs-only "$STORE/")
           spent=""
-          for n in $(printf '%s\n' "$dirs" | sed 's#/$##' | grep -E '^[0-9]{8}T[0-9]{6}Z$' | sort -r || true); do
+          for n in $(printf '%s\n' "$dirs" | sed 's#/$##' | grep -E '^[0-9]{8}T[0-9]{6}Z$' | sort -r); do
             [ "$(echo "$n" | tr -d TZ)" -gt "$(echo "$ob" | tr -d TZ)" ] || break
             files=$(rclone lsf --files-only --max-depth 1 "$STORE/$n/")
             if printf '%s\n' "$files" | grep -qxF DONE; then spent=$n; break; fi

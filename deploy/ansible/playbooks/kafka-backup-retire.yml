@@ -1,0 +1,46 @@
+---
+# A damaged Kafka dump retired in the Pi store (tasks/kafka-store.yml): its DONE removed - no longer complete, it is
+# never the backup's guard's reference again (the dump before it is) and the prune removes it a day later. For a dump
+# the guard refuses every upload against ("holds no topics.txt", "holds no offsets for" - KafkaBackupMissed's runbook),
+# never to quiet a refusal that says Kafka lost data (that is a restore). A pinned dump refuses (a restore's source -
+# unpin it first, on purpose). Its DONE said before it goes; why kept in the store beside it (RETIRED).
+#
+# Usage: task deploy:kafka-backup-retire -- -e kafka_dump=<UTC timestamp> -e kafka_retire_why="<what is damaged>"
+- name: A damaged Kafka dump retired
+  hosts: target
+  become: true
+  gather_facts: false
+  vars:
+    kubeconfig: /etc/kubernetes/admin.conf
+    kubectl: "kubectl --kubeconfig {{ kubeconfig }}"
+  tasks:
+    - name: The dump named, and why
+      ansible.builtin.assert:
+        that:
+          - kafka_dump | default('') is match('^[0-9]{8}T[0-9]{6}Z$')
+          - kafka_retire_why | default('') | trim | length > 0
+        fail_msg: '-e kafka_dump=<UTC timestamp, as the store names it> -e kafka_retire_why="<what is damaged>"'
+        quiet: true
+
+    - name: Its DONE removed
+      ansible.builtin.include_tasks: tasks/kafka-store.yml
+      when: not ansible_check_mode
+      vars:
+        kafka_store_what: retire
+        kafka_store_cmd: |
+          d={{ kafka_dump }}
+          rc=0
+          files=$(rclone lsf --files-only --max-depth 1 "$STORE/$d/") || rc=$?
+          [ "$rc" -ne 3 ] || { echo "no dump $d in the store"; exit 1; }
+          [ "$rc" -eq 0 ] || { echo "listing $STORE/$d failed (rclone rc=$rc)"; exit 1; }
+          if printf '%s\n' "$files" | grep -qxF PINNED; then echo "$d is pinned (a restore's source): unpin it first"; exit 1; fi
+          if ! printf '%s\n' "$files" | grep -qxF DONE; then echo "$d holds no DONE: retired already, nothing changed"; exit 0; fi
+          done_line=$(rclone cat "$STORE/$d/DONE")
+          printf '%s\nwhy %s\nDONE was %s\n' "$(date -u +%Y%m%dT%H%M%SZ)" \
+            '{{ kafka_retire_why | regex_replace("[^A-Za-z0-9 ._,:/()-]", "_") }}' "$done_line" | rclone rcat "$STORE/$d/RETIRED"
+          rclone deletefile "$STORE/$d/DONE"
+          echo "$d retired (its DONE was: $done_line) - no longer complete; the prune removes it a day from now"
+
+    - name: Done
+      ansible.builtin.debug:
+        msg: "KAFKA BACKUP RETIRE: {{ kafka_store_said | default('(a preview - nothing changed)') }}"
