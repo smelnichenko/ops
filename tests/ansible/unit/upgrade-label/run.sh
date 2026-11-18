@@ -66,6 +66,10 @@ def check(name, got, want):
     fails += got != want
     print(("PASS " if got == want else "FAIL ") + name + ("" if got == want else f": got {got!r}, want {want!r}"))
 SHA = {k: (k * 40)[:40] for k in ("a1", "a2", "b1", "c1", "d1")}  # 40 hex characters each
+# ops' merge message as the script holds it (read, not restated: the check is that it is sent, and Woodpecker's marker)
+import ast  # noqa: E402
+OPS_SKIP = next(ast.literal_eval(n.value) for n in ast.parse(open("scripts/upgrade-label.py").read()).body
+                if isinstance(n, ast.Assign) and getattr(n.targets[0], "id", "") == "OPS_MERGE_MESSAGE")
 def pr(n, unit, sha, mergeable=True, user="renovate-bot", fork=False):
     # head.repo filled in by fixture() for its repo (a fork's another's)
     return {"number": n, "head": {"ref": f"renovate/{unit}", "sha": SHA.get(sha, sha), "repo": "FORK" if fork else None},
@@ -141,11 +145,14 @@ def proven(text=heads_out):
 fixture(UNIT, {"a1": "success", "b1": "success", "c1": "success"})
 proven()
 rc, out = run("wave-patches", "--merge", "--expect", PROVEN)
-check("merge: every one green and the proven commit - infra, platform, then ops, each at that commit, its branch deleted",
+check("merge: every one green and the proven commit - infra, platform, then ops, each at that commit, its branch deleted;"
+      " ops' merge commit [CI SKIP] (its record's commit judged), infra's and platform's never (their pipelines deploy)",
       (rc, [x[0] for x in writes()], [json.dumps(x[1], sort_keys=True) for x in writes()]),
       (0, ["/repos/schnappy/infra/pulls/1/merge", "/repos/schnappy/platform/pulls/5/merge", "/repos/schnappy/ops/pulls/8/merge"],
-       [json.dumps({"Do": "merge", "delete_branch_after_merge": True, "head_commit_id": SHA[k]}, sort_keys=True)
+       [json.dumps(dict({"Do": "merge", "delete_branch_after_merge": True, "head_commit_id": SHA[k]},
+                        **({"MergeMessageField": OPS_SKIP} if k == "c1" else {})), sort_keys=True)
         for k in ("a1", "b1", "c1")]))
+check("merge: ops' skip is Woodpecker's own marker, at the message's start", OPS_SKIP.startswith("[CI SKIP] "), True)
 fixture({**UNIT, "platform": [pr(5, "wave-patches", "d1")]}, {"a1": "success", "d1": "success", "c1": "success"})
 proven()
 rc, out = run("wave-patches", "--merge", "--expect", PROVEN)

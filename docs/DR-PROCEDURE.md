@@ -109,6 +109,17 @@ velero restore create --from-backup velero-schnappy-daily-YYYYMMDD --include-nam
 
 Postgres is not restored this way - CNPG recovers it from its own barman backup (below).
 
+A restore brings back objects git no longer renders but the backup held (the mesh apps and data apps do not prune):
+they return with their Argo tracking id, and the app shows OutOfSync with them marked requiresPruning. List them and
+delete each by kind and name - never by label or a name pattern: names repeat across kinds (`schnappy-production-kafka`
+is the broker's StrimziPodSet, Service, Secret and ServiceAccount too). Hooks (a completed Sync Job) are listed too and
+are Argo's own - leave them.
+
+```bash
+kubectl -n argocd get applications -o json | jq -r '.items[] | .metadata.name as $a | .status.resources[]?
+  | select(.requiresPruning and (.hook | not)) | "\($a) \(.kind) \(.namespace)/\(.name)"'
+```
+
 ## Postgres from its barman backup (CNPG)
 
 A recovery bootstraps a new Cluster from the barman archive in the Pi store; it never changes a running one. The

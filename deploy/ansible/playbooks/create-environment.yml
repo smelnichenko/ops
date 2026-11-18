@@ -106,7 +106,6 @@
       args:
         executable: /bin/bash
       changed_when: false
-      failed_when: false
 
     # The generated values and the external keys (from .env via lookup('env'), like seed-vault-secrets.yml) go to Vault
     # as JSON - no K=V parsing (a value starting with `@` or `-` would be read as a file or stdin by the CLI), no shell

@@ -94,35 +94,71 @@
                 volumeMounts: "{{ _dump_c.volumeMounts }}"
                 command: [bash, -c, 'bash /scripts/restore.sh "/dump/$(ls /dump)"']
 
-- name: The restore Job run, waited for - what it restored in its log
-  ansible.builtin.shell:
-    executable: /bin/bash
-    stdin: "{{ _kr_job | combine({'metadata': _kr_job.metadata | combine({'name': _kr_name})}) | to_json }}"
-    cmd: |
-      set -euo pipefail
-      k="{{ kubectl }} -n {{ kafka_namespace | default('schnappy-production') }}"
-      j={{ _kr_name }}
-      $k apply -f - > /dev/null
-      # by the clock, not the tries: /proc/uptime, which nothing sets back; 3700 s, past the Job's own hour
-      end=$(( $(cut -d. -f1 /proc/uptime) + 3700 ))
-      s=""
-      for _ in $(seq 370); do
-        s=$($k get "job/$j" -o jsonpath='{.status.succeeded}/{.status.failed}')
-        case "$s" in
-          1/*) break ;;
-          */1) $k logs "job/$j" -c fetch --tail=20 || true; $k logs "job/$j" -c restore --tail=20 || true
-               echo "the restore Job $j failed"; exit 1 ;;
-        esac
-        [ "$(cut -d. -f1 /proc/uptime)" -lt "$end" ] || break
-        sleep 10
-      done
-      case "$s" in 1/*) ;; *) echo "the restore Job $j not done 3700 s after its start"; exit 1 ;; esac
-      $k logs "job/$j" -c fetch | tail -1
-      $k logs "job/$j" -c restore | grep -E '^restored [0-9]+ messages from ' | tail -1
-      $k delete job "$j" --wait=false > /dev/null
-  register: _kr_run
-  changed_when: true
-  failed_when: _kr_run.rc != 0 or (_kr_run.stdout_lines | last | default('')) is not match('^restored [0-9]+ messages from [0-9]{8}T[0-9]{6}Z$')
+# the nightly dump refused for the restore's span: platform's kafka-backup CronJob mounts <cronjob>-restoring (optional)
+# and its dump stops while the ConfigMap is there - a dump of a Kafka half restored would be pruned in as the newest
+# complete one. Made before the Job (create: one already there is another restore's, or a stale one to look at), a dump
+# already running waited out of it by refusing, removed always after
+- name: The restore, the nightly dump held off for its span
+  vars:
+    _kr_lock: "{{ kafka_namespace | default('schnappy-production') }}-kafka-backup-restoring"
+  block:
+    - name: The restoring ConfigMap made - the nightly dump refuses while it is there
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          {{ kubectl }} -n {{ kafka_namespace | default('schnappy-production') }} create configmap {{ _kr_lock }} \
+            --from-literal=since="$(date -u +%Y%m%dT%H%M%SZ)"
+      changed_when: true
+
+    - name: No dump running (one started before the ConfigMap would read Kafka as the restore fills it)
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -o pipefail
+          {{ kubectl }} -n {{ kafka_namespace | default('schnappy-production') }} get jobs -o json \
+            | python3 -c 'import json, sys; print(" ".join(j["metadata"]["name"] for j in json.load(sys.stdin)["items"]
+          if any(o.get("kind") == "CronJob" and o.get("name", "").endswith("-kafka-backup") for o in j["metadata"].get("ownerReferences", []))
+          and (j.get("status", {}).get("active") or 0) > 0))'
+      register: _kr_dumping
+      changed_when: false
+      failed_when: _kr_dumping.rc != 0 or _kr_dumping.stdout | trim | length > 0
+
+    - name: The restore Job run, waited for - what it restored in its log
+      ansible.builtin.shell:
+        executable: /bin/bash
+        stdin: "{{ _kr_job | combine({'metadata': _kr_job.metadata | combine({'name': _kr_name})}) | to_json }}"
+        cmd: |
+          set -euo pipefail
+          k="{{ kubectl }} -n {{ kafka_namespace | default('schnappy-production') }}"
+          j={{ _kr_name }}
+          $k apply -f - > /dev/null
+          # by the clock, not the tries: /proc/uptime, which nothing sets back; 3700 s, past the Job's own hour
+          end=$(( $(cut -d. -f1 /proc/uptime) + 3700 ))
+          s=""
+          for _ in $(seq 370); do
+            s=$($k get "job/$j" -o jsonpath='{.status.succeeded}/{.status.failed}')
+            case "$s" in
+              1/*) break ;;
+              */1) $k logs "job/$j" -c fetch --tail=20 || true; $k logs "job/$j" -c restore --tail=20 || true
+                   echo "the restore Job $j failed"; exit 1 ;;
+            esac
+            [ "$(cut -d. -f1 /proc/uptime)" -lt "$end" ] || break
+            sleep 10
+          done
+          case "$s" in 1/*) ;; *) echo "the restore Job $j not done 3700 s after its start"; exit 1 ;; esac
+          $k logs "job/$j" -c fetch | tail -1
+          $k logs "job/$j" -c restore | grep -E '^restored [0-9]+ messages from ' | tail -1
+          $k delete job "$j" --wait=false > /dev/null
+      register: _kr_run
+      changed_when: true
+      failed_when: _kr_run.rc != 0 or (_kr_run.stdout_lines | last | default('')) is not match('^restored [0-9]+ messages from [0-9]{8}T[0-9]{6}Z$')
+
+  always:
+    - name: The restoring ConfigMap removed - the nightly dump runs again
+      ansible.builtin.command: >-
+        {{ kubectl }} -n {{ kafka_namespace | default('schnappy-production') }} delete configmap {{ _kr_lock }} --ignore-not-found
+      changed_when: true
 
 - name: What was restored
   ansible.builtin.set_fact:

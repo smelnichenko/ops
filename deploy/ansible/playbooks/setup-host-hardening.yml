@@ -342,7 +342,8 @@
 
     # Order matters: leaves first, then their dependencies. Each step
     # is idempotent — community.general.modprobe state=absent is a no-op
-    # if the module isn't loaded.
+    # if the module isn't loaded (absent on this kernel included). A builtin counts as loaded and cannot be unloaded:
+    # the blacklist keeps it off, so that refusal is no failure; any other (a module in use) is.
     - name: Unload bluetooth HCI leaf modules
       community.general.modprobe:
         name: "{{ item }}"
@@ -353,19 +354,22 @@
         - btrtl
         - btbcm
         - btmtk
-      failed_when: false  # vendor modules may be absent on different kernels
+      failed_when: _unload.failed | default(false) and 'builtin' not in (_unload.msg | default(''))
+      register: _unload
 
     - name: Unload bluetooth core
       community.general.modprobe:
         name: bluetooth
         state: absent
-      failed_when: false
+      failed_when: _unload.failed | default(false) and 'builtin' not in (_unload.msg | default(''))
+      register: _unload
 
     - name: Unload ecdh_generic (only consumer was bluetooth)
       community.general.modprobe:
         name: ecdh_generic
         state: absent
-      failed_when: false
+      failed_when: _unload.failed | default(false) and 'builtin' not in (_unload.msg | default(''))
+      register: _unload
 
     - name: Unload iwlwifi stack
       community.general.modprobe:
@@ -374,7 +378,8 @@
       loop:
         - iwlmvm
         - iwlwifi
-      failed_when: false
+      failed_when: _unload.failed | default(false) and 'builtin' not in (_unload.msg | default(''))
+      register: _unload
 
     # ================================================================
     # smartctl_exporter — surface NVMe SMART (Unsafe Shutdowns,

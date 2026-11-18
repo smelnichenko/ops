@@ -349,6 +349,10 @@ kind of issues in the future". Now:
 - upgrade-renovate's harness fails a package the preset marks one-way that no store names (and the reverse), a store with
   neither backups, taken_by nor a named gap, a backup that is no production task of ops'; upgrade-stores' own harness a
   table not as described - a new kind of store is decided in the table when Renovate starts tracking it, not met in a run.
+- ops' merge commit carries [CI SKIP] (2026-11-18, upgrade-label.py OPS_MERGE_MESSAGE): its tree is the pull request's
+  head, green already, and defaults-follow-production failed ops' main by design until the record read production's
+  inventory after the apply - a red main and WoodpeckerBuildFailed for every unit's verify hour (wave-patches, 11:14).
+  The record's commit is the one ops' CI judges; infra's and platform's merges never skip (their pipelines deploy).
 - still to build (2026-11-18): ScyllaDB's way back from a release line rehearsed (a new cluster at the old version,
   schema then tables - a table restore into the running cluster is rehearsed: test:copy:scylla-restore); Kafka's restore
   rehearsed on the copy (test:copy:kafka-restore - its first run stopped on the check's own stdin bug, fixed). Done

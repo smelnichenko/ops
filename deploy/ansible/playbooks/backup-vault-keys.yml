@@ -34,6 +34,15 @@
         - /etc/vault-unseal/root-token
       no_log: true
 
+    # the root token is optional (it may have been purged after setup): locked down when the fetch brought it, and
+    # nothing else excused - a failed chmod on the unseal keys would leave them readable
+    - name: Is the root token in the local backup
+      ansible.builtin.stat:
+        path: "{{ vault_recovery_dir }}/root-token"
+      delegate_to: localhost
+      become: false
+      register: _root_token_copy
+
     - name: Lock down the local backup (0700 dir, 0600 files)
       ansible.builtin.file:
         path: "{{ item.path }}"
@@ -41,11 +50,10 @@
         state: "{{ item.state | default('file') }}"
       delegate_to: localhost
       become: false
-      failed_when: false   # root-token is optional (may have been purged post-setup)
-      loop:
-        - { path: "{{ vault_recovery_dir }}", mode: '0700', state: directory }
-        - { path: "{{ vault_recovery_dir }}/unseal-keys", mode: '0600' }
-        - { path: "{{ vault_recovery_dir }}/root-token", mode: '0600' }
+      loop: >-
+        {{ [{'path': vault_recovery_dir, 'mode': '0700', 'state': 'directory'},
+            {'path': vault_recovery_dir ~ '/unseal-keys', 'mode': '0600'}]
+           + ([{'path': vault_recovery_dir ~ '/root-token', 'mode': '0600'}] if _root_token_copy.stat.exists else []) }}
 
     - name: Confirm what landed (filenames only, never contents)
       ansible.builtin.find:

@@ -270,12 +270,22 @@ def ready(repo, pr, proven):
     print(f"BASE {repo}: moved since the proof by CD's app promotions alone ({proven_base[:12]} -> {base[:12]})")
 
 
+# ops' merge commit runs no CI of its own: its tree is the pull request's head, green already, and defaults-follow-
+# production fails ops' main until the record (upgrade-cycle.sh step 8) reads production's inventory after the apply -
+# a red main and WoodpeckerBuildFailed for every unit's verify hour (2026-11-18). The record's commit, the merge in it,
+# is the one ops' CI judges. infra's and platform's main pipelines deploy: never skipped.
+OPS_MERGE_MESSAGE = ("[CI SKIP] ops' CI judges the record that follows (production's inventory read after the apply, "
+                     "scripts/upgrade-cycle.sh step 8): before it, defaults-follow-production fails main by design")
+
+
 def merge_one(repo, pr, head, merged):
     """One pull request merged at its proven head - its answer lost (a timeout, a 5xx, Forgejo restarting) is no proof
     it did not merge: read again. Merged: True; refused with nothing in before it: Refused; else Partial."""
+    body = {"Do": "merge", "delete_branch_after_merge": True, "head_commit_id": head}
+    if repo.endswith("/ops"):
+        body["MergeMessageField"] = OPS_MERGE_MESSAGE
     try:
-        call("POST", f"/repos/{repo}/pulls/{pr['number']}/merge",
-             {"Do": "merge", "delete_branch_after_merge": True, "head_commit_id": head})
+        call("POST", f"/repos/{repo}/pulls/{pr['number']}/merge", body)
     except Refused as e:
         went = went_in(repo, pr["number"], e.definite, head, (pr.get("base") or {}).get("ref") or "main")
         if went:
