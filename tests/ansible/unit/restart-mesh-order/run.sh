@@ -5,6 +5,9 @@
 # set's pods ready. A pod that has the new sidecar is not yet a pod that serves. The playbook on localhost against a
 # kubectl stub: its pods take the target sidecar when their owner restarts, and the data tier turns ready only polls
 # later; the stub records whether it was ready when the Deployment restarted. An owner it cannot restart still fails.
+# And the sidecar's mode: istiod's ENABLE_NATIVE_SIDECARS flipped (or unset - native, Istio's default since 1.27), every
+# pod of the other mode is restarted though its version is the target's; a pod's own nativeSidecar annotation decides
+# for it; pods already in their mode are left alone.
 set -u
 cd "$(dirname "$0")/../../../.." || exit 1
 AP=$(command -v ansible-playbook || echo deploy/ansible/venv/bin/ansible-playbook)
@@ -28,16 +31,24 @@ a=" $* "
 after() { [ "$1" = "${SLOW:-}" ] && echo 6 || echo "${READY_AFTER:-3}"; }
 ready() { [ -e "$S/$1" ] && [ "$(cat "$S/polls.$1" 2>/dev/null || echo 0)" -ge "$(after "$1")" ]; }
 poll() { [ -e "$S/$1" ] && echo $(( $(cat "$S/polls.$1" 2>/dev/null || echo 0) + 1 )) > "$S/polls.$1"; }
-v() { [ -e "$S/$1" ] && echo 1.27.9 || echo 1.26.8; }
+v() { [ -e "$S/$1" ] || [ -n "${SAME_VERSION:-}" ] && echo 1.27.9 || echo 1.26.8; }
+# the sidecar's mode: OLD_MODE before its owner restarts it, NEW_MODE after (classic | native)
+m() { [ -e "$S/$1" ] && echo "${NEW_MODE:-classic}" || echo "${OLD_MODE:-classic}"; }
 case "$a" in
   *" rollout status "*) exit 0 ;;
+  *" get deployment istiod "*ENABLE_NATIVE_SIDECARS*) printf '%s' "${NATIVE_ENV-false}" ;;
   *" get deployment istiod "*) echo "docker.io/istio/pilot:1.27.9" ;;
   *" get daemonset istio-cni-node "*) echo "docker.io/istio/install-cni:1.27.9" ;;
   *" get pods,replicasets -A -o json "*)
-    pod() { echo "{\"kind\": \"Pod\", \"metadata\": {\"namespace\": \"$1\", \"name\": \"$2\", \"ownerReferences\": [{\"kind\": \"$3\", \"name\": \"$4\"}]},
-      \"status\": {\"phase\": \"Running\"}, \"spec\": {\"containers\": [{\"name\": \"istio-proxy\", \"image\": \"istio/proxyv2:$5\"}]}}"; }
-    echo "{\"items\": [$(pod d db-0 StatefulSet db "$(v db)"), $(pod d pg-1 Cluster pg "$(v pg)"),
-      $(pod d kafka-0 StrimziPodSet kafka "$(v kafka)"), $(pod a web-x ReplicaSet web-rs "$(v web)"),
+    pod() {  # pod <ns> <name> <owner kind> <owner> <version> [<mode> [<its nativeSidecar annotation>]]
+      local proxy="{\"name\": \"istio-proxy\", \"image\": \"istio/proxyv2:$5\"" ann=""
+      [ -z "${7:-}" ] || ann=", \"annotations\": {\"sidecar.istio.io/nativeSidecar\": \"$7\"}"
+      if [ "${6:-classic}" = native ]; then spec="\"initContainers\": [$proxy, \"restartPolicy\": \"Always\"}], \"containers\": [{\"name\": \"app\"}]"
+      else spec="\"containers\": [$proxy}]"; fi
+      echo "{\"kind\": \"Pod\", \"metadata\": {\"namespace\": \"$1\", \"name\": \"$2\", \"ownerReferences\": [{\"kind\": \"$3\", \"name\": \"$4\"}]$ann},
+      \"status\": {\"phase\": \"Running\"}, \"spec\": {$spec}}"; }
+    echo "{\"items\": [$(pod d db-0 StatefulSet db "$(v db)" "$(m db)"), $(pod d pg-1 Cluster pg "$(v pg)" "$(m pg)"),
+      $(pod d kafka-0 StrimziPodSet kafka "$(v kafka)" "$(m kafka)"), $(pod a web-x ReplicaSet web-rs "$(v web)" "$(m web)" "${WEB_ANN:-}"),
       {\"kind\": \"ReplicaSet\", \"metadata\": {\"namespace\": \"a\", \"name\": \"web-rs\", \"ownerReferences\": [{\"kind\": \"Deployment\", \"name\": \"web\"}]}}
       ${ODD:+, $(pod a odd-0 Lonely odd 1.26.8)}]}" ;;
   *" rollout restart statefulset/db "*) touch "$S/db" ;;
@@ -90,5 +101,19 @@ check "an owner it cannot restart: refused before any restart" \
   "$(run ODD=1) $(grep -c -E ' rollout restart | annotate ' "$W/calls")" "rc=2 0"
 check "a data workload never ready: the apps not restarted" "$(run READY_AFTER=999 | cut -c1-4) $(grep -c 'deployment/web' "$W/calls")" \
   "rc=2 0"
+# the mode: every sidecar on the target version already
+restarted() { grep -c -E ' rollout restart | annotate ' "$W/calls"; }
+check "native sidecars switched on (istiod's ENABLE_NATIVE_SIDECARS true), every pod classic: all four restarted, the data tier first, green" \
+  "$(run SAME_VERSION=1 NATIVE_ENV=true NEW_MODE=native) $(restarted) $(cat "$W/order" 2>/dev/null)" "rc=0 4 web restarted: data tier ready"
+check "  unset (Istio's default since 1.27: native): the same" "$(run SAME_VERSION=1 NATIVE_ENV= NEW_MODE=native) $(restarted)" "rc=0 4"
+check "  every pod native already: nothing restarted" "$(run SAME_VERSION=1 NATIVE_ENV=true OLD_MODE=native NEW_MODE=native) $(restarted)" "rc=0 0"
+check "  a pod whose own annotation keeps it classic (nativeSidecar false): left alone, the other three restarted" \
+  "$(run SAME_VERSION=1 NATIVE_ENV=true NEW_MODE=native WEB_ANN=false) $(restarted) $(grep -c 'deployment/web' "$W/calls")" "rc=0 3 0"
+check "classic again (ENABLE_NATIVE_SIDECARS false), every pod native: all restarted onto classic" \
+  "$(run SAME_VERSION=1 NATIVE_ENV=false OLD_MODE=native NEW_MODE=classic) $(restarted)" "rc=0 4"
+check "  a pod native by its own annotation (the Kafka backup's kind): left alone" \
+  "$(run SAME_VERSION=1 NATIVE_ENV=false OLD_MODE=native NEW_MODE=classic WEB_ANN=true) $(grep -c 'deployment/web' "$W/calls")" "rc=0 0"
+check "  restarted pods coming back in the wrong mode: never green (the wait for the mode, not the version alone)" \
+  "$(run SAME_VERSION=1 NATIVE_ENV=true NEW_MODE=classic | cut -c1-4)" "rc=2"
 echo "restart-mesh-order: $([ $fails = 0 ] && echo ALL-PASS || echo "$fails FAILED")"
 [ $fails = 0 ]
