@@ -225,8 +225,12 @@ check("the copy tasks on running VMs (argo, change, playbook, check): the host g
 uses = sorted(n for n, v in T.items() if isinstance(v, dict) and re.search(
     r"\bvagrant (up|halt|destroy|reload|provision|ssh|resume)\b|inventory/vagrant\.yml|vagrant-[a-z-]+\.(sh|py)|copy-snapshot\.sh (save|revert|drop)",
     "\n".join(c for _, c, _ in cmds(n))))
-check("every task on the copy's VMs takes the lock first (%d of them)" % len(uses),
-      [n for n in uses if not cmds(n) or cmds(n)[0][1] != "scripts/copy-lock.sh"], [])
+# the lock's path as the task's directory reads it (a task under dir: deploy/ansible ran scripts/copy-lock.sh from
+# there - "no such file", copy run 6's Kafka rehearsal, 2026-11-18) - and the file there
+lock_at = lambda n: os.path.relpath("scripts/copy-lock.sh", T[n].get("dir") or ".")
+check("every task on the copy's VMs takes the lock first (%d of them), by its path from the task's directory" % len(uses),
+      [n for n in uses if not cmds(n) or cmds(n)[0][1] != lock_at(n)], [])
+check("  each one's lock there, a file", [n for n in uses if not os.path.isfile(os.path.join(T[n].get("dir") or ".", lock_at(n)))], [])
 # every copy task whole - each command, in order, and its vars - against expected.json beside this file: a seed dropped,
 # an env -i lost (production's .env into the copy), a default moved, an argument left off passes every check above that
 # reads one line. A Taskfile change to these tasks changes expected.json in the same commit (its diff is the review)

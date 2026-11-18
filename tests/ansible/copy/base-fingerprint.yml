@@ -81,9 +81,10 @@
       ansible.builtin.copy:
         dest: "{{ playbook_dir }}/../../../.copy/base-fingerprint-{{ label }}.txt"
         mode: "0644"
-        content: >-
-          {{ (ansible_play_hosts | map('extract', hostvars) | map(attribute='_fp_vm') | map(attribute='stdout_lines') | flatten
-              + ansible_play_hosts | map('extract', hostvars) | map(attribute='_fp_pi') | selectattr('stdout_lines', 'defined')
-                | map(attribute='stdout_lines') | flatten
-              + ansible_play_hosts | map('extract', hostvars) | map(attribute='_fp_node') | selectattr('stdout_lines', 'defined')
-                | map(attribute='stdout_lines') | flatten) | sort | join('\n') }}
+        # a double-quoted scalar: YAML makes its \n a newline - a folded one passed the two characters on, the whole
+        # fingerprint one line (copy run 6, 2026-11-18)
+        content: "{{ (ansible_play_hosts | map('extract', hostvars) | map(attribute='_fp_vm') | map(attribute='stdout_lines') | flatten
+          + ansible_play_hosts | map('extract', hostvars) | map(attribute='_fp_pi') | selectattr('stdout_lines', 'defined')
+          | map(attribute='stdout_lines') | flatten
+          + ansible_play_hosts | map('extract', hostvars) | map(attribute='_fp_node') | selectattr('stdout_lines', 'defined')
+          | map(attribute='stdout_lines') | flatten) | sort | join('\n') }}\n"
