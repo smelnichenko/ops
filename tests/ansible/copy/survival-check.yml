@@ -4,13 +4,16 @@
 # formats for good: their database, blocks and parts.
 #
 #   -e mode=seed    once, on a green copy (the build's Argo stage): a ClickHouse MergeTree table of known rows, merged
-#                   into one part in the format of the version running; a Grafana dashboard of known content, and the
-#                   UIDs of every dashboard then; a Tempo trace of a known ID; the time of the seed and how many `up`
-#                   series Mimir holds for it. The UIDs, the time and the count go to .copy/survival.json.
+#                   into one part in the format of the version running; a Grafana dashboard of known content, the
+#                   UIDs of every dashboard then and the database Grafana runs on; a Tempo trace of a known ID; the time
+#                   of the seed and how many `up` series Mimir holds for it. The UIDs, the database, the time and the
+#                   count go to .copy/survival.json.
 #   -e mode=verify  after a change: the rows (count and md5 computed here), ClickHouse's compatibility setting
 #                   (-e clickhouse_compat; empty = not set) and its users (-e clickhouse_users) as the platform ref
 #                   under test sets them (scripts/copy-checks.sh reads its clickhouse-users.xml), every dashboard UID of the seed and
-#                   the seeded dashboard's content, every Grafana datasource healthy (a plugin Grafana 13 failed to
+#                   the seeded dashboard's content - or, Grafana moved to another database since the seed (SQLite to its
+#                   CNPG cluster: a fresh database), the seeded dashboard gone and every other UID there again
+#                   (provisioned: nothing made in the UI lost) - every Grafana datasource healthy (a plugin Grafana 13 failed to
 #                   load broke the Mimir one), the trace by its ID, a fresh span counted in Mimir's span metrics
 #                   (Tempo's metrics generator), Mimir's `up` series at the seed's time - as many as then - and,
 #                   from 4 h after the seed, a stored block covering that time in the store-gateway's list (before
@@ -67,6 +70,13 @@
     - name: The seed's record (verify)
       ansible.builtin.set_fact:
         _seed: "{{ lookup('ansible.builtin.file', survival_file) | from_json }}"
+      when: mode == 'verify'
+
+    - name: The seed's record names Grafana's database (one seeded before it was recorded is not guessed - seed again)
+      ansible.builtin.assert:
+        that: _seed.grafana_db is defined
+        fail_msg: "{{ survival_file }} has no grafana_db: seeded by an older survival check - build the copy again"
+        quiet: true
       when: mode == 'verify'
 
     # ── ClickHouse ────────────────────────────────────────────────────
@@ -151,31 +161,49 @@
       changed_when: true
       when: mode == 'seed'
 
-    - name: Grafana - every dashboard UID, and the canary's content
+    - name: Grafana - every dashboard UID, the canary's content, the database Grafana runs on
       ansible.builtin.shell:
         executable: /bin/bash
         cmd: |
           set -euo pipefail
-          # a script on stdin to the pod's sh: the admin credentials to curl on its stdin (-K-), never on an argv
+          # a script on stdin to the pod's sh: the admin credentials to curl on its stdin (-K-), never on an argv; the
+          # HTTP status on a line of its own after the body
           g() {
             {{ kubectl }} exec -i deploy/schnappy-grafana -c grafana -- sh -s "$1" <<'POD'
           p=$(printf %s "$GF_SECURITY_ADMIN_PASSWORD" | sed 's/[\\"]/\\&/g')
           printf 'user = "%s:%s"\n' "$GF_SECURITY_ADMIN_USER" "$p" \
-            | curl -sf -K- --connect-timeout 10 --max-time 30 "http://localhost:3000$1"
+            | curl -s -K- --connect-timeout 10 --max-time 30 -w '\n%{http_code}' "http://localhost:3000$1"
           POD
           }
           g "/api/search?type=dash-db&limit=5000" | python3 -c '
-          import json, sys; print(json.dumps(sorted(d["uid"] for d in json.load(sys.stdin))))'
+          import json, sys
+          *body, code = sys.stdin.read().split("\n")
+          if code != "200": sys.exit(f"the dashboards: HTTP {code}")
+          print(json.dumps(sorted(d["uid"] for d in json.loads("\n".join(body)))))'
+          # the canary's content, or - when Grafana has no such dashboard (404); any other answer fails
           g "/api/dashboards/uid/{{ dashboard_uid }}" | python3 -c '
-          import json, sys; d = json.load(sys.stdin)["dashboard"]; print(d["panels"][0]["options"]["content"])'
+          import json, sys
+          *body, code = sys.stdin.read().split("\n")
+          if code == "404": print("-")
+          elif code == "200": print(json.loads("\n".join(body))["dashboard"]["panels"][0]["options"]["content"])
+          else: sys.exit(f"the canary: HTTP {code}")'
+          # the database: GF_DATABASE_TYPE as the chart sets it for CNPG (postgres); unset is Grafana's own default
+          {{ kubectl }} exec deploy/schnappy-grafana -c grafana -- sh -c 'echo "${GF_DATABASE_TYPE:-sqlite3}"'
+      vars:
+        # moved to another database since the seed (stage 2 of Grafana's move to CNPG: a fresh database, deliberately):
+        # the canary was made in the old one only - gone here, or Grafana still reads the old one; every other dashboard
+        # of the seed there again, provisioned - a dashboard made in the UI would be lost with the old database
+        _grafana_moved: "{{ mode == 'verify' and _grafana.stdout_lines[2] != _seed.grafana_db }}"
       register: _grafana
       changed_when: false
       retries: 10
       delay: 10
-      until: _grafana.rc == 0
+      until: _grafana.rc == 0 and _grafana.stdout_lines | length == 3
       failed_when: >-
-        _grafana.rc != 0 or _grafana.stdout_lines[1] != dashboard_text
-        or (mode == 'verify' and (_seed.grafana_uids | difference(_grafana.stdout_lines[0] | from_json)) | length > 0)
+        _grafana.rc != 0 or _grafana.stdout_lines | length != 3
+        or _grafana.stdout_lines[1] != ('-' if _grafana_moved else dashboard_text)
+        or (mode == 'verify' and (_seed.grafana_uids | difference(_grafana.stdout_lines[0] | from_json)
+                                  | difference([dashboard_uid] if _grafana_moved else [])) | length > 0)
 
     # Grafana 13 moved how plugins and datasources load: each datasource answers its own health check - the
     # ClickHouse plugin (installed at start), Mimir, Tempo
@@ -284,7 +312,8 @@
     - name: The seed's record
       ansible.builtin.copy:
         content: >-
-          {{ {'grafana_uids': _grafana.stdout_lines[0] | from_json, 'mimir_at': _mimir_at | int,
+          {{ {'grafana_uids': _grafana.stdout_lines[0] | from_json, 'grafana_db': _grafana.stdout_lines[2],
+              'mimir_at': _mimir_at | int,
               'mimir_up': _mimir.stdout | int} | to_nice_json }}
         dest: "{{ survival_file }}"
         mode: '0644'
@@ -297,5 +326,7 @@
         msg: >-
           SURVIVAL OK: ClickHouse {{ _ch.stdout_lines[1].split()[-1] }} {{ rows }} rows md5 {{ expected_md5 }},
           {{ _ch.stdout_lines[1].split()[0] }}; Grafana {{ (_grafana.stdout_lines[0] | from_json) | length }}
-          dashboards, the canary intact; Tempo trace {{ trace_id }}; Mimir {{ _mimir.stdout }} `up` series at the seed,
+          dashboards on {{ _grafana.stdout_lines[2] }}, {{ ('moved from ' ~ _seed.grafana_db ~ ': the canary gone with it,
+          every other dashboard there again') if mode == 'verify' and _grafana.stdout_lines[2] != _seed.grafana_db
+          else 'the canary intact' }}; Tempo trace {{ trace_id }}; Mimir {{ _mimir.stdout }} `up` series at the seed,
           {{ _mimir_block.stdout | default('blocks not checked at the seed') }}

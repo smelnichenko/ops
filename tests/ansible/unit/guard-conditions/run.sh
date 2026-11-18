@@ -126,6 +126,30 @@ good = ["50 def", "compat= 24.8.14", "users=default,schnappy", "formats="]
 check("L02 the canary as seeded: on; another count, checksum or user list: failed",
       (survival(good), survival(["49 def"] + good[1:]), survival(["50 deg"] + good[1:]),
        survival(good[:2] + ["users=default"] + good[3:])), (False, True, True, True))
+# L03: Grafana's dashboards as seeded - or, its database moved since the seed, the canary gone and the rest there again
+gf = next(t for t in tasks("tests/ansible/copy/survival-check.yml") if t.get("register") == "_grafana")
+UIDS = ["infrastructure", "masi", "upgrade-check"]
+def grafana(mode, uids, canary, db, seed_db="sqlite3"):
+    import json
+    v = dict(mode=mode, dashboard_uid="upgrade-check", dashboard_text="upgrade survival canary",
+             _seed={"grafana_uids": UIDS, "grafana_db": seed_db},
+             _grafana={"rc": 0, "stdout_lines": [json.dumps(uids), canary, db][:3 if db else 2]})
+    # the task's vars as Ansible holds them: trusted templates, rendered only when read (lazily - the length clause
+    # first, so two lines never reach the third)
+    v.update(as_loaded(gf.get("vars") or {}))
+    return condition(gf["failed_when"], **v)
+C = "upgrade survival canary"
+check("L03 the seed, its canary read: on; the same database after a change, every UID and the canary: on",
+      (grafana("seed", UIDS, C, "sqlite3"), grafana("verify", UIDS, C, "sqlite3")), (False, False))
+check("L03 the same database: the canary gone, or another dashboard gone: failed",
+      (grafana("verify", UIDS[:2], "-", "sqlite3"), grafana("verify", UIDS[1:], C, "sqlite3")), (True, True))
+check("L03 moved to another database: the canary gone, every other dashboard there again: on",
+      grafana("verify", UIDS[:2], "-", "postgres"), False)
+check("L03 moved: the canary still there (the old database read), or another dashboard lost with the old one: failed",
+      (grafana("verify", UIDS, C, "postgres"), grafana("verify", ["masi"], "-", "postgres")), (True, True))
+check("L03 seeded on Postgres (a copy built after the move), still there: every UID and the canary: on",
+      grafana("verify", UIDS, C, "postgres", seed_db="postgres"), False)
+check("L03 the database not said (two lines): failed", grafana("verify", UIDS, C, ""), True)
 print("guard-conditions: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 PY_GUARD_CONDITIONS
