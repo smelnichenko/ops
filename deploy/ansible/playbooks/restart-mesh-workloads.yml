@@ -203,10 +203,9 @@
           done <<< "$DATA"
       environment:
         SCRIPT: "{{ stale_script }}"
-        DATA: >-
-          {{ ((_stale.stdout_lines | select('match', '^Cluster ') | list)
-              + (_stale.stdout_lines | select('match', '^StrimziPodSet ') | list)
-              + (_stale.stdout_lines | select('match', '^StatefulSet ') | list)) | join('\n') }}
+        # a double-quoted scalar: YAML makes its \n a newline (a folded one passes the two characters on)
+        DATA: "{{ ((_stale.stdout_lines | select('match', '^Cluster ') | list) + (_stale.stdout_lines | select('match', '^StrimziPodSet ') | list)
+          + (_stale.stdout_lines | select('match', '^StatefulSet ') | list)) | join('\n') }}"
       register: _data
       changed_when: _data.stdout | length > 0
 

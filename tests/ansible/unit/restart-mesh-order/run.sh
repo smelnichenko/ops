@@ -160,12 +160,12 @@ check "  an annotation False: native, as Istio reads it (only exactly \"false\" 
 check "  an annotation True (any case): native for that pod" \
   "$(run SAME_VERSION=1 NATIVE_ENV=false OLD_MODE=native NEW_MODE=classic WEB_ANN=True) $(grep -c 'deployment/web' "$W/calls")" "rc=0 0"
 check "an istio-proxy init container without restartPolicy Always: no native sidecar - restarted onto one" \
-  "$(run SAME_VERSION=1 NATIVE_ENV=true OLD_MODE=native NEW_MODE=native WEB_MODE=init) $(grep -c 'deployment/web' "$W/calls")" "rc=0 1"
+  "$(run SAME_VERSION=1 NATIVE_ENV=true OLD_MODE=native NEW_MODE=native WEB_MODE=init) $(grep -c 'rollout restart deployment/web' "$W/calls")" "rc=0 1"
 check "a Job's pod of the other mode: listed, never restarted (it ends on its own), the run green" \
   "$(run SAME_VERSION=1 NATIVE_ENV=true OLD_MODE=native NEW_MODE=native JOB=1) $(restarted) $(grep -c "Jobs left to finish on their own sidecar: \['Job a job-1'\]" "$W/out")" "rc=0 0 1"
 # -e sidecar_mode: the switch's run refused until istiod injects that mode (else every pod reads in its mode: a green no-op)
 check "sidecar_mode=native while istiod still injects classic (Argo not synced yet): refused, nothing restarted" \
-  "$(run SAME_VERSION=1 NATIVE_ENV=false SIDECAR_MODE=native | cut -c1-4) $(restarted) $(grep -c 'wait until Argo synced istiod' "$W/out")" "rc=2 0 1"
+  "$(run SAME_VERSION=1 NATIVE_ENV=false SIDECAR_MODE=native | cut -c1-4) $(restarted) $(grep -q 'wait until Argo synced istiod' "$W/out" && echo said || echo silent)" "rc=2 0 said"
 check "  sidecar_mode=native once istiod injects native: the run as without it" \
   "$(run SAME_VERSION=1 NATIVE_ENV=true NEW_MODE=native SIDECAR_MODE=native) $(restarted)" "rc=0 4"
 check "  sidecar_mode=classic for the way back, istiod classic: green" "$(run SAME_VERSION=1 NATIVE_ENV=false SIDECAR_MODE=classic) $(restarted)" "rc=0 0"
