@@ -23,9 +23,12 @@
       $k logs "job/$j" -c upload --tail=5 2> /dev/null | tail -1
   register: _guardcheck
   changed_when: true
+  # each topic by its whole name: the guard writes each loss after ": " or "; " - the names it gives read whole (a
+  # substring - "b gone" inside "ab gone" - named no topic)
   failed_when: >-
     _guardcheck.rc != 0 or (_guardcheck.stdout_lines | first | default('')) != 'job /1'
     or 'Kafka lost data:' not in _guardcheck.stdout
-    or (kafka_guard_gone | map('regex_replace', '$', ' gone (since ') | reject('in', _guardcheck.stdout) | list | length) > 0
-    or (kafka_guard_excused | map('regex_replace', '$', ' gone (') | select('in', _guardcheck.stdout) | list | length) > 0
-    or (kafka_guard_excused | map('regex_replace', '$', ' made again') | select('in', _guardcheck.stdout) | list | length) > 0
+    or (kafka_guard_gone | difference(_guardcheck.stdout | regex_findall('(?:: |; )([A-Za-z0-9._-]+) gone \\(since '))
+        | length) > 0
+    or (kafka_guard_excused | intersect(_guardcheck.stdout | regex_findall('(?:: |; )([A-Za-z0-9._-]+)(?: gone \\(| made again|\\[)'))
+        | length) > 0

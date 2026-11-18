@@ -133,7 +133,7 @@ start metrics play ../../tests/ansible/copy/metrics-check.yml -e "scrape_pools_g
 start smoke scripts/vagrant-smoke.sh "$infra_ref" "$platform_ref"
 start prod play playbooks/production-data-check.yml
 start isolation play ../../tests/ansible/copy/isolate-cluster.yml --tags proof
-start kafka play playbooks/kafka-backup-check.yml
+start kafka play playbooks/kafka-backup-check.yml -e kafka_backup_expect_judged=true
 
 # the checks' own bound: one that never ends - stopped by a signal (wait -n waits on it while any other job runs, this
 # one always: measured on bash 5.2), or a hang none of them bounds - ends them after COPY_CHECKS_SECONDS, said, those

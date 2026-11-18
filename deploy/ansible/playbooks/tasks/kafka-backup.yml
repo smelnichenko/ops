@@ -2,7 +2,8 @@
 # Kafka's topics dumped to the Pi store now, as its CronJob does each night (platform's schnappy-data kafka-backup.yaml):
 # a Job made from the CronJob - the dump (every partition from its earliest offset, its count checked), the upload (DONE
 # last), the prune - waited for by the clock; its upload's log must name the dump. The Job removed once it succeeded (a
-# failed one stays for its logs - KubeJobFailed says so). Sets kafka_backup_name (the dump's UTC timestamp).
+# failed one stays for its logs - KubeJobFailed says so). Sets kafka_backup_name (the dump's UTC timestamp) and
+# kafka_backup_guard (the guard's verdict: the topics it judged against which dump, or none to compare with).
 #
 # Expects: kubectl (the admin kubeconfig on the target); kafka_namespace (default schnappy-production) - its CronJob is
 # <namespace>-kafka-backup (the release's name).
@@ -38,12 +39,15 @@
       case "$s" in 1/*) ;; *) echo "the backup Job $j not done 3700 s after its start"; exit 1 ;; esac
       log=$($k logs "job/$j" -c upload)
       echo "$log" | tail -3
+      # the guard's own verdict (what it judged, against which dump) before the dump's name, the last line
+      echo "$log" | grep -E '^Kafka holds everything its dumps held:|^no complete dump before this one' | tail -1 | sed 's/^/guard: /'
       echo "$log" | grep -oE 'kafka backup [0-9]{8}T[0-9]{6}Z: uploaded' | awk '{print $3}' | tr -d : | tail -1
       $k delete job "$j" --wait=false > /dev/null
   register: _kb_backup
   changed_when: true
   failed_when: _kb_backup.rc != 0 or (_kb_backup.stdout_lines | last | default('')) is not match('^[0-9]{8}T[0-9]{6}Z$')
 
-- name: The dump's name
+- name: The dump's name, and the guard's verdict
   ansible.builtin.set_fact:
     kafka_backup_name: "{{ _kb_backup.stdout_lines | last }}"
+    kafka_backup_guard: "{{ (_kb_backup.stdout_lines | select('match', '^guard: ') | last | default('guard: (none said)'))[7:] }}"

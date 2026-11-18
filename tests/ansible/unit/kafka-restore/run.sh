@@ -16,6 +16,11 @@
 #   R07 playbooks/kafka-backup-retire.yml: a dump's DONE removed (no longer complete), why kept; a pinned one refused
 #   R08 the copy's refused dump (tests/ansible/copy/tasks/kafka-guard-refused.yml): each topic named gone, none excused named
 #   R09 the restore's wait: an API read that fails is tried again (the Job runs on); its fetch, topics and restored lines
+#   R10 the restore Job as built from the CronJob: its env (TOPICS, FORCE, RESET_GROUPS), its volumes (the scratch 2Gi),
+#       the dump container's mounts, the pod's labels and annotations (no checksum), its ServiceAccount; the playbook:
+#       restored, then dumped, then said
+#   R11 the backup's and the store's waits through a failing read; the store Job's scratch the upload's own /tmp
+#   R12 the baseline's "spent": an earlier BASELINE a complete dump followed - the dumps before it in the store too
 set -u
 cd "$(dirname "$0")/../../../.." || exit 1
 PY=$(command -v python3)
@@ -350,6 +355,15 @@ check("R08   the excused one named too (gone, or made again): failed - a restore
       (True, True))
 check("R08   a prefix is no name: b-other gone does not name b",
       condition(gr, _guardcheck=line("Kafka lost data: b-other gone (since x)"), kafka_guard_gone=["b"], kafka_guard_excused=[]), True)
+check("R08   a name inside another is no name: ab gone does not name b (a refusal for b missed)",
+      condition(gr, _guardcheck=line("Kafka lost data: ab gone (since x)"), kafka_guard_gone=["b"], kafka_guard_excused=[]), True)
+check("R08   an excused name inside another's: metadata gone does not name data (the excused one not judged)",
+      condition(gr, _guardcheck=line("Kafka lost data: b gone (since x); metadata gone (since x)"), kafka_guard_gone=["b"], kafka_guard_excused=["data"]), False)
+check("R08   the excused topic named by a partition's loss (data[0] at 3, was 9): failed",
+      condition(gr, _guardcheck=line("Kafka lost data: b gone (since x); data[0] at 3, was 9 (x)"), kafka_guard_gone=["b"], kafka_guard_excused=["data"]), True)
+check("R08   two named gone, both in the line: passed; one missing: failed",
+      (condition(gr, _guardcheck=line("Kafka lost data: a gone (since x); b gone (since x)"), kafka_guard_gone=["a", "b"], kafka_guard_excused=[]),
+       condition(gr, _guardcheck=line("Kafka lost data: a gone (since x)"), kafka_guard_gone=["a", "b"], kafka_guard_excused=[])), (False, True))
 check("R08   the dump uploaded (the Job succeeded), or no refusal line: failed",
       (condition(gr, _guardcheck={"rc": 0, "stdout": "job 1/\nuploaded", "stdout_lines": ["job 1/", "uploaded"]}, kafka_guard_gone=["b"], kafka_guard_excused=[]),
        condition(gr, _guardcheck=line("connection reset"), kafka_guard_gone=["b"], kafka_guard_excused=[])), (True, True))
@@ -380,6 +394,103 @@ check("R09 the restore's wait: two reads failing, then done - its fetch, topics 
       (rc, out), (0, ["fetched 20261101T023000Z (5 messages), pinned: 20261101T023000Z", "topics a b", "restored 5 messages from 20261101T023000Z"]))
 rc, out = wait(10000)
 check("R09   every read failing: not done by its deadline, said", (rc, out[-1]), (1, "the restore Job kafka-restore-1 not done 3700 s after its start"))
+
+# R10: the restore Job as built from a CronJob's pod
+pod = {"metadata": {"labels": {"app.kubernetes.io/name": "kafka-backup", "x": "y"},
+                    "annotations": {"sidecar.istio.io/nativeSidecar": "true", "checksum/scripts": "abc"}},
+       "spec": {"serviceAccountName": "sa-kb", "securityContext": {"runAsNonRoot": True},
+                "volumes": [{"name": "tmp", "emptyDir": {"sizeLimit": "256Mi"}}, {"name": "dump", "emptyDir": {}},
+                            {"name": "scripts", "configMap": {"name": "s"}}, {"name": "restoring", "configMap": {"name": "l", "optional": True}}],
+                "initContainers": [{"name": "dump", "image": "kafka:4", "env": [{"name": "BOOTSTRAP", "value": "b:9092"}],
+                                    "resources": {"limits": {"memory": "1Gi"}}, "securityContext": {"readOnlyRootFilesystem": True},
+                                    "volumeMounts": [{"name": "tmp", "mountPath": "/tmp"}, {"name": "dump", "mountPath": "/dump"},
+                                                     {"name": "scripts", "mountPath": "/scripts"}]}],
+                "containers": [{"name": "upload", "image": "rclone:1", "env": [{"name": "STORE", "value": "store:kafka"}],
+                                "resources": {}, "securityContext": {"readOnlyRootFilesystem": True},
+                                "volumeMounts": [{"name": "tmp", "mountPath": "/tmp"}, {"name": "dump", "mountPath": "/dump"}]}]}}
+cjson = {"stdout": json.dumps({"spec": {"jobTemplate": {"spec": {"template": pod}}}})}
+jtask = next(t for t in tasks if t.get("name") == "The restore Job")
+from ansible.parsing.dataloader import DataLoader
+from ansible.template import Templar
+def render_tree(x, **v):  # a task's dict rendered whole, its strings trusted as a playbook's are
+    return Templar(loader=DataLoader(), variables=v).template(as_loaded(x))
+def job(**v):
+    vs = dict(v, _kr_cronjob=cjson, kafka_dump="newest", kafka_namespace="ns")
+    for k in ("_ns", "_pod", "_dump_c", "_upload_c", "_which"):  # the task's vars, each on the ones before it
+        vs[k] = render(jtask["vars"][k], **vs)
+    return render_tree(jtask["ansible.builtin.set_fact"]["_kr_job"], **vs)
+j = job(kafka_topics=" a b ", kafka_force=True, kafka_reset_groups=False)
+spec = j["spec"]["template"]["spec"]; rc_ = spec["containers"][0]; fc = spec["initContainers"][0]
+env = {e["name"]: e["value"] for e in rc_["env"]}
+check("R10 the restore container: TOPICS as named (trimmed), FORCE and RESET_GROUPS as asked, the dump container's env kept",
+      (env.get("TOPICS"), env.get("FORCE"), env.get("RESET_GROUPS"), env.get("BOOTSTRAP")), ("a b", "1", "no", "b:9092"))
+env2 = {e["name"]: e["value"] for e in job()["spec"]["template"]["spec"]["containers"][0]["env"]}
+check("R10   by default: every topic, no force, the groups moved", (env2.get("TOPICS"), env2.get("FORCE"), env2.get("RESET_GROUPS")), ("", "", "yes"))
+check("R10 its volumes the CronJob's, the scratch 2Gi in place of the upload's 256Mi; both containers on the dump container's mounts",
+      ([(v["name"], v.get("emptyDir")) for v in spec["volumes"] if v["name"] in ("tmp", "dump")], [m["mountPath"] for m in rc_["volumeMounts"]],
+       [m["mountPath"] for m in fc["volumeMounts"]], [v["name"] for v in spec["volumes"]]),
+      ([("dump", {}), ("tmp", {"sizeLimit": "2Gi"})], ["/tmp", "/dump", "/scripts"], ["/tmp", "/dump", "/scripts"], ["dump", "scripts", "restoring", "tmp"]))
+check("R10 the pod's labels the CronJob's (its network policy reaches the store), annotations without the checksum, its ServiceAccount, no token, never retried",
+      (j["spec"]["template"]["metadata"]["labels"], j["spec"]["template"]["metadata"]["annotations"], spec["serviceAccountName"],
+       spec["automountServiceAccountToken"], j["spec"]["backoffLimit"], spec["restartPolicy"], fc["image"], rc_["image"]),
+      ({"app.kubernetes.io/name": "kafka-backup", "x": "y"}, {"sidecar.istio.io/nativeSidecar": "true"}, "sa-kb", False, 0, "Never", "rclone:1", "kafka:4"))
+pb = yaml.safe_load(open(os.path.join(ops, "deploy/ansible/playbooks/kafka-restore.yml")))[0]["tasks"]
+check("R10 the playbook: the dump named, restored, the restored Kafka dumped, said - in that order",
+      [t.get("ansible.builtin.include_tasks") or next(iter(k for k in t if k.startswith("ansible.builtin."))) for t in pb],
+      ["ansible.builtin.assert", "tasks/kafka-restore.yml", "tasks/kafka-backup.yml", "ansible.builtin.debug"])
+
+kc = yaml.safe_load(open(os.path.join(ops, "deploy/ansible/playbooks/kafka-backup-check.yml")))[0]["tasks"]
+ja = next(t for t in kc if str(t.get("name", "")).startswith("The guard judged topics"))
+check("R10 the copy's Kafka check: the guard's verdict judged topics against a dump - nothing to compare, no dump before, none said: refused",
+      [condition(ja["ansible.builtin.assert"]["that"], kafka_backup_guard=g) for g in (
+          "Kafka holds everything its dumps held: chat.messages@20261101T023000Z user.events@20261101T023000Z",
+          "Kafka holds everything its dumps held: nothing to compare (the BASELINE of x covers every topic, y older)",
+          "no complete dump before this one to compare with", "(none said)")] + [condition(ja["when"], kafka_backup_expect_judged=True, ansible_check_mode=False),
+          condition(ja["when"], ansible_check_mode=False)],
+      [True, False, False, False, True, False])
+# R11: the backup's and the store's waits through a failing read
+def stub_wait(script, logs, fail_reads, render_vars):
+    with tempfile.TemporaryDirectory() as d:
+        os.makedirs(d + "/bin")
+        open(d + "/bin/kubectl", "w").write("""#!/bin/bash
+case "$*" in
+  *" create job "*|*" apply "*) cat > /dev/null 2>&1; exit 0 ;;
+  *" get job/"*) n=$(cat "$W/reads" 2> /dev/null || echo 0); echo $((n + 1)) > "$W/reads"
+                 [ "$n" -ge "$FAILS" ] || { echo "error: the server is currently unable to handle the request" >&2; exit 1; }; echo "1/" ;;
+  *"logs "*) printf '%s\\n' "$LOGS" ;;
+  *" delete "*) ;;
+esac
+""")
+        open(d + "/bin/sleep", "w").write("#!/bin/sh\nexit 0\n")
+        os.chmod(d + "/bin/kubectl", 0o755); os.chmod(d + "/bin/sleep", 0o755)
+        r = subprocess.run(["bash", "-c", render(script, **render_vars)], input="{}", capture_output=True, text=True, timeout=120,
+                           env={"PATH": d + "/bin:/usr/bin:/bin", "W": d, "FAILS": str(fail_reads), "LOGS": logs})
+        return r.returncode, r.stdout.strip().split("\n")
+kb = yaml.safe_load(open(os.path.join(ops, "deploy/ansible/playbooks/tasks/kafka-backup.yml")))
+kbs = next(t for t in kb if "ansible.builtin.shell" in t)["ansible.builtin.shell"]["cmd"]
+rc, out = stub_wait(kbs, "Kafka holds everything its dumps held: a@20261101T023000Z\nkafka backup 20261102T023000Z: uploaded", 2,
+                    {"kubectl": "kubectl", "_kb_ns": "ns", "_kb_job": "kafka-backup-check-1"})
+check("R11 the backup's wait: two reads failing, then done - the guard's verdict and the dump's name",
+      (rc, out[-2:]), (0, ["guard: Kafka holds everything its dumps held: a@20261101T023000Z", "20261102T023000Z"]))
+ks = yaml.safe_load(open(os.path.join(ops, "deploy/ansible/playbooks/tasks/kafka-store.yml")))
+kss = next(t for t in ks if str(t.get("name", "")).startswith("The store Job run"))["ansible.builtin.shell"]["cmd"]
+rc, out = stub_wait(kss, "baseline 20261102T000000Z: a", 2, {"kubectl": "kubectl", "kafka_namespace": "ns", "_ks_name": "kafka-store-x-1"})
+check("R11 the store's wait: two reads failing, then done - its last line", (rc, out[-1]), (0, "baseline 20261102T000000Z: a"))
+rc, out = stub_wait(kss, "x", 10000, {"kubectl": "kubectl", "kafka_namespace": "ns", "_ks_name": "kafka-store-x-1"})
+check("R11   every read failing: not done by its deadline, said", (rc, out[-1]), (1, "the store Job kafka-store-x-1 not done 660 s after its start"))
+sj = next(t for t in ks if t.get("name") == "The store Job")
+sjob = render_tree(sj["ansible.builtin.set_fact"]["_ks_job"], _pod=pod, _upload_c=pod["spec"]["containers"][0], kafka_namespace="ns", kafka_store_cmd="echo x", kafka_store_what="x")
+check("R11 the store Job's scratch: the upload container's own /tmp mount over a small emptyDir (HOME=/tmp under a read-only root)",
+      ([m["mountPath"] for m in sjob["spec"]["template"]["spec"]["containers"][0]["volumeMounts"]], sjob["spec"]["template"]["spec"]["volumes"]),
+      (["/tmp"], [{"name": "tmp", "emptyDir": {"sizeLimit": "64Mi"}}]))
+
+# R12: the baseline's spent rule on a store holding dumps before the earlier BASELINE too
+rc, lines, _ = baseline("b", "b removed", top={"BASELINE": OLD},
+                        store={"20261101T023000Z": ("x 1 topics 5 messages", []), "20261102T023000Z": ("x 1 topics 5 messages", [])})
+check("R12 an earlier BASELINE with a dump before it and a complete one after: spent - b alone", (rc, lines[1:]), (0, ["why b removed", "topic b"]))
+rc, lines, _ = baseline("b", "b removed", top={"BASELINE": OLD},
+                        store={"20261031T023000Z": ("x 1 topics 5 messages", []), "20261101T023000Z": ("x 1 topics 5 messages", [])})
+check("R12   dumps before it alone (none after): kept - a and b", (rc, lines[-2:]), (0, ["topic a", "topic b"]))
 
 print("kafka-restore: " + ("ALL-PASS" if not fails else "%d FAILED" % fails))
 sys.exit(1 if fails else 0)

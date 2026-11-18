@@ -103,7 +103,7 @@ for want in "check -i inventory/vagrant.yml ../../tests/ansible/copy/data-check.
     "check -i inventory/vagrant.yml ../../tests/ansible/copy/storage-check.yml read stdin: []" \
     "check -i inventory/vagrant.yml playbooks/production-data-check.yml read stdin: []" \
     "check -i inventory/vagrant.yml ../../tests/ansible/copy/isolate-cluster.yml --tags proof read stdin: []" \
-    "check -i inventory/vagrant.yml playbooks/kafka-backup-check.yml read stdin: []" \
+    "check -i inventory/vagrant.yml playbooks/kafka-backup-check.yml -e kafka_backup_expect_judged=true read stdin: []" \
     "smoke i p read stdin: []"; do
   check "the exact command: ${want% read stdin*}" "$(grep -cxF -- "$want" <<< "$out")" 1
 done
