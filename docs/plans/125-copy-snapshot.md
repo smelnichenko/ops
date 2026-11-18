@@ -2,7 +2,8 @@
 
 **Status:** decided 2026-11-18 (operator: "maybe it's time to make rules more flexible?" - "both, do it"); built,
 reviewed twice (the second: architecture and reliability, two Criticals - the policy's text, a base reused before it was
-proven - answered below); its proof next.
+proven - answered below), test-quality answered; on ops main 2026-11-18 (operator: "make it sooner", "no need to wait
+whole hours"): copy run 8 its fresh build, the next run its revert and the proof.
 
 ## Decisions (operator, 2026-11-18)
 
@@ -101,13 +102,17 @@ fully built and settled; its review (three Criticals) showed a reverted settled 
 
 ## Proof
 
-Main against main (no change between the runs - a change would mix two effects):
+The base's tree the same between the runs (nothing under what tree_id hashes changes - a change there makes the base
+stale: the revert would build):
 
-1. `COPY_FINGERPRINT=fresh task test:copy:ready` with no snapshot: it builds, saves (unproven), proves at its end; the
-   base's fingerprint at the cold boot in `.copy/base-fingerprint-fresh.txt`; every check green.
-2. 20 h or more later, across 00:00 and 06:00 (the Pis' and Debian's daily timers, the nightly CronJobs' hours):
+1. `COPY_FINGERPRINT=fresh task test:copy:build` (copy run 8, 2026-11-18): it builds, saves (unproven), proves at its
+   end; the base's fingerprint at the cold boot in `.copy/base-fingerprint-fresh.txt`; every check green; at its end
+   halted and marked used, never destroyed.
+2. The next run (copy run 7, the same night - operator: "no need to wait whole hours"):
    `COPY_FINGERPRINT=revert task test:copy:ready`: it reverts ("reverted:" in its log, never a build), the fingerprint
-   in `.copy/base-fingerprint-revert.txt`; every check green.
+   in `.copy/base-fingerprint-revert.txt`; every check green. A reverted base's age up to MAX_AGE (24 h) is accepted
+   unproven by a revert that old: what moves in a day is read as stale (the inventory, the base's files) or refreshed
+   at the cold boot (the package lists).
 3. The two fingerprints diffed - packages, enabled units, timers, failed units, Consul's members, Vault's state,
    Patroni's members and roles, Gluster's bricks, versitygw's buckets, the cluster's objects, the node's images: equal,
    and no "unreadable" line in either (a fact neither run could read is no fact the two share).
