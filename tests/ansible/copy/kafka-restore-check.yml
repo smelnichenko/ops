@@ -41,15 +41,18 @@
         stdin: "{{ markers | join('\n') }}"
         cmd: |
           set -euo pipefail
+          # the markers first: every kubectl exec -i below reads stdin - the first took them (copy run 5, 2026-11-18)
+          in=$(cat)
+          [ -n "$in" ] || { echo "no markers on stdin"; exit 1; }
           K="{{ kbin }}"
-          $K/kafka-topics.sh --bootstrap-server localhost:9092 --delete --if-exists --topic {{ topic }} > /dev/null 2>&1 || true
+          # --if-exists: an absent topic is no error - a failure here is (a broken exec, no broker), said
+          $K/kafka-topics.sh --bootstrap-server localhost:9092 --delete --if-exists --topic {{ topic }} < /dev/null > /dev/null
           made=""
           for _ in $(seq 30); do
-            $K/kafka-topics.sh --bootstrap-server localhost:9092 --create --topic {{ topic }} --partitions 3 > /dev/null 2>&1 && { made=1; break; }
+            $K/kafka-topics.sh --bootstrap-server localhost:9092 --create --topic {{ topic }} --partitions 3 < /dev/null > /dev/null 2>&1 && { made=1; break; }
             sleep 2
           done
           [ -n "$made" ] || { echo "the marker topic not made"; exit 1; }
-          in=$(cat)
           TAB=$'\t'
           # the restore's own way of producing: the dump's format is what it reads
           while IFS= read -r l; do

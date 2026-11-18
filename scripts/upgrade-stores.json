@@ -43,7 +43,7 @@
         "check:production:scylla-backup"
       ],
       "missing": [
-        "no restore from its backup: no sctool restore task or runbook, never rehearsed on the copy - a release line cannot be downgraded, so the way back is a new cluster restored from it"
+        "the way back from a release line (a new cluster at the old version, its schema restored by sctool restore --restore-schema, then its tables) not rehearsed on the copy - a release line cannot be downgraded; a table restore into the running cluster is (deploy:scylla:restore, test:copy:scylla-restore)"
       ],
       "examples": [
         "scylladb-2026.3",
@@ -97,16 +97,17 @@
         "grafana",
         "grafana/grafana"
       ],
-      "backups": [],
-      "missing": [
-        "no backup of Grafana's database in the cycle (its SQLite on a local volume)"
+      "backups": [
+        "deploy:postgres:base-backup -- -e pg_namespace=schnappy-infra -e cluster=schnappy-grafana-pg"
       ],
+      "missing": [],
       "examples": [
         "grafana-grafana-13.x",
         "grafana-14.x"
       ],
       "taken_by": [],
-      "minutes": 0
+      "_why": "its database on its own CNPG cluster since stage 2 (2026-11-18): a Grafana major migrates it - that cluster's base backup first (Postgres's entry takes it too); the way back a recovery from it (CNPG bootstrap.recovery, the path the copy rehearses on production's cluster every run); its dashboards and datasources provisioned",
+      "minutes": 10
     },
     {
       "store": "vault",

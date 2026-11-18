@@ -792,14 +792,18 @@ def blocked_why(calls):
     return " ".join(c for c in calls if c.startswith("upgrade-notice.sh blocked"))
 TABLE = os.path.join(OPS, "scripts/upgrade-stores.json")
 REAL_TABLE = open(TABLE).read()
-def table_with(**stores):  # the real table, the named stores' fields replaced (a store backed up whole: none is, today)
+def table_with(**stores):  # the real table, the named stores' fields replaced (every store backed up whole since 2026-11-18: a gap is made up)
     t = json.loads(REAL_TABLE)
     for s in t["stores"]:
         s.update(stores.get(s["store"], {}))
     open(TABLE, "w").write(json.dumps(t))
-rc, calls = night("apply grafana-grafana-13.x major")
-check("a one-way unit whose store has a part with no backup (Grafana's database, still its SQLite): blocked before its "
-      "proof, never merged, the notice naming the part",
+try:
+    table_with(grafana={"backups": [], "missing": ["Grafana's database: no backup of it in the cycle"]})
+    rc, calls = night("apply grafana-grafana-13.x major")
+finally:
+    open(TABLE, "w").write(REAL_TABLE)
+check("a one-way unit whose store has a part with no backup (a table where Grafana's database has none): blocked before "
+      "its proof, never merged, the notice naming the part",
       (rc, has(calls, "task"), has(calls, "upgrade-label.py grafana-grafana-13.x upgrade-blocked"),
        "Grafana's database" in blocked_why(calls)),
       (1, [], ["upgrade-label.py grafana-grafana-13.x upgrade-blocked"], True))
@@ -812,13 +816,23 @@ backups = [c for c in has(calls, "task --yes deploy:postgres:base-backup")]
 check("a Postgres major (its store backed up whole): not blocked, merged - each of the four clusters' base backups run first",
       (rc, merged(calls, "postgresql-19.x"), sorted(c.split("cluster=")[1] for c in backups)),
       (0, True, ["schnappy-grafana-pg", "schnappy-production-postgres", "schnappy-sonarqube-pg", "woodpecker-postgres"]))
-for unit, part in (("kafka-4.x", "restore not yet rehearsed on the copy"),
-                   ("strimzi-kafka-operator-1.x", "restore not yet rehearsed on the copy"),
-                   ("grafana-grafana-13.x", "Grafana's database"),
-                   ("scylladb-2026.3", "no restore from its backup")):
-    rc, calls = night(f"prove {unit} minor", files={"list": f"{unit} minor schnappy/infra upgrade-cycle\n"})
-    check(f"{unit}, its label missing: the names' net finds its store - blocked, nothing built, the missing part named",
-          (rc, merged(calls, unit), has(calls, "task"), part in blocked_why(calls)), (1, False, [], True))
+# Grafana's database on its own CNPG cluster since stage 2: a major takes that cluster's base backup before its merge
+rc, calls = night("apply grafana-grafana-13.x major", plan=PG_PLAN,
+                  files={"list": "grafana-grafana-13.x major schnappy/infra major,one-way,upgrade-cycle\n", "noticed": ANNOUNCED})
+check("a Grafana major (its database on CNPG): not blocked, merged - its cluster's base backup run first",
+      (rc, merged(calls, "grafana-grafana-13.x"), [c.split("cluster=")[1] for c in has(calls, "task --yes deploy:postgres:base-backup")]),
+      (0, True, ["schnappy-grafana-pg"]))
+NET_GAPS = {"kafka": "Kafka: a part made up with no backup", "grafana": "Grafana: a part made up with no backup",
+            "scylladb": "ScyllaDB: a part made up with no backup"}
+try:
+    table_with(**{s: {"missing": [why]} for s, why in NET_GAPS.items()})
+    for unit, st in (("kafka-4.x", "kafka"), ("strimzi-kafka-operator-1.x", "kafka"), ("grafana-grafana-13.x", "grafana"),
+                     ("scylladb-2026.3", "scylladb")):
+        rc, calls = night(f"prove {unit} minor", files={"list": f"{unit} minor schnappy/infra upgrade-cycle\n"})
+        check(f"{unit}, its label missing: the names' net finds its store - blocked, nothing built, the missing part named",
+              (rc, merged(calls, unit), has(calls, "task"), NET_GAPS[st] in blocked_why(calls)), (1, False, [], True))
+finally:
+    open(TABLE, "w").write(REAL_TABLE)
 SCYLLA_WHOLE = {"backups": ["check:production:scylla-backup"], "missing": [], "minutes": 30}
 try:
     table_with(scylladb=SCYLLA_WHOLE)
@@ -850,8 +864,12 @@ try:
           (0, True, []))
 finally:
     open(TABLE, "w").write(REAL_TABLE)
-rc, calls = night("test test-scylladb-2026.3 minor", files={"list": "test-scylladb-2026.3 minor schnappy/infra one-way\n"})
-check("a test unit whose production twin's store cannot take it (ScyllaDB, no restore): blocked, never merged, the twin's "
+try:
+    table_with(scylladb={"missing": ["ScyllaDB: a part made up with no backup"]})
+    rc, calls = night("test test-scylladb-2026.3 minor", files={"list": "test-scylladb-2026.3 minor schnappy/infra one-way\n"})
+finally:
+    open(TABLE, "w").write(REAL_TABLE)
+check("a test unit whose production twin's store cannot take it (a table where ScyllaDB has a gap): blocked, never merged, the twin's "
       "parts named - a test environment ahead of production for good proves nothing",
       (rc, merged(calls, "test-scylladb-2026.3"), "its production twin scylladb-2026.3's" in blocked_why(calls)), (1, False, True))
 VAULT_PLAN = "test:copy:change INFRA_REF=main PLATFORM_REF=main\ntest:copy:playbook PLAYBOOK=upgrade-vault.yml ARGS='-e @/x/vault.yml'\n"

@@ -198,8 +198,8 @@ tool's time limit. Its review found two things, fixed before the first applying 
   committed). defaults-follow-production fails a default the preset reads under another datasource or name than
   production's chart, or not at all (containerd.io named as left by hand: no proof path yet); upgrade-renovate fails an
   ops value the preset moves that copy-unit.sh cannot prove, unless its file is named (Woodpecker's: never picked;
-  Keycloak's setup-pi-services.yml and Consul's setup-consul.yml: no proof path yet - such a unit is refused by the
-  proof, after its build), both through one reading of the preset (tests/ansible/unit/renovate_preset.py: its managers,
+  Keycloak's setup-pi-services.yml: no proof path yet - such a unit is refused before its build; Consul's
+  setup-consul.yml proven since 2026-11-18 by production's upgrade-consul.yml on the copy), both through one reading of the preset (tests/ansible/unit/renovate_preset.py: its managers,
   ignorePaths, the rules turning a dependency off). Renovate reads nothing under tests/ (ignorePaths), so a copy's check
   pins no image production runs (upgrade-renovate fails one): restore-check's rclone and storage-check's busybox read the
   etcd backup's image from the cluster (tests/ansible/copy/tasks/shell-image.yml); the isolation probe's curl is named -
@@ -341,16 +341,20 @@ kind of issues in the future". Now:
   nothing merged; a test environment's unit takes no backup but runs only when its production twin could. The labels and
   the table read again after the proof.
 - the pick: a one-way unit waits out the 24 h notice as a major does (ScyllaDB's release lines are minors by number).
-- the plan read before the copy is built: a part the copy cannot prove (Keycloak's, Consul's - copy-unit.sh has no proof
-  for them) refused there, labelled, nothing built and no fix agent.
+- the plan read before the copy is built: a part the copy cannot prove (Keycloak's - copy-unit.sh has no proof for it;
+  Consul's has one since 2026-11-18) refused there, labelled, nothing built and no fix agent.
 - ScyllaDB's version (the ScyllaCluster's, scyllaOperator.version) annotated beside the cqlsh image in both data values -
   one depName, one unit - and infra's CI (.woodpecker/scylla-version-check.sh) fails the two apart (infra 6c518023): the
   release-line units moved cqlsh alone and would have changed no ScyllaDB.
 - upgrade-renovate's harness fails a package the preset marks one-way that no store names (and the reverse), a store with
   neither backups, taken_by nor a named gap, a backup that is no production task of ops'; upgrade-stores' own harness a
   table not as described - a new kind of store is decided in the table when Renovate starts tracking it, not met in a run.
-- still to build: a ScyllaDB restore (sctool restore, rehearsed on the copy); a backup store for woodpecker-postgres;
-  SonarQube's Postgres backed up (or on CNPG); Kafka, ClickHouse and Grafana backups; Consul's upgrade path.
+- still to build (2026-11-18): ScyllaDB's way back from a release line rehearsed (a new cluster at the old version,
+  schema then tables - a table restore into the running cluster is rehearsed: test:copy:scylla-restore); Kafka's restore
+  rehearsed on the copy (test:copy:kafka-restore - its first run stopped on the check's own stdin bug, fixed). Done
+  since: woodpecker-postgres and SonarQube's Postgres on CNPG backups (plan 121), ClickHouse's backup and its restore
+  rehearsed, Grafana's database on its own CNPG cluster (stage 2), Kafka's daily dump, Consul's upgrade path
+  (upgrade-consul.yml).
 - 2026-11-17: woodpecker-postgres backed up (infra aeb0e31f egress, 8c6f7345 spec.backup as woodpecker-postgres-pg18,
   daily 01:15; its first base backup completed 19:31 UTC, archiving True) - its base backup joins Postgres's backups in
   the table, its missing part gone. The Pis' restore check restores production's server by name now (ops 486beef7), so
