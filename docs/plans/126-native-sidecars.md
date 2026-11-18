@@ -70,7 +70,9 @@ them. It restarts stateful pods: a copy run (plan 125's closed list), and the da
 ## Proof (the copy)
 
 1. Built; the data counts read; the change (infra's branch) applied; the restart playbook (test:copy:playbook): every
-   meshed pod native - none classic.
+   meshed pod native - none classic. A gateway pod is none (istio-proxy its main container, not a sidecar: the
+   restart playbook exempts it alike); a pod naming its own mode (`sidecar.istio.io/nativeSidecar` - the Kafka backup,
+   init-users) is judged by it, in either direction.
 2. Every check (test:copy:check - data, survival, storage, metrics with every target up, the k6 smoke, production's
    data paths, isolation, Kafka's dump through the guard), every app's database login, Kafka's consumer groups with
    members, the restore rehearsals (Kafka, ClickHouse, ScyllaDB), the hooks' Jobs completing.
