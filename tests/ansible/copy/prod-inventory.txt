@@ -153,17 +153,16 @@ helm argocd/argocd argo-cd-10.9.7 v3.5.4
 helm kube-system/cilium cilium-1.20.4 1.20.4
 image alpine 3.20
 image alpine/k8s 1.35.10
-image amazon/aws-cli 2.37.1
+image amazon/aws-cli 2.37.13
 image apache/kafka 4.3.1
-image bitnami/kubectl latest
 image busybox 1.37
 image centrifugo/centrifugo v6.9.7
-image clickhouse/clickhouse-server 26.8.39.19-alpine
+image clickhouse/clickhouse-server 26.8.40.7-alpine
 image cr.fluentbit.io/fluent/fluent-bit 5.1.5
+image curlimages/curl 8.10.1
 image curlimages/curl 8.12.1
 image docker.io/istio/install-cni 1.31.4
 image docker.io/istio/pilot 1.31.4
-image docker.io/istio/proxyv2 1.31.1
 image docker.io/istio/proxyv2 1.31.4
 image docker.io/library/postgres 18.3-alpine
 image docker.io/rancher/local-path-provisioner v0.0.37
@@ -184,10 +183,11 @@ image git.pmon.dev/schnappy/chat b744e8d
 image git.pmon.dev/schnappy/chess e5a1654
 image git.pmon.dev/schnappy/game-scp 216c611
 image git.pmon.dev/schnappy/hyperfoil latest
-image git.pmon.dev/schnappy/masi 61d276d
+image git.pmon.dev/schnappy/masi 68f4b7f
 image git.pmon.dev/schnappy/monitor 83018a8
-image git.pmon.dev/schnappy/site 0fa086b
+image git.pmon.dev/schnappy/site 99e8d45
 image grafana/grafana 13.2.6
+image grafana/k6 1.7.1
 image grafana/mimir 3.2.5
 image grafana/tempo 3.1.1
 image nginx 1.27-alpine
@@ -215,7 +215,7 @@ image quay.io/strimzi/operator 1.2.0
 image rclone/rclone 1.71.2
 image rclone/rclone 1.75.2
 image registry.k8s.io/coredns/coredns v1.14.2
-image registry.k8s.io/etcd 3.6.16-0
+image registry.k8s.io/etcd 3.6.17-0
 image registry.k8s.io/etcd 3.6.8-0
 image registry.k8s.io/kube-apiserver v1.36.6
 image registry.k8s.io/kube-controller-manager v1.36.6
