@@ -252,6 +252,23 @@ gate("  its native sidecar ready, a plain init container done (not ready): settl
 gate("  its native sidecar OOM-killed during the wait: not settled, named", A,
      [pod("n3", "n3", native={"restartCount": 1, "lastState": {"terminated": {"reason": "OOMKilled", "finishedAt": "2026-10-06T10:40:00Z"}}})],
      1, "ns/n3/istio-proxy at 2026-10-06T10:40:00Z", *OS)
+# its restarts the pod's too: a native istio-proxy restarting (crash-looping, ready between its runs) while the app's
+# container never restarts - the native-sidecar failure the switch can bring - fails the quiet and the since gates
+def proxy_restarted(name, finished, count=2):
+    return pod(name, name, native={"restartCount": count, "lastState": {"terminated": {"reason": "Error", "finishedAt": finished}}})
+gate("  its native sidecar restarted 60 s before now (the app's container never), quiet 300: not settled", A,
+     [proxy_restarted("n4", "2026-10-06T11:59:00Z")], 1, "restarted 60 s ago", "--restart-quiet", "300")
+gate("  its native sidecar restarted at/after --restarted-since: not settled", A,
+     [proxy_restarted("n5", "2026-10-06T11:00:00Z")], 1, "after 2026-10-06T10:30:00", "--restart-quiet", "300",
+     "--restarted-since", "2026-10-06T10:30:00Z")
+gate("  its native sidecar's restart 400 s before now, before --restarted-since: settled", A,
+     [proxy_restarted("n6", "2026-10-06T10:00:00Z")], 0, "", "--restart-quiet", "300", "--restarted-since", "2026-10-06T10:30:00Z")
+gate("  a plain init container's restarts (it ran, it ended): not the pod's", A,
+     [dict(pod("n7", "n7", native={}), status={"phase": "Running", "containerStatuses": [{"ready": True, "restartCount": 0}],
+      "initContainerStatuses": [{"name": "istio-proxy", "ready": True, "restartCount": 0},
+                                {"name": "setup", "ready": False, "restartCount": 3,
+                                 "lastState": {"terminated": {"reason": "Error", "finishedAt": "2026-10-06T11:59:00Z"}}}]})],
+     0, "", "--restart-quiet", "300")
 rc, out = run(A, [pod("p2", "u3")], "--failing-cronjobs", "kube-system/restore check")
 check("  a malformed entry: refused (exit 2), said", (rc, "is no <namespace>/<name>" in out), (2, True), out)
 # the copy's list and its wiring: the playbook passes the file's names (comments and blank lines dropped)
@@ -514,6 +531,12 @@ rc, out = run(A, [pod("p1", "u9", 1)], "--restart-history", H, "--step", "15")
 check("a new pod (another uid) with a restart: one step only, green", rc, 0, out)
 rc, out = run(A, [pod("p1", "u1", 0)], "--restart-history", H)
 check("--restart-history without --step: bad arguments", rc, 2, out)
+# a native sidecar's restarts in the history: the pod restarting in two steps running by its istio-proxy alone fails
+HN = os.path.join(work, "history-native.json")
+for step, count, want in ((20, 1, 0), (21, 2, 0), (22, 3, 1)):
+    rc, out = run(A, [pod("pn", "un", native={"restartCount": count})], "--restart-history", HN, "--step", str(step))
+check("a pod whose native sidecar restarts in two steps running (its app container never): fails, naming the pod",
+      (rc, "ns/pn" in out and "(21, 22)" in out), (1, True), out)
 
 # a workload's pod replaced by the next step (the Istio steps restart every meshed pod) still restarting in it: the
 # crash loop is the workload's - caught though the pod is new (by uid it was never in two steps running)
