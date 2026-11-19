@@ -2,7 +2,7 @@
 
 **Status:** 2026-11-19 - in progress (found by plan 126's architecture review: "make sure we will not lose prod data").
 monitor: PR 24 (handler, DLT, counter; an embedded-broker test with production's application.yml). platform: the
-KafkaDeadLetters alert, its promtool tests and runbook - committed, pushed after the running upgrade chain's unit. chat:
+KafkaDeadLetters alert, its promtool tests and runbook - main 2da35dc. chat:
 ready, opened after monitor's CI is green. chess, masi (its owner's session): next.
 
 ## Why
