@@ -31,7 +31,10 @@
       changed_when: false
 
     - name: The guard judged topics against the dump before (the copy's checks)
-      when: not ansible_check_mode and (kafka_backup_expect_judged | default(false) | bool) and ((_kb_guard_script | default({})).stdout | default('') | length > 0)
+      when:
+        - not ansible_check_mode
+        - kafka_backup_expect_judged | default(false) | bool
+        - (_kb_guard_script | default({})).stdout | default('') | length > 0
       ansible.builtin.assert:
         that: "kafka_backup_guard is search(': .*[A-Za-z0-9._-]+@[0-9]{8}T[0-9]{6}Z')"
         fail_msg: "the guard judged nothing: {{ kafka_backup_guard }}"
