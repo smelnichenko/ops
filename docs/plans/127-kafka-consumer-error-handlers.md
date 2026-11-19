@@ -6,11 +6,13 @@ then the DLT) is gone (see "What the review changed").
 
 | part | state |
 |---|---|
-| monitor PR 24 | CI green, Sonar gate OK; merges after the DLT topics are live |
-| platform: KafkaDeadLetters (on increase()), KafkaDeadLettersRefused, KafkaListenerFailing + runbooks | KafkaDeadLetters on main 2da35dc; the rest committed, pushed in the chain's next gap (alert rules: the closed list) |
-| platform + infra `feat/kafka-dlt-topics`: the DLT KafkaTopics, KafkaUser ACLs, monitor's ConfigMap without spring.kafka, monitor's JDBC socketTimeout | proven on the copy (test:copy:change) in the chain's next gap, then main - before monitor deploys |
-| chat, chess | ready (round 2 committed); PRs one at a time after monitor |
-| admin: user.events keyed by user | ready; a PR after monitor |
+| monitor PR 24 | MERGED 77aa2c7, in production 2026-11-19 14:45Z: both pods' consumer config names `ErrorHandlingDeserializer`, `user-sync` holds user.events-0..2, no ERROR, `kafka_dead_letters_total{topic="user.events"}` 0 on both |
+| platform: KafkaDeadLetters (on increase()), KafkaDeadLettersRefused, KafkaListenerFailing + runbooks | on main 486cbddd |
+| platform + infra `feat/kafka-dlt-topics`: the DLT KafkaTopics, KafkaUser ACLs, monitor's ConfigMap without spring.kafka, monitor's JDBC socketTimeout | on the copy (run 1119b, test:copy:change); main after it is green. Chat's review found the KafkaTopic names `user-events-DLT` invalid (RFC 1123: no upper case) - the data app's sync would have failed; lower-cased (platform 6d4e0e8) before the change step read the branch |
+| chess PR 10 | MERGED 9d9a284, in production 2026-11-19 15:12Z: consumer config names `ErrorHandlingDeserializer`, `chess-user` holds user.events-0..2, no ERROR, both counters 0. The review's fixes in it: an event naming no user to the DLT at once (was skipped), admin's `enabled` kept, `REGISTRATION_*`/`USER_REGISTERED` ignored (no uuid), DataIntegrityViolation retried (pinned) |
+| chat PR 12 | MERGED 1eb78b3, in production 2026-11-19 15:29Z: three chat-persistence consumers (chat.messages 0-3, 4-7, 8-11), chat-user on user.events 0-2, the wrapped deserializer on all four, the JDBC URL with socketTimeout=300, no ERROR, all four counters 0. The review found every reply unstored (a UUID bound to the text `parent_message_id`: no codec) - bound as text, `CodecNotFoundException` not retried; a parent that is no message id a 400 at the API; the admin notices retried instead of swallowed |
+| admin PR 14: user.events keyed by user | open, CI; reviewed (no blocker; the pair's test and keyOf's blank cases added). The runbook's replay key follows (platform, with the DLT merge) |
+| monitor: the describe race in its retry test, the timestamp header | on monitor's next PR (with the Sonar fixes) |
 | masi | its owner's session, the same handler |
 
 ## Why
