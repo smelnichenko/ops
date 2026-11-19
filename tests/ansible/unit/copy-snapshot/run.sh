@@ -150,13 +150,15 @@ check "  in a line the base holds (a package): stale" "$(run status) $(said "inv
 restore; echo "pi: 2" > "$W/tests/ansible/copy/pi-versions.yml"
 check "  the Pis' versions moved: stale" "$(run status)" "rc=3"
 restore; echo "- hosts: pis # moved" > "$W/deploy/ansible/playbooks/setup-consul.yml"
-check "  a file building the base changed (the working tree's): stale" "$(run status) $(said 'files that build the base changed')" "rc=3 1"
+check "  a file building the base changed (the working tree's): stale, the file named (2026-11-19: a stale base unexplained, 50 min of build)" \
+  "$(run status) $(said 'files that build the base changed since: deploy/ansible/playbooks/setup-consul.yml')" "rc=3 1"
 restore; echo "x: 1" > "$W/deploy/ansible/playbooks/group_vars_new.yml"
-check "  a file under deploy/ansible added, untracked: stale" "$(run status)" "rc=3"
+check "  a file under deploy/ansible added, untracked: stale, named" \
+  "$(run status) $(said 'changed since: deploy/ansible/playbooks/group_vars_new.yml')" "rc=3 1"
 restore; echo "echo pin2" >> "$W/scripts/pi-apt-pin.sh"
 check "  the apt pins' script changed: stale" "$(run status)" "rc=3"
 restore; sed -i 's/cmds: \[echo pis\]/cmds: [echo pis, echo more]/' "$W/Taskfile.yml"
-check "  a base step added in the Taskfile: stale" "$(run status)" "rc=3"
+check "  a base step added in the Taskfile: stale, the base steps named" "$(run status) $(said 'changed since: Taskfile.yml:base-steps')" "rc=3 1"
 restore; sed -i 's/cmds: \[echo build\]/cmds: [echo build, echo more]/' "$W/Taskfile.yml"
 check "  test:copy:build's steps changed: stale" "$(run status)" "rc=3"
 restore; sed -i 's/cmds: \[echo checks\]/cmds: [echo checks, echo more]/' "$W/Taskfile.yml"; echo "- hosts: all # x" > "$W/tests/ansible/copy/survival-check.yml"
