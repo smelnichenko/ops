@@ -1,11 +1,21 @@
 # Plan 126 - Istio's native sidecars mesh-wide, without losing a byte of production data
 
-**Status:** 2026-11-18 - asked (operator: "please recheck if native sidecars will work now", then "make sure we will
-not lose prod data"); DECIDED ("switch it!"), its order ("go"): the mesh push (plan 123) first, then this ops branch on
-main, then its copy run (copy run 8, before the hooks/Kafka batch's), its full review, the production switch below in
-a quiet hour. Reviewed twice before its copy run (architecture, reliability: the restart's real CNPG behaviour, the
-Kafka consumers' skipped records, the gates that could pass a loss, the alerts blind to a native proxy - all answered
-below).
+**Status:** DONE 2026-11-19 - native sidecars mesh-wide in production since 02:55 UTC, no data lost. Copy run 8
+(attempt 2, 2026-11-19): the native direction green (20 workloads restarted, every check, native-check: every pod native,
+CNPG healthy and streaming, every group live, 15 min held by uid, no record given up on, no table shrunk;
+clickhouse-init's PostSync Job on a native sidecar Succeeded; the Kafka dump and restore through native sidecars), the
+way back green in its native-check (every pod classic, the same gates) - its k6 smoke missed one masi request while the
+copy's 18 GB node ran full in the rolling restart (masi OOM-killed by the kernel, back 3 s before the request;
+production's node 64 GB, its masi no OOM restart in 7 days); schnappy-sonarqube is not on the copy - its setup hook
+unproven there. Production (02:42-03:11 UTC): check:production:data, every store backed up, the counts, groups and meshed
+pods recorded; infra ad1b312 (`"true"`), istiod rolled out 02:43:56; deploy:mesh:restart -e sidecar_mode=native - 32
+workloads, data tier one at a time, 02:44-02:55; prod-native-verify RESULT-OK (39 of 39 native, as many per namespace as
+before, 5 CNPG clusters healthy, streaming, 6 groups live, 15 min held by uid, no skipped record over 289,490 log
+lines, Argo green); the counts compared - no loss (monitor's claims and swept RSS rows, 3 each, listed);
+check:production:kafka-backup and check:production:data green. The gates were hardened by the test-quality audit before
+it (a wiped or emptied table, an empty Kafka read, a skip search without logs, empty lists, uninjected and terminating
+pods now fail). Follow-ups: each app's Kafka error handler (the next plan); the playbook harness's gaps (readiness
+sub-conditions, the loop bound, set -e, the last waits; argo-settled counting a native sidecar's restarts).
 
 ## Why
 
