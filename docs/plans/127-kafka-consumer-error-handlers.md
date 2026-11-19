@@ -1,6 +1,6 @@
 # Plan 127 - a Kafka record never skipped while its store restarts
 
-**Status:** 2026-11-19 - all PRs merged; monitor, chess, chat and admin live in production (the last promotes queued for the upgrade chain's gap) - masi with its owner (found by plan 126's architecture review: "make sure we will not lose prod data").
+**Status:** 2026-11-20 - the consumer side done; monitor, chess, chat and admin live in production (the last promotes queued for the upgrade chain's gap) - masi with its owner (found by plan 126's architecture review: "make sure we will not lose prod data").
 The design below is the one monitor PR 24's full review settled; the first draft (15 min of retries for every failure,
 then the DLT) is gone (see "What the review changed").
 
@@ -16,6 +16,8 @@ then the DLT) is gone (see "What the review changed").
 | chat PR 14: a message written as the same row on every try | MERGED d5a3841 after two concurrency reviews: the row id one tick after the chain head (rows in chain order; a replay appended, never over its row); a message without its uuid id or its time, or a time out of bounds, to the DLT. Deferred: a lightweight transaction on chain_heads (one writer per channel today) |
 | Sonar: monitor PR 25, chess PR 11, chat PR 15, admin PR 15 | MERGED - every app at 0 open issues; chess and chat lost a stale `/ws/**` permitAll (their STOMP endpoints gone) |
 | the last promotes (monitor 6a99194, chess 260e33d, chat a800d06, admin 71f0d6e) | queued for the upgrade chain's gap (after run 2) |
+| chat PR 16: a message's send waited for | MERGED dc45177, in production: a 503 when chat.messages did not take a message, never a 201 for a lost one; producer delivery 15 s, waited 20 s |
+| admin PR 16: user events through an outbox | MERGED fe31031, in production 2026-11-19 22:54Z (changeset 011 ran; heartbeat fresh, backlog 0); operator-approved; reviewed twice (concurrency): written in the change's transaction, sent in order by one publisher on its own thread (heartbeat, lock re-checked per send, each mark its own commit, only on unsent rows), the user's row locked where it changes (never across Keycloak or mail), Keycloak's client bounded, admin's JDBC socketTimeout; alert UserEventOutboxStuck on platform main |
 | masi | its owner's session, the same handler |
 
 ## Why
