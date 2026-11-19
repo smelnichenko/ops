@@ -291,7 +291,9 @@ COPY_HOST_GRACE=10 guard watch; rc=$?
 clock 111; c=$(polls); wait_for 10 polls_ge $((c + 4))
 check "a watch while it is quiet (a vagrant up after a destroy): it says it watches, and the grace starts again" \
   "$rc $(grep -c 'watches already' <<< "$out") $(pid_on "$p" && echo on)" "0 1 on"
-echo ops_kubeadm > "$STUB/active"; clock 130; c=$(polls); wait_for 10 polls_ge $((c + 4))
+# the VMs back seen by the watcher before the clock moves: a poll reading the empty active file, then the moved clock,
+# was a whole grace with no VM - it ended (CI, 2026-11-19: "got '  <pid>', want 'on <pid>'")
+echo ops_kubeadm > "$STUB/active"; c=$(polls); wait_for 10 polls_ge $((c + 2)); clock 130; c=$(polls); wait_for 10 polls_ge $((c + 4))
 check "  the VMs back: still the same watcher, watching" "$(pid_on "$p" && echo on) $(watcher)" "on $p"
 : > "$STUB/active"; clock 150; c=$(polls); wait_for 10 polls_ge $((c + 4)); clock 161
 wait_for 10 pid_off "$p"; gone=$?
