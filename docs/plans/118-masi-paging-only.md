@@ -59,4 +59,6 @@ search/list/etc" (after 2026-11-11: "make sure we use paging everywhere and neve
   gap closed) and site #69 (architecture, web UI measured in the DOM, test-quality - every finding fixed). Merge gate:
   the site reads both shapes and goes live FIRST; site #69 merged and live 22:02 UTC (b5efe3d); masi #256 merged 22:45
   UTC (68f4b7f), live 23:16 UTC - Liquibase 132 applied, 219 of 230 sources (every one that fires) hold their next run,
-  none that will not. Next: a site follow-up drops the old-shape readers (src/services/masiSourcesOld.ts).
+  none that will not. 2026-11-19 00:02 UTC: site #70 (99e8d45) live - the old-shape readers gone, the counts typed as
+  masi sends them (no made-up zero), a badge's link reads the page alone (architecture and test-quality reviewed).
+  **Plan 118 DONE**: every list a page or a list that says its bound; a request's oversized read stopped in production.
