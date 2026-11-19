@@ -18,6 +18,11 @@
 # pipeline on that commit, and ends with its error instead of sitting out the timeout (2026-09-25: every masi pipeline
 # died that way for ten hours, and each waiter reported only "timeout unknown").
 #
+# Only a CI's statuses count - a "ci/" context (Woodpecker's ci/woodpecker/pr/ci): Renovate's renovate/stability-days,
+# success, alone made Forgejo's combined state "success" on three heads whose pipelines had errored loading their config
+# (2026-11-19) - a waiter reading that state reported a CI that never ran. Renovate's pending status beside a finished
+# CI no longer holds the verdict either.
+#
 # Exit: 0 success, 1 failure/error, 2 timeout, 3 bad usage/unreachable token.
 # Prints one line per state change and a final "CI <state> <sha> <url>" line. Never prints the token.
 #
@@ -82,12 +87,21 @@ while :; do
         sleep 10; continue
     fi
     misses=0
-    # the combined state, the first status's URL, and whether any status was posted since this waiter started
+    # the CI's state (its "ci/" statuses alone, combined), the first one's URL, and whether any was posted since this
+    # waiter started
     line=$(get "repos/$repo/commits/$sha/status" | START="$start" python3 -c '
 import os, sys, json
 d = json.load(sys.stdin)
-statuses = d.get("statuses") or []
-st = (d.get("state") or "none") if statuses else "none"
+statuses = [s for s in d.get("statuses") or [] if str(s.get("context") or "").startswith("ci/")]
+each = [s.get("status") or "pending" for s in statuses]
+if not statuses:
+    st = "none"
+elif "failure" in each or "error" in each:
+    st = "failure" if "failure" in each else "error"
+elif all(x == "success" for x in each):
+    st = "success"
+else:
+    st = "pending"
 url = next((s.get("target_url", "") for s in statuses), "") or "-"
 from datetime import datetime, timezone
 def when(s):

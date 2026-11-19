@@ -134,7 +134,14 @@ def heads(unit):
 
 
 def state(repo, sha):
-    return (call("GET", f"/repos/{repo}/commits/{sha}/status") or {}).get("state")
+    """A head's CI state - Forgejo's combined state, only when a CI reported (a "ci/" context: Woodpecker's
+    ci/woodpecker/pr/ci); else None, no CI. Another status alone is no CI: Renovate's renovate/stability-days, success,
+    made three platform units' heads "success" whose pipelines had errored loading their config - Forgejo slow under
+    Renovate's burst of pull requests (2026-11-19, never run, read as green)."""
+    st = call("GET", f"/repos/{repo}/commits/{sha}/status") or {}
+    if not any(str(s.get("context") or "").startswith("ci/") for s in st.get("statuses") or []):
+        return None
+    return st.get("state")
 
 
 class Red(Exception):
@@ -160,7 +167,7 @@ def green(unit, wait=0):
         if time.monotonic() >= deadline:
             print("\n".join(f"{n} {st}" for n, st in states))
             none = [n for n, st in states if st == "none"]
-            if none:  # Forgejo's answer for a commit no CI ever reported on: state "", no statuses
+            if none:  # no CI ever reported on it: Forgejo's state "" (no statuses), or another status alone
                 raise NoCI(f"no CI on: {', '.join(none)}")
             raise Refused(f"not green yet: {', '.join(n for n, st in states if st != 'success')}")
         time.sleep(float(os.environ.get("UPGRADE_GREEN_POLL", "60")))

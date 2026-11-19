@@ -68,8 +68,8 @@ s = http.server.HTTPServer(('127.0.0.1', 0), H)
 open(os.path.join(root, 'port'), 'w').write(str(s.server_port))
 s.serve_forever()
 EOF
-status() {   # status <state> <updated_at>
-    printf '{"state":"%s","statuses":[{"status":"%s","target_url":"http://ci/1","updated_at":"%s"}]}' "$1" "$1" "$2" > "$scratch/api/status.json"
+status() {   # status <state> <updated_at> - Woodpecker's context beside Renovate's (success)
+    printf '{"state":"%s","statuses":[{"context":"renovate/stability-days","status":"success","target_url":"http://renovate/","updated_at":"%s"},{"context":"ci/woodpecker/pr/ci","status":"%s","target_url":"http://ci/1","updated_at":"%s"}]}' "$1" "$2" "$1" "$2" > "$scratch/api/status.json"
 }
 none() { printf '{"state":"","statuses":[]}' > "$scratch/api/status.json"; }
 none
@@ -90,6 +90,23 @@ out=$(ci_wait --fresh o/r "$sha" 30 2>&1); rc=$?
 status failure "2026-01-01T00:00:00Z"
 out=$(ci_wait o/r "$sha" 10 2>&1); rc=$?
 [[ $rc == 1 ]] && pass "a standing verdict is reported at once" || fail "a standing verdict is reported at once" "rc=$rc: $out"
+
+# Renovate's stability-days alone (its pipeline never created - 2026-11-19): Forgejo's combined state "success", but no
+# CI ran - never a success; no Woodpecker error either here: it keeps waiting
+printf '{"state":"success","statuses":[{"context":"renovate/stability-days","status":"success","target_url":"http://renovate/","updated_at":"%s"}]}' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$scratch/api/status.json"
+cat > "$scratch/wp-none" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+chmod +x "$scratch/wp-none"
+out=$(CI_WAIT_NONE_GRACE=1 CI_WAIT_PIPELINE_ROWS="$scratch/wp-none" ci_wait o/r "$sha" 4 2>&1); rc=$?
+[[ $rc == 2 && $out != *"CI success"* ]] && pass "Renovate's status alone is no CI: never a success" \
+    || fail "Renovate's status alone is no CI: never a success" "rc=$rc: $out"
+# the CI finished green while Renovate's own status is still pending (Forgejo's combined state pending): the CI's verdict
+printf '{"state":"pending","statuses":[{"context":"renovate/stability-days","status":"pending","updated_at":"2026-01-01T00:00:00Z"},{"context":"ci/woodpecker/pr/ci","status":"success","target_url":"http://ci/1","updated_at":"2026-01-01T00:00:00Z"}]}' > "$scratch/api/status.json"
+out=$(ci_wait o/r "$sha" 10 2>&1); rc=$?
+[[ $rc == 0 && $out == *"CI success $sha http://ci/1"* ]] && pass "the CI's verdict, not Renovate's pending status" \
+    || fail "the CI's verdict, not Renovate's pending status" "rc=$rc: $out"
 
 # a pipeline Woodpecker could not even create posts nothing on the commit: after the grace the waiter asks Woodpecker
 none
