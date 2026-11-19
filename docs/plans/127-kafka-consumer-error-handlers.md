@@ -1,6 +1,6 @@
 # Plan 127 - a Kafka record never skipped while its store restarts
 
-**Status:** 2026-11-19 - in progress (found by plan 126's architecture review: "make sure we will not lose prod data").
+**Status:** 2026-11-19 - all PRs merged; monitor, chess, chat and admin live in production (the last promotes queued for the upgrade chain's gap) - masi with its owner (found by plan 126's architecture review: "make sure we will not lose prod data").
 The design below is the one monitor PR 24's full review settled; the first draft (15 min of retries for every failure,
 then the DLT) is gone (see "What the review changed").
 
@@ -8,11 +8,14 @@ then the DLT) is gone (see "What the review changed").
 |---|---|
 | monitor PR 24 | MERGED 77aa2c7, in production 2026-11-19 14:45Z: both pods' consumer config names `ErrorHandlingDeserializer`, `user-sync` holds user.events-0..2, no ERROR, `kafka_dead_letters_total{topic="user.events"}` 0 on both |
 | platform: KafkaDeadLetters (on increase()), KafkaDeadLettersRefused, KafkaListenerFailing + runbooks | on main 486cbddd |
-| platform + infra `feat/kafka-dlt-topics`: the DLT KafkaTopics, KafkaUser ACLs, monitor's ConfigMap without spring.kafka, monitor's JDBC socketTimeout | on the copy (run 1119b, test:copy:change); main after it is green. Chat's review found the KafkaTopic names `user-events-DLT` invalid (RFC 1123: no upper case) - the data app's sync would have failed; lower-cased (platform 6d4e0e8) before the change step read the branch |
-| chess PR 10 | MERGED 9d9a284, in production 2026-11-19 15:12Z: consumer config names `ErrorHandlingDeserializer`, `chess-user` holds user.events-0..2, no ERROR, both counters 0. The review's fixes in it: an event naming no user to the DLT at once (was skipped), admin's `enabled` kept, `REGISTRATION_*`/`USER_REGISTERED` ignored (no uuid), DataIntegrityViolation retried (pinned) |
-| chat PR 12 | MERGED 1eb78b3, in production 2026-11-19 15:29Z: three chat-persistence consumers (chat.messages 0-3, 4-7, 8-11), chat-user on user.events 0-2, the wrapped deserializer on all four, the JDBC URL with socketTimeout=300, no ERROR, all four counters 0. The review found every reply unstored (a UUID bound to the text `parent_message_id`: no codec) - bound as text, `CodecNotFoundException` not retried; a parent that is no message id a 400 at the API; the admin notices retried instead of swallowed |
-| admin PR 14: user.events keyed by user | open, CI; reviewed (no blocker; the pair's test and keyOf's blank cases added). The runbook's replay key follows (platform, with the DLT merge) |
-| monitor: the describe race in its retry test, the timestamp header | on monitor's next PR (with the Sonar fixes) |
+| platform + infra: the DLT KafkaTopics, ACLs, monitor's ConfigMap without spring.kafka, its JDBC socketTimeout | copy-proven (run 1119b rc=0), on main (platform 946c662, infra 262e0fc7) 2026-11-19 15:35Z: user.events.DLT and chat.messages.DLT Ready (1 partition) in production; monitor rolled onto the ConfigMap (socketTimeout=300, the image's deserializer) |
+| chess PR 10 | MERGED 9d9a284, in production 15:12Z (verified) |
+| chat PR 12 | MERGED 1eb78b3, in production 15:29Z (verified: three chat-persistence consumers, chat-user, both counters x2 at 0) |
+| admin PR 14: user.events keyed by user | MERGED 9bca905, in production 15:40Z |
+| chat PR 13: the registration notices (admin's REGISTRATION_* carry no uuid) | MERGED b034e2f |
+| chat PR 14: a message written as the same row on every try | MERGED d5a3841 after two concurrency reviews: the row id one tick after the chain head (rows in chain order; a replay appended, never over its row); a message without its uuid id or its time, or a time out of bounds, to the DLT. Deferred: a lightweight transaction on chain_heads (one writer per channel today) |
+| Sonar: monitor PR 25, chess PR 11, chat PR 15, admin PR 15 | MERGED - every app at 0 open issues; chess and chat lost a stale `/ws/**` permitAll (their STOMP endpoints gone) |
+| the last promotes (monitor 6a99194, chess 260e33d, chat a800d06, admin 71f0d6e) | queued for the upgrade chain's gap (after run 2) |
 | masi | its owner's session, the same handler |
 
 ## Why
