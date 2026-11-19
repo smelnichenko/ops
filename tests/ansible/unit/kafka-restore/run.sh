@@ -445,9 +445,16 @@ check("R10 the copy's Kafka check: the guard's verdict judged topics against a d
       [condition(ja["ansible.builtin.assert"]["that"], kafka_backup_guard=g) for g in (
           "Kafka holds everything its dumps held: chat.messages@20261101T023000Z user.events@20261101T023000Z",
           "Kafka holds everything its dumps held: nothing to compare (the BASELINE of x covers every topic, y older)",
-          "no complete dump before this one to compare with", "(none said)")] + [condition(ja["when"], kafka_backup_expect_judged=True, ansible_check_mode=False),
-          condition(ja["when"], ansible_check_mode=False)],
+          "no complete dump before this one to compare with", "(none said)")] + [condition(ja["when"], kafka_backup_expect_judged=True, ansible_check_mode=False,
+                                                                                    _kb_guard_script={"stdout": "#!/bin/bash"}),
+          condition(ja["when"], ansible_check_mode=False, _kb_guard_script={"stdout": "#!/bin/bash"})],
       [True, False, False, False, True, False])
+# the judgement asked only of a backup that has its guard (platform's chart before the guard: the copy's build ran it)
+check("R10   a backup without its guard (no guard.sh in its ConfigMap): not asked to judge; asked when it has one",
+      [condition(ja["when"], kafka_backup_expect_judged=True, ansible_check_mode=False, _kb_guard_script={"stdout": ""}),
+       condition(ja["when"], kafka_backup_expect_judged=True, ansible_check_mode=False),
+       condition(ja["when"], kafka_backup_expect_judged=True, ansible_check_mode=False, _kb_guard_script={"stdout": "x"})],
+      [False, False, True])
 # R11: the backup's and the store's waits through a failing read
 def stub_wait(script, logs, fail_reads, render_vars):
     with tempfile.TemporaryDirectory() as d:
@@ -472,6 +479,11 @@ rc, out = stub_wait(kbs, "Kafka holds everything its dumps held: a@20261101T0230
                     {"kubectl": "kubectl", "_kb_ns": "ns", "_kb_job": "kafka-backup-check-1"})
 check("R11 the backup's wait: two reads failing, then done - the guard's verdict and the dump's name",
       (rc, out[-2:]), (0, ["guard: Kafka holds everything its dumps held: a@20261101T023000Z", "20261102T023000Z"]))
+# a backup without its guard (platform's chart before it) logs no verdict: the dump still named, never a failed pipeline
+rc, out = stub_wait(kbs, "backups in store:kafka-backups/: 1 complete\nkafka backup 20261102T023000Z: uploaded (2 topics 0 messages)", 0,
+                    {"kubectl": "kubectl", "_kb_ns": "ns", "_kb_job": "kafka-backup-check-1"})
+check("R11   a backup without its guard (no verdict logged): done, its dump named, no guard line",
+      (rc, out[-1], any(l.startswith("guard: ") for l in out)), (0, "20261102T023000Z", False))
 ks = yaml.safe_load(open(os.path.join(ops, "deploy/ansible/playbooks/tasks/kafka-store.yml")))
 kss = next(t for t in ks if str(t.get("name", "")).startswith("The store Job run"))["ansible.builtin.shell"]["cmd"]
 rc, out = stub_wait(kss, "baseline 20261102T000000Z: a", 2, {"kubectl": "kubectl", "kafka_namespace": "ns", "_ks_name": "kafka-store-x-1"})

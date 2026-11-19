@@ -40,7 +40,9 @@
       log=$($k logs "job/$j" -c upload)
       echo "$log" | tail -3
       # the guard's own verdict (what it judged, against which dump) before the dump's name, the last line
-      echo "$log" | grep -E '^Kafka holds everything its dumps held:|^no complete dump before this one' | tail -1 | sed 's/^/guard: /'
+      # (none said by a backup without its guard - platform's chart before the guard: no line, never a failed pipeline)
+      { echo "$log" | grep -E '^Kafka holds everything its dumps held:|^no complete dump before this one' || true; } \
+        | tail -1 | sed 's/^/guard: /'
       echo "$log" | grep -oE 'kafka backup [0-9]{8}T[0-9]{6}Z: uploaded' | awk '{print $3}' | tr -d : | tail -1
       $k delete job "$j" --wait=false > /dev/null
   register: _kb_backup
