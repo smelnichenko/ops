@@ -65,40 +65,54 @@ def main(argv):
     return 3 if failing else 0
 
 
-def read_once(kubectl, allow):
-    """The policies failing this read (namespace/name) and the read's table."""
+def live_pods(kubectl):
+    """The pods that enforce, by namespace - a finished pod enforces nothing."""
     pods = {}
     for p in get(kubectl, "pods"):
-        if (p.get("status") or {}).get("phase") in ("Succeeded", "Failed"):
-            continue  # a finished pod enforces nothing
-        pods.setdefault(p["metadata"]["namespace"], []).append(p)
+        if (p.get("status") or {}).get("phase") not in ("Succeeded", "Failed"):
+            pods.setdefault(p["metadata"]["namespace"], []).append(p)
+    return pods
+
+
+def judge(pol, pods, allow):
+    """One policy's table row and whether it fails; None when not judged (outside schnappy-, namespace-wide)."""
+    ns, name = pol["metadata"]["namespace"], pol["metadata"]["name"]
+    if not ns.startswith("schnappy-"):
+        return None
+    spec = pol.get("spec") or {}
+    if spec.get("targetRef") or spec.get("targetRefs"):
+        return "%-4s %-20s %-42s attached by targetRef - not judged" % (pol["kind"][:4], ns, name), False
+    sel = (spec.get("selector") or {}).get("matchLabels")
+    if not sel:
+        return None  # namespace-wide
+    hit = [p for p in pods.get(ns, []) if all((p["metadata"].get("labels") or {}).get(k) == v for k, v in sel.items())]
+    bare = [p["metadata"]["name"] for p in hit if not proxied(p)]
+    allowed = "%s/%s" % (ns, name) in allow
+    if hit and not bare:
+        note = ""
+    elif not hit:
+        note = " (allowed)" if allowed else " - ENFORCED BY NOTHING"
+    else:
+        note = " - NO PROXY ON %s" % " ".join(bare)
+    row = "%-4s %-20s %-42s pods %d, with a proxy %d%s" % (pol["kind"][:4], ns, name, len(hit), len(hit) - len(bare), note)
+    return row, bool(bare or (not hit and not allowed))
+
+
+def read_once(kubectl, allow):
+    """The policies failing this read (kind/namespace/name - kinds share names: Kafka's policy and its
+    PeerAuthentication) and the read's table."""
+    pods = live_pods(kubectl)
     bad, table = set(), []
     for kind in KINDS:
         for pol in get(kubectl, kind):
-            ns, name = pol["metadata"]["namespace"], pol["metadata"]["name"]
-            if not ns.startswith("schnappy-"):
+            judged = judge(pol, pods, allow)
+            if judged is None:
                 continue
-            spec = pol.get("spec") or {}
-            if spec.get("targetRef") or spec.get("targetRefs"):
-                table.append("%-4s %-20s %-42s attached by targetRef - not judged" % (pol["kind"][:4], ns, name))
-                continue
-            sel = (spec.get("selector") or {}).get("matchLabels")
-            if not sel:
-                continue  # namespace-wide
-            hit = [p for p in pods.get(ns, []) if all((p["metadata"].get("labels") or {}).get(k) == v for k, v in sel.items())]
-            bare = [p["metadata"]["name"] for p in hit if not proxied(p)]
-            allowed = "%s/%s" % (ns, name) in allow
-            if hit and not bare:
-                note = ""
-            elif not hit:
-                note = " (allowed)" if allowed else " - ENFORCED BY NOTHING"
-            else:
-                note = " - NO PROXY ON %s" % " ".join(bare)
-            table.append("%-4s %-20s %-42s pods %d, with a proxy %d%s" % (pol["kind"][:4], ns, name, len(hit), len(hit) - len(bare), note))
-            if bare or (not hit and not allowed):
-                bad.add("%s/%s/%s" % (pol["kind"], ns, name))  # kinds share names (Kafka's policy and its PeerAuthentication)
+            row, failed = judged
+            table.append(row)
+            if failed:
+                bad.add("%s/%s/%s" % (pol["kind"], pol["metadata"]["namespace"], pol["metadata"]["name"]))
     return bad, table
-
 
 if __name__ == "__main__":
     sys.exit(main(sys.argv[1:]))
