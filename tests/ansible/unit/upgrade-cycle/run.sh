@@ -25,7 +25,7 @@ REAL=$PWD
 W=$(mktemp -d)
 trap 'rm -rf "$W"' EXIT
 python3 - "$REAL" "$W" <<'PYCHECK'
-import json, os, shutil, signal, subprocess, sys, time
+import json, os, re, shutil, signal, subprocess, sys, time
 REAL, W = sys.argv[1], sys.argv[2]
 fails = 0
 def check(name, got, want):
@@ -121,8 +121,11 @@ n=$(ls "$ST"/agent.* 2>/dev/null | wc -l)
 echo "${GIT_AUTHOR_NAME:-} <${GIT_AUTHOR_EMAIL:-}> ${GIT_COMMITTER_NAME:-} <${GIT_COMMITTER_EMAIL:-}>" > "$ST/author.$n"
 case "$*" in
   *"upgrade-cycle review"*) { ls; cat ./*.commits ./*.diff; } > "$ST/review.saw" 2>&1  # what lies beside its clones
-    cat "$ST/verdict"; exit "$(cat "$ST/review.rc" 2>/dev/null || echo 0)" ;;
+    n=$(( $(cat "$ST/review.n" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$ST/review.n"
+    if [ -e "$ST/verdict.$n" ]; then cat "$ST/verdict.$n"; else cat "$ST/verdict"; fi
+    exit "$(cat "$ST/review.rc" 2>/dev/null || echo 0)" ;;
   *"upgrade-cycle fix"*) [ -e "$PWD/proof.log" ] && touch "$ST/fix.saw-log"
+    [ -e "$PWD/review.txt" ] && touch "$ST/fix.saw-review"
     [ ! -e "$PWD/.trusted" ] || touch "$ST/fix.saw-trusted"
     [ ! -e "$ST/fix.heads" ] || touch "$ST/fixed"
     [ ! -e "$ST/nofix" ] || echo "NO FIX: the new version drops a flag the chart needs"
@@ -215,7 +218,7 @@ H1_UPDATED = "schnappy/infra 4 " + "5" * 40 + " " + "e" * 40 + "\nschnappy/ops 7
 H1_BASE_MOVED = "schnappy/infra 4 " + "a" * 40 + " " + "9" * 40 + "\nschnappy/ops 7 " + "c" * 40 + " " + "e" * 40 + "\n"
 CLEAN = "PASSES: correctness, security, architecture, reliability, tests\nVERDICT: CLEAN"
 def setup(pick, proofs=(0,), plan="test:copy:change INFRA_REF=renovate/x PLATFORM_REF=main\n", verdict=CLEAN, mem=30000,
-          files=None, heads=(H1,), records=(), inflight=False, tries=0, journal=None, pending=None):
+          files=None, heads=(H1,), records=(), inflight=False, tries=0, journal=None, pending=None, verdicts=()):
     for f in os.listdir(ST):
         os.remove(os.path.join(ST, f))
     for d in (".copy", "docs", ".upgrade-cycle"):
@@ -239,6 +242,8 @@ def setup(pick, proofs=(0,), plan="test:copy:change INFRA_REF=renovate/x PLATFOR
     open(os.path.join(ST, "proofs"), "w").write("".join(f"{p}\n" for p in proofs))
     open(os.path.join(ST, "plan"), "w").write(plan)
     open(os.path.join(ST, "verdict"), "w").write(verdict + "\n")
+    for i, v in enumerate(verdicts, 1):  # one a review, in turn (the review after a fix reads the next)
+        open(os.path.join(ST, f"verdict.{i}"), "w").write(v + "\n")
     open(os.path.join(ST, "meminfo"), "w").write(f"MemAvailable: {mem * 1024} kB\n")
     for i, h in enumerate(heads):
         open(os.path.join(ST, f"heads.{i}"), "w").write(h)
@@ -272,8 +277,17 @@ def words(c, n):
     return " ".join(c.split(" ")[:n]).strip()
 def picked(calls):
     return bool(has(calls, "upgrade-units.py pick"))
+def run_log():  # the run's own log - every line it said, the terminal gone or not (each case's .copy its own)
+    d = os.path.join(OPS, ".copy")
+    logs = sorted(f for f in os.listdir(d) if f.startswith("upgrade-cycle-")) if os.path.isdir(d) else []
+    return open(os.path.join(d, logs[-1]), errors="replace").read() if logs else ""
 def notices(calls):
-    return [words(c, 3) for c in has(calls, "upgrade-notice.sh") if not c.startswith(("upgrade-notice.sh open", "upgrade-notice.sh repost"))]
+    """What the run said of its unit - stopped, applied, noticed (nothing is mailed: operator 2026-11-20) - and the pages
+    it recorded (its calls)."""
+    said = [f"{m.group(1).lower()} {m.group(2)}" for m in re.finditer(r"^\S+ \S+ (STOPPED|APPLIED|NOTICED) ([a-z0-9.-]+):", run_log(), re.M)]
+    return said + [f"page {c.split()[2]}" for c in has(calls, "upgrade-notice.sh page")]
+def stopped_lines():
+    return [l for l in run_log().splitlines() if re.match(r"\S+ \S+ STOPPED ", l)]
 def merged(calls, unit):
     return bool(has(calls, f"upgrade-label.py {unit} --merge"))
 def paused(calls):
@@ -330,16 +344,15 @@ check("19:19: 00:50 a minute past the start's span - on", (rc, picked(calls)), (
 rc, calls = night("prove wave-patches patch", hm="06:00", dow="3")
 check("06:00: the day's windows behind it - on", (rc, picked(calls)), (0, True))
 rc, calls = night("prove wave-patches patch", files={"open": "scylla-2026.3\n"})
-check("an open page: posted again (Alertmanager forgets on a restart), refused, nothing picked",
-      (rc, has(calls, "upgrade-notice.sh"), picked(calls)), (1, ["upgrade-notice.sh open", "upgrade-notice.sh repost"], False))
+check("an open page: refused, nothing picked - nothing posted (no mail since 2026-11-20)",
+      (rc, has(calls, "upgrade-notice.sh"), picked(calls)), (1, ["upgrade-notice.sh open"], False))
 rc, calls = night("prove wave-patches patch", inflight=True)
 check("a run stopped mid-apply with no page (its journal): paged now - its unit, the journal in it - paused, refused, "
       "nothing picked", (rc, notices(calls), paused(calls), picked(calls), "merged" in night.out),
-      (1, ["upgrade-notice.sh one-way-failed wave-patches"], True, False, True))
+      (1, ["page wave-patches"], True, False, True))
 for files, why in (({"branch": "feat/x\n"}, "ops on another branch"), ({"dirty": " M Taskfile.yml\n"}, "ops with changes"),
                    ({"origin": "2" * 40 + "\n"}, "ops behind or ahead of origin"), ({"fetch.rc": "1"}, "origin not read"),
                    ({"mains.rc": "1"}, "the local infra or platform main stale"),
-                   ({"am": "email\n"}, "production's Alertmanager routing notices elsewhere (platform's route not live)"),
                    ({"health.rc": "1"}, "production not settled and quiet")):
     rc, calls = night("prove wave-patches patch", files=files)
     check(f"{why}: refused, nothing picked", (rc, picked(calls)), (1, False))
@@ -347,8 +360,8 @@ rc, calls = night("prove wave-patches patch")
 check("ops checked clean but for the copy's inventory record (the build rewrites it)",
       [c for c in calls if "status --porcelain" in c][0].split(" -- ")[-1],
       ". :!tests/ansible/copy/prod-inventory.txt :!tests/ansible/copy/pi-versions.yml")
-check("Alertmanager's loaded config probed (its API), not the file mounted",
-      [("--alertmanager.url=http://localhost:9093" in c, "--config.file" in c) for c in calls if "amtool" in c][:1], [(True, False)])
+check("Alertmanager never read or posted to (the cycle mails nothing since 2026-11-20)",
+      [c for c in calls if "amtool" in c or "alertmanager" in c.lower()], [])
 rc, calls = night("prove wave-patches patch", mem=20000)
 check("memory short (the radar running), a unit that builds the copy: refused at once - no wait, no build",
       (rc, has(calls, "task"), has(calls, "sleep")), (1, [], []))
@@ -373,7 +386,7 @@ check("  infra's checkout on another branch: left as it is (nothing fetched or m
       "platform's still brought forward",
       [c for c in calls if c.startswith(("git -C ../infra f", "git -C ../infra m", "git -C ../platform f", "git -C ../platform m"))],
       ["git -C ../platform fetch -q origin main", "git -C ../platform merge -q --ff-only origin/main"])
-for files, mem, why in (({}, 20000, "memory"), ({"am": "email\n"}, 30000, "Alertmanager")):
+for files, mem, why in (({}, 20000, "memory"),):
     rc, calls = night("prove wave-patches patch", args=("--preflight",), mem=mem, files=files)
     check(f"--preflight, a gate refusing ({why}): exit 1", rc, 1)
 for p in ("NOTHING", "PAUSED"):
@@ -387,7 +400,7 @@ REVS = "infra=" + "f" * 40
 rc, calls = night("prove wave-patches patch", plan=PLAN)
 check("the copy built in a UTF-8 locale - Ansible refuses any other (the first build through the runner, 2026-11-16: "
       "LC_ALL=C, 'Detected None')", open(os.path.join(ST, "build.locale")).read().strip().lower().replace("-", ""), "utf8")
-KEY = ("task ", "upgrade-label.py", "upgrade-record.sh", "vagrant", "claude", "upgrade-notice.sh applied", "upgrade-verify.sh ARGO",
+KEY = ("task ", "upgrade-label.py", "upgrade-record.sh", "vagrant", "claude", "upgrade-verify.sh ARGO",
        "upgrade-verify.sh AFTER", "upgrade-units.py held", "copy-snapshot.sh")
 seq = [words(c, 2 if c.startswith("upgrade-record.sh") else 3) for c in calls if c.startswith(KEY)
        or c.startswith("git -C " + OPS + " merge")]
@@ -401,15 +414,15 @@ check("a patch unit: heads, green, its plan read, built, proven, heads again, re
            "copy-snapshot.sh used", "vagrant halt", "task test:copy:unit UNIT=wave-patches", "task --yes deploy:etcd:backup",
            "upgrade-units.py held wave-patches", "upgrade-label.py wave-patches --merge", "git -C " + OPS,
            "upgrade-verify.sh ARGO " + REVS, "task --yes deploy:kubeadm:upgrade", "task --yes deploy:forgejo:upgrade",
-           "upgrade-verify.sh AFTER " + REVS, "task test:copy:inventory", "upgrade-record.sh wave-patches",
-           "upgrade-notice.sh applied wave-patches"]))
+           "upgrade-verify.sh AFTER " + REVS, "task test:copy:inventory", "upgrade-record.sh wave-patches"]))
+check("  said applied on the terminal - nothing mailed", notices(calls), ["applied wave-patches"])
 check("  merged at the heads proven - head and base each - ops brought by fetch and fast-forward (never a pull)",
       (open(os.path.join(ST, "merged.expect")).read(), len(has(calls, "git -C " + OPS + " merge -q --ff-only origin/main")),
        has(calls, "git -C " + OPS + " pull")), (H1, 1, []))
-check("  the gates read again before the merge (Alertmanager probed twice) - the local mains at the start alone (the "
-      "base pin stands for them after); the unit's branches judged on main before its CI and again after it",
-      (len([c for c in calls if "amtool config routes test" in c]), [c for c in has(calls, "copy-main-current.sh")]),
-      (2, ["copy-main-current.sh ../infra ../platform"] + [f"copy-main-current.sh {OPS}/../infra:renovate/wave-patches {OPS}:renovate/wave-patches"] * 2))
+check("  the local mains read at the start alone (the base pin stands for them after); the unit's branches judged on "
+      "main before its CI and again after it",
+      [c for c in has(calls, "copy-main-current.sh")],
+      ["copy-main-current.sh ../infra ../platform"] + [f"copy-main-current.sh {OPS}/../infra:renovate/wave-patches {OPS}:renovate/wave-patches"] * 2)
 check("  the review's clones as the bot (its token by a helper of the call's own, to Forgejo's host alone), each at its "
       "proven head, outside every checkout, gone after",
       ([c.split()[-2] for c in calls if c.startswith("git -c credential.helper=") and " clone " in c],
@@ -458,7 +471,7 @@ rc, calls = night("prove wave-patches patch", plan=PLAN, files={"green.rc": "1"}
 check("its CI still running after an hour (Woodpecker's queue): reported, nothing built, nothing labelled, NO try counted",
       (rc, has(calls, "task"), notices(calls), has(calls, "upgrade-label.py wave-patches upgrade-blocked"),
        has(calls, "upgrade-label.py wave-patches --green"), os.path.exists(os.path.join(OPS, ".upgrade-cycle/tries/wave-patches"))),
-      (1, [], ["upgrade-notice.sh blocked wave-patches"], [], ["upgrade-label.py wave-patches --green 3600"], False))
+      (1, [], ["stopped wave-patches"], [], ["upgrade-label.py wave-patches --green 3600"], False))
 def tries_now(unit="wave-patches"):
     p = os.path.join(OPS, ".upgrade-cycle/tries", unit)
     return len(open(p).read().splitlines()) if os.path.exists(p) else 0
@@ -466,7 +479,7 @@ check("  the heads it was still running on recorded: the next run on the same he
       os.path.exists(os.path.join(OPS, ".upgrade-cycle/pending/wave-patches")), True)
 rc, calls = night("prove wave-patches patch", plan=PLAN, files={"green.rc": "1"}, pending="same")
 check("  still running on the same heads a run later (stuck in Woodpecker): a try counted, nothing built",
-      (rc, has(calls, "task"), tries_now(), [c for c in has(calls, "upgrade-notice.sh blocked") if "same heads a run later" in c] != []),
+      (rc, has(calls, "task"), tries_now(), [c for c in stopped_lines() if "same heads a run later" in c] != []),
       (1, [], 1, True))
 rc, calls = night("prove wave-patches patch", plan=PLAN, files={"green.rc": "1"}, pending="schnappy/infra 1 " + "f" * 40 + " ")
 check("  still running on other heads than a run before (they moved): no try, the new heads recorded",
@@ -474,11 +487,12 @@ check("  still running on other heads than a run before (they moved): no try, th
       (1, 0, True))
 rc, calls = night("prove wave-patches patch", plan=PLAN, files={"green.rc": "5"})
 check("no CI on its heads after an hour (no pipeline started - it never comes by itself): a try counted, nothing built",
-      (rc, has(calls, "task"), tries_now(), [c for c in has(calls, "upgrade-notice.sh blocked") if "no CI on its heads" in c] != []),
+      (rc, has(calls, "task"), tries_now(), [c for c in stopped_lines() if "no CI on its heads" in c] != []),
       (1, [], 1, True))
 rc, calls = night("prove wave-patches patch", plan=PLAN, files={"green.rc": "4"}, tries=2)
-check("  the third try for the unit's pull requests (red CI, its heads moved between them): labelled upgrade-blocked (the "
-      "queue goes on)", (rc, has(calls, "upgrade-label.py wave-patches upgrade-blocked")), (1, ["upgrade-label.py wave-patches upgrade-blocked"]))
+check("  the third try for the unit's pull requests (red CI, its heads moved between them): a try like any other - never "
+      "labelled, no blocked state (the pick takes the units with none first)",
+      (rc, has(calls, "upgrade-label.py wave-patches upgrade-blocked"), tries_now(), notices(calls)), (1, [], 3, ["stopped wave-patches"]))
 setup("prove wave-patches patch", plan=PLAN, files={"green.rc": "4"})
 os.makedirs(os.path.join(OPS, ".upgrade-cycle/tries"), exist_ok=True)
 open(os.path.join(OPS, ".upgrade-cycle/tries/wave-patches"), "w").write("schnappy/infra#1,schnappy/ops#2 2026-11-01T00:00:00Z old\n" * 5)
@@ -488,7 +502,7 @@ check("  tries of an earlier unit of the name (other pull requests): not this on
 rc, calls = night("prove wave-patches patch", plan=PLAN, files={"green.rc": "4"})
 check("its CI red (its own checks, or Woodpecker failing - a clone that lost its credentials): a try, nothing built, not "
       "labelled the first time", (rc, has(calls, "task"), has(calls, "upgrade-label.py wave-patches upgrade-blocked"), notices(calls)),
-      (1, [], [], ["upgrade-notice.sh blocked wave-patches"]))
+      (1, [], [], ["stopped wave-patches"]))
 rc, calls = night("prove wave-patches patch", plan=PLAN, tries=2)
 check("a run that gets the unit further (applied) starts its count again", (rc, os.path.exists(os.path.join(OPS, ".upgrade-cycle/tries/wave-patches"))),
       (0, False))
@@ -503,7 +517,7 @@ check("  every repo of the unit judged on main - ops' branch too", [c for c in h
       [f"copy-main-current.sh {OPS}/../infra:renovate/wave-patches {OPS}:renovate/wave-patches"])
 rc, calls = night("prove wave-patches patch", plan=PLAN, files={"stale": "1\n1\n"})
 check("  behind again after its CI (other work's pushes to main): said, nothing built, NO try", (rc, has(calls, "task test:copy:ready"),
-      notices(calls), os.path.exists(os.path.join(OPS, ".upgrade-cycle/tries/wave-patches"))), (1, [], ["upgrade-notice.sh blocked wave-patches"], False))
+      notices(calls), os.path.exists(os.path.join(OPS, ".upgrade-cycle/tries/wave-patches"))), (1, [], ["stopped wave-patches"], False))
 rc, calls = night("prove wave-patches patch", plan=PLAN, files={"stale": "1\n", "tip.infra": "9" * 40 + "\n"})
 check("  updated, Forgejo not showing the new heads yet: said, nothing built, no try", (rc, has(calls, "task test:copy:ready"),
       os.path.exists(os.path.join(OPS, ".upgrade-cycle/tries/wave-patches"))), (1, [], False))
@@ -518,7 +532,7 @@ check("  Forgejo's update refused (a conflict): a try", (rc, os.path.exists(os.p
 rc, calls = night("prove wave-patches patch", plan=PLAN, files={"fetchunit.seq": "0\n0\n1\n"})
 check("  its branches fetched before its CI, not after it (the second fetch failing alone): said, nothing built, no try",
       (rc, has(calls, "task test:copy:ready"), tries_now(),
-       [c for c in has(calls, "upgrade-notice.sh blocked") if "not fetched after their CI" in c] != []), (1, [], 0, True))
+       [c for c in stopped_lines() if "not fetched after their CI" in c] != []), (1, [], 0, True))
 rc, calls = night("prove wave-patches patch", plan=PLAN, files={"fetchunit.ops.rc": "1"})
 check("  ops' branch fetched too (its checkout's own fetch failing): said, nothing built", (rc, has(calls, "task test:copy:ready")), (1, []))
 rc, calls = night("prove wave-patches patch", plan=PLAN, files={"fetchunit.rc": "1"})
@@ -550,11 +564,12 @@ check("  its commits fetched into the runner's own repository (never run in the 
 check("  the fix's own CI waited for before its proof (green read again after the push)",
       [words(c, 4) for c in calls if c.startswith(("upgrade-label.py istio --green", "upgrade-label.py istio agent-fixed"))],
       ["upgrade-label.py istio --green 3600", "upgrade-label.py istio agent-fixed", "upgrade-label.py istio --green 3600"])
-check("  then, proven and reviewed: a 24 h notice mailed with the fix's diff, its comment - never merged in this run",
+check("  then, proven and reviewed: its 24 h notice - its comment, said on the terminal (nothing mailed), the fix's record "
+      "kept - never merged in this run",
       (notices(calls), has(calls, "upgrade-label.py istio --comment")[0][:47] if has(calls, "upgrade-label.py istio --comment") else None,
-       merged(calls, "istio"), "=== schnappy/infra" in open(os.path.join(ST, "notice.veto.details")).read()
-       if os.path.exists(os.path.join(ST, "notice.veto.details")) else None),
-      (["upgrade-notice.sh veto istio"], "upgrade-label.py istio --comment UPGRADE NOTICE", False, True))
+       merged(calls, "istio"), "=== schnappy/infra" in open(os.path.join(OPS, ".upgrade-cycle/fixes/istio.diff")).read()
+       if os.path.exists(os.path.join(OPS, ".upgrade-cycle/fixes/istio.diff")) else None),
+      (["noticed istio"], "upgrade-label.py istio --comment UPGRADE NOTICE", False, True))
 for files, why in (({"fix.heads": H2, "fix.files": ".woodpecker/ci.yaml\n"}, "changed CI (outside the unit's own files)"),
                    ({"fix.heads": H2, "fix.files": "clusters/production/CLAUDE.md\n"}, "wrote an agent's instructions"),
                    ({"fix.heads": H2, "fix.files": "clusters/x.yaml\nscripts/copy-unit.sh\n"}, "changed a script beside a value"),
@@ -564,18 +579,18 @@ for files, why in (({"fix.heads": H2, "fix.files": ".woodpecker/ci.yaml\n"}, "ch
     rc, calls = night("prove istio minor", proofs=(1, 0), files=files)
     check(f"a fix that {why}: not pushed, blocked, proven no more, nothing merged",
           (rc, merged(calls, "istio"), pushes(calls) if "push.rc" not in files else [], notices(calls), len(has(calls, "task test:copy:ready"))),
-          (1, False, [], ["upgrade-notice.sh blocked istio"], 1))
+          (1, False, [], ["stopped istio"], 1))
 rc, calls = night("prove istio minor", proofs=(1, 0), files={"fix.heads": H2, "fix.raw": ":000000 120000 0000000 3333333 A\tclusters/production/x.yaml\n"})
 check("a fix committing a symlink (or a submodule) under the unit's own files: nothing pushed, blocked (the copy reads "
-      "the tree unsandboxed)", (rc, pushes(calls), notices(calls)), (1, [], ["upgrade-notice.sh blocked istio"]))
+      "the tree unsandboxed)", (rc, pushes(calls), notices(calls)), (1, [], ["stopped istio"]))
 for blob, why in (("v: 2\r  extra: evil\n", "a carriage return (a YAML key hidden from the mail and the review)"),
                   ("{{/* \x00 */}}\n", "a NUL (git calls it binary: the mail shows 'Binary files differ')"),
                   ("bell \x07\n", "another control character")):
     rc, calls = night("prove istio minor", proofs=(1, 0), files={"fix.heads": H2, "blob": blob})
-    check(f"a fix holding {why}: nothing pushed, blocked", (rc, pushes(calls), notices(calls)), (1, [], ["upgrade-notice.sh blocked istio"]))
+    check(f"a fix holding {why}: nothing pushed, blocked", (rc, pushes(calls), notices(calls)), (1, [], ["stopped istio"]))
 rc, calls = night("prove istio minor", proofs=(1, 0), files={"fix.heads": H2}, env={"LABEL_FAIL": "stop-updating"})
 check("a fix whose stop-updating label does not set (Renovate would rewrite it): nothing pushed, blocked", (rc, pushes(calls), notices(calls)),
-      (1, [], ["upgrade-notice.sh blocked istio"]))
+      (1, [], ["stopped istio"]))
 setup("prove istio minor", proofs=(1, 0), files={"fix.heads": H2})
 os.makedirs(os.path.join(OPS, ".upgrade-cycle/fixes"), exist_ok=True)
 open(os.path.join(OPS, ".upgrade-cycle/fixes/istio.diff"), "w").write("=== the agent's fix of renovate/istio, long ago (applied) - files:\nOLD\n")
@@ -583,8 +598,8 @@ subprocess.run(["bash", os.path.join(OPS, "scripts/upgrade-cycle.sh")], capture_
 check("a unit of a name fixed before (its record of an applied instance): this fix's record alone - the old one never mailed",
       "OLD" in open(os.path.join(OPS, ".upgrade-cycle/fixes/istio.diff")).read(), False)
 rc, calls = night("prove istio minor", proofs=(1, 0), files={"fix.heads": H2, "blob": "x: " + "y" * 120000 + "\n"})
-check("a fix whose diff is over a mail's 100 KB: labelled upgrade-blocked (no notice on half its evidence), never mailed as a veto",
-      (rc, has(calls, "upgrade-label.py istio upgrade-blocked"), [n for n in notices(calls) if "veto" in n]), (1, ["upgrade-label.py istio upgrade-blocked"], []))
+check("a fix of any size (over the 100 KB a mail once took): noticed all the same - nothing is mailed, never labelled",
+      (rc, has(calls, "upgrade-label.py istio upgrade-blocked"), notices(calls)), (0, [], ["noticed istio"]))
 rc, calls = night("prove istio minor", proofs=(1, 0), files={"fix.heads": H2, "fix.raw": ":100644 000000 1111111 0000000 D\tclusters/production/old.yaml\n"})
 check("a fix deleting a file of the unit's own: pushed (a deletion is no symlink)", (rc, len(pushes(calls))), (0, 1))
 rc, calls = night("prove istio minor", proofs=(1, 0), files={"fix.heads": H2})
@@ -595,14 +610,14 @@ check("  the fix on record (.upgrade-cycle/fixes/<unit>.diff): every repo's file
 rc, calls = night("prove istio minor", proofs=(1, 0), files={"fix.heads": H2}, env={"LABEL_FAIL": "agent-fixed"})
 check("a fix whose agent-fixed label does not set (its 24 h notice would not hold): nothing pushed, blocked, not proven again",
       (rc, pushes(calls), len(has(calls, "task test:copy:ready")), notices(calls), merged(calls, "istio")),
-      (1, [], 1, ["upgrade-notice.sh blocked istio"], False))
+      (1, [], 1, ["stopped istio"], False))
 rc, calls = night("prove istio minor", proofs=(1, 0), files={"fix.heads": H3, "fixed.ops": ""})
 labelled_at = min([i for i, c in enumerate(calls) if c.startswith("upgrade-label.py istio agent-fixed")] or [10 ** 6])
 pushed_at = [i for i, c in enumerate(calls) if c.startswith("git ") and " push " in c]
 check("a fix in two repos (the clone and its list read past every step that reads stdin): both judged, labelled "
       "agent-fixed BEFORE the first push, both pushed, proven again on both heads Forgejo shows",
       (rc, [p[1][:4] for p in pushes(calls)], bool(pushed_at) and labelled_at < min(pushed_at), len(has(calls, "task test:copy:ready")),
-       notices(calls)), (0, ["bbbb", "dddd"], True, 2, ["upgrade-notice.sh veto istio"]))
+       notices(calls)), (0, ["bbbb", "dddd"], True, 2, ["noticed istio"]))
 readies = [i for i, c in enumerate(calls) if c.startswith("task test:copy:ready")]
 forgets = [i for i, c in enumerate(calls) if c.startswith("copy-snapshot.sh forget")]
 check("  the proof after the fix on a base built fresh: the snapshot forgotten between the two readies, once (never one base twice)",
@@ -615,18 +630,18 @@ check("  the copy marked used before its halt, however the run ended",
       ["used", "vagrant halt"])
 rc, calls = night("prove istio minor", proofs=(1, 0), files={"fix.heads": H3, "fixed.ops": "", "fix.files.ops": "Taskfile.yml\n"})
 check("a fix fine in infra, outside the unit's files in ops: NOTHING pushed (never half a fix, unlabelled), blocked",
-      (rc, pushes(calls), has(calls, "upgrade-label.py istio agent-fixed"), notices(calls)), (1, [], [], ["upgrade-notice.sh blocked istio"]))
+      (rc, pushes(calls), has(calls, "upgrade-label.py istio agent-fixed"), notices(calls)), (1, [], [], ["stopped istio"]))
 rc, calls = night("prove istio minor", proofs=(1, 0), files={"fix.heads": H3, "fixed.ops": "", "push.ops.rc": "1"})
 check("a fix whose second push is refused after the first went in: blocked - the unit labelled agent-fixed already (what "
       "went in waits for its notice)", (rc, len(pushes(calls)), bool(has(calls, "upgrade-label.py istio agent-fixed")), notices(calls)),
-      (1, 2, True, ["upgrade-notice.sh blocked istio"]))
+      (1, 2, True, ["stopped istio"]))
 rc, calls = night("prove wave-patches patch", plan=PLAN, files={"branchtip.infra": "9" * 40 + "\n"})
 check("a checkout's branch not the head its pull request names (Forgejo's record behind its git): nothing built, no try",
-      (rc, has(calls, "task"), tries_now(), [c for c in has(calls, "upgrade-notice.sh blocked") if "tips not the heads" in c] != []),
+      (rc, has(calls, "task"), tries_now(), [c for c in stopped_lines() if "tips not the heads" in c] != []),
       (1, [], 0, True))
 rc, calls = night("prove wave-patches patch", plan=PLAN, files={"branchtip.infra.seq": "a" * 40 + "\n" + "9" * 40 + "\n"})
 check("  the branch moved past its pull request's head during the proof (the copy fetched another commit): nothing applied",
-      (rc, merged(calls, "wave-patches"), [c for c in has(calls, "upgrade-notice.sh blocked") if "moved during its proof" in c] != []),
+      (rc, merged(calls, "wave-patches"), [c for c in stopped_lines() if "moved during its proof" in c] != []),
       (1, False, True))
 rc, calls = night("prove istio minor", proofs=(1, 0), files={"fix.heads": ""})
 check("a try counted for the pull requests the run's first read named - a later read that came back empty no other key",
@@ -634,26 +649,27 @@ check("a try counted for the pull requests the run's first read named - a later 
       if os.path.exists(os.path.join(OPS, ".upgrade-cycle/tries/istio")) else None, ["schnappy/infra#4,schnappy/ops#7"])
 rc, calls = night("prove istio minor", proofs=(1, 0), files={"fix.heads": H2, "fix.unseen": ""})
 check("a fix pushed that Forgejo does not show on its pull requests: blocked, not proven on what it shows",
-      (rc, len(has(calls, "task test:copy:ready")), notices(calls)), (1, 1, ["upgrade-notice.sh blocked istio"]))
+      (rc, len(has(calls, "task test:copy:ready")), notices(calls)), (1, 1, ["stopped istio"]))
 rc, calls = night("prove istio minor", proofs=(1, 0), plan=ISTIO, files={"nofix": ""})
-check("no fix, the agent's verdict (NO FIX - the new version's defect): labelled upgrade-blocked, reported - no rebuild",
-      (rc, has(calls, "upgrade-label.py istio upgrade-blocked"), notices(calls), len(has(calls, "task test:copy:ready"))),
-      (1, ["upgrade-label.py istio upgrade-blocked"], ["upgrade-notice.sh blocked istio"], 1))
+check("no fix, the agent's verdict (NO FIX - the new version's defect): a try, its reason said - never labelled, no rebuild",
+      (rc, has(calls, "upgrade-label.py istio upgrade-blocked"), notices(calls), len(has(calls, "task test:copy:ready")), tries_now("istio"),
+       any("NO FIX: the new version drops a flag" in l for l in stopped_lines())),
+      (1, [], ["stopped istio"], 1, 1, True))
 rc, calls = night("prove istio minor", proofs=(1, 0), plan=ISTIO, files={"fix.rc": "1"})
-check("no fix and no verdict (the agent did not finish): reported, NOT labelled (the next run proves it again), no rebuild",
-      (rc, has(calls, "upgrade-label.py istio upgrade-blocked"), notices(calls), len(has(calls, "task test:copy:ready"))),
-      (1, [], ["upgrade-notice.sh blocked istio"], 1))
+check("no fix and no verdict (the agent did not finish): a try, never labelled, no rebuild",
+      (rc, has(calls, "upgrade-label.py istio upgrade-blocked"), notices(calls), len(has(calls, "task test:copy:ready")), tries_now("istio")),
+      (1, [], ["stopped istio"], 1, 1))
 rc, calls = night("prove istio minor", proofs=(1, 1), files={"fix.heads": H2})
-check("red after its fix: labelled upgrade-blocked, reported, nothing merged, the copy halted",
-      (rc, has(calls, "upgrade-label.py istio upgrade-blocked"), notices(calls), merged(calls, "istio"), len(has(calls, "vagrant"))),
-      (1, ["upgrade-label.py istio upgrade-blocked"], ["upgrade-notice.sh blocked istio"], False, 1))
+check("red after its fix: a try, said, nothing merged, the copy halted - never labelled",
+      (rc, has(calls, "upgrade-label.py istio upgrade-blocked"), notices(calls), merged(calls, "istio"), len(has(calls, "vagrant")), tries_now("istio")),
+      (1, [], ["stopped istio"], False, 1, 1))
 rc, calls = night("prove istio minor", files={"build.rc": "1"})
 check("a copy that does not get ready: the run ends - no agent, no label, no notice blaming the unit; the copy halted",
       (rc, has(calls, "claude"), has(calls, "upgrade-label.py istio upgrade-blocked"), notices(calls), len(has(calls, "vagrant"))),
       (1, [], [], [], 1))
 rc, calls = night("prove istio minor", heads=(H1, H2))
 check("the heads moved during the proof: blocked, nothing reviewed or merged",
-      (rc, merged(calls, "istio"), has(calls, "claude"), notices(calls)), (1, False, [], ["upgrade-notice.sh blocked istio"]))
+      (rc, merged(calls, "istio"), has(calls, "claude"), notices(calls)), (1, False, [], ["stopped istio"]))
 rc, calls = night("prove istio minor", heads=(H1, H1_BASE_MOVED))
 check("only a base moved during the proof (CD's promotions - the merge judges a base): reviewed and merged",
       (rc, merged(calls, "istio")), (0, True))
@@ -661,9 +677,14 @@ rc, calls = night("prove istio minor", files={"vagrant.rc": "1"})
 check("the copy not halted after the review: said in the run and the applied notice (the radar stays off)",
       (rc, "THE COPY NOT HALTED" in night.out), (0, True))
 # ── the review ────────────────────────────────────────────────────────────────────────────────────────────────────────
-for verdict, files, label, why in (("VERDICT: CRITICAL a bad thing\nPASSES: x", {}, True, "a Critical review: labelled"),
-                                   ("PASSES: a\nVERDICT: CLEAN\nVERDICT: CRITICAL later", {}, True, "a later CRITICAL: labelled"),
-                                   ("VERDICT: CRITICAL first\n" + CLEAN, {}, True, "a CRITICAL then CLEAN (a later line never takes it back): labelled"),
+# any finding - whatever its severity (operator 2026-11-20: "why only criticals?") - goes to the agent's fix (here it
+# commits none: a try); a review that did not finish is a try with no fix; nothing is ever labelled
+for verdict, files, label, why in (("VERDICT: CRITICAL a bad thing\nPASSES: x", {}, True, "a CRITICAL: a finding, to the fix agent"),
+                                   ("PASSES: a\nVERDICT: CLEAN\nVERDICT: CRITICAL later", {}, True, "a later CRITICAL: a finding, to the fix agent"),
+                                   ("VERDICT: CRITICAL first\n" + CLEAN, {}, True, "a CRITICAL then CLEAN (a later line never takes it back): to the fix agent"),
+                                   ("FINDING: suggestion infra/x.yaml - a nit\n" + CLEAN, {}, True, "a suggestion beside a CLEAN verdict: a finding, to the fix agent"),
+                                   ("FINDING: warning a - b\nPASSES: correctness, security, architecture, reliability, tests\nVERDICT: FINDINGS 1", {}, True,
+                                    "VERDICT: FINDINGS: to the fix agent"),
                                    ("VERDICT: CLEAN", {}, False, "CLEAN with no passes named: not labelled"),
                                    ("PASSES: correctness, security, architecture, reliability\nVERDICT: CLEAN", {}, False,
                                     "CLEAN with a pass missing (tests): not labelled"),
@@ -678,8 +699,34 @@ for verdict, files, label, why in (("VERDICT: CRITICAL a bad thing\nPASSES: x", 
                                     "CLEAN, 'no tests': not labelled"),
                                    (CLEAN, {"review.rc": "1"}, False, "the review agent failing: not labelled")):
     rc, calls = night("prove istio minor", verdict=verdict, files=files)
-    check(f"{why}, blocked, nothing merged", (rc, merged(calls, "istio"), has(calls, "upgrade-label.py istio upgrade-blocked")),
-          (1, False, ["upgrade-label.py istio upgrade-blocked"] if label else []))
+    check(f"{why.replace(': not labelled', ': no fix')}, nothing merged, never labelled, a try",
+          (rc, merged(calls, "istio"), has(calls, "upgrade-label.py istio upgrade-blocked"), os.path.exists(os.path.join(ST, "fix.saw-review")),
+           tries_now("istio")), (1, False, [], label, 1))
+# the finding fixed: proven again on a fresh base and reviewed again - CLEAN goes on (a fixed unit: its 24 h notice);
+# findings left after the fix, or red after it: a try; two fixes at most a run
+FIND = ("FINDING: warning clusters/production/istio/values.yaml - a value the new chart renamed\n"
+        "PASSES: correctness, security, architecture, reliability, tests\nVERDICT: FINDINGS 1")
+def reviews(calls):
+    return len([c for c in calls if c.startswith("claude") and "upgrade-cycle review" in c])
+def proven(calls, unit="istio"):
+    return len([c for c in calls if c == f"task test:copy:unit UNIT={unit}"])
+rc, calls = night("prove istio minor", proofs=(0, 0), verdicts=(FIND, CLEAN), files={"fix.heads": H2})
+check("a review's finding (a warning): the agent's fix handed the review (review.txt), pushed, proven again on a fresh "
+      "base, reviewed again CLEAN - then its 24 h notice (a fixed unit), never merged in this run",
+      (rc, os.path.exists(os.path.join(ST, "fix.saw-review")), len(pushes(calls)), len(has(calls, "task test:copy:ready")),
+       proven(calls), reviews(calls), notices(calls), merged(calls, "istio")),
+      (0, True, 1, 2, 2, 2, ["noticed istio"], False))
+rc, calls = night("prove istio minor", proofs=(0, 0), verdicts=(FIND, FIND), files={"fix.heads": H2})
+check("  findings left after its fix: a try, said - nothing merged, never labelled",
+      (rc, merged(calls, "istio"), tries_now("istio"), notices(calls), has(calls, "upgrade-label.py istio upgrade-blocked")),
+      (1, False, 1, ["stopped istio"], []))
+rc, calls = night("prove istio minor", proofs=(0, 1), verdicts=(FIND,), files={"fix.heads": H2})
+check("  red after the fix of its findings: a try, never reviewed again, nothing merged",
+      (rc, merged(calls, "istio"), reviews(calls), tries_now("istio"), notices(calls)), (1, False, 1, 1, ["stopped istio"]))
+rc, calls = night("prove istio minor", proofs=(1, 0), verdicts=(FIND,), files={"fix.heads": H2}, env={"UPGRADE_FIX_ROUNDS": "1"})
+check("  a red proof fixed, then a finding with the run's fixes spent: a try, said, the agent not run again",
+      (rc, len([c for c in calls if c.startswith("claude") and "upgrade-cycle fix" in c]), any("fixes spent" in l for l in stopped_lines()),
+       merged(calls, "istio")), (1, 1, True, False))
 # ── the gate ──────────────────────────────────────────────────────────────────────────────────────────────────────────
 rc, calls = night("prove istio minor", verdict="PASSES: Correctness,security , architecture,RELIABILITY, tests\nVERDICT: CLEAN")
 check("every pass named, in any case and spacing: reviewed clean, merged", (rc, merged(calls, "istio")), (0, True))
@@ -690,18 +737,18 @@ for broken, why in (("no frontmatter at all\n", "no frontmatter"), ("---\nname: 
     rc, calls = night("prove istio minor")
     check(f"a reviewer's definition that does not read ({why}): blocked, no review run, nothing merged, not labelled",
           (rc, [c for c in calls if c.startswith("claude")], merged(calls, "istio"), has(calls, "upgrade-label.py istio upgrade-blocked"),
-           notices(calls)), (1, [], False, [], ["upgrade-notice.sh blocked istio"]))
+           notices(calls)), (1, [], False, [], ["stopped istio"]))
 open(os.path.join(OPS, ".claude/agents/test-quality-reviewer.md"), "w").write(good)
 rc, calls = night("prove istio minor", files={"revlog.infra.rc": "128"})
 check("a clone's commits not written for the review (the first repo's): blocked, no review run, nothing merged",
       (rc, [c for c in calls if c.startswith("claude")], merged(calls, "istio"), notices(calls),
-       "its diffs not written for the review" in " ".join(has(calls, "upgrade-notice.sh blocked"))),
-      (1, [], False, ["upgrade-notice.sh blocked istio"], True))
+       "its diffs not written for the review" in " ".join(stopped_lines())),
+      (1, [], False, ["stopped istio"], True))
 rc, calls = night("prove istio minor", files={"revdiff.ops.rc": "128"})
 check("a clone's diff not written for the review: blocked, no review run, nothing merged, not labelled",
       (rc, [c for c in calls if c.startswith("claude")], merged(calls, "istio"), has(calls, "upgrade-label.py istio upgrade-blocked"),
-       notices(calls), "its diffs not written for the review" in " ".join(has(calls, "upgrade-notice.sh blocked"))),
-      (1, [], False, [], ["upgrade-notice.sh blocked istio"], True))
+       notices(calls), "its diffs not written for the review" in " ".join(stopped_lines())),
+      (1, [], False, [], ["stopped istio"], True))
 # the apply's span holds what it waits for: Argo's settle and verify's (each its settle default), verify's hold, the
 # commands (30 min at least)
 import re as _re
@@ -715,63 +762,37 @@ check(f"the apply's span ({aspan} min) holds the etcd snapshot ({etcd}), Argo's 
       f"verify's hold ({vhold}) and 30 min of commands", aspan >= etcd + 2 * vsettle + vhold + 30, True)
 AF = {"list": "istio-1.32 minor schnappy/infra agent-fixed,stop-updating,upgrade-cycle\n"}
 rc, calls = night("notice istio-1.32 minor", files=AF)
-check("a unit an earlier run fixed (agent-fixed; a review that did not finish), noticed now - its diff not "
-      "on record: blocked, no clock", (rc, notices(calls), has(calls, "upgrade-label.py istio-1.32 --comment")),
-      (1, ["upgrade-notice.sh blocked istio-1.32"], []))
-setup("notice istio-1.32 minor", files=AF)
-os.makedirs(os.path.join(OPS, ".upgrade-cycle/fixes"), exist_ok=True)
-open(os.path.join(OPS, ".upgrade-cycle/fixes/istio-1.32.diff"), "w").write("=== the agent's fix of renovate/istio-1.32 - files:\n=== schnappy/infra\n")
-open(os.path.join(ST, "noticed"), "w").write("NONE\n")
-r = subprocess.run(["bash", os.path.join(OPS, "scripts/upgrade-cycle.sh")], capture_output=True, text=True, env=environ("12:00", "3"), timeout=120)
-calls = calls_now()
-check("  its diff on record: noticed with it (the agent's wording), then its comment",
-      (r.returncode, [words(c, 3) for c in calls if c.startswith(("upgrade-notice.sh veto", "upgrade-label.py istio-1.32 --comment"))],
-       open(os.path.join(ST, "notice.veto.details")).read().startswith("=== the agent's fix") if os.path.exists(os.path.join(ST, "notice.veto.details")) else None,
-       any("WITH THE AGENT'S FIX" in c for c in has(calls, "upgrade-notice.sh veto"))),
-      (0, ["upgrade-notice.sh veto istio-1.32", "upgrade-label.py istio-1.32 --comment"], True, True))
+check("a unit an earlier run fixed (agent-fixed; a review that did not finish), noticed now: its comment (the clock), said "
+      "with the agent's fix named - nothing mailed",
+      (rc, notices(calls), [words(c, 3) for c in has(calls, "upgrade-label.py istio-1.32 --comment")],
+       any("with the agent's fix" in l for l in run_log().splitlines() if " NOTICED " in l)),
+      (0, ["noticed istio-1.32"], ["upgrade-label.py istio-1.32 --comment"], True))
 rc, calls = night("notice centrifugo-7.x major")
-check("a major's first run: Renovate kept off its branches (stop-updating - a newer release would void the notice), its "
-      "notice mailed, then its comment (the clock) - nothing merged",
-      (rc, [words(c, 3) for c in calls if c.startswith(("upgrade-notice.sh veto", "upgrade-label.py centrifugo-7.x --comment",
-                                                         "upgrade-label.py centrifugo-7.x stop-updating"))], merged(calls, "centrifugo-7.x")),
-      (0, ["upgrade-label.py centrifugo-7.x stop-updating", "upgrade-notice.sh veto centrifugo-7.x", "upgrade-label.py centrifugo-7.x --comment"], False))
-check("  its details a summary of the unit (each repo's files, its commits - a subject's escape a '?' -, the review's "
-      "passes and verdict, the diff) - never the run's log (hundreds of KB: over a mail's 100 KB, every major was blocked)",
-      open(os.path.join(ST, "notice.veto.details")).read().split("\n") if os.path.exists(os.path.join(ST, "notice.veto.details")) else None,
-      ["=== renovate/centrifugo-7.x: what it changes",
-       "=== schnappy/infra", " clusters/production/x.yaml | 2 +-", "abc1234 bump x to 2 ?[2J",
-       "=== schnappy/ops", " clusters/production/x.yaml | 2 +-", "abc1234 bump x to 2 ?[2J",
-       "=== the review: PASSES: correctness, security, architecture, reliability, tests VERDICT: CLEAN ", "=== the diff", ""])
-check("  the summary read from the heads proven (never the branches' names - Forgejo's head may lag its branch)",
-      sorted({c.split("origin/main...")[1] for c in calls if "diff --stat --no-ext-diff --no-textconv --no-color --no-renames origin/main..." in c}), ["a" * 40, "c" * 40])
-check("  the summary's file gone at the run's end (mailed by then)",
-      [f for f in os.listdir(os.path.join(OPS, ".copy")) if f.startswith("upgrade-notice-")] if os.path.isdir(os.path.join(OPS, ".copy")) else [], [])
-rc2, calls2 = night("notice centrifugo-7.x major", files={"summary.fail": ""})
-check("  git failing on its summary: not noticed (no mail on what is not known), no try counted",
-      (rc2, notices(calls2), has(calls2, "upgrade-label.py centrifugo-7.x --comment"), tries_now("centrifugo-7.x")),
-      (1, ["upgrade-notice.sh blocked centrifugo-7.x"], [], 0))
-rc2, calls2 = night("notice centrifugo-7.x major", args=("--dry",))
-check("  a dry run: no summary made (nothing of git read for it)", [c for c in calls2 if "diff --stat" in c], [])
+check("a major's first run: Renovate kept off its branches (stop-updating - a newer release would void the notice), then "
+      "its comment (the clock), said on the terminal with when it applies and how to veto it - nothing mailed, nothing merged",
+      (rc, [words(c, 3) for c in calls if c.startswith(("upgrade-label.py centrifugo-7.x --comment", "upgrade-label.py centrifugo-7.x stop-updating"))],
+       merged(calls, "centrifugo-7.x"), notices(calls),
+       any(re.search(r"NOTICED centrifugo-7.x: major, proven and reviewed - a run after \d{4}-\d\d-\d\d \d\d:\d\d applies it, "
+                     r"unless its pull requests carry the label veto", l) for l in run_log().splitlines())),
+      (0, ["upgrade-label.py centrifugo-7.x stop-updating", "upgrade-label.py centrifugo-7.x --comment"], False, ["noticed centrifugo-7.x"], True))
+check("  no summary made for a mail (nothing of git read for one)", [c for c in calls if "diff --stat" in c], [])
 check("  its comment carries what it announced (the heads proven): a later run applies those, or notices again",
       [c.split()[6] for c in has(calls, "upgrade-label.py centrifugo-7.x --comment")],
       ["heads=schnappy/infra@" + "a" * 40 + ",schnappy/ops@" + "c" * 40])
-rc, calls = night("notice centrifugo-7.x major", files={"blob": "+x: " + "y" * 200000 + "\n"})
-check("  a unit whose diff is over a mail's 100 KB (two repos of 200 KB): its summary cut to 100 KB, noticed all the same "
-      "(upgrade-notice.sh refuses more - a unit never noticed, run after run)",
-      (rc, notices(calls), os.path.getsize(os.path.join(ST, "notice.veto.details")) <= 102400 if os.path.exists(os.path.join(ST, "notice.veto.details")) else None,
-       open(os.path.join(ST, "notice.veto.details"), errors="replace").read().rstrip("\n").split("\n")[-1][:32] if os.path.exists(os.path.join(ST, "notice.veto.details")) else None),
-      (0, ["upgrade-notice.sh veto centrifugo-7.x"], True, "[cut: 102200 of 400320 bytes sho"))
 rc, calls = night("notice centrifugo-7.x major", env={"LABEL_FAIL": "stop-updating"})
 check("  stop-updating not set: no notice, no clock (Renovate would void it)", (rc, notices(calls), has(calls, "upgrade-label.py centrifugo-7.x --comment")),
       (1, [], []))
+rc, calls = night("notice centrifugo-7.x major", env={"LABEL_FAIL": "--comment"})
+check("  its comment not posted: no clock, said - the next run notices it again", (rc, notices(calls), any("NOT NOTICED: the comment" in l for l in run_log().splitlines())),
+      (1, [], True))
 ANNOUNCED = "2026-11-19T02:00:00Z schnappy/infra@" + "a" * 40 + ",schnappy/ops@" + "c" * 40 + "\n"
 rc, calls = night("apply centrifugo-7.x major", files={"noticed": ANNOUNCED}, heads=(H1.replace("a" * 40, "f" * 40),))
 check("a major whose notice ran out, its heads past the announced ones by main merged in alone (their merge into main the "
       "announced ones' tree): applied", (rc, merged(calls, "centrifugo-7.x"), notices(calls)[-1:]),
-      (0, True, ["upgrade-notice.sh applied centrifugo-7.x"]))
+      (0, True, ["applied centrifugo-7.x"]))
 rc, calls = night("apply centrifugo-7.x major", files={"noticed": ANNOUNCED})
 check("a major whose notice ran out, its heads the ones announced: applied", (rc, merged(calls, "centrifugo-7.x"), notices(calls)[-1:]),
-      (0, True, ["upgrade-notice.sh applied centrifugo-7.x"]))
+      (0, True, ["applied centrifugo-7.x"]))
 H_SINCE = H1.replace("a" * 40, "f" * 40)  # the infra head moved past the announced one
 for files, why, hs in (({"noticed": ANNOUNCED, "ancestor.rc": "1"}, "a head no longer descending from the one announced (a rebase, a newer release)", (H1,)),
                        ({"noticed": ANNOUNCED, "sincenotice": "d" * 40 + "\n"}, "a commit since the notice, its merge into main another tree (a fix, a newer release)", (H_SINCE,)),
@@ -779,19 +800,17 @@ for files, why, hs in (({"noticed": ANNOUNCED, "ancestor.rc": "1"}, "a head no l
                        ({"noticed": "2026-11-19T02:00:00Z\n"}, "a notice with no heads (what it announced unknown)", (H1,))):
     rc, calls = night("apply centrifugo-7.x major", files=files, heads=hs)
     check(f"  {why}: noticed again (a new 24 h) - never applied on the old notice",
-          (rc, merged(calls, "centrifugo-7.x"), [words(c, 3) for c in calls if c.startswith(("upgrade-notice.sh veto", "upgrade-label.py centrifugo-7.x --comment"))]),
-          (0, False, ["upgrade-notice.sh veto centrifugo-7.x", "upgrade-label.py centrifugo-7.x --comment"]))
+          (rc, merged(calls, "centrifugo-7.x"), [words(c, 3) for c in has(calls, "upgrade-label.py centrifugo-7.x --comment")], notices(calls)),
+          (0, False, ["upgrade-label.py centrifugo-7.x --comment"], ["noticed centrifugo-7.x"]))
 rc, calls = night("notice centrifugo-7.x major", tries=2)
 check("  a notice given (the unit further): its count of tries starts again", (rc, os.path.exists(os.path.join(OPS, ".upgrade-cycle/tries/centrifugo-7.x"))),
       (0, False))
-rc, calls = night("notice centrifugo-7.x major", files={"notice.veto.rc": "1"})
-check("a veto mail that failed: no comment, no clock started", (rc, has(calls, "upgrade-label.py centrifugo-7.x --comment")), (1, []))
 
 # one-way: what its store needs, from scripts/upgrade-stores.json - a part with no backup yet blocks it before anything is
 # built, the notice naming the part (a vague "no backup path" told the operator nothing, 2026-11-17); a store backed up
 # whole goes on, its backups run before the merge; one whose own command takes the backup goes on only with that command
-def blocked_why(calls):
-    return " ".join(c for c in calls if c.startswith("upgrade-notice.sh blocked"))
+def blocked_why(calls):  # what the run said when it stopped
+    return " ".join(stopped_lines())
 TABLE = os.path.join(OPS, "scripts/upgrade-stores.json")
 REAL_TABLE = open(TABLE).read()
 def table_with(**stores):  # the real table, the named stores' fields replaced (every store backed up whole since 2026-11-18: a gap is made up)
@@ -804,11 +823,11 @@ try:
     rc, calls = night("apply grafana-grafana-13.x major")
 finally:
     open(TABLE, "w").write(REAL_TABLE)
-check("a one-way unit whose store has a part with no backup (a table where Grafana's database has none): blocked before "
-      "its proof, never merged, the notice naming the part",
+check("a one-way unit whose store has a part with no backup (a table where Grafana's database has none): stopped before "
+      "its proof, never merged, the part named - a try (behind the others next time), never labelled",
       (rc, has(calls, "task"), has(calls, "upgrade-label.py grafana-grafana-13.x upgrade-blocked"),
-       "Grafana's database" in blocked_why(calls)),
-      (1, [], ["upgrade-label.py grafana-grafana-13.x upgrade-blocked"], True))
+       "Grafana's database" in blocked_why(calls), tries_now("grafana-grafana-13.x")),
+      (1, [], [], True, 1))
 # Postgres backed up whole since 2026-11-18 (production's, Woodpecker's, SonarQube's and Grafana's CNPG clusters): a major
 # goes on - each cluster's base backup run before its merge
 PG_PLAN = "test:copy:change INFRA_REF=main PLATFORM_REF=main\n"
@@ -846,7 +865,7 @@ try:
     rc, calls = night("prove scylladb-2026.3 minor", files={"list": "scylladb-2026.3 minor schnappy/infra one-way,upgrade-cycle\n",
                                                             "task.check_production_scylla-backup.rc": "1"})
     check("  its backup failing: nothing merged, blocked (said)", (rc, merged(calls, "scylladb-2026.3"), notices(calls)),
-          (1, False, ["upgrade-notice.sh blocked scylladb-2026.3"]))
+          (1, False, ["stopped scylladb-2026.3"]))
     table_with(scylladb={**SCYLLA_WHOLE, "minutes": 900})
     rc, calls = night("prove scylladb-2026.3 minor", files={"list": "scylladb-2026.3 minor schnappy/infra one-way,upgrade-cycle\n"})
     check("  its backups' bound in the apply's span: one that reaches a backup window refuses the apply, nothing merged",
@@ -915,7 +934,7 @@ check("a label only containing the word (not-one-way) is not one-way: merged", (
 rc, calls = night("prove wave-patches patch", files={"list": "wave-patches patch schnappy/infra - UNLABELLED\n"})
 check("the unit's labels not on it since the pick (Renovate's, read as UNLABELLED): blocked, nothing built or merged - "
       "never through the one-way net unread", (rc, has(calls, "task"), merged(calls, "wave-patches"), notices(calls)),
-      (1, [], False, ["upgrade-notice.sh blocked wave-patches"]))
+      (1, [], False, ["stopped wave-patches"]))
 rc, calls = night("prove wave-patches patch", files={"list.fail": ""})
 check("the labels not read: nothing built or merged (fails closed)", (rc, has(calls, "task"), merged(calls, "wave-patches")),
       (1, [], False))
@@ -926,23 +945,23 @@ check("the unit gone from the open ones since its pick: nothing built or merged"
 # no agent (a refusal is ops' to fix; it was built 49 min, refused, handed to the fix agent - 2026-11-17's review)
 REFUSAL = "REFUSED: the unit changes ops values with no known proof: deploy/ansible/playbooks/setup-pi-services.yml\n"
 rc, calls = night("prove pi-services minor", files={"plan.fail": "", "plan": REFUSAL})
-check("a unit the copy cannot prove (its plan refused before the build): blocked, labelled, the part named - nothing "
-      "built, no agent",
+check("a unit the copy cannot prove (its plan refused before the build): stopped, the part named - nothing built, no "
+      "agent; a try (behind the others next time), never labelled",
       (rc, has(calls, "task test:copy:ready"), [c for c in calls if c.startswith("claude")],
        has(calls, "upgrade-label.py pi-services upgrade-blocked"),
-       "setup-pi-services.yml" in " ".join(has(calls, "upgrade-notice.sh blocked"))),
-      (1, [], [], ["upgrade-label.py pi-services upgrade-blocked"], True))
+       "setup-pi-services.yml" in " ".join(stopped_lines()), tries_now("pi-services")),
+      (1, [], [], [], True, 1))
 rc, calls = night("prove pi-services minor", files={"plan.fail": "", "plan": "task: some error\n"})
 check("  its plan not read (no refusal said): blocked, not labelled, nothing built",
       (rc, has(calls, "task test:copy:ready"), has(calls, "upgrade-label.py pi-services upgrade-blocked"), notices(calls)),
-      (1, [], [], ["upgrade-notice.sh blocked pi-services"]))
+      (1, [], [], ["stopped pi-services"]))
 # ── the plan ──────────────────────────────────────────────────────────────────────────────────────────────────────────
 rc, calls = night("prove wave-patches patch", plan=PLAN, files={"plan.fail": ""})
 check("the plan's task failing (even printing steps): blocked, nothing merged",
-      (rc, merged(calls, "wave-patches"), notices(calls)), (1, False, ["upgrade-notice.sh blocked wave-patches"]))
+      (rc, merged(calls, "wave-patches"), notices(calls)), (1, False, ["stopped wave-patches"]))
 rc, calls = night("prove wave-patches patch", plan="test:copy:playbook PLAYBOOK=setup-mystery.yml ARGS=''\n")
 check("a part with no production command: refused BEFORE the merge - nothing merged, not paged",
-      (rc, merged(calls, "wave-patches"), notices(calls)), (1, False, ["upgrade-notice.sh blocked wave-patches"]))
+      (rc, merged(calls, "wave-patches"), notices(calls)), (1, False, ["stopped wave-patches"]))
 for step, why in (("test:copy:playbook PLAYBOOK=upgrade-kubeadm.yml ARGS='-e k8s_version=1.36'", "no Kubernetes version"),
                   ("test:copy:playbook PLAYBOOK=upgrade-kubeadm.yml ARGS='-e k8s_upgrade_to=next'", "a Kubernetes version that is none"),
                   ("test:copy:playbook PLAYBOOK=setup-kubeadm.yml ARGS='--tags cilium'", "no Cilium version"),
@@ -961,48 +980,48 @@ for pb, cmd in (("upgrade-patroni.yml", "deploy:patroni:upgrade"), ("upgrade-con
     rc, calls = night("prove centrifugo minor", plan=f"test:copy:playbook PLAYBOOK={pb}\n",
                       files={f"task.{cmd.split()[0].replace(':', '_')}.rc": "1"})
     check("  its failure: paged, the cycle paused, the journal kept", (rc, notices(calls), paused(calls), inflight()),
-          (1, ["upgrade-notice.sh one-way-failed centrifugo"], True, True))
+          (1, ["page centrifugo"], True, True))
 # ── the apply ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 rc, calls = night("prove wave-patches patch", plan=PLAN, files={"task.deploy_etcd_backup.rc": "1"})
 check("the etcd snapshot failing (before the merge): blocked, nothing merged, not paged, no journal",
       (rc, merged(calls, "wave-patches"), has(calls, "task --yes deploy:kubeadm"), notices(calls), inflight()),
-      (1, False, [], ["upgrade-notice.sh blocked wave-patches"], False))
+      (1, False, [], ["stopped wave-patches"], False))
 for hm, want, why in ((["12:00", "21:19"], True, "21:19: 00:50 a minute past the apply's 210 min - applied"),
                       (["12:00", "21:20"], False, "21:20: 00:50 the apply's last minute - not applied, reported")):
     rc, calls = night("prove wave-patches patch", plan=PLAN, hm=hm)
     check(f"the gate before the merge, {why}", (merged(calls, "wave-patches"), notices(calls)[-1:]),
-          (want, ["upgrade-notice.sh applied wave-patches"] if want else ["upgrade-notice.sh blocked wave-patches"]))
+          (want, ["applied wave-patches"] if want else ["stopped wave-patches"]))
 for files, why in (({"held": "veto\n"}, "a veto set since the pick"), ({"held": "paused\n"}, "the kill switch set since"),
                    ({"held.fail": ""}, "held not read")):
     rc, calls = night("prove wave-patches patch", plan=PLAN, files=files)
     check(f"{why}: nothing merged, reported, no journal", (rc, merged(calls, "wave-patches"), notices(calls), inflight()),
-          (1, False, ["upgrade-notice.sh blocked wave-patches"], False))
+          (1, False, ["stopped wave-patches"], False))
 rc, calls = night("prove wave-patches patch", plan=PLAN, files={"merge.rc": "1"})
 check("a merge refused whole: blocked (not paged), no command, the journal gone (nothing merged: no later run refused)",
       (rc, has(calls, "task --yes deploy:kubeadm"), notices(calls), paused(calls), inflight()),
-      (1, [], ["upgrade-notice.sh blocked wave-patches"], False, False))
+      (1, [], ["stopped wave-patches"], False, False))
 rc, calls = night("prove wave-patches patch", plan=PLAN, files={"merge.rc": "3"})
 check("a partial or unknown merge (exit 3): paged, the cycle paused, no command, the journal kept",
       (rc, has(calls, "task --yes deploy:kubeadm"), notices(calls), paused(calls), inflight()),
-      (1, [], ["upgrade-notice.sh one-way-failed wave-patches"], True, True))
+      (1, [], ["page wave-patches"], True, True))
 for rc_, why in (("137", "killed (137)"), ("2", "a usage (2)")):
     rc, calls = night("prove wave-patches patch", plan=PLAN, files={"merge.rc": rc_})
     check(f"the merge ending {why} - not Forgejo's refusal: paged, paused, the journal kept",
-          (rc, notices(calls), paused(calls), inflight()), (1, ["upgrade-notice.sh one-way-failed wave-patches"], True, True))
+          (rc, notices(calls), paused(calls), inflight()), (1, ["page wave-patches"], True, True))
 rc, calls = night("prove wave-patches patch", plan=PLAN, files={"origin.seq": "1" * 40 + "\n" + "1" * 40 + "\n" + "2" * 40 + "\n"})
 check("ops' main moved after the gate, before the merge (another session's push): nothing merged, no page, no journal",
-      (rc, merged(calls, "wave-patches"), notices(calls), paused(calls), inflight()), (1, False, ["upgrade-notice.sh blocked wave-patches"], False, False))
+      (rc, merged(calls, "wave-patches"), notices(calls), paused(calls), inflight()), (1, False, ["stopped wave-patches"], False, False))
 for files, why in (({"opsextra": "m" * 40 + "\n" + "n" * 40 + "\n"}, "another commit beside the unit's merge"),
                    ({"opsparent2": "d" * 40 + "\n"}, "a merge not of the proven ops head")):
     rc, calls = night("prove wave-patches patch", plan=PLAN, files=files)
     check(f"merged, ops' main holding {why}: paged before any command, not fast-forwarded",
           (rc, has(calls, "task --yes deploy:kubeadm"), notices(calls), has(calls, "git -C " + OPS + " merge -q --ff-only")),
-          (1, [], ["upgrade-notice.sh one-way-failed wave-patches"], []))
+          (1, [], ["page wave-patches"], []))
 HI = "schnappy/infra 4 " + "a" * 40 + " " + "e" * 40 + "\n"
 rc, calls = night("prove centrifugo minor", heads=(HI,), files={"opsextra": "m" * 40 + "\n"})
-check("  a unit with no ops part, ops' main moved since the gate: paged", (rc, notices(calls)), (1, ["upgrade-notice.sh one-way-failed centrifugo"]))
+check("  a unit with no ops part, ops' main moved since the gate: paged", (rc, notices(calls)), (1, ["page centrifugo"]))
 rc, calls = night("prove centrifugo minor", heads=(HI,))
-check("  a unit with no ops part, ops' main where the gate saw it: applied", (rc, notices(calls)), (0, ["upgrade-notice.sh applied centrifugo"]))
+check("  a unit with no ops part, ops' main where the gate saw it: applied", (rc, notices(calls)), (0, ["applied centrifugo"]))
 rc, calls = night("prove wave-patches patch", plan=PLAN, files={"task.deploy_kubeadm_upgrade.rc": "1"})
 journal = open(os.path.join(OPS, ".upgrade-cycle/inflight")).read() if inflight() else ""
 check("a production command failing: the journal holds the etcd snapshot's name (a restore takes it), the pull requests "
@@ -1013,19 +1032,19 @@ check("a journal that ends verified (the record not pushed): refused, said - nev
       (rc, notices(calls), paused(calls), picked(calls)), (1, [], False, False))
 rc, calls = night("prove wave-patches patch", plan=PLAN, files={"ff.rc": "1"})
 check("merged, ops not fast-forwarded: paged, no command", (rc, has(calls, "task --yes deploy:kubeadm"), notices(calls)),
-      (1, [], ["upgrade-notice.sh one-way-failed wave-patches"]))
+      (1, [], ["page wave-patches"]))
 rc, calls = night("prove wave-patches patch", plan=PLAN, files={"lsremote.fail": ""})
 check("merged, the merge's commits not read: paged, no command", (rc, has(calls, "task --yes deploy:kubeadm"), notices(calls)),
-      (1, [], ["upgrade-notice.sh one-way-failed wave-patches"]))
+      (1, [], ["page wave-patches"]))
 rc, calls = night("prove wave-patches patch", plan=PLAN, files={"argo.rc": "1"})
 check("merged, Argo not settled on it: paged, no command", (rc, has(calls, "task --yes deploy:kubeadm"), notices(calls), paused(calls)),
-      (1, [], ["upgrade-notice.sh one-way-failed wave-patches"], True))
+      (1, [], ["page wave-patches"], True))
 rc, calls = night("prove wave-patches patch", plan=PLAN, files={"verify.rc": "1"})
 check("verify red: paged, paused, not recorded", (rc, notices(calls), paused(calls), has(calls, "upgrade-record")),
-      (1, ["upgrade-notice.sh one-way-failed wave-patches"], True, []))
+      (1, ["page wave-patches"], True, []))
 rc, calls = night("prove wave-patches patch", plan=PLAN, files={"record.rc": "1"})
 check("applied and verified, not recorded: reported, the journal kept (the next run refuses until it is pushed)",
-      (rc, notices(calls)[-1:], inflight()), (1, ["upgrade-notice.sh blocked wave-patches"], True))
+      (rc, notices(calls)[-1:], inflight()), (1, ["stopped wave-patches"], True))
 # stops: after (or during) the merge paged; before it nothing; a closed terminal after the journal stops nothing
 FORGEJO = "test:copy:playbook PLAYBOOK=upgrade-forgejo.yml ARGS='-e @/x/forgejo.yml'\n"
 rc, calls = stopped(signal.SIGTERM, "slow.started", plan=PLAN, files={"slow": ""})
@@ -1033,16 +1052,16 @@ check("stopped (SIGTERM) during the etcd snapshot (before the merge): no page, n
       (rc, notices(calls), paused(calls), inflight(), merged(calls, "wave-patches")), (1, [], False, False, False))
 rc, calls = stopped(signal.SIGTERM, "slow.started", plan=FORGEJO, files={"slow": ""})
 check("stopped (SIGTERM) during a production command after the merge: paged and paused", (rc, notices(calls), paused(calls)),
-      (1, ["upgrade-notice.sh one-way-failed wave-patches"], True))
+      (1, ["page wave-patches"], True))
 rc, calls = stopped(signal.SIGTERM, "slowmerge.started", plan=PLAN, files={"slowmerge": ""})
 check("stopped during the merge itself (it may have gone in): paged and paused", (rc, notices(calls), paused(calls)),
-      (1, ["upgrade-notice.sh one-way-failed wave-patches"], True))
+      (1, ["page wave-patches"], True))
 rc, calls = stopped(signal.SIGINT, "slowproof.started", plan=PLAN, files={"slowproof": ""})
 check("stopped (Ctrl-C) during the proof: no page, no pause, no journal - nothing was merged",
       (rc, notices(calls), paused(calls), inflight()), (1, [], False, False))
 rc, calls = stopped(signal.SIGHUP, "slow.started", plan=FORGEJO, files={"slow": ""})
 check("the terminal closed (SIGHUP) during a production command: nothing stops - applied, recorded, no page",
-      (rc, notices(calls), paused(calls), inflight()), (0, ["upgrade-notice.sh applied wave-patches"], False, False))
+      (rc, notices(calls), paused(calls), inflight()), (0, ["applied wave-patches"], False, False))
 rc, calls = night("prove wave-patches patch", plan=PLAN, args=("--dry",))
 check("--dry: every step said, nothing run or written - no build, agent, merge, push, clone, label or production "
       "command; no journal; no clone directory",
@@ -1063,50 +1082,49 @@ check("a test unit: one-way judged, its heads read, green, held read, merged at 
            "upgrade-units.py held test-observability", "upgrade-label.py test-observability --merge", "git -C " + OPS,
            "upgrade-verify.sh AFTER " + REVS], H1))
 check("  recorded and reported, the journal gone", (bool(has(calls, "upgrade-record.sh test-observability")), notices(calls), inflight()),
-      (True, ["upgrade-notice.sh applied test-observability"], False))
+      (True, ["applied test-observability"], False))
 TESTONLY = "NOT SETTLED after 30 min:\napp schnappy-test-apps OutOfSync Healthy -\n"
 rc, calls = night("test test-observability minor", files={"verify.rc": "1", "verify.out": TESTONLY})
-check("a test unit not settled after its merge: its production twin held (upgrade-blocked), reported, not recorded",
-      (rc, has(calls, "upgrade-label.py observability upgrade-blocked"), notices(calls), has(calls, "upgrade-record.sh"), inflight()),
-      (1, ["upgrade-label.py observability upgrade-blocked"], ["upgrade-notice.sh blocked test-observability"], [], False))
+check("a test unit not settled after its merge: its production twin behind the others (a try of its own), said, not "
+      "recorded - never labelled, not paged",
+      (rc, has(calls, "upgrade-label.py observability upgrade-blocked"), notices(calls), has(calls, "upgrade-record.sh"), inflight(),
+       tries_now("observability"), paused(calls)),
+      (1, [], ["stopped test-observability"], [], False, 1, False))
 rc, calls = night("test test-observability minor", files={"verify.rc": "1", "verify.out": "NOT SETTLED after 30 min:\napp schnappy-production-apps OutOfSync Healthy -\n"})
 check("a test unit after which a PRODUCTION app is not settled (its charts reach beyond it): paged and paused",
-      (rc, notices(calls), paused(calls)), (1, ["upgrade-notice.sh one-way-failed test-observability"], True))
+      (rc, notices(calls), paused(calls)), (1, ["page test-observability"], True))
 for out_, why in (("NOT SETTLED after 30 min:\napps not read\n", "production not read at all"),
                   ("NOT SETTLED after 30 min:\ncritical alert NodeDown\n", "a critical alert (no namespace of its own)"),
                   ("NOT SETTLED after 30 min:\napp root Synced Degraded -\n", "root alone (no test app among them)")):
     rc, calls = night("test test-observability minor", files={"verify.rc": "1", "verify.out": out_})
-    check(f"  {why}: paged (never read as the test environment's)", (rc, notices(calls)), (1, ["upgrade-notice.sh one-way-failed test-observability"]))
+    check(f"  {why}: paged (never read as the test environment's)", (rc, notices(calls)), (1, ["page test-observability"]))
 for out_, why in (("SETTLED\nNOT QUIET during the hold (10 looks in a row):\napp schnappy-test-apps Synced Degraded -\n", "the hold's own headers"),
                   ("NOT SETTLED after 30 min:\npod schnappy-test-valkey/valkey-0 unready: c0\n", "a namespace of the test environment's (schnappy-test-valkey)")):
     rc, calls = night("test test-observability minor", files={"verify.rc": "1", "verify.out": out_})
-    check(f"  the test environment alone ({why}): its twin held, not paged", (rc, notices(calls)), (1, ["upgrade-notice.sh blocked test-observability"]))
+    check(f"  the test environment alone ({why}): its twin behind the others, not paged", (rc, notices(calls)), (1, ["stopped test-observability"]))
 for out_, why in (("NOT SETTLED after 30 min:\napp schnappy-testing-x Synced Degraded -\n", "an app only named like it (schnappy-testing-x)"),
                   ("NOT SETTLED after 30 min:\npod schnappytest/x-0 unready: c0\n", "a namespace only like it (schnappytest)")):
     rc, calls = night("test test-observability minor", files={"verify.rc": "1", "verify.out": out_})
-    check(f"  {why}: production's - paged", (rc, notices(calls)), (1, ["upgrade-notice.sh one-way-failed test-observability"]))
+    check(f"  {why}: production's - paged", (rc, notices(calls)), (1, ["page test-observability"]))
 rc, calls = night("test test-observability minor", files={"verify.rc": "1", "verify.out": "NOT SETTLED after 30 min:\napp schnappy-test Synced Degraded -\napp root Synced Degraded -\npod schnappy-test/x-0 unready: c0\n"})
-check("  only the test environment not settled (root degraded with it - its child): its twin held, reported, not paged",
-      (rc, has(calls, "upgrade-label.py observability upgrade-blocked"), notices(calls), paused(calls)),
-      (1, ["upgrade-label.py observability upgrade-blocked"], ["upgrade-notice.sh blocked test-observability"], False))
-rc, calls = night("test test-observability minor", files={"verify.rc": "1", "verify.out": TESTONLY}, env={"TWIN_FAIL": "observability"})
-check("  its twin not labelled: paged and paused (the twin must not go on)", (rc, notices(calls), paused(calls)),
-      (1, ["upgrade-notice.sh one-way-failed test-observability"], True))
+check("  only the test environment not settled (root degraded with it - its child): its twin behind the others, said, not paged",
+      (rc, has(calls, "upgrade-label.py observability upgrade-blocked"), notices(calls), paused(calls), tries_now("observability")),
+      (1, [], ["stopped test-observability"], False, 1))
 rc, calls = night("test test-observability minor", files={"record.rc": "1"})
 check("a test unit applied and verified, not recorded: reported, the journal kept - its unit, its log, how far it got",
       (rc, notices(calls), inflight() and open(os.path.join(OPS, ".upgrade-cycle/inflight")).read().split("\n")[0],
        inflight() and [l.split(" ", 1)[1] for l in open(os.path.join(OPS, ".upgrade-cycle/inflight")).read().splitlines()[5:]]),
-      (1, ["upgrade-notice.sh blocked test-observability"], "unit test-observability", ["merge asked", "merged: schnappy/infra#4 ", "verified"]))
+      (1, ["stopped test-observability"], "unit test-observability", ["merge asked", "merged: schnappy/infra#4 ", "verified"]))
 rc, calls = night("test test-observability minor", files={"merge.rc": "1"})
 check("a test unit's merge refused: blocked, not verified or recorded, no journal",
       (rc, has(calls, "upgrade-verify.sh AFTER"), has(calls, "upgrade-record.sh"), notices(calls), inflight()),
-      (1, [], [], ["upgrade-notice.sh blocked test-observability"], False))
+      (1, [], [], ["stopped test-observability"], False))
 rc, calls = night("test test-observability minor", files={"merge.rc": "3"})
 check("a test unit partly merged: paged, paused", (rc, notices(calls), paused(calls)),
-      (1, ["upgrade-notice.sh one-way-failed test-observability"], True))
+      (1, ["page test-observability"], True))
 rc, calls = stopped(signal.SIGTERM, "slowverify.started", pick="test test-observability minor", files={"slowverify": ""})
 check("a test unit stopped after its merge (during its verify): paged and paused", (rc, notices(calls), paused(calls)),
-      (1, ["upgrade-notice.sh one-way-failed test-observability"], True))
+      (1, ["page test-observability"], True))
 rc, calls = night("test observability minor")
 check("a test action for a unit with no test- name: refused, nothing done", (rc, has(calls, "upgrade-label.py")), (1, []))
 # the log keeps every line when the terminal is gone (its stdout a pipe whose reader died)
@@ -1114,7 +1132,7 @@ setup("prove wave-patches patch", plan=PLAN)
 subprocess.run(f"bash {os.path.join(OPS, 'scripts/upgrade-cycle.sh')} | true", shell=True, env=environ("12:00", "3"), timeout=120)
 logs = [os.path.join(OPS, ".copy", f) for f in os.listdir(os.path.join(OPS, ".copy")) if f.startswith("upgrade-cycle-")]
 check("stdout a pipe whose reader is gone (a closed terminal): the run goes on to its end, its log holds every line",
-      (bool(logs) and "APPLIED wave-patches" in open(logs[0]).read(), notices(calls_now())[-1:]), (True, ["upgrade-notice.sh applied wave-patches"]))
+      (bool(logs) and "APPLIED wave-patches" in open(logs[0]).read(), notices(calls_now())[-1:]), (True, ["applied wave-patches"]))
 HO = "schnappy/ops 7 " + "c" * 40 + " " + "e" * 40 + "\n"
 rc, calls = night("prove centrifugo minor", heads=(HO,), plan="test:copy:playbook PLAYBOOK=upgrade-forgejo.yml ARGS='-e @/x/f.yml'\n")
 check("a unit of ops alone: no merge commit of infra's or platform's for Argo to reach - none asked of verify",

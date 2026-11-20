@@ -29,6 +29,22 @@ No LOOKUP, RUNNER or SHADOW: one typed in lower case or misspelt was read as uns
 upgrade:run refuses all three. Shadow mode gone with them (operator: "what use of variable if we don't have shadow
 mode?"): the runner's `--shadow`, `upgrade-units.py pick --shadow` and the `.upgrade-cycle/shadow-proven` gate - its one
 use, holding the first applying run until a clean shadow proof, passed 2026-11-17.
+**No blocked state, no mail (operator 2026-11-20: "we need to fix all review findings right away instead of marking
+anything blocked", "these should be no blocked state at all", "why only criticals?", "I doubt I need these emails at
+all"):**
+- The runner never labels `upgrade-blocked`, and the pick ignores the label. What a run cannot take further - red after
+  its fix, no fix, findings left, a part the copy cannot prove, a one-way store not ready, a failure with no verdict - is
+  a try (`.upgrade-cycle/tries`); the pick takes the units with no try first, so one that keeps failing never holds the
+  queue and is taken up again when the others are through. A cause in ops is mine to fix at once.
+- Every review finding, any severity, goes to the fix agent (`review.txt`); the unit is proven again on a fresh base and
+  reviewed again. Two fixes at most a run (a red proof's, the review's). CLEAN means no FINDING line at all.
+- A test unit that leaves the test environment unsettled puts its production twin behind the others (a try of its own);
+  its own copy proof still gates production.
+- Nothing is mailed or posted: no applied, veto, blocked or page mail, no Alertmanager route (platform's UpgradeCycle
+  route removed), no preflight probe of it. The run's terminal and log say what happened. A major or agent-fixed unit
+  still waits 24 h after its notice - a comment on its pull requests, printed by the run with the time it may apply -
+  and the label `veto` still stops it. A one-way failure still records a page (`scripts/upgrade-notice.sh`, local) and
+  pauses the cycle: production may be half changed.
 **The runner's open items - DONE 2026-11-15 (each with its harness; the first real run's review found them):** the
 headless agents (fix, review) run with a clean environment (`env -i` HOME PATH: none of ops/.env, the account's login
 rather than the API key), settings of their own (`.claude/upgrade-agent/fix.json`, `review.json`, `--permission-mode

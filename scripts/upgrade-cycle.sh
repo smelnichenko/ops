@@ -2,30 +2,30 @@
 # The upgrade cycle's run - task upgrade:run's second half, after Renovate (started by hand, run locally): one Renovate
 # unit - picked, proven on the Vagrant copy (one fix by the Claude agent when red), reviewed, gated (a major, or a unit
 # carrying the agent's fix, waits out a 24 h veto notice), backed up before a one-way change, applied to production,
-# verified, recorded, reported (scripts/upgrade-notice.sh: one mail to the single admin address). Nothing in production
+# verified, recorded, reported on the terminal and in its log (nothing mailed: the runs are started by hand - operator
+# 2026-11-20). Nothing in production
 # moves before the merge; from the merge on, a run that cannot finish PAGES (a one-way failure: the cycle paused, the
 # runner refusing until it is resolved) - half a unit applied is never left unsaid. No shadow mode (operator 2026-11-15:
 # "deploy once it works in vagrant tests"; its flag gone 2026-11-20 - the first applying run's gate it was had passed).
 #
 #   0. gates    before anything (and alone with --preflight, which task upgrade:run runs before Renovate) and again right
 #               before the merge: no backup window within the run's span (its start: the proof's time and the
-#               apply's, 330 min; before the merge: the apply's own waits, 210); no page open (posted again -
-#               Alertmanager forgets them on a restart); no run stopped mid-apply (its journal - one found with no page
+#               apply's, 330 min; before the merge: the apply's own waits, 210); no page open; no run stopped mid-apply (its journal - one found with no page
 #               is paged now; one that ends verified is a record to push, said); ops on main,
 #               origin's, clean but for the copy's inventory record; at the start, the local infra and platform mains
-#               origin's but for CD's app promotions (the copy mirrors them); production's Alertmanager routing the
-#               cycle's notices (its loaded config); production settled and quiet (critical alerts included). The
+#               origin's but for CD's app promotions (the copy mirrors them); production settled and quiet (critical alerts included). The
 #               copy's memory (the operator stops the radar) for a unit that builds it - refused, never waited
-#   1. pick     scripts/upgrade-units.py pick - NOTHING / PAUSED end the run quietly; a one-way unit whose store has a part
-#               with no backup yet (scripts/upgrade-stores.json) blocked at once, the part named; one
-#               without Renovate's labels (its kind not known) never applied
+#   1. pick     scripts/upgrade-units.py pick - NOTHING / PAUSED end the run quietly; the units with no try on record
+#               first (one that keeps failing never holds the queue: there is no blocked state, operator 2026-11-20);
+#               a one-way unit whose store has a part with no backup yet (scripts/upgrade-stores.json) stopped at once,
+#               the part named - ops' to fix, a try; one without Renovate's labels (its kind not known) never applied
 #   2. prove    the unit's heads read (and its bases); its branches, in every repo, on main but for CD's promotions
 #               (Renovate rebases only on a conflict: a unit behind brought up to date by Forgejo first, its new heads
 #               waited for - an empty answer never a head; never read as the unit's defect); then its CI green (a
 #               running one waited for an hour - still running: said, no try, the same heads still so a run later a
 #               try; a red one a try, none at all a try) and main read again (it moved meanwhile: said, no try), each
 #               checkout's branch the head its pull request names (Forgejo's record may lag); task test:copy:ready (the copy as built - its base snapshot reverted, or built; a copy that does not get ready ends the run - the unit
-#               untouched), task test:copy:unit UNIT=<it>; red: the agent's fix - it commits in clones of the proven
+#               untouched), task test:copy:unit UNIT=<it>; red, or any finding of the review (3.): the agent's fix (two at most a run) - it commits in clones of the proven
 #               commits outside every checkout; the runner fetches its commits into a repository of its own (the
 #               agent's hooks and config never run), keeps them only on top of the proven head, inside the unit's own
 #               kind of files (infra's clusters/, platform's helm/, ops' Ansible vars and playbooks - never CI,
@@ -35,22 +35,23 @@
 #               merge commit - every repo judged before any is pushed; the fix kept on record (.upgrade-cycle/fixes/<unit>.diff), the unit
 #               labelled agent-fixed and stop-updating, then its tree pushed as the bot - one commit of the runner's on
 #               the proven head (the agent's own commits - a step in between, its words, its author - never on Forgejo); Forgejo read until it shows them, their
-#               CI waited for, proven again; red again, or no fix: blocked (labelled upgrade-blocked only on a verdict
-#               - the agent's NO FIX); the heads after the proof the ones proven. A failure with no verdict (CI red, a
-#               review or fix that did not finish, Forgejo refusing the update) counts a try for the unit's pull
-#               requests (the same name later is another unit): their third in a row blocks it; a notice or an
-#               apply starts the count again
+#               CI waited for, proven again on a base built fresh; the heads after each proof the ones proven. What the
+#               run cannot take further - red after its fix, no fix (the agent's NO FIX), a failure with no verdict (CI
+#               red, a review or fix that did not finish, Forgejo refusing the update) - is said (the log and the
+#               terminal, never a mail: nothing in it for the operator) and counts a try for the unit's pull requests
+#               (the same name later is another unit): the next pick takes the units with none first; a notice or an
+#               apply clears them
 #   3. review   the review of the unit's diff (the agent, headless, --restricted: no instructions from the clones; the
-#               reviewers' own agents handed to it, a definition that does not read refusing the review) - VERDICT:
-#               CLEAN and every pass named exactly, or blocked (labelled only on a VERDICT: CRITICAL line, any of them -
-#               an INCOMPLETE or unfinished review is reviewed again, a try). The copy halted then, marked used (no
-#               change or check on it until the next run readies it - its base snapshot kept)
+#               reviewers' own agents handed to it, a definition that does not read refusing the review) - CLEAN is no
+#               FINDING line at all, VERDICT: CLEAN and every pass named exactly; any finding, whatever its severity
+#               (operator 2026-11-20: "why only criticals?"), goes to the agent's fix (2.), the unit proven and
+#               reviewed again - findings left after the last fix a try, an INCOMPLETE or unfinished review a try. The
+#               copy halted then, marked used (no change or check on it until the next run readies it - its base
+#               snapshot kept)
 #   4. gate     patch/minor: on; a major's first run, or any unit carrying the agent's fix (this run's or an earlier
-#               one's - its diff on record, under 100 KB, or blocked): labelled stop-updating (a newer release pushed
-#               by Renovate would void the notice), its notice mailed (what it changes: each repo's stat, its commits,
-#               the review's passes and verdict, the diff of the heads proven - 100 KB in all, the cut said; git
-#               failing: no notice; a fix's whole diff), then its UPGRADE NOTICE comment with the heads proven (the
-#               clock); a major or fixed unit whose notice ran out unvetoed: on - when its heads are the ones announced,
+#               one's): labelled stop-updating (a newer release pushed by Renovate would void the notice), then its
+#               UPGRADE NOTICE comment on its pull requests with the heads proven (the clock), said on the terminal -
+#               nothing mailed; a major or fixed unit whose notice ran out unvetoed: on - when its heads are the ones announced,
 #               main merged in alone (git judges it: the announced head an ancestor of the head now, and merging the
 #               head now into main the very tree merging the announced one makes); a newer release, a fix since, an
 #               evil or octopus merge, a rebase, main's work dropped: noticed again
@@ -58,7 +59,7 @@
 #               refuses the unit, nothing merged
 #   6. apply    the gates again; the backups a one-way change needs (an etcd snapshot before Kubernetes, its store's from
 #               scripts/upgrade-stores.json) - failing,
-#               nothing merged; held (a veto, upgrade-blocked, the kill switch) refused; a journal written (the
+#               nothing merged; held (a veto, the kill switch) refused; a journal written (the
 #               snapshot's name, the pull requests merged, each command - a closed terminal stops nothing from here
 #               on); the unit's pull requests merged by the bot at the proven commits onto the proven bases (CD's app
 #               promotions since aside; ops' main where the gate saw it, or nothing merged; a partial or unknown merge
@@ -115,10 +116,12 @@ run() {
   [ -n "$dry" ] && return 0
   "$@" < /dev/null >> "$log" 2>&1 9>&-
 }
-notice() { run scripts/upgrade-notice.sh "$@" || say "NOTICE NOT SENT: $1 $2 - its post failed (see the log)"; }
+# a run that ends short of applying: said in its log and on the terminal, never mailed - nothing in it for the operator
+# (the next run takes the unit up; a cause in ops is mine to fix) - operator 2026-11-20: no mail from the cycle at all
+stopped() { say "STOPPED $unit: $1${2:+ (details: $2)}"; }
 unit=""
-page() {  # a one-way failure: paged, the cycle paused on Forgejo (durable - the local record is a file)
-  notice one-way-failed "$unit" "$1" "$log"
+page() {  # a one-way failure: recorded (the runner refuses while it is open), the cycle paused on Forgejo, said - never mailed
+  run scripts/upgrade-notice.sh page "$unit" "$1" "$log" || say "PAGE NOT RECORDED: $1 - the dashboard's pause holds the cycle"
   run scripts/upgrade-label.py --pause "UPGRADE PAUSED $(date -u +%Y-%m-%dT%H:%M:%SZ) - $unit: $1 - the operator's: production checked, then scripts/upgrade-notice.sh resolve $unit, $state/inflight removed (if there), and this label removed" \
     || say "NOT PAUSED: the dashboard's upgrades-paused not set - the runner's own record refuses the next run all the same"
 }
@@ -208,11 +211,10 @@ mains_forward() {
   done
 }
 gates() {  # $1: the span (minutes) no backup window may meet; $2: start or merge
-  local w open branch head origin am
+  local w open branch head origin
   if w=$(window_within "$1"); then say "REFUSED: a backup window meets the run ($w UTC) - run when none is that near"; return 1; fi
   open=$(scripts/upgrade-notice.sh open) || { say "REFUSED: the open pages not read"; return 1; }
   if [ -n "$open" ]; then
-    run scripts/upgrade-notice.sh repost || say "NOTICE NOT SENT: the open pages' repost failed (see the log)"
     say "REFUSED: a one-way failure's page is open ($(echo $open)) - its fix first, then: scripts/upgrade-notice.sh resolve <unit>"
     return 1
   fi
@@ -241,9 +243,6 @@ gates() {  # $1: the span (minutes) no backup window may meet; $2: start or merg
     scripts/copy-main-current.sh ../infra ../platform >> "$log" 2>&1 \
       || { say "REFUSED: the local infra or platform main is not origin's (the copy mirrors them) - see the log"; return 1; }
   fi
-  # the config Alertmanager runs (its API), not the file mounted: a config it refused to load keeps the old one running
-  am=$(ssh -o BatchMode=yes -o ConnectTimeout=15 ten "kubectl -n schnappy-infra exec deploy/schnappy-alertmanager -c alertmanager -- amtool config routes test --alertmanager.url=http://localhost:9093 alertname=UpgradeCycle kind=veto unit=probe severity=warning notice=probe" < /dev/null 2>> "$log" | tail -n 1)
-  [ "$am" = email-notice ] || { say "REFUSED: production's Alertmanager routes the cycle's notices to '${am:-nothing read}', not email-notice - platform's route not live"; return 1; }
   UPGRADE_VERIFY_SETTLE=0 UPGRADE_VERIFY_HOLD=0 scripts/upgrade-verify.sh < /dev/null >> "$log" 2>&1 \
     || { say "REFUSED: production is not settled and quiet now (see the log) - nothing applied on top of it"; return 1; }
   return 0
@@ -278,7 +277,6 @@ cleanup() {  # however the run ends: the copy halted when it was readied (the ra
   [ -z "$built" ] || run scripts/copy-snapshot.sh used || say "THE COPY NOT MARKED USED - task test:copy:drop by hand"
   [ -z "$built" ] || run vagrant halt || say "THE COPY NOT HALTED - the radar stays off: vagrant halt by hand"
   [ -n "$dry" ] || { chmod -R u+w "${dirs[@]}" 2> /dev/null; rm -rf "${dirs[@]}" "$heads" "$heads.after" "$heads.expected"; }
-  [ -z "${notice_summary:-}" ] || rm -f "$notice_summary"  # mailed by then (the details of a veto go whole)
 }
 trap cleanup EXIT
 tries_key=""
@@ -316,7 +314,7 @@ still_running() {  # its CI still running after an hour (Woodpecker's queue), or
     retry "its CI still not finished on the same heads a run later (stuck in Woodpecker) - nothing proven"
   fi
   [ -n "$dry" ] || { mkdir -p "$state/pending"; printf '%s' "$key" > "$state/pending/$unit"; }
-  notice blocked "$unit" "its CI still running after an hour (Woodpecker's queue), or not read - nothing proven, no try counted (the same heads so at the next run count one)" "$log"
+  stopped "its CI still running after an hour (Woodpecker's queue), or not read - nothing proven, no try counted (the same heads so at the next run count one)" "$log"
   exit 1
 }
 # its branches on main as it stands but for CD's promotions (the proof refuses them else - never the unit's defect):
@@ -352,38 +350,38 @@ heads_updated() {
   return 1
 }
 fresh_or_end() {
-  fetch_unit || { notice blocked "$unit" "its branches not fetched (git: one checked out in a checkout of the operator's?) - nothing proven, no try counted" "$log"; exit 1; }
+  fetch_unit || { stopped "its branches not fetched (git: one checked out in a checkout of the operator's?) - nothing proven, no try counted" "$log"; exit 1; }
   if ! fresh; then
     run scripts/upgrade-label.py "$unit" --update || retry "its branches behind main, Forgejo's update refused (a conflict)"
-    heads_updated || { notice blocked "$unit" "its branches updated, Forgejo not showing the new heads yet - nothing proven, no try counted" "$log"; exit 1; }
+    heads_updated || { stopped "its branches updated, Forgejo not showing the new heads yet - nothing proven, no try counted" "$log"; exit 1; }
   fi
   green
-  fetch_unit || { notice blocked "$unit" "its branches not fetched after their CI (git) - nothing proven, no try counted" "$log"; exit 1; }
-  fresh || { notice blocked "$unit" "main moved again while its CI ran (other work's pushes) - nothing proven, no try counted" "$log"; exit 1; }
-  branches_are_heads || { notice blocked "$unit" "its branches' tips not the heads its pull requests name (Forgejo's record behind its git) - nothing proven, no try counted" "$log"; exit 1; }
+  fetch_unit || { stopped "its branches not fetched after their CI (git) - nothing proven, no try counted" "$log"; exit 1; }
+  fresh || { stopped "main moved again while its CI ran (other work's pushes) - nothing proven, no try counted" "$log"; exit 1; }
+  branches_are_heads || { stopped "its branches' tips not the heads its pull requests name (Forgejo's record behind its git) - nothing proven, no try counted" "$log"; exit 1; }
 }
 
 # a one-way change: Renovate's label (renovate/upgrade-cycle.json's rules) or its name a store's (the second net) - what
 # its store needs before production, from scripts/upgrade-stores.json (scripts/upgrade-stores.py): the backups, run before
 # the merge (one_way_backups, into the apply's pre-commands), or a part with none yet - blocked before anything is built,
-# the notice naming each (a vague "no backup path" told the operator nothing, 2026-11-17). A test environment's unit needs
+# the message naming each (a vague "no backup path" told the operator nothing, 2026-11-17). A test environment's unit needs
 # none (its data is no store to keep - the test environment is where a one-way change runs first). The labels or the
 # table not read: nothing applied
 unit_labels=""
 one_way_backups=() one_way_taken=() one_way_minutes=0
 stop_if_one_way() {
   local labels line need judged=$unit
-  labels=$(scripts/upgrade-units.py list) || { notice blocked "$unit" "its labels not read from Forgejo - nothing applied" "$log"; exit 1; }
+  labels=$(scripts/upgrade-units.py list) || { stopped "its labels not read from Forgejo - nothing applied" "$log"; exit 1; }
   line=$(awk -v u="$unit" '$1 == u' <<< "$labels")
-  [ -n "$line" ] || { notice blocked "$unit" "not in the open units any more - nothing applied" "$log"; exit 1; }
-  [[ $line != *" UNLABELLED" ]] || { notice blocked "$unit" "Renovate's labels not on it (its kind, its one-way mark not known) - nothing applied" "$log"; exit 1; }
+  [ -n "$line" ] || { stopped "not in the open units any more - nothing applied" "$log"; exit 1; }
+  [[ $line != *" UNLABELLED" ]] || { stopped "Renovate's labels not on it (its kind, its one-way mark not known) - nothing applied" "$log"; exit 1; }
   labels=$(awk '{print $4}' <<< "$line")
   unit_labels=$labels
   # a test environment's unit takes no backup, but runs only when its production twin could (one merged ahead of a twin
   # blocked for good left the test environment ahead of production - proving nothing after)
   [ "$action" != test ] || judged=${unit#test-}
   need=$(python3 -I scripts/upgrade-stores.py "$judged" "$labels" 2>> "$log") \
-    || { notice blocked "$unit" "what its one-way change needs not read (scripts/upgrade-stores.py, see the log) - nothing applied" "$log"; exit 1; }
+    || { stopped "what its one-way change needs not read (scripts/upgrade-stores.py, see the log) - nothing applied" "$log"; exit 1; }
   case "$need" in
     none) return 0 ;;
     store\ *)
@@ -392,33 +390,29 @@ stop_if_one_way() {
       mapfile -t one_way_taken < <(sed -n 's/^taken-by //p' <<< "$need")
       one_way_minutes=$(awk 'NR == 1 {print $3}' <<< "$need")
       [ "$(( ${#one_way_backups[@]} + ${#one_way_taken[@]} ))" -gt 0 ] && [[ $one_way_minutes =~ ^[0-9]+$ ]] \
-        || { notice blocked "$unit" "a one-way change, its store's backups not read - nothing applied" "$log"; exit 1; }
+        || { stopped "a one-way change, its store's backups not read - nothing applied" "$log"; exit 1; }
       say "ONE-WAY $unit: ${need%%$'\n'*} - backed up before the merge: $(printf '%s; ' "${one_way_backups[@]}" "${one_way_taken[@]/#/its command }")"
       return 0 ;;
   esac
-  run scripts/upgrade-label.py "$unit" upgrade-blocked || say "NOT LABELLED upgrade-blocked - the next run blocks it again"
-  notice blocked "$unit" "a one-way change its store cannot take yet$([ "$judged" = "$unit" ] || echo " (its production twin $judged's)") - $(awk '{sub(/^(missing|unknown) /, ""); printf "%s%s", (NR > 1 ? "; " : ""), $0}' <<< "$need") (scripts/upgrade-stores.json; once there, upgrade-blocked off its pull requests) - nothing applied" "$log"
-  exit 1
+  retry "a one-way change its store cannot take yet$([ "$judged" = "$unit" ] || echo " (its production twin $judged's)") - $(awk '{sub(/^(missing|unknown) /, ""); printf "%s%s", (NR > 1 ? "; " : ""), $0}' <<< "$need") (scripts/upgrade-stores.json - ops' to fix) - nothing applied"
 }
-held_now() {  # a veto, upgrade-blocked or the kill switch set since the pick: refused, nothing merged
+held_now() {  # a veto or the kill switch set since the pick: refused, nothing merged
   local held
-  held=$(scripts/upgrade-units.py held "$unit") || { notice blocked "$unit" "whether it is held not read - nothing merged" "$log"; exit 1; }
-  [ -z "$held" ] || { notice blocked "$unit" "held since its pick ($(echo $held)) - nothing merged" "$log"; exit 1; }
+  held=$(scripts/upgrade-units.py held "$unit") || { stopped "whether it is held not read - nothing merged" "$log"; exit 1; }
+  [ -z "$held" ] || { stopped "held since its pick ($(echo $held)) - nothing merged" "$log"; exit 1; }
 }
-# a failure with no verdict (a red CI, a review or fix that did not finish, Forgejo refusing its update): counted for
-# the unit's pull requests (the same name later is another unit) - its third in a row blocks it (labelled, said),
-# never the head of the queue run after run; a run that gets it further (noticed, applied, the test
-# environment's merged) starts the count again
+# what the run cannot take further - a failure, a finding its fixes did not clear, a refusal before anything is built:
+# said (never mailed), a try recorded for the unit's pull requests (the same name later is another unit). There is no
+# blocked state (operator 2026-11-20): the next pick takes the units with no try first (scripts/upgrade-units.py), so
+# one that keeps failing never holds the queue, and is taken up again once the others are through; a cause in ops is
+# mine to fix at once. A run that gets the unit further (noticed, applied, the test environment's merged) clears them
 retry() {
-  local n key=${tries_key:-none}
+  local n key
+  [ -n "$tries_key" ] || read_heads "$heads.key" || say "its pull requests not read - the try recorded without them"
+  key=${tries_key:-none}
   [ -n "$dry" ] || { mkdir -p "$state/tries"; echo "$key $(date -u +%FT%TZ) $1" >> "$state/tries/$unit"; }
   n=$(awk -v k="$key" '$1 == k' "$state/tries/$unit" 2> /dev/null | wc -l)
-  if [ "${n:-0}" -ge 3 ]; then
-    run scripts/upgrade-label.py "$unit" upgrade-blocked || say "NOT LABELLED upgrade-blocked - the next run tries it again"
-    notice blocked "$unit" "$1 - its third try in a row: blocked (upgrade-blocked) for the operator" "${2:-$log}"
-  else
-    notice blocked "$unit" "$1 - the next run tries again (${n:-1} of 3)" "${2:-$log}"
-  fi
+  stopped "$1 - the next run takes the units with no try first (this one's try ${n:-1})" "${2:-$log}"
   exit 1
 }
 progress() { [ -n "$dry" ] || rm -f "$state/tries/$unit" "$state/pending/$unit"; }
@@ -434,7 +428,7 @@ merged=""
 merge() {  # the unit merged at the proven heads onto the proven bases - nothing in: blocked; part in, or not known: paged
   if [ -z "$dry" ] && ! { git -C "$ops" fetch -q origin main < /dev/null >> "$log" 2>&1 && [ "$(git -C "$ops" rev-parse origin/main)" = "$gate_head" ]; }; then
     rm -f "$state/inflight"
-    notice blocked "$unit" "ops' main moved since the gate (or not read) - nothing merged, the next run proves it again" "$log"; exit 1
+    stopped "ops' main moved since the gate (or not read) - nothing merged, the next run proves it again" "$log"; exit 1
   fi
   merged=1  # from the call on a stop pages: it may have gone in
   journal "merge asked"
@@ -442,7 +436,7 @@ merge() {  # the unit merged at the proven heads onto the proven bases - nothing
   case $? in
     0) journal "merged: $(grep '^MERGED ' "$log" 2> /dev/null | cut -d' ' -f2 | tr '\n' ' ')" ;;
     1) merged=""; [ -n "$dry" ] || rm -f "$state/inflight"
-       notice blocked "$unit" "its merge refused - nothing merged" "$log"; exit 1 ;;
+       stopped "its merge refused - nothing merged" "$log"; exit 1 ;;
     *) page "partly merged, or not known whether (the merge ended $?) - half the unit may apply (see the log: what went in)"; exit 1 ;;
   esac
   # ops to origin's main (a pull follows the operator's pull.rebase): the record commits on it, the commands run from it -
@@ -495,7 +489,7 @@ PY
 # production): no copy, no review, no backup (its data is no store to keep); merged at the heads judged, settled, recorded
 if [ "$action" = test ]; then
   stop_if_one_way
-  read_heads "$heads" || { notice blocked "$unit" "its pull requests not read - nothing merged" "$log"; exit 1; }
+  read_heads "$heads" || { stopped "its pull requests not read - nothing merged" "$log"; exit 1; }
   green
   held_now
   start_journal
@@ -511,21 +505,20 @@ if [ "$action" = test ]; then
     if ! test_only "$vout"; then
       page "merged to the test environment, production not settled after it (see the log)"; exit 1
     fi
-    # its production twin waits: the test environment not settled is no proof for it (not held: the cycle paused)
-    run scripts/upgrade-label.py "${unit#test-}" upgrade-blocked \
-      || { page "merged to the test environment, not settled after it, and its production unit ${unit#test-} not held"; exit 1; }
-    rm -f "$state/inflight"  # the test environment's: production untouched, the twin held
-    notice blocked "$unit" "merged to the test environment, it not settled after it - its production unit ${unit#test-} held (upgrade-blocked)" "$log"
+    # its production twin behind the others (a try of its own): the test environment not settled is no proof for it -
+    # its own proof on the copy still gates production; the test environment is mine to fix at once
+    rm -f "$state/inflight"  # the test environment's: production untouched
+    [ -n "$dry" ] || { mkdir -p "$state/tries"; echo "test-environment $(date -u +%FT%TZ) its test unit $unit merged, the test environment not settled after it" >> "$state/tries/${unit#test-}"; }
+    stopped "merged to the test environment, it not settled after it - its production unit ${unit#test-} behind the others" "$log"
     exit 1
   fi
   [ ! -e "$vout" ] || cat "$vout" >> "$log"
   journal "verified"
   run scripts/upgrade-record.sh "$unit" "$log" \
-    || { notice blocked "$unit" "applied and verified, not recorded - push the record, then remove $state/inflight" "$log"; exit 1; }
+    || { stopped "applied and verified, not recorded - push the record, then remove $state/inflight" "$log"; exit 1; }
   [ -n "$dry" ] || rm -f "$state/inflight"
   progress
-  notice applied "$unit" "the test environment's $unit applied and verified (its production unit next)" "$log"
-  say "APPLIED $unit"
+  say "APPLIED $unit: the test environment's, verified - its production unit next"
   exit 0
 fi
 
@@ -572,7 +565,7 @@ allowed() {  # allowed <repo> <path>
   return 1
 }
 # a file of the agent's: UTF-8 text (a binary showed as "Binary files differ"), each line it adds printable ASCII and
-# tab alone - a carriage return, a NEL or a U+2028 is a line break to YAML and none to git (a key hidden from the mail
+# tab alone - a carriage return, a NEL or a U+2028 is a line break to YAML and none to git (a key hidden from the notice
 # and the review), a no-break space indenting a key made it another key that read the same, a zero-width or bidi
 # character, a look-alike letter the same; a line it keeps stays as it was
 plain_fix() {  # plain_fix <repository> <proven> <tip> <path>
@@ -605,6 +598,7 @@ fixed=""
 push_fix() {
   local dir=$1 repo n sha clone mirror tip bad
   local -a push=()
+  pushed=""  # this call's fix pushed (fixed: any of the run's)
   : > "$fixdiff"; : > "$fixdiff.stat"
   : > "$heads.expected"
   while read -r repo n sha _ <&3; do
@@ -641,7 +635,7 @@ push_fix() {
     echo "$repo $n $tip" >> "$heads.expected"
   done 3< "$heads"
   [ "${#push[@]}" -gt 0 ] || return 0
-  # the fix on record before anything is pushed: its notice (this run's or a later one's) mails it whole - every repo's
+  # the fix on record before anything is pushed (.upgrade-cycle/fixes - its commit is on the pull requests too) - every repo's
   # stat first, then each commit and diff (appended: a second fix noticed with the first)
   if [ -z "$dry" ]; then
     mkdir -p "$state/fixes"
@@ -652,7 +646,7 @@ push_fix() {
   run scripts/upgrade-label.py "$unit" agent-fixed || { say "NOT LABELLED agent-fixed - nothing pushed: its 24 h notice would not hold"; return 1; }
   run scripts/upgrade-label.py "$unit" stop-updating || { say "NOT LABELLED stop-updating - nothing pushed: Renovate would rewrite the fixed branches"; return 1; }
   unit_labels+=",stop-updating"
-  fixed=1  # labelled: from here a push that went in waits for its notice, whatever follows
+  fixed=1 pushed=1  # labelled: from here a push that went in waits for its notice, whatever follows
   for p in "${push[@]}"; do
     read -r repo tip <<< "$p"
     run bot_git -C "$dir.push/${repo#*/}" -c core.hooksPath=/dev/null push -q "$forgejo/$repo.git" "$tip:refs/heads/renovate/$unit" \
@@ -675,7 +669,7 @@ heads_pushed() {
 # when the run ends, however it ends (the radar may start again)
 build() { built=1; run task test:copy:ready || { say "COPY NOT READY - the unit untouched (see the log); run again"; exit 1; }; }
 # the unit's plan read before the copy is built: a part the proof cannot take (an ops value copy-unit.sh has no proof for -
-# Keycloak's; Consul's has its own since 2026-11-18) refused now - labelled upgrade-blocked, the parts named, nothing built and no agent: the refusal is
+# Keycloak's; Consul's has its own since 2026-11-18) refused now - a try, the parts named, nothing built and no agent: the refusal is
 # ops' to fix, never the unit's (it was built 49 min, refused, and handed to the fix agent as red - 2026-11-17's review)
 preplan() {
   local out
@@ -683,72 +677,75 @@ preplan() {
   out=$(task test:copy:unit UNIT="$unit" PLAN=true 2>&1 < /dev/null 9>&-) && { printf '%s\n' "$out" >> "$log"; return 0; }
   printf '%s\n' "$out" >> "$log"
   if grep -q '^REFUSED:' <<< "$out"; then
-    run scripts/upgrade-label.py "$unit" upgrade-blocked || say "NOT LABELLED upgrade-blocked - the next run blocks it again"
-    notice blocked "$unit" "the copy cannot prove it - $(grep -m1 '^REFUSED:' <<< "$out" | cut -c10-400) (scripts/copy-unit.sh's proof paths; once there, upgrade-blocked off its pull requests) - nothing built" "$log"
-    exit 1
+    retry "the copy cannot prove it - $(grep -m1 '^REFUSED:' <<< "$out" | cut -c10-400) (scripts/copy-unit.sh's proof paths - ops' to fix) - nothing built"
   fi
-  notice blocked "$unit" "its plan not read before the build (see the log) - nothing built, no try counted" "$log"
+  stopped "its plan not read before the build (see the log) - nothing built, no try counted" "$log"
   exit 1
 }
-read_heads "$heads" || { notice blocked "$unit" "its pull requests not read - nothing proven" "$log"; exit 1; }
+read_heads "$heads" || { stopped "its pull requests not read - nothing proven" "$log"; exit 1; }
 fresh_or_end
 preplan
 build
-if ! run task test:copy:unit UNIT="$unit"; then
-  say "RED: $unit - handed to the fix agent"
-  fixdir=$work/$unit-fix-$$; fixdiff=$ops/.copy/upgrade-fix-$unit-$$.diff; fixout=$ops/.copy/upgrade-fix-$unit-$$.txt
-  clones "$fixdir" || { notice blocked "$unit" "red; its branches not cloned for the agent - no fix, the next run proves it again" "$log"; exit 1; }
+# the agent's fix - a red proof's, or the review's findings (3.); two at most a run: each judged and pushed by the
+# runner, its CI green, the unit proven again on a base built fresh (the two proofs never share one base: a defect of
+# the base read as the unit's twice). What it cannot take further is a try (retry) - the next run takes it up
+fixes=0
+fix_unit() {  # fix_unit <what it fixes> <the file the agent reads> <its name there> <the agent's task>
+  local what=$1 input=$2 name=$3 task=$4 fixdir rc why
+  [ "$fixes" -lt "${UPGRADE_FIX_ROUNDS:-2}" ] || retry "$what - this run's fixes spent (${UPGRADE_FIX_ROUNDS:-2})" "$input"
+  fixes=$((fixes + 1))
+  say "$what: $unit - handed to the fix agent (fix $fixes)"
+  fixdir=$work/$unit-fix-$$-$fixes; fixdiff=$ops/.copy/upgrade-fix-$unit-$$-$fixes.diff; fixout=$ops/.copy/upgrade-fix-$unit-$$-$fixes.txt
+  clones "$fixdir" || retry "$what; its branches not cloned for the agent - no fix"
   dirs+=("$fixdir.push")
   if [ -z "$dry" ]; then
-    cp "$log" "$fixdir/proof.log"
-    (cd "$fixdir" && timeout "$agent_timeout" "${clean_env[@]}" "$agent" -p "upgrade-cycle fix: the unit renovate/$unit failed its proof on the Vagrant copy (its log: proof.log here). Follow the upgrade-fix instructions: the unit's branches are cloned here (one directory per repo); diagnose from the log, commit one fix in each repo it needs. Do not push - the runner does." "${fix_flags[@]}") < /dev/null > "$fixout" 2>&1 9>&-
+    cp "$input" "$fixdir/$name"
+    (cd "$fixdir" && timeout "$agent_timeout" "${clean_env[@]}" "$agent" -p "upgrade-cycle fix: the unit renovate/$unit $task Follow the upgrade-fix instructions: the unit's branches are cloned here (one directory per repo); commit one fix in each repo it needs. Do not push - the runner does." "${fix_flags[@]}") < /dev/null > "$fixout" 2>&1 9>&-
     rc=$?
     cat "$fixout" >> "$log"
     [ "$rc" = 0 ] || say "the fix agent ended $rc - its commits, if any, are checked all the same"
-  else
-    say "RUN $agent -p <the fix of renovate/$unit>"
-  fi
-  if [ -n "$dry" ]; then say "RUN the agent's commits checked and pushed"
-  else push_fix "$fixdir" || { notice blocked "$unit" "its fix not pushed (see the log) - left for the operator" "$log"; exit 1; }; fi
-  if [ -z "$fixed" ] && [ -z "$dry" ]; then
-    # no commit: a verdict (the agent's NO FIX - the new version's defect) holds the unit; an agent that did not
-    # finish (a limit, a timeout) does not - the next run proves it again
-    if grep -q '^NO FIX: ' "$fixout"; then
-      run scripts/upgrade-label.py "$unit" upgrade-blocked || say "NOT LABELLED upgrade-blocked - the next run proves it again"
-      notice blocked "$unit" "red, no fix: $(grep -m1 '^NO FIX: ' "$fixout" | cut -c1-300)" "$log"
-    else
-      retry "red; the agent committed no fix and gave no verdict (see the log)"
+    push_fix "$fixdir" || retry "$what; its fix not pushed (see the log)"
+    # no commit: the agent's NO FIX (a defect of the new version, or a cause outside the unit's files - ops' own,
+    # mine to fix), or an agent that did not finish (a limit, a timeout)
+    if [ -z "$pushed" ]; then
+      why=$(grep -m1 '^NO FIX: ' "$fixout" | cut -c1-300)
+      retry "$what; no fix${why:+ - $why}"
     fi
-    exit 1
+  else
+    say "RUN $agent -p <the fix of renovate/$unit: $what>"
+    say "RUN the agent's commits checked and pushed"
   fi
   heads_pushed || retry "its fix pushed, Forgejo not showing it on its pull requests"
   green  # the fix's own CI
-  # the proof after a fix on a base built fresh: the two proofs never share one base (a defect of the base read as the
-  # unit's twice - "red after its fix")
   run scripts/copy-snapshot.sh forget "the proof after a fix builds its base fresh" || say "THE SNAPSHOT NOT FORGOTTEN - the proof may revert it"
   build
-  if ! run task test:copy:unit UNIT="$unit"; then
-    run scripts/upgrade-label.py "$unit" upgrade-blocked || say "NOT LABELLED upgrade-blocked - the next run proves it again"
-    notice blocked "$unit" "red after its fix - left for the operator" "$log"
-    say "BLOCKED $unit"
-    exit 1
+}
+prove() { run task test:copy:unit UNIT="$unit"; }
+# what was proven is what is reviewed and merged: the heads after each proof the ones read before it
+proven_heads() {
+  read_heads "$heads.after" || { stopped "its pull requests not read after its proof - nothing applied" "$log"; exit 1; }
+  if ! { cmp -s <(cut -d' ' -f1-3 "$heads") <(cut -d' ' -f1-3 "$heads.after") && branches_are_heads; }; then
+    stopped "its branches moved during its proof - nothing applied (the next run proves them)" "$log"; exit 1
   fi
+}
+if ! prove; then
+  fix_unit "red" "$log" proof.log "failed its proof on the Vagrant copy (its log: proof.log here) - diagnose from the log."
+  prove || retry "red after its fix"
 fi
-# what was proven is what is merged: the heads after the proof the ones read before it
-read_heads "$heads.after" || { notice blocked "$unit" "its pull requests not read after its proof - nothing applied" "$log"; exit 1; }
-if ! { cmp -s <(cut -d' ' -f1-3 "$heads") <(cut -d' ' -f1-3 "$heads.after") && branches_are_heads; }; then
-  notice blocked "$unit" "its branches moved during its proof - nothing applied (the next run proves them)" "$log"; exit 1
-fi
+proven_heads
 
-# 3. the review - from clones of the proven commits; CLEAN and every pass named, nothing else
-review=$ops/.copy/upgrade-review-$unit-$(date +%s)-$$.txt
-revdir=$work/$unit-review-$$
-say "RUN $agent -p <the review of renovate/$unit>"
-if [ -z "$dry" ]; then
-  reviewers=$(reviewers_json 2>> "$log") || { notice blocked "$unit" "the reviewers' definitions not read - not reviewed, nothing applied" "$log"; exit 1; }
-  clones "$revdir" || { notice blocked "$unit" "its branches not cloned for the review - nothing applied" "$log"; exit 1; }
-  diffs "$revdir" || { notice blocked "$unit" "its diffs not written for the review - nothing applied" "$log"; exit 1; }
-  (cd "$revdir" && timeout "$agent_timeout" "${clean_env[@]}" "$agent" -p "upgrade-cycle review: review the unit renovate/$unit - its diff in each repo cloned here (one directory per repo, its diff against origin/main in <repo>.diff and its commits in <repo>.commits beside it) - as the review instructions say. End with two lines: 'PASSES: <the passes that ran, comma-separated>' and 'VERDICT: CLEAN' or 'VERDICT: CRITICAL <what>'. Change nothing." \
+# 3. the review - from clones of the proven commits: CLEAN is no finding at all, every pass named; any finding goes to
+# the agent's fix, then the unit is proven and reviewed again
+review_unit() {  # 0: clean; 1: findings (in $review); a review that did not finish ends the run (a try)
+  local rc verdict passes missing reviewers p
+  review=$ops/.copy/upgrade-review-$unit-$(date +%s)-$$-$fixes.txt
+  revdir=$work/$unit-review-$$-$fixes
+  say "RUN $agent -p <the review of renovate/$unit>"
+  [ -z "$dry" ] || return 0
+  reviewers=$(reviewers_json 2>> "$log") || { stopped "the reviewers' definitions not read - not reviewed, nothing applied" "$log"; exit 1; }
+  clones "$revdir" || { stopped "its branches not cloned for the review - nothing applied" "$log"; exit 1; }
+  diffs "$revdir" || { stopped "its diffs not written for the review - nothing applied" "$log"; exit 1; }
+  (cd "$revdir" && timeout "$agent_timeout" "${clean_env[@]}" "$agent" -p "upgrade-cycle review: review the unit renovate/$unit - its diff in each repo cloned here (one directory per repo, its diff against origin/main in <repo>.diff and its commits in <repo>.commits beside it) - as the review instructions say. Each finding, whatever its severity, on a line of its own: 'FINDING: <critical|warning|suggestion> <where> - <what>'. End with two lines: 'PASSES: <the passes that ran, comma-separated>' and 'VERDICT: CLEAN' (no finding at all) or 'VERDICT: FINDINGS <how many>'. Change nothing." \
      --restricted --tools "Bash,Read,Glob,Grep,Agent,Skill" --agents "$reviewers" \
      --append-system-prompt-file "$ops/.claude/upgrade-agent/review.md" --settings "$ops/.claude/upgrade-agent/review.json" \
      --strict-mcp-config --permission-mode dontAsk --permission-prompts none) < /dev/null > "$review" 2>&1 9>&-
@@ -758,53 +755,27 @@ if [ -z "$dry" ]; then
   passes=$(grep -E '^PASSES: .+' "$review" | tail -1)
   missing=""
   for p in $REVIEW_PASSES; do tr ',' '\n' <<< "${passes#PASSES: }" | sed 's/^ *//; s/ *$//' | grep -qxi "$p" || missing+=" $p"; done
-  if grep -q '^VERDICT: CRITICAL' "$review"; then  # any CRITICAL line - a later CLEAN never takes it back
-    verdict=$(grep -m1 '^VERDICT: CRITICAL' "$review")
-    run scripts/upgrade-label.py "$unit" upgrade-blocked || say "NOT LABELLED upgrade-blocked - the next run proves it again"
-    notice blocked "$unit" "its review blocks it (${verdict:0:300})" "$review"
-    say "BLOCKED $unit"
-    exit 1
+  # any finding, whatever its severity - a later CLEAN never takes one back
+  if grep -qE '^(FINDING: |VERDICT: (FINDINGS|CRITICAL))' "$review"; then
+    say "FINDINGS $unit: $(grep -cE '^FINDING: ' "$review") - $(grep -m1 -E '^(FINDING: |VERDICT: (FINDINGS|CRITICAL))' "$review" | cut -c1-200)"
+    return 1
   fi
   if [ "$rc" -ne 0 ] || [ "$verdict" != "VERDICT: CLEAN" ] || [ -n "$missing" ]; then
     retry "its review did not finish (${verdict:-no verdict}; passes missing:${missing:- none}; exit $rc)" "$review"
   fi
-fi
+  return 0
+}
+while ! review_unit; do
+  fix_unit "its review's findings" "$review" review.txt "was proven on the Vagrant copy, and its review found what review.txt here lists (its FINDING lines) - fix every one you can within the unit's own files; one you cannot (it lies outside them), name on a NO FIX line."
+  prove || retry "red after the fix of its review's findings"
+  proven_heads
+done
+
 # proven and reviewed: the copy halted now (its snapshot kept for the next run) - the radar may start, the apply needs none of it
 copy_gone="the copy halted: the radar may start"
 run scripts/copy-snapshot.sh used || say "THE COPY NOT MARKED USED - task test:copy:drop by hand"
 if run vagrant halt; then built=""; else copy_gone="THE COPY NOT HALTED - the radar stays off"; say "$copy_gone"; fi
 
-# a major's notice: what it changes, bounded - each repo's files and commits, the diff itself (its first 80 KB), the
-# review's verdict (the run's log is hundreds of KB: a mail carries what the operator reads)
-summary() {  # summary <file>: what the unit changes, for its notice's mail - each repo's files and commits (the heads
-             # read: the ones proven), the review's passes and verdict, the diff; 100 KB in all (upgrade-notice.sh refuses
-             # more: a unit never noticed), the cut said in the mail; git failing: no summary (no notice on what is not known)
-  local out=$1 repo head dir ok=1 size limit=102400
-  [ -z "$dry" ] || { : > "$out"; return 0; }
-  { echo "=== renovate/$unit: what it changes"
-    while read -r repo _ head _ <&3; do
-      dir=$(repo_dir "$repo")
-      echo "=== $repo"; git -C "$dir" diff --stat --no-ext-diff --no-textconv --no-color --no-renames "origin/main...$head" < /dev/null 2>> "$log" || ok=""
-      git -C "$dir" log --format='%h %s' "origin/main..$head" < /dev/null 2>> "$log" | LC_ALL=C tr -c '[:print:]\n' '?' | cut -c1-200
-      [ "${PIPESTATUS[0]}" = 0 ] || ok=""
-    done 3< "$heads"
-    echo "=== the review: $(grep -E '^(PASSES|VERDICT): ' "$review" 2> /dev/null | tr '\n' ' ')"
-    echo "=== the diff"
-    while read -r repo _ head _ <&3; do
-      git -C "$(repo_dir "$repo")" diff --text --no-ext-diff --no-textconv --no-color --no-renames "origin/main...$head" < /dev/null 2>> "$log" || ok=""
-    done 3< "$heads"
-  } > "$out.whole"
-  [ -n "$ok" ] || { rm -f "$out.whole"; return 1; }
-  size=$(wc -c < "$out.whole")
-  if [ "$size" -le "$limit" ]; then
-    mv "$out.whole" "$out"
-  else
-    { head -c $((limit - 200)) "$out.whole"
-      printf '\n[cut: %s of %s bytes shown - the whole: git diff origin/main...<head> in each repo above]\n' $((limit - 200)) "$size"
-    } > "$out"
-    rm -f "$out.whole"
-  fi
-}
 # a major (or a unit carrying the agent's fix) applies only what its notice announced: the heads on its comment, each
 # an ancestor of the head proven now, and merging the head now into main makes the very tree merging the announced one
 # makes - main merged in since (Forgejo's update) changes nothing of it; a newer release, a fix since, a rebase, an evil
@@ -829,35 +800,27 @@ notice_holds() {
   done
 }
 
-# 4. the gate - a major's first run, a unit this run fixed, or one whose notice no longer holds: its notice mailed first
-# (the fix's diff in it), its comment then starts the 24 h - never a clock the operator was not told of
+# 4. the gate - a major's first run, a unit this run fixed, or one whose notice no longer holds: its notice - a comment on
+# its pull requests, said on the terminal (nothing mailed: the runs are started by hand) - starts the 24 h; a later run
+# applies it unless its pull requests carry the label veto
 again=""
 [ "$action" != apply ] || notice_holds || { again=1; say "its notice does not hold for the heads proven now (a newer release, a fix since) - noticed again"; }
 if [ "$action" = notice ] || [ -n "$fixed" ] || [ -n "$again" ]; then
-  why="major $unit proven and reviewed"; notice_summary=$ops/.copy/upgrade-notice-$unit-$$.txt; details=$notice_summary
-  summary "$details" || { notice blocked "$unit" "its summary not made (git failing - see the log) - not noticed, no try counted" "$log"; exit 1; }
+  why="major, proven and reviewed"
   if [ -n "$fixed" ] || [[ ,$unit_labels, == *,agent-fixed,* ]]; then
-    # the agent's fix, whichever run pushed it: its whole diff on record, or no notice (no clock without its evidence)
-    details=$state/fixes/$unit.diff
-    [ -s "$details" ] || { notice blocked "$unit" "carries the agent's fix, its diff not on record ($details) - not noticed, left for the operator" "$log"; exit 1; }
-    why="$kind $unit proven and reviewed WITH THE AGENT'S FIX (its diff below)"; fixed=1
-  fi
-  if [ -n "$fixed" ] && [ "$(wc -c < "$details")" -gt 102400 ]; then  # a fix too large to mail whole is no fix to notice: the operator's
-    run scripts/upgrade-label.py "$unit" upgrade-blocked || say "NOT LABELLED upgrade-blocked - the next run tries again"
-    notice blocked "$unit" "its fix's diff ($(wc -c < "$details") bytes) is over a mail's 100 KB - not noticed, labelled upgrade-blocked" "$log"
-    exit 1
+    # the agent's fix, whichever run pushed it: its commit on the unit's pull requests (the runner's record of it:
+    # $state/fixes/<unit>.diff)
+    why="$kind, proven and reviewed with the agent's fix (its commit on the pull requests)"; fixed=1
   fi
   # what the notice announces: the heads proven now - a later run applies these (main merged in aside), or notices again;
   # Renovate kept off its branches from here (a newer release it pushed would void the notice, the loop never ending)
   announce=$(awk '{printf "%s%s@%s", (NR > 1 ? "," : ""), $1, $3}' "$heads")
   [[ ,$unit_labels, == *,stop-updating,* ]] || run scripts/upgrade-label.py "$unit" stop-updating \
     || { say "NOT NOTICED: stop-updating not set - Renovate would void the notice; the next run notices it again"; exit 1; }
-  run scripts/upgrade-notice.sh veto "$unit" "$why - applies after 24 h unless vetoed (label veto on its PRs)" "$details" \
-    || { say "NOT NOTICED: the veto mail not sent - no clock started, the next run notices it again"; exit 1; }
   run scripts/upgrade-label.py "$unit" --comment "UPGRADE NOTICE $(date -u +%Y-%m-%dT%H:%M:%SZ) heads=$announce - applies after 24 h unless vetoed (label veto)${fixed:+ - with the fix by the agent}" \
     || { say "NOT NOTICED: the comment not posted - the next run notices it again"; exit 1; }
   progress
-  say "NOTICED $unit"
+  say "NOTICED $unit: $why - a run after $(date -d '+24 hours' '+%F %H:%M') applies it, unless its pull requests carry the label veto"
   exit 0
 fi
 
@@ -866,7 +829,7 @@ if [ -n "$dry" ]; then
   say "RUN task test:copy:unit UNIT=$unit PLAN=true"; plan=""
 else
   plan=$(task test:copy:unit UNIT="$unit" PLAN=true 2>> "$log" 9>&- | grep -E '^test:copy:') \
-    || { notice blocked "$unit" "its plan not read - nothing applied" "$log"; exit 1; }
+    || { stopped "its plan not read - nothing applied" "$log"; exit 1; }
 fi
 pre=(); cmds=()
 version_of() {  # the value of $1= in the step, a version or nothing
@@ -878,10 +841,10 @@ while IFS= read -r step; do
   [ -n "$step" ] || continue
   case "$step" in
     "test:copy:playbook PLAYBOOK=upgrade-kubeadm.yml"*)
-      v=$(version_of k8s_upgrade_to "$step") || { notice blocked "$unit" "no Kubernetes version in its plan ($step) - nothing merged" "$log"; exit 1; }
+      v=$(version_of k8s_upgrade_to "$step") || { stopped "no Kubernetes version in its plan ($step) - nothing merged" "$log"; exit 1; }
       pre+=("deploy:etcd:backup"); cmds+=("deploy:kubeadm:upgrade -- -e k8s_upgrade_to=$v") ;;
     "test:copy:playbook PLAYBOOK=setup-kubeadm.yml"*)
-      v=$(version_of cilium_version "$step") || { notice blocked "$unit" "no Cilium version in its plan ($step) - nothing merged" "$log"; exit 1; }
+      v=$(version_of cilium_version "$step") || { stopped "no Cilium version in its plan ($step) - nothing merged" "$log"; exit 1; }
       cmds+=("deploy:cilium:upgrade -- -e cilium_version=$v") ;;
     "test:copy:playbook PLAYBOOK=setup-argocd.yml"*) cmds+=("deploy:argocd") ;;
     "test:copy:playbook PLAYBOOK=setup-host-hardening.yml"*) cmds+=("deploy:host-hardening") ;;
@@ -891,26 +854,26 @@ while IFS= read -r step; do
     "test:copy:playbook PLAYBOOK=upgrade-forgejo.yml"*) cmds+=("deploy:forgejo:upgrade") ;;
     "test:copy:playbook PLAYBOOK=setup-caddy.yml"*) cmds+=("deploy:caddy") ;;  # it installs the version pinned
     "test:copy:playbook PLAYBOOK=restart-mesh-workloads.yml"*)  # every sidecar on istiod's version - Argo applied it first
-      v=$(version_of istio_version "$step") || { notice blocked "$unit" "no Istio version in its plan ($step) - nothing merged" "$log"; exit 1; }
+      v=$(version_of istio_version "$step") || { stopped "no Istio version in its plan ($step) - nothing merged" "$log"; exit 1; }
       cmds+=("deploy:mesh:restart -- -e istio_version=$v") ;;
     "test:copy:change"*) continue ;;  # Argo applies infra's and platform's merge
-    *) notice blocked "$unit" "a part with no production command: $step - nothing merged" "$log"; exit 1 ;;
+    *) stopped "a part with no production command: $step - nothing merged" "$log"; exit 1 ;;
   esac
 done <<< "$plan"
 stop_if_one_way
 pre+=("${one_way_backups[@]}")  # a one-way store's backups, after the plan's own (an etcd snapshot) - each before the merge, the order theirs alone
 for c in "${one_way_taken[@]}"; do  # a store whose backup its own command takes: that command in the plan, or nothing
   printf '%s\n' "${cmds[@]}" | grep -qx -- "$c" \
-    || { notice blocked "$unit" "a one-way change whose backup its command takes ($c) - not in its plan; nothing merged" "$log"; exit 1; }
+    || { stopped "a one-way change whose backup its command takes ($c) - not in its plan; nothing merged" "$log"; exit 1; }
 done
 APPLY_SPAN=$((APPLY_SPAN + one_way_minutes))  # the backups' bound: the apply's window holds them too
 
 # 6. the apply - the gates again (hours since the start), the backups a one-way change needs, still free, a journal
-gates "$APPLY_SPAN" merge || { notice blocked "$unit" "proven and reviewed, not applied: a gate refused it now (see the log) - the next run proves it again" "$log"; exit 1; }
+gates "$APPLY_SPAN" merge || { stopped "proven and reviewed, not applied: a gate refused it now (see the log) - the next run proves it again" "$log"; exit 1; }
 gate_head=$(git -C "$ops" rev-parse HEAD)
 for c in "${pre[@]}"; do
   read -ra words <<< "$c"
-  run task --yes "${words[@]}" || { notice blocked "$unit" "its backup before the change failed (task $c) - nothing merged" "$log"; exit 1; }
+  run task --yes "${words[@]}" || { stopped "its backup before the change failed (task $c) - nothing merged" "$log"; exit 1; }
 done
 held_now
 start_journal
@@ -940,7 +903,6 @@ journal "verified"
 # 8. record
 run task test:copy:inventory || say "the inventory not read after it - the record says so"
 run scripts/upgrade-record.sh "$unit" "$log" \
-  || { notice blocked "$unit" "applied and verified, not recorded - push the record, then remove $state/inflight" "$log"; exit 1; }
+  || { stopped "applied and verified, not recorded - push the record, then remove $state/inflight" "$log"; exit 1; }
 [ -n "$dry" ] || rm -f "$state/inflight" "$state/tries/$unit" "$state/fixes/$unit.diff"
-notice applied "$unit" "$kind $unit applied and verified ($copy_gone)" "$log"
-say "APPLIED $unit"
+say "APPLIED $unit: $kind, applied and verified ($copy_gone)"

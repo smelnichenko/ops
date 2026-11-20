@@ -2,7 +2,8 @@
 # scripts/upgrade-units.py - the upgrade cycle's pick of the night's Renovate unit - against a throwaway Forgejo API (a
 # local server, a process of its own, its answers from the case's fixture, paged as Forgejo pages): units grouped by
 # branch across infra, platform and ops, their kind (major by label, wave-patches a patch); the pick's order -
-# wave-patches, the family minors in order, other minors, majors; blocked and vetoed units left out; a major noticed,
+# wave-patches, the family minors in order, other minors, majors - a unit with a try on record (the runner's) behind the
+# ones with none; vetoed units left out (an upgrade-blocked label holds nothing - no blocked state); a major noticed,
 # applied only after its 24 h (an unvetoed one, exactly 24 h its end; the earliest notice its own), the waiting one before
 # a new notice (the one noticed first first); the kill switch on the dashboard issue (found by its title, on any page;
 # none open - not read, never "not paused"); more than one page of pull requests; Forgejo unreachable - not read, never
@@ -38,8 +39,9 @@ python3 "$W/server.py" "$W" & echo $! > "$W/pid"
 for _ in $(seq 50); do [ -e "$W/port" ] && break; sleep 0.1; done
 [ -e "$W/port" ] || { echo "upgrade-units: the local server did not start"; exit 1; }
 W=$W PORT=$(cat "$W/port") python3 - <<'PYCHECK'
-import json, os, subprocess, sys
+import json, os, shutil, subprocess, sys
 W, PORT = os.environ["W"], os.environ["PORT"]
+TRIES = os.path.join(W, "tries")  # the runner's tries: the case's own, never the checkout's
 fails = 0
 def check(name, got, want):
     global fails
@@ -78,7 +80,7 @@ NOW = "2026-11-20T03:00:00Z"
 HEADS = "schnappy/infra@" + "a" * 40 + ",schnappy/ops@" + "c" * 40
 def run(*args, url=None):
     env = {**os.environ, "UPGRADE_FORGEJO_URL": url or f"http://127.0.0.1:{PORT}/api/v1", "UPGRADE_FORGEJO_TOKEN": "t",
-           "UPGRADE_NOW": NOW}
+           "UPGRADE_NOW": NOW, "UPGRADE_TRIES": TRIES}
     r = subprocess.run([sys.executable, "scripts/upgrade-units.py", *args], capture_output=True, text=True, env=env, timeout=60)
     return r.returncode, r.stdout.strip()
 fixture()
@@ -142,7 +144,10 @@ check("a test environment's unit first, before wave-patches", run("pick"), (0, "
 fixture(infra=[pr(1, "test-observability"), pr(2, "test-wave-patches")])
 check("test units in their twins' order (wave-patches' first)", run("pick"), (0, "test test-wave-patches patch"))
 fixture(infra=[pr(1, "test-istio-1.32", "upgrade-blocked"), pr(2, "istio-1.32"), pr(3, "observability")])
-check("a production unit waits while its test unit is open - blocked too: the next unit instead", run("pick"),
+check("an upgrade-blocked label (left from before 2026-11-20) holds nothing: the test unit picked", run("pick"),
+      (0, "test test-istio-1.32 minor"))
+fixture(infra=[pr(1, "test-istio-1.32", "veto"), pr(2, "istio-1.32"), pr(3, "observability")])
+check("a production unit waits while its test unit is open - vetoed too: the next unit instead", run("pick"),
       (0, "prove observability minor"))
 fixture(infra=[pr(1, "test-grafana-k6-2.x", "major")])
 check("a major's test unit: merged as a test unit (the 24 h notice is its production twin's)", run("pick"),
@@ -155,7 +160,30 @@ fixture(infra=[pr(2, "istio-x.32"), pr(3, "istio")])
 check("a name that only looks versioned is not (istio-x.32 is no istio minor): the family's own unit first",
       run("pick"), (0, "prove istio minor"))
 fixture(infra=[pr(1, "wave-patches", "upgrade-blocked"), pr(2, "istio", "veto"), pr(3, "observability")])
-check("a blocked unit and a vetoed one left out", run("pick"), (0, "prove observability minor"))
+check("an upgrade-blocked label ignored (no blocked state), a vetoed unit left out", run("pick"), (0, "prove wave-patches patch"))
+# no blocked state (operator 2026-11-20): a unit with a try on record (the runner's) behind the units with none - its own
+# pull requests' tries alone (another unit of the name before had other pull requests), a key with no "#" the unit's
+def tries(unit, *keys):
+    os.makedirs(TRIES, exist_ok=True)
+    open(os.path.join(TRIES, unit), "w").write("".join(f"{k} 2026-11-20T10:00:00Z a try\n" for k in keys))
+fixture(infra=[pr(1, "wave-patches"), pr(2, "observability")], ops=[pr(9, "wave-patches")])
+tries("wave-patches", "schnappy/ops#9,schnappy/infra#1")
+check("a unit with a try on record (its pull requests', in any order) behind one with none", run("pick"), (0, "prove observability minor"))
+tries("wave-patches", "schnappy/infra#1,schnappy/ops#5")
+check("  a try of another unit of the name (other pull requests): not this one's - the order kept", run("pick"), (0, "prove wave-patches patch"))
+tries("wave-patches", "none")
+check("  a try with its pull requests not read (none): the unit's", run("pick"), (0, "prove observability minor"))
+tries("observability", "test-environment")
+check("  both with tries: their order again", run("pick"), (0, "prove wave-patches patch"))
+shutil.rmtree(TRIES)
+fixture(infra=[pr(1, "test-observability"), pr(2, "test-wave-patches")])
+tries("test-wave-patches", "schnappy/infra#2")
+check("  test units the same: the one with a try after", run("pick"), (0, "test test-observability minor"))
+shutil.rmtree(TRIES)
+fixture(infra=[pr(1, "alpha-2.x", "major"), pr(2, "beta-3.x", "major")])
+tries("alpha-2.x", "schnappy/infra#1")
+check("  majors the same: the one with no try noticed first", run("pick"), (0, "notice beta-3.x major"))
+shutil.rmtree(TRIES)
 # a manual- unit (renovate/manual-woodpecker): what the copy cannot prove - applied by hand, never picked
 fixture(infra=[pr(1, "manual-woodpecker")])
 check("a manual- unit alone: nothing picked (applied by hand)", run("pick"), (0, "NOTHING"))
@@ -224,9 +252,9 @@ check("Forgejo unreachable: not read (exit 1), never NOTHING", run("pick", url="
 check("noticed: a unit not open", run("noticed", "nope"), (1, "NO UNIT nope"))
 check("a command it does not take", run("apply")[0], 2)
 fixture(infra=[pr(1, "wave-patches"), pr(2, "istio", "veto"), pr(3, "observability", "upgrade-blocked", "veto")])
-check("held: what holds a unit now - nothing for a free one, its labels for one blocked or vetoed",
+check("held: what holds a unit now - nothing for a free one, veto for a vetoed one (an upgrade-blocked label holds nothing)",
       (run("held", "wave-patches"), run("held", "istio"), run("held", "observability"), run("held", "nope")),
-      ((0, ""), (0, "veto"), (0, "upgrade-blocked\nveto"), (1, "NO UNIT nope")))
+      ((0, ""), (0, "veto"), (0, "veto"), (1, "NO UNIT nope")))
 fixture(infra=[pr(1, "wave-patches")], dashboard_labels=["upgrades-paused"])
 check("held: the dashboard's kill switch - paused", run("held", "wave-patches"), (0, "paused"))
 fixture(infra=[pr(1, "wave-patches")], dashboard_labels=["upgrades-paused"], others=60)

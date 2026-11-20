@@ -16,9 +16,10 @@ grouped by branch (renovate/<unit> - the same name in each repo).
                  The order: renovate/wave-patches, then the family minors (istio, gateway-api, kubernetes, cilium, observability,
                  data-operators, argocd, pi-services - the first three one minor at a time, named <family>-<X.Y>, the
                  lowest first), then any other minor (a <name>-<X.Y> one by its version), then majors - a waiting
-                 major's notice before a new one's. Left out:
+                 major's notice before a new one's - the units with a try on record (the runner's .upgrade-cycle/tries)
+                 after the ones with none (no blocked state: one that keeps failing never holds the queue). Left out:
                  a manual- unit (renovate/manual-<unit>: what the copy cannot prove - Woodpecker - applied by hand),
-                 a unit labelled upgrade-blocked (red after its fix) or veto, a major in its 24 h, a unit any of whose pull
+                 a unit labelled veto, a major in its 24 h, a unit any of whose pull
                  requests lacks Renovate's own labels (upgrade-cycle, major, one-way: its kind not known - Forgejo applies
                  only labels a repo has); everything while the
                  dashboard issue carries upgrades-paused (the kill switch) - and no dashboard issue open: not read (exit 1)
@@ -26,7 +27,7 @@ grouped by branch (renovate/<unit> - the same name in each repo).
                  NOTICE <iso> heads=<repo>@<sha>,..." comment: a fix noticed again starts its 24 h again), "<iso>
                  <heads>", or "NONE" - the runner applies only those heads, main merged into them aside (git judges it);
                  anything else is noticed again
-  held UNIT      what holds the unit now, one a line - upgrade-blocked, veto (on any of its pull requests), paused (the
+  held UNIT      what holds the unit now, one a line - veto (on any of its pull requests), paused (the
                  dashboard's upgrades-paused); nothing when nothing does: the runner asks again right before a merge
                  (a veto or the kill switch set during the proof and the review was not seen at the pick's time)
 
@@ -63,6 +64,10 @@ NOTICE = re.compile(r"UPGRADE NOTICE (\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ)(?: heads=
 # renovate/upgrade-cycle.json's dependencyDashboardTitle - each repo's dashboard (all three extend the preset)
 DASHBOARD = "Upgrade cycle - Renovate's dashboard (label upgrades-paused: the cycle stops)"
 RENOVATE_LABELS = {"upgrade-cycle", "major", "one-way"}
+# the runner's tries, one file a unit (scripts/upgrade-cycle.sh retry): a unit with one on record goes behind the units
+# with none - there is no blocked state (operator 2026-11-20), so one that keeps failing never holds the queue
+TRIES = os.environ.get("UPGRADE_TRIES",
+                       os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".upgrade-cycle", "tries"))
 
 
 class NotRead(Exception):
@@ -202,21 +207,40 @@ def waits_notice(u):
     return u["kind"] == "major" or bool({"agent-fixed", "one-way"} & set(u["labels"]))
 
 
+def tried(name, u):
+    """A try on record for this unit's pull requests: a line of .upgrade-cycle/tries/<unit> whose key is them
+    ("repo#number,..." in any order) - or a key with no "#" (its pull requests not read, the test environment's merge
+    that did not settle): the unit's whatever its pull requests. Another unit of the name before (other pull requests)
+    is not this one."""
+    if not re.fullmatch(r"[a-z0-9][a-z0-9.-]*", name):
+        return False
+    try:
+        lines = open(os.path.join(TRIES, name), encoding="utf-8").read().split("\n")
+    except OSError:
+        return False
+    mine = {f"{repo}#{n}" for repo, n in u["repos"].items()}
+    keys = (line.split(" ", 1)[0] for line in lines)
+    return any(k and ("#" not in k or set(k.split(",")) == mine) for k in keys)
+
+
 def pick():
     if paused():
         return "PAUSED"
     all_units = units()
     # unlabelled (Renovate's labels not on it): never picked - a major unlabelled read as a minor, applied with no notice
     # a manual- unit (renovate/manual-woodpecker, the preset's): what the copy cannot prove - applied by hand, never picked
-    open_units = {n: u for n, u in all_units.items() if not ({"upgrade-blocked", "veto"} & u["labels"]) and not u["unlabelled"]
+    open_units = {n: u for n, u in all_units.items() if "veto" not in u["labels"] and not u["unlabelled"]
                   and not n.startswith("manual-")}
-    tests = sorted((n for n in open_units if n.startswith("test-")), key=lambda n: order(n, open_units[n]))
+    # the units with a try on record after the ones with none, each group in its order
+    def queue(n):
+        return (tried(n, open_units[n]), order(n, open_units[n]))
+    tests = sorted((n for n in open_units if n.startswith("test-")), key=queue)
     if tests:
         return f"test {tests[0]} {open_units[tests[0]]['kind']}"
-    # a production unit waits while its test environment's is open - blocked or vetoed too (its twin goes first); a test
+    # a production unit waits while its test environment's is open - vetoed too (its twin goes first); a test
     # unit itself is never a production one
     open_units = {n: u for n, u in open_units.items() if f"test-{n}" not in all_units and not n.startswith("test-")}
-    for name in sorted((n for n, u in open_units.items() if not waits_notice(u)), key=lambda n: order(n, open_units[n])):
+    for name in sorted((n for n, u in open_units.items() if not waits_notice(u)), key=queue):
         return f"prove {name} {open_units[name]['kind']}"
     return pick_noticed(open_units, sorted(n for n, u in open_units.items() if waits_notice(u)))
 
@@ -225,11 +249,12 @@ def pick_noticed(open_units, majors):
     """A major (or a unit carrying the agent's fix) whose notice ran out - the earliest noticed first; else one with no
     notice yet. Whether it applies what was noticed is the runner's to judge (the notice's heads, by git)."""
     notices = {name: noticed(name, open_units[name]) for name in majors}
-    waiting = sorted((n[0], name) for name, n in notices.items() if n and now() - n[0] >= datetime.timedelta(hours=VETO_HOURS))
+    waiting = sorted((tried(name, open_units[name]), n[0], name) for name, n in notices.items()
+                     if n and now() - n[0] >= datetime.timedelta(hours=VETO_HOURS))
     if waiting:
-        name = waiting[0][1]
+        name = waiting[0][2]
         return f"apply {name} {open_units[name]['kind']}"
-    for name in majors:
+    for name in sorted(majors, key=lambda m: tried(m, open_units[m])):
         if notices[name] is None:
             return f"notice {name} {open_units[name]['kind']}"
     return "NOTHING"
@@ -252,7 +277,7 @@ def show_held(name):
     if u is None:
         print(f"NO UNIT {name}")
         return 1
-    for reason in sorted({"upgrade-blocked", "veto"} & u["labels"]):
+    for reason in sorted({"veto"} & u["labels"]):
         print(reason)
     if paused():
         print("paused")

@@ -128,15 +128,15 @@ def run(*args, url=None):
 UNIT = {"infra": [pr(1, "wave-patches", "a1"), pr(2, "istio", "a2")], "platform": [pr(5, "wave-patches", "b1")],
         "ops": [pr(8, "wave-patches", "c1")]}
 fixture(UNIT, {"a1": "success", "b1": "success", "c1": "success"},
-        labels={"infra": [{"name": "upgrade-blocked", "id": 3}], "platform": [], "ops": []})
-rc, out = run("wave-patches", "upgrade-blocked")
+        labels={"infra": [{"name": "stop-updating", "id": 3}], "platform": [], "ops": []})
+rc, out = run("wave-patches", "stop-updating")
 w = writes()
 check("label: on each of the unit's pull requests (not istio's), the repo's own id; made where missing",
       (rc, [x[0] for x in w], [x[1] for x in w]),
       (0, ["/repos/schnappy/infra/issues/1/labels", "/repos/schnappy/platform/labels", "/repos/schnappy/platform/issues/5/labels",
            "/repos/schnappy/ops/labels", "/repos/schnappy/ops/issues/8/labels"],
-       [{"labels": [3]}, {"name": "upgrade-blocked", "color": "#d93f0b"}, {"labels": [77]},
-        {"name": "upgrade-blocked", "color": "#d93f0b"}, {"labels": [77]}]))
+       [{"labels": [3]}, {"name": "stop-updating", "color": "#d93f0b"}, {"labels": [77]},
+        {"name": "stop-updating", "color": "#d93f0b"}, {"labels": [77]}]))
 fixture(UNIT, {})
 rc, out = run("wave-patches", "--comment", "UPGRADE NOTICE 2026-11-20T03:00:00Z - applies after 24 h")
 check("comment: on each, the text whole", (rc, [(x[0], x[1]["body"][:14]) for x in writes()]),
@@ -193,7 +193,7 @@ fixture({"infra": [pr(1, "wave-patches", "a1", user="mallory")], "platform": [pr
          "ops": [pr(8, "wave-patches", "c1")]}, {"a1": "success", "b1": "success", "c1": "success"})
 rc, out = run("wave-patches", "--heads")
 check("another account's pull request, or a fork's, named renovate/<unit>: none of the unit's (heads, labels)",
-      (rc, out.split("\n"), run("wave-patches", "upgrade-blocked")[0], [x[0] for x in writes()][-1]),
+      (rc, out.split("\n"), run("wave-patches", "stop-updating")[0], [x[0] for x in writes()][-1]),
       (0, [f"schnappy/ops 8 {SHA['c1']} {BASE}"], 0, "/repos/schnappy/ops/issues/8/labels"))
 fixture(UNIT, {"a1": "success", "b1": "success", "c1": "success"}, base={"platform": "f" * 40})
 proven()

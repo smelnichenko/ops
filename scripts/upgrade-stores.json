@@ -5,7 +5,7 @@
     "units: the names Renovate gives the store's units (a major: its depName, '/' as '-', then '-<major>.x'; ScyllaDB's release lines: renovate/scylladb-<X.Y>) - examples: real ones, each matched by its own store's units alone (the harness); a group's name is a store's only when the group is that store's alone.",
     "backups: the production tasks the runner runs before the merge (each must end well, or nothing is merged), minutes their bound (added to the apply's span) - every part of the store the unit may change.",
     "taken_by: the unit's own production command takes the backup itself (its playbook, first) - the runner refuses the unit when its plan has not that command.",
-    "missing: the parts that have none yet, each with why - while any is listed, the store's units are blocked before anything is built, the notice naming each; once the part exists, the table says so and the label upgrade-blocked comes off the unit's pull requests.",
+    "missing: the parts that have none yet, each with why - while any is listed, the store's units are stopped before anything is built (a try - no blocked state), the message naming each; once the part exists, the table says so and the label upgrade-blocked comes off the unit's pull requests.",
     "A test environment's unit takes no backup (its data is no store to keep), but runs only when its production twin could: a test environment ahead of production for good is no proof of anything.",
     "upgrade-renovate's harness fails a package the preset marks one-way that no store here names (and the reverse), a store with neither, a backup that is no production task - a new kind of store is decided here, not met in a run."
   ],
