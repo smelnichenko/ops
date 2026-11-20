@@ -63,7 +63,7 @@ old_keys = keys_dir("keys-old", [VENDOR, OLD], [VENDOR, OLD])       # a key expi
 
 # ── the mirror: each vendor's files where the script reads them ─────────────
 V = {"vault": "1.22.0", "forgejo": "15.0.12", "helm": "v3.21.0", "node_exporter": "1.13.0", "nexus": "3.91.0-02",
-     "versitygw": "1.9.0", "consul": "1.21.0", "keycloak": "26.6.0", "gateway_api": "v1.6.0"}
+     "versitygw": "1.9.0", "consul": "1.21.0", "keycloak": "26.6.0", "gateway_api": "v1.6.0", "insightface_buffalo_l": "0.8"}
 M = os.path.join(W, "mirror")
 def put(url, data):
     p = os.path.join(M, url.split("://", 1)[1] + ("index.html" if url.endswith("/") else ""))
@@ -100,6 +100,9 @@ expect["keycloak"] = {"noarch": h(f"keycloak {v} tarball")}
 v = V["gateway_api"]
 put(f"https://github.com/kubernetes-sigs/gateway-api/releases/download/{v}/standard-install.yaml", f"gateway api {v} crds")
 expect["gateway_api"] = {"noarch": h(f"gateway api {v} crds")}
+v = V["insightface_buffalo_l"]
+put(f"https://github.com/deepinsight/insightface/releases/download/v{v}/buffalo_l.zip", f"buffalo_l {v} zip")
+expect["insightface_buffalo_l"] = {"noarch": h(f"buffalo_l {v} zip")}
 v = V["forgejo"]
 fj = {a: f"https://code.forgejo.org/forgejo/forgejo/releases/download/v{v}/forgejo-{v}-linux-{a}" for a in ("arm64", "amd64")}
 binaries = {a: f"forgejo {v} {a} binary".encode() for a in fj}
@@ -195,18 +198,19 @@ bump(*PIN)
 code, out = run("--changed")
 check("every pin moved: each rewritten from its vendor's signed material (or TLS, said); 0",
       (code, pins_now() == expect, out.count("rewritten"), "signed: HashiCorp" in out, "signed: Forgejo" in out,
-       "signed: Helm" in out, "signed: Keycloak" in out, "TLS alone" in out), (0, True, 10, True, True, True, True, True))
+       "signed: Helm" in out, "signed: Keycloak" in out, "TLS alone" in out), (0, True, 11, True, True, True, True, True))
 changed = diff_lines()
 check("  nothing else in the files changed: each moved version and each pin's hash, the rest as it was (the nexus "
-      "map's sha256: prefix and quotes kept); versitygw's new version an entry of its own, as the ones before it",
-      (all(re.search(r"_version:|^\+\s+\"1\.9\.0\":$|^[-+]\s+(-\s+)?\S+:\s*\"?(sha256:)?[0-9a-f]{64}", l) for l in changed),
+      "map's sha256: prefix and quotes kept); versitygw's new version an entry of its own, as the ones before it; "
+      "buffalo_l's version and hash, top-level keys of their vars file",
+      (all(re.search(r"_version:|^\+\s+\"1\.9\.0\":$|^[-+]\s*(-\s+)?\S+:\s*\"?(sha256:)?[0-9a-f]{64}", l) for l in changed),
        len([l for l in changed if l.startswith("+")]), any('"sha256:' + expect["nexus"]["x86_64"] + '"' in l for l in changed),
        len([l for l in changed if l.startswith("-") and "_version:" not in l])),
-      (True, 9 + 8 + 4 + 3 + 2, True, 8 + 4 + 2))
+      (True, 9 + 8 + 4 + 3 + 2 + 2, True, 8 + 4 + 2 + 1))
 vg_text = open(os.path.join(R, PIN["versitygw"]["file"])).read()
 check("  versitygw's new entry after the ones before it", re.findall(r'^\s+"(\d+\.\d+\.\d+)":$', vg_text, re.M)[-1:], ["1.9.0"])
 code, out = run("--check")
-check("  --check after it: every pin ok; 0", (code, out.count("STALE"), out.count(" ok")), (0, 0, 16))
+check("  --check after it: every pin ok; 0", (code, out.count("STALE"), out.count(" ok")), (0, 0, 17))
 
 # --check: a stale pin, a missing versitygw entry - said, nothing written
 p = os.path.join(R, PIN["vault"]["file"])
@@ -379,6 +383,7 @@ DOWNLOADS = {  # pin -> the playbooks' download lines (their file, a marker on t
     "node_exporter": [("setup-host-hardening.yml", "node_exporter_archive_name:")],
     "nexus": [("setup-nexus.yml", "url: \"https://download.sonatype.com/")],
     "versitygw": [("tasks/versitygw.yml", "url: \"https://github.com/versity/")],
+    "insightface_buffalo_l": [("../vars/nexus-models.yml", "url: \"https://github.com/deepinsight/")],
 }
 def artifact(pin, v, a):
     vd = rc.VENDORS[pin["vendor"]]

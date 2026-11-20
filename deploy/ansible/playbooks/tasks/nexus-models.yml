@@ -1,0 +1,142 @@
+---
+# The hosted models repository (raw), converged idempotently through a running
+# Nexus on localhost. Included by setup-nexus.yml twice, as nexus-pytorch-cpu.yml
+# is: from the bootstrap play (fresh install, Nexus up on pi1 before Keepalived
+# exists) and from the converge play (on whichever Pi holds the VIP).
+# Expects: nexus_port, nexus_admin_password, nexus_model_files (../vars/nexus-models.yml).
+#
+# Model files the builds fetch, served from here first: masi's image and its
+# Gradle faceModels fetch InsightFace's buffalo_l (288 MB) from this repository,
+# then from GitHub's release download path, then from GitHub's asset API. Both
+# GitHub routes have failed a build: the download path answered 504
+# (2026-11-08), the API 403 once the shared address had spent its unauthenticated
+# rate. A hosted copy is uploaded once and served from the Pis, whatever GitHub
+# answers that day.
+
+- name: List repositories (models)
+  ansible.builtin.uri:
+    follow_redirects: none
+    url: "http://localhost:{{ nexus_port }}/service/rest/v1/repositories"
+    url_username: admin
+    url_password: "{{ nexus_admin_password }}"
+    force_basic_auth: true
+    return_content: true
+  register: _model_repos
+  check_mode: false  # a read: a preview (--check) runs it, and what reads it
+
+- name: Create models raw hosted repository
+  ansible.builtin.uri:
+    follow_redirects: none
+    url: "http://localhost:{{ nexus_port }}/service/rest/v1/repositories/raw/hosted"
+    method: POST
+    url_username: admin
+    url_password: "{{ nexus_admin_password }}"
+    force_basic_auth: true
+    body_format: json
+    body:
+      name: models
+      online: true
+      # ALLOW_ONCE: a file, once uploaded, is never replaced under the same path
+      storage: { blobStoreName: default, strictContentTypeValidation: true, writePolicy: ALLOW_ONCE }
+    status_code: [201]
+  changed_when: true
+  when: "'models' not in (_model_repos.json | map(attribute='name') | list)"
+
+# one request per file at its path: no listing to page through
+- name: Look for each file in models
+  ansible.builtin.uri:
+    url: "http://localhost:{{ nexus_port }}/repository/models/{{ item.path }}"
+    method: HEAD
+    status_code: [200, 404]
+  loop: "{{ nexus_model_files }}"
+  loop_control: { label: "{{ item.path }}" }
+  register: _model_lookup
+  check_mode: false  # a read: a preview (--check) runs it, and what reads it
+
+- name: Work out which files are missing
+  ansible.builtin.set_fact:
+    _missing_models: "{{ _model_lookup.results | selectattr('status', 'eq', 404) | map(attribute='item') | list }}"
+
+# a private directory on root's disk, not /tmp (a RAM disk on the Pis: a 288 MB file pinned in memory beside Nexus), its
+# files named by their sha256 (two of one basename never one file); removed whatever the upload did
+- name: The missing files, downloaded and uploaded
+  when: _missing_models | length > 0
+  block:
+    - name: A private directory for the files
+      ansible.builtin.tempfile:
+        state: directory
+        path: /root
+        suffix: .models
+      check_mode: false
+      register: _models_tmp
+
+    - name: Download the missing files (checksummed)
+      ansible.builtin.get_url:
+        url: "{{ item.url }}"
+        dest: "{{ _models_tmp.path }}/{{ item.sha256 }}"
+        checksum: "sha256:{{ item.sha256 }}"
+        mode: "0600"
+        timeout: 600
+      loop: "{{ _missing_models }}"
+      loop_control: { label: "{{ item.path }}" }
+      register: _model_download
+      # GitHub's download path has answered 504 for a while: tried again, the file checked each time
+      until: _model_download is succeeded
+      retries: 3
+      delay: 30
+
+    # a raw repository takes the file as it is, PUT at its path - streamed from disk (uri sends src as a file, its
+    # length said), its answer shown when it fails; the password is the module's own no_log
+    - name: Upload the missing files to models
+      ansible.builtin.uri:
+        follow_redirects: none
+        url: "http://localhost:{{ nexus_port }}/repository/models/{{ item.path }}"
+        method: PUT
+        src: "{{ _models_tmp.path }}/{{ item.sha256 }}"
+        remote_src: true
+        url_username: admin
+        url_password: "{{ nexus_admin_password }}"
+        force_basic_auth: true
+        status_code: [201]
+        timeout: 600
+      loop: "{{ _missing_models }}"
+      loop_control: { label: "{{ item.path }}" }
+      changed_when: true
+  always:
+    - name: Remove the downloaded files
+      ansible.builtin.file:
+        path: "{{ _models_tmp.path }}"
+        state: absent
+      check_mode: false
+      when: _models_tmp.path is defined
+
+# the bytes Nexus serves are the pinned ones: its own sha256 of each file read back (every run - a file put there by
+# hand, or another, fails here, never a build)
+- name: Read each file's checksum from Nexus
+  ansible.builtin.uri:
+    follow_redirects: none
+    url: "http://localhost:{{ nexus_port }}/service/rest/v1/search/assets?repository=models&name={{ item.path | urlencode }}"
+    url_username: admin
+    url_password: "{{ nexus_admin_password }}"
+    force_basic_auth: true
+    return_content: true
+  loop: "{{ nexus_model_files }}"
+  loop_control: { label: "{{ item.path }}" }
+  register: _model_assets
+  # just uploaded, its asset may take a moment to be searchable
+  until: _model_assets.json is defined and _model_assets.json['items'] | length > 0
+  retries: 10
+  delay: 3
+  check_mode: false  # a read: a preview (--check) runs it, and what reads it
+  # a preview that uploads nothing reads nothing for a file still missing
+  when: not ansible_check_mode or _missing_models | length == 0
+
+- name: Each file in models is the pinned one
+  ansible.builtin.assert:
+    that: "(item.json['items'] | map(attribute='checksum') | map(attribute='sha256') | list) == [item.item.sha256]"
+    fail_msg: >-
+      models/{{ item.item.path }} is not the file of sha256 {{ item.item.sha256 }}: Nexus has
+      {{ item.json['items'] | map(attribute='checksum') | list }}
+    quiet: true
+  loop: "{{ _model_assets.results | default([]) | rejectattr('skipped', 'defined') | list }}"
+  loop_control: { label: "{{ item.item.path }}" }

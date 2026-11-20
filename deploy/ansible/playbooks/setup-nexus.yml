@@ -313,6 +313,9 @@
   hosts: pi1
   become: true
   gather_facts: false
+  # the files the models repository holds (tasks/nexus-models.yml)
+  vars_files:
+    - ../vars/nexus-models.yml
 
   vars:
     nexus_data_dir: /mnt/data/nexus
@@ -783,6 +786,9 @@
     - name: Converge the pytorch-cpu repository
       ansible.builtin.include_tasks: tasks/nexus-pytorch-cpu.yml
 
+    - name: Converge the models repository
+      ansible.builtin.include_tasks: tasks/nexus-models.yml
+
     - name: Show repository status
       ansible.builtin.uri:
         follow_redirects: none
@@ -828,6 +834,9 @@
   become: true
   gather_facts: false
   tags: [converge]  # task deploy:nexus -- --tags converge: this play alone
+  # the files the models repository holds (tasks/nexus-models.yml)
+  vars_files:
+    - ../vars/nexus-models.yml
 
   vars:
     vip: "{{ keepalived_vip }}"
@@ -874,5 +883,11 @@
     - name: Converge the pytorch-cpu repository
       ansible.builtin.include_tasks:
         file: tasks/nexus-pytorch-cpu.yml
+        apply:
+          tags: [converge]
+
+    - name: Converge the models repository
+      ansible.builtin.include_tasks:
+        file: tasks/nexus-models.yml
         apply:
           tags: [converge]
