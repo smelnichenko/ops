@@ -6,7 +6,17 @@ Status: IN PROGRESS 2026-11-20 (operator: "CI run as a root?! you are kidding me
   infra pipeline 1121 green with its pods on hostUsers: false) - a container's root is no longer ten's root.
 - DONE: step 1 - the ansible-lint image's collections readable by any user and a uid-1000 user (ansible-lint d11e437);
   argocd-reader, ci-bot and git-mirror ALL-PASS as uid 1000, ops' whole suite green as uid 1000 with nothing excused.
-- step 2 for ops: its pipeline non-root and the ci-nonroot harness that keeps it.
+- DONE: step 2 for ops (its pipeline non-root, the ci-nonroot harness), platform, infra, radar, game-scp, monitor,
+  target-scorer, keycloak-theme, sonar-scanner, hyperfoil. site: its pull request (non-root, ci-deploy) in CI.
+- DONE: `git.pmon.dev/schnappy/ci-tools` - the tools steps used to apk/apt-install as root (git, python3 + PyYAML,
+  helm, ...), user 1000 - and its `ci-deploy`, the one copy of every app's update-infra / promote-prod (never
+  backwards; a lost push race retried). Its CD moves `:latest` only to an image its smoke test ran (ci-tools PR 3).
+- DONE: monitor on ONE Gradle home for every app, `/cache/gradle/shared`, each Gradle step holding a kernel flock on
+  `/cache/gradle-shared.flock` (cancelled pods die 20 s after their step; their Gradle must not share the caches
+  unlocked). The per-PR homes (51 GB) deleted, the cache volume owned by 1000.
+- LEFT: masi, admin, chat, chess and radio-scheduler (each still root, per-build Gradle homes) the same way as monitor;
+  ops' CI on ci-tools with production's own Ansible (`.woodpecker/ansible-setup.sh`, branch ci/ci-tools), then the
+  ansible-lint image retired and its repo archived; game-scp's godot-ci step (below); step 3; step 4.
 
 ## The problem
 
@@ -18,9 +28,10 @@ container and workspace. ops' unit suite even depends on it: argocd-reader, ci-b
 
 ## The goal
 
-Every step and service container runs as a non-root uid by default. The one exception is Kaniko (it needs uid 0 inside
-its own container to build an image); it stays unprivileged with no added capabilities, and is named as the exception
-in each pipeline.
+Every step and service container runs as a non-root uid by default. The exceptions, root inside their own user
+namespace only, unprivileged, no added capabilities, each named in its pipeline: Kaniko (uid 0 to build an image), and
+until it has an image of its own, game-scp's godot-ci export step (its export templates live in /root and it apt-installs
+libfontconfig1 at run time - to go: an image FROM godot-ci with the font baked in and the templates in a uid-1000 home).
 
 ## What runs today (2026-11-20, every repo's `.woodpecker/*.yaml` on main)
 
@@ -30,10 +41,10 @@ in each pipeline.
 | gcr.io/kaniko-project/executor | 12 | no - the exception |
 | alpine, debian:13-slim, python:3.13 slim | 9 | yes, HOME set |
 | postgres:17-alpine (service) | 6 | its own uid 70, PGDATA writable |
-| eclipse-temurin:25 (Gradle) | 5 | GRADLE_USER_HOME in the workspace |
+| eclipse-temurin:25 (Gradle) | 5 | its own user ubuntu (1000); the shared Gradle home under its flock |
 | valkey:8.1-alpine (service) | 4 | its own uid 999 |
 | schnappy/sonar-scanner | 4 | to check |
-| node:22 / node:24, playwright, browserless | 5 | node's own uid 1000; playwright's pwuser |
+| node:22 / node:24, playwright, browserless | 5 | node's own uid 1000; playwright as ubuntu 1000 (the workspace's owner - pwuser 1001 cannot write node_modules) |
 | prometheus, alertmanager | 3 | already nobody (65534) |
 | ansible-lint (ours) | 1 file, 5 steps | yes, once the three harnesses pass non-root |
 | clickhouse-server (service) | 1 | its own uid 101 |
@@ -47,9 +58,16 @@ in each pipeline.
    true` and a uid (1000, or the image's own user for services), HOME or caches moved into the workspace where a step
    writes them. ops first (its own CI is the proof), then platform, infra, the apps. Each repo's CI green on the change
    is its proof.
-3. **The default flipped last**: the agent's `WOODPECKER_BACKEND_K8S_SECCTX_NONROOT: "true"`, every Kaniko step
-   overriding it explicitly (`runAsUser: 0`, `runAsNonRoot: false`). Flipped last so a step missed in step 2 fails
-   loudly instead of staying root.
+3. **The default flipped last**: the agent's `WOODPECKER_BACKEND_K8S_SECCTX_NONROOT: "true"` AND
+   `WOODPECKER_BACKEND_K8S_USER_NAMESPACES_OVERRIDE_SECCTX_NONROOT: "true"`, every Kaniko (and godot-ci) step keeping
+   its explicit `runAsUser: 0`, `runAsNonRoot: false`. The second is not optional: Woodpecker v3.20.1 (pod.go) uses a
+   step's own runAsNonRoot only when no agent-level setting exists, or in a user namespace with the override - without
+   it a Kaniko pod gets runAsNonRoot: true with runAsUser 0, the kubelet refuses the container (CreateContainerConfigError)
+   and every deploy stops. Proved on a Kaniko run (ci-tools' CD, or apt-cache by hand) before it is called done.
+   Flipped last so a step missed in step 2 fails loudly instead of staying root. Woodpecker honours `runAsUser: 0` at
+   all only because user namespaces are on - turning them off would silently drop those lines.
+   Also here: `WOODPECKER_BACKEND_K8S_PERMISSION_INIT_IMAGE` - a non-root clone adds an init container that is
+   `busybox:stable-musl` from Docker Hub, pulled for every pipeline; an image of ours instead.
 4. **A check that keeps it**: each repo's CI runs a step asserting `id -u` is not 0, and ops' unit suite fails on a
    pipeline step without a security context unless it is a Kaniko step.
 
