@@ -111,6 +111,52 @@ check("PgBouncer: restarted, answering again - done", (rc, restarted), (0, True)
 rc, restarted, err = run(pcmd, [], PGB_DOWN="1")
 check("PgBouncer: not answering after its restart - failed, said", (rc != 0, restarted, "not serving" in err),
       (True, True, True))
+# Keycloak's version: the one it runs (the install its processes hold open) against the one /opt/keycloak names - a new
+# version moved only the symlink, the file stamp read current and the old version ran on until a reboot. The read as
+# the playbook holds it, systemctl / pgrep / readlink stubbed: the main process and its child (java) holding jars open
+kst = os.path.join(work, "kcbin"); os.makedirs(kst)
+def kstub(name, body):
+    with open(os.path.join(kst, name), "w") as f:
+        f.write("#!/bin/bash\n" + body)
+    os.chmod(os.path.join(kst, name), 0o755)
+kstub("systemctl", 'echo "${KC_PID:-0}"\n')
+kstub("pgrep", '[ -n "${KC_CHILD:-}" ] && echo "$KC_CHILD"; exit 0\n')
+kstub("readlink", 'case $1 in /opt/keycloak) echo "$KC_LINK" ;;\n'
+                  '  /proc/*/fd/*) p=${1#/proc/}; p=${p%%/*}; v="KC_FDS_$p"; [ -n "${!v:-}" ] && tr , "\\n" <<< "${!v}" ;; esac\n')
+ktasks = yaml.safe_load(open("deploy/ansible/playbooks/tasks/keycloak-restart.yml"))
+kread = next(t for t in ktasks if t.get("register") == "_keycloak_install")
+def kc(link, pid=0, child="", **fds):
+    env = dict(os.environ, PATH=kst + ":" + os.environ["PATH"], KC_LINK=link, KC_PID=str(pid), KC_CHILD=child,
+               **{f"KC_FDS_{k[1:]}": v for k, v in fds.items()})
+    r = subprocess.run(["bash", "-c", kread["ansible.builtin.shell"]["cmd"]], capture_output=True, text=True, env=env)
+    return r.returncode, r.stdout.split("\n")[:2]
+jar = lambda v: f"/opt/keycloak-{v}/lib/lib/main/a.jar,/opt/keycloak-{v}/lib/quarkus-run.jar"
+check("Keycloak's version read: the one installed and the one its child (java) holds open; moved; two (stale); none",
+      [kc("/opt/keycloak-26.5.7", 41, "42", p42=jar("26.5.7")),
+       kc("/opt/keycloak-26.8.2", 41, "42", p42=jar("26.5.7")),
+       kc("/opt/keycloak-26.8.2", 41, "42", p41="/opt/keycloak-26.5.7/bin/kc.sh", p42=jar("26.8.2"))],
+      [(0, ["26.5.7", "26.5.7"]), (0, ["26.8.2", "26.5.7"]), (0, ["26.8.2", "26.5.7 26.8.2"])])
+check("  not running: said so; running and holding no install open: empty (read again, then refused)",
+      [kc("/opt/keycloak-26.5.7"), kc("/opt/keycloak-26.5.7", 41, "42")], [(0, ["26.5.7", "not-running"]), (0, ["26.5.7", ""])])
+from templar import condition, render, as_loaded  # noqa: E402
+kdue = next(t for t in ktasks if "_keycloak_restart_due" in (t.get("ansible.builtin.set_fact") or {}))["ansible.builtin.set_fact"]["_keycloak_restart_due"]
+def due(pending, installed, running, check_mode=False):
+    return render(kdue, ansible_check_mode=check_mode, _restart_pending={"stdout_lines": [pending, "h"]},
+                  _keycloak_install={"stdout_lines": [installed, running]})
+check("Keycloak's restart due: a file changed; another version running (moved, or two); not when current and the same,"
+      " or not running, or a preview",
+      [due("pending", "26.5.7", "26.5.7"), due("current", "26.8.2", "26.5.7"), due("current", "26.8.2", "26.5.7 26.8.2"),
+       due("current", "26.5.7", "26.5.7"), due("current", "26.8.2", "not-running"), due("pending", "26.8.2", "26.5.7", True)],
+      [True, True, True, False, False, False])
+check("  each of the three restarts runs on it (not on the file stamp alone)",
+      [("_keycloak_restart_due | bool" in t.get("when", [])) and not any("_restart_pending" in str(w) for w in t.get("when", []))
+       for t in ktasks if str(t.get("name", "")).startswith("Keycloak restarted where pending")], [True, True, True])
+kruns = next(t for t in ktasks if t.get("register") == "_keycloak_runs")
+runs = lambda lines: condition(kruns["failed_when"], _keycloak_runs={"rc": 0, "stdout_lines": lines})
+check("Keycloak after the restarts: the version installed running - on; the old one, two, or none - refused",
+      [runs(["26.8.2", "26.8.2"]), runs(["26.8.2", "26.5.7"]), runs(["26.8.2", "26.5.7 26.8.2"]), runs(["26.8.2", "not-running"])],
+      [False, True, True, True])
+check("  the read before and the check after are one script", kruns["ansible.builtin.shell"]["cmd"] == kread["ansible.builtin.shell"]["cmd"], True)
 print("pi-restart-guard: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 PY

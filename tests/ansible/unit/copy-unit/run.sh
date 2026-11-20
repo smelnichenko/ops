@@ -71,6 +71,15 @@ cat > "$W/src/ops/deploy/ansible/playbooks/setup-consul.yml" <<'Y'
     consul_datacenter: "schnappy"
   tasks: []
 Y
+cat > "$W/src/ops/deploy/ansible/playbooks/setup-pi-services.yml" <<'Y'
+- name: pi services
+  hosts: pi1,pi2
+  vars:
+    keycloak_version: "26.5.7"
+    keycloak_sha256: "34870950e9edfd6e5647e5a95efbd6a235499813c2f652361d84298c74b5711c"
+    keycloak_db_user: keycloak
+  tasks: []
+Y
 cat > "$W/src/ops/deploy/ansible/playbooks/setup-istio.yml" <<'Y'
 - name: istio
   hosts: target
@@ -109,6 +118,10 @@ unit ops caddy 's/"2.10.0"/"2.10.2"/' deploy/ansible/playbooks/setup-caddy.yml
 unit ops consul 's/"1.20.6"/"1.20.7"/; s/96ba60faadde5d92f36d536818a6382159344983c79529015e5d991fd1199d4b/1111111111111111111111111111111111111111111111111111111111111111/; s/37fc6f213a44c6db3a2b912966fb1415939e9b189ce1bc1eb07b7f87449a28c2/2222222222222222222222222222222222222222222222222222222222222222/' deploy/ansible/playbooks/setup-consul.yml
 unit ops consul-dc 's/"1.20.6"/"1.20.7"/; s/"schnappy"/"other"/' deploy/ansible/playbooks/setup-consul.yml
 unit ops consul-task 's/"1.20.6"/"1.20.7"/; s/tasks: \[\]/tasks: [{name: x, command: id}]/' deploy/ansible/playbooks/setup-consul.yml
+unit ops keycloak 's/"26.5.7"/"26.8.2"/; s/34870950e9edfd6e5647e5a95efbd6a235499813c2f652361d84298c74b5711c/3333333333333333333333333333333333333333333333333333333333333333/' deploy/ansible/playbooks/setup-pi-services.yml
+unit ops keycloak-db 's/"26.5.7"/"26.8.2"/; s/keycloak_db_user: keycloak/keycloak_db_user: other/' deploy/ansible/playbooks/setup-pi-services.yml
+unit ops keycloak-task 's/"26.5.7"/"26.8.2"/; s/tasks: \[\]/tasks: [{name: x, command: id}]/' deploy/ansible/playbooks/setup-pi-services.yml
+unit ops keycloak-bad 's/"26.5.7"/"26.8.2 -e x=y"/' deploy/ansible/playbooks/setup-pi-services.yml
 unit ops caddy-peer 's/"2.10.0"/"2.10.2"/; s/10.0.0.2/10.0.0.3/' deploy/ansible/playbooks/setup-caddy.yml
 unit ops caddy-task 's/"2.10.0"/"2.10.2"/; s/tasks: \[\]/tasks: [{name: x, command: id}]/' deploy/ansible/playbooks/setup-caddy.yml
 unit ops caddy-bad 's/"2.10.0"/"2.10.2 -e x=y"/' deploy/ansible/playbooks/setup-caddy.yml
@@ -246,6 +259,15 @@ for u in consul-dc consul-task; do
   check "  $u: another of its values, or its tasks: refused" \
     "$rc $(grep -c '^REFUSED' <<< "$out") $(grep -c 'test:copy:playbook' <<< "$out")" "1 1 0"
 done
+out=$(plan keycloak); f=$(sed -n "s/^test:copy:playbook PLAYBOOK=setup-pi-services.yml ARGS='-e @[^ ]* -e @\([^ ']*\)'.*/\1/p" <<< "$out")
+check "Keycloak's version: production's setup-pi-services on the copy's Pis, production's Pi versions first, the branch's version and hash after" \
+  "$(sed "s|@$f|@VARS|" <<< "$out") | $( [ -n "$f" ] && awk '{ gsub(/["\047]/, "") } /keycloak_version:/ { v = $2 } /keycloak_sha256:/ { h = substr($2, 1, 4) } END { print v, h }' "$f")" \
+  "test:copy:playbook PLAYBOOK=setup-pi-services.yml ARGS='-e @../../tests/ansible/copy/pi-versions.yml -e @VARS' | 26.8.2 3333"
+for u in keycloak-db keycloak-task keycloak-bad; do
+  out=$(plan "$u"); rc=$?
+  check "  $u: another of its values, its tasks, or no version beside it: refused" \
+    "$rc $(grep -c '^REFUSED' <<< "$out") $(grep -c 'test:copy:playbook' <<< "$out")" "1 1 0"
+done
 for u in caddy-peer caddy-task caddy-bad; do
   out=$(plan "$u"); rc=$?
   check "  $u: another of its values, its tasks, or no version beside it: refused" \
@@ -290,5 +312,20 @@ check "run: a unit with no ops branch: no build-hash check (infra's and platform
   "$rc $(grep -c '^pins' "$W/ran")" "0 0"
 check "the clones stay on main (the unit's branches fetched beside, never checked out)" \
   "$(for r in infra platform ops; do git -C "$W/src/$r" branch --show-current; done | sort -u)" "main"
+# every playbook a proof can run on the copy (copy-unit.sh's ORDER - its vars files' playbooks among them) has a
+# production command in the runner's apply (scripts/upgrade-cycle.sh): one without was proven for an hour, then blocked
+# at the apply as "a part with no production command"
+check "each playbook copy-unit.sh can hand the copy has a production command in upgrade-cycle.sh's apply" \
+  "$(python3 - "$OPS" <<'PYSTEPS'
+import ast, os, re, sys
+ops = sys.argv[1]
+cu = open(os.path.join(ops, "scripts/copy-unit.sh")).read()
+order = ast.literal_eval(re.search(r"^ORDER = (\{.*?\})", cu, re.S | re.M).group(1))
+varsf = set(re.findall(r'\("([a-z-]+\.yml)", ', cu[cu.index("VARS_FILES = {"):cu.index("}", cu.index("VARS_FILES = {"))]))
+run = open(os.path.join(ops, "scripts/upgrade-cycle.sh")).read()
+mapped = set(re.findall(r'"test:copy:playbook PLAYBOOK=([a-z-]+\.yml)"\*\)', run))
+print(sorted((set(order) | varsf) - mapped), sorted(varsf - set(order)))
+PYSTEPS
+)" "[] []"
 echo "copy-unit: $([ $fails -eq 0 ] && echo ALL-PASS || echo "$fails FAILED")"
 [ $fails -eq 0 ]

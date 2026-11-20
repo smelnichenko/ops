@@ -19,6 +19,42 @@
          not in ['active', 'activating'] }}
   when: not ansible_check_mode
 
+# a new version moves only /opt/keycloak (setup-pi-services: its tarball, the symlink) - the unit and secrets the same,
+# the stamp read current and the old version ran on, until a reboot started the new one and migrated its database
+# unattended. The version it runs - the install its processes hold open, as scripts/version-inventory-pi.sh reads it -
+# against the one /opt/keycloak names: another (or two: a stale process) is a restart due, as a changed file is. Not
+# running: none due (the start above, or the Pi-not-serving restart, starts it on what is installed). Running and
+# holding no install open (a JVM still loading): read again; then refused - its version unknown.
+- name: Keycloak's install - the one it runs against the one /opt/keycloak names
+  ansible.builtin.shell:
+    executable: /bin/bash
+    cmd: &keycloak_install_read |
+      set -euo pipefail
+      installed=$(readlink /opt/keycloak | sed -n 's|^/opt/keycloak-\([^/]*\)$|\1|p')
+      pid=$(systemctl show -p MainPID --value keycloak)
+      if [ "$pid" = 0 ]; then running=not-running
+      else
+        running=$(for p in "$pid" $(pgrep -P "$pid" || true); do readlink /proc/"$p"/fd/* 2> /dev/null || true; done \
+          | sed -n 's|^/opt/keycloak-\([^/]*\)/.*|\1|p' | sort -u | paste -sd' ')
+      fi
+      printf '%s\n%s\n' "$installed" "$running"
+  register: _keycloak_install
+  changed_when: false
+  check_mode: false  # a read
+  retries: 10
+  delay: 3
+  until: _keycloak_install.rc == 0 and _keycloak_install.stdout_lines | length == 2 and _keycloak_install.stdout_lines[1] | length > 0
+  failed_when: >-
+    _keycloak_install.rc != 0 or _keycloak_install.stdout_lines | length != 2
+    or _keycloak_install.stdout_lines[0] | length == 0 or _keycloak_install.stdout_lines[1] | length == 0
+
+- name: Keycloak's restart due here - a file it loads changed, or it runs another version than installed
+  ansible.builtin.set_fact:
+    _keycloak_restart_due: >-
+      {{ (not ansible_check_mode)
+         and (_restart_pending.stdout_lines[0] == 'pending'
+              or _keycloak_install.stdout_lines[1] not in ['not-running', _keycloak_install.stdout_lines[0]]) }}
+
 # only the VIP's Caddy serves logins (each Pi's proxies auth.pmon.dev to its own Keycloak): the other Pi's restart
 # costs nothing and a unit that does not start is found there - the VIP's last, logins down while it starts
 - name: Whether this Pi holds the VIP
@@ -70,7 +106,7 @@
   changed_when: true
   when:
     - not ansible_check_mode
-    - _restart_pending.stdout_lines[0] == 'pending'
+    - _keycloak_restart_due | bool
     - _keycloak_serves.status | default(0) != 200
 
 - name: Keycloak restarted where pending - the Pi without the VIP
@@ -84,7 +120,7 @@
   changed_when: true
   when:
     - not ansible_check_mode
-    - _restart_pending.stdout_lines[0] == 'pending'
+    - _keycloak_restart_due | bool
     - _keycloak_serves.status | default(0) == 200
     - _keycloak_vip.stdout | length == 0
 
@@ -111,9 +147,26 @@
   changed_when: true
   when:
     - not ansible_check_mode
-    - _restart_pending.stdout_lines[0] == 'pending'
+    - _keycloak_restart_due | bool
     - _keycloak_serves.status | default(0) == 200
     - _keycloak_vip.stdout | length > 0
+
+# after the restarts: the version it runs is the one installed - a restart that brought the old one back (or none ran)
+# refused here, not found at the next reboot
+- name: Keycloak runs the version installed
+  ansible.builtin.shell:
+    executable: /bin/bash
+    cmd: *keycloak_install_read
+  register: _keycloak_runs
+  changed_when: false
+  check_mode: false  # a read
+  retries: 10
+  delay: 3
+  until: _keycloak_runs.rc == 0 and _keycloak_runs.stdout_lines | length == 2 and _keycloak_runs.stdout_lines[1] | length > 0
+  failed_when: >-
+    _keycloak_runs.rc != 0 or _keycloak_runs.stdout_lines | length != 2
+    or _keycloak_runs.stdout_lines[1] != _keycloak_runs.stdout_lines[0]
+  when: not ansible_check_mode
 
 # what the next run compares with: restarted (a failure ends this Pi's run before here), or current
 - name: Keycloak's config as it runs it, recorded

@@ -181,7 +181,8 @@ check "no CI cron runs Renovate any more (.woodpecker/renovate.yaml gone)" "$([ 
 # (platform's alertmanager-render.sh and clickhouse-config-start.sh, infra's tests/stale-pr-envs-sweeper and
 # tests/restore-check-age), so a unit that moved only production's stayed red for good (wave-patches, 2026-11-16: infra#36
 # alpine/k8s 1.35.10, platform#38 ClickHouse 26.8.37.168) - the step's image and its CI_STEP_IMAGE_CHECK both, digest kept;
-# CI's own tools (helm, kubeconform, postgres, Prometheus - its tag follows a chart's appVersion) never a unit
+# CI's own tools (helm, kubeconform, postgres, Prometheus - its tag follows a chart's appVersion) never a unit; a values key
+# named <x>Image read as an image (rcloneImage, CNPG's ephemeralImage - missed until 2026-11-18)
 check "the preset moves CI's copies of production's images with production's: the same depName, version and digest, CI's own tools left out" \
   "$("$PY" - <<'PYPRESET'
 import json, re
@@ -205,12 +206,14 @@ ci = ("  - name: stale-pr-envs-sweeper\n    image: alpine/k8s:1.35.9\n    comman
       "  - name: lint\n    image: alpine/helm:3.20.0\n  - name: kubeconform\n    image: ghcr.io/yannh/kubeconform:v0.7.0-alpine\n"
       "  - name: init-users-script\n    image: postgres:17-alpine\n")
 prod = ("              image: alpine/k8s:1.35.9\n              image: rclone/rclone:1.75.1" + dig + "\n")
-values = "alertmanager:\n  image: prom/alertmanager:v0.34.1\nclickhouse:\n  image: clickhouse/clickhouse-server:26.8.34.13-alpine\n"
+values = ("alertmanager:\n  image: prom/alertmanager:v0.34.1\nclickhouse:\n  image: clickhouse/clickhouse-server:26.8.34.13-alpine\n"
+          "  backup:\n    rcloneImage: rclone/rclone:1.71.2\ncnpg:\n  ephemeralImage: ghcr.io/cloudnative-pg/postgresql:18.6-system-bullseye\n"
+          "  imagePullPolicy: IfNotPresent\n")
 print(found(".woodpecker/ci.yaml", ci))
 print(found("clusters/production/cluster-config/restore-check-age.yaml", prod), found("helm/schnappy-observability/values.yaml", values))
 PYPRESET
 )" "[('alpine/k8s', '1.35.9', False), ('rclone/rclone', '1.75.1', True), ('rclone/rclone', '1.75.1', True), ('clickhouse/clickhouse-server', '26.8.34.13-alpine', False), ('clickhouse/clickhouse-server', '26.8.34.13-alpine', False), ('prom/alertmanager', 'v0.34.1', False)]
-[('alpine/k8s', '1.35.9', False), ('rclone/rclone', '1.75.1', True)] [('prom/alertmanager', 'v0.34.1', False), ('clickhouse/clickhouse-server', '26.8.34.13-alpine', False)]"
+[('alpine/k8s', '1.35.9', False), ('rclone/rclone', '1.75.1', True)] [('prom/alertmanager', 'v0.34.1', False), ('clickhouse/clickhouse-server', '26.8.34.13-alpine', False), ('rclone/rclone', '1.71.2', False), ('ghcr.io/cloudnative-pg/postgresql', '18.6-system-bullseye', False)]"
 # what Renovate moves in ops, the copy can prove: each ops value the preset reads (renovate_preset.reads: its managers,
 # ignorePaths, the rules turning a dependency off) is one copy-unit.sh follows or proves - its file a vars file it hands
 # over, or its key one that file's branch accepts - unless every dependency in the file goes to a manual- unit (never
@@ -234,11 +237,11 @@ PROVEN = {  # the keys each playbook's branch in copy-unit.sh accepts, read from
     "deploy/ansible/playbooks/setup-argocd.yml": pyset("ARGOCD"),
     "deploy/ansible/playbooks/setup-host-hardening.yml": pyset("NODE_EXPORTER"),
     "deploy/ansible/playbooks/setup-caddy.yml": pyset("CADDY"),
+    "deploy/ansible/playbooks/setup-consul.yml": pyset("CONSUL"),
+    "deploy/ansible/playbooks/setup-pi-services.yml": pyset("KEYCLOAK"),
 }
 VARS_FILES = set(re.findall(r'"(deploy/ansible/vars/[^"]+)": \(', cu))
 NO_PROOF = {  # tracked, with no proof path on the copy yet - such a unit is refused by the proof, after its build
-    "deploy/ansible/playbooks/setup-pi-services.yml": "Keycloak",
-    "deploy/ansible/playbooks/setup-consul.yml": "Consul",
 }
 bad, unproven = [], set()
 for root, dirs, files in os.walk("deploy/ansible"):
@@ -269,7 +272,7 @@ for root, _, files in os.walk("tests/ansible/copy"):
                         copy_pins.add(f"{os.path.join(root, f)} {name}")
 print(bad, sorted(unproven), sorted(copy_pins - set(PIN_OK)))
 PYPROVABLE
-)" "[] ['Consul', 'Keycloak'] []"
+)" "[] [] []"
 # a one-way change's needs are decided in one table (scripts/upgrade-stores.json): every package the preset marks one-way
 # is a store's there and every store's package is marked; each store has its backups or names what is missing; each
 # backup is a task ops has. A new kind of store fails here when the preset starts tracking it - never first met in a run

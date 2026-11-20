@@ -197,9 +197,12 @@ tool's time limit. Its review found two things, fixed before the first applying 
   annotated value (renovate/manual-woodpecker - by hand: infra's pull request, then ops', then the inventory read again and
   committed). defaults-follow-production fails a default the preset reads under another datasource or name than
   production's chart, or not at all (containerd.io named as left by hand: no proof path yet); upgrade-renovate fails an
-  ops value the preset moves that copy-unit.sh cannot prove, unless its file is named (Woodpecker's: never picked;
-  Keycloak's setup-pi-services.yml and Consul's setup-consul.yml: no proof path yet - such a unit is refused by the
-  proof, after its build), both through one reading of the preset (tests/ansible/unit/renovate_preset.py: its managers,
+  ops value the preset moves that copy-unit.sh cannot prove, unless its file is named (Woodpecker's: never picked; none
+  else since 2026-11-18 - Consul's setup-consul.yml proven by production's upgrade-consul.yml on the copy, Keycloak's
+  setup-pi-services.yml by production's setup-pi-services.yml on the copy's Pis, production's Pi versions first, which
+  restarts Keycloak one Pi at a time where the version it runs is not the one installed and refuses a run that leaves
+  the old one running - before, a moved version changed only /opt/keycloak's symlink and the old one ran on until a
+  reboot), both through one reading of the preset (tests/ansible/unit/renovate_preset.py: its managers,
   ignorePaths, the rules turning a dependency off). Renovate reads nothing under tests/ (ignorePaths), so a copy's check
   pins no image production runs (upgrade-renovate fails one): restore-check's rclone and storage-check's busybox read the
   etcd backup's image from the cluster (tests/ansible/copy/tasks/shell-image.yml); the isolation probe's curl is named -
@@ -341,8 +344,8 @@ kind of issues in the future". Now:
   nothing merged; a test environment's unit takes no backup but runs only when its production twin could. The labels and
   the table read again after the proof.
 - the pick: a one-way unit waits out the 24 h notice as a major does (ScyllaDB's release lines are minors by number).
-- the plan read before the copy is built: a part the copy cannot prove (Keycloak's, Consul's - copy-unit.sh has no proof
-  for them) refused there, labelled, nothing built and no fix agent.
+- the plan read before the copy is built: a part the copy cannot prove (an ops value copy-unit.sh has no proof for;
+  Keycloak's and Consul's have theirs since 2026-11-18) refused there, labelled, nothing built and no fix agent.
 - ScyllaDB's version (the ScyllaCluster's, scyllaOperator.version) annotated beside the cqlsh image in both data values -
   one depName, one unit - and infra's CI (.woodpecker/scylla-version-check.sh) fails the two apart (infra 6c518023): the
   release-line units moved cqlsh alone and would have changed no ScyllaDB.
