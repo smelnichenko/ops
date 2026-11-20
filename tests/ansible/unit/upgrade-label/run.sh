@@ -85,6 +85,15 @@ def write_fixture(fx):
     os.replace(tmp, os.path.join(W, "fixture.json"))
 
 
+def status(st):
+    """Forgejo's combined status: Renovate's stability-days beside Woodpecker's context; "" - nothing reported;
+    "stability-only" - Renovate's status alone (its state success), as for a head whose pipeline never started."""
+    days = {"context": "renovate/stability-days", "status": "success"}
+    if st == "":
+        return {"state": "", "statuses": []}
+    if st == "stability-only":
+        return {"state": "success", "statuses": [days]}
+    return {"state": st, "statuses": [days, {"context": "ci/woodpecker/pr/ci", "status": st}]}
 def fixture(prs, states, labels=None, base=None, fail_post=(), merged=None, issues=None, drop_post=(), extra=None, fail_code=409):
     fx = {"fail_post": list(fail_post), "drop_post": list(drop_post), "fail_code": fail_code}
     for repo in ("infra", "platform", "ops"):
@@ -102,7 +111,7 @@ def fixture(prs, states, labels=None, base=None, fail_post=(), merged=None, issu
         fx[f"/repos/schnappy/{repo}/labels"] = (labels or {}).get(repo, [])
     for sha, st in states.items():
         for repo in ("infra", "platform", "ops"):
-            fx[f"/repos/schnappy/{repo}/commits/{SHA.get(sha, sha)}/status"] = {"state": st}
+            fx[f"/repos/schnappy/{repo}/commits/{SHA.get(sha, sha)}/status"] = status(st)
     fx.update(extra or {})
     write_fixture(fx)
     for f in ("writes", "auth", "reads"):
@@ -290,7 +299,7 @@ fixture(UNIT, {"a1": "success", "b1": "pending", "c1": "success"})
 def flip():
     time.sleep(0.6)
     fx = json.load(open(os.path.join(W, "fixture.json")))
-    fx[f"/repos/schnappy/platform/commits/{SHA['b1']}/status"] = {"state": "success"}
+    fx[f"/repos/schnappy/platform/commits/{SHA['b1']}/status"] = status("success")
     write_fixture(fx)
 t = threading.Thread(target=flip); t.start()
 env = {**os.environ, "UPGRADE_FORGEJO_URL": f"http://127.0.0.1:{PORT}/api/v1", "UPGRADE_FORGEJO_TOKEN": "t", "UPGRADE_GREEN_POLL": "0.1"}
@@ -308,6 +317,15 @@ fixture(UNIT, {"a1": "success", "b1": "", "c1": "pending"})
 rc, out = run("wave-patches", "--green")
 check("green: a head no CI ever reported on (Forgejo's state \"\") at the wait's end: no CI (exit 5 - no pipeline started), named "
       "- never 'running'", (rc, out.split("\n")[-1]), (5, "NO CI: no CI on: schnappy/platform#5"))
+fixture(UNIT, {"a1": "success", "b1": "stability-only", "c1": "success"})
+rc, out = run("wave-patches", "--green")
+check("green: a head \"success\" by Renovate's stability-days alone - its pipeline never started (2026-11-19) - no CI "
+      "(exit 5), named: never green", (rc, out.split("\n")[-1]), (5, "NO CI: no CI on: schnappy/platform#5"))
+fixture(UNIT, {"a1": "success", "b1": "stability-only", "c1": "success"})
+proven()
+rc, out = run("wave-patches", "--merge", "--expect", PROVEN)
+check("merge: a head \"success\" by stability-days alone - not green, none merged, named",
+      (rc, writes(), "platform#5 not green (its CI: none)" in out), (1, [], True))
 fixture(UNIT, {})
 rc, out = run("wave-patches", "--update")
 check("update: a pull request whose compare is not read: refused (exit 1), nothing updated", (rc, writes()), (1, []))
