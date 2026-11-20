@@ -18,6 +18,7 @@ then the DLT) is gone (see "What the review changed").
 | the last promotes (monitor 6a99194, chess 260e33d, chat a800d06, admin 71f0d6e) | queued for the upgrade chain's gap (after run 2) |
 | chat PR 16: a message's send waited for | MERGED dc45177, in production: a 503 when chat.messages did not take a message, never a 201 for a lost one; producer delivery 15 s, waited 20 s |
 | admin PR 16: user events through an outbox | MERGED fe31031, in production 2026-11-19 22:54Z (changeset 011 ran; heartbeat fresh, backlog 0); operator-approved; reviewed twice (concurrency): written in the change's transaction, sent in order by one publisher on its own thread (heartbeat, lock re-checked per send, each mark its own commit, only on unsent rows), the user's row locked where it changes (never across Keycloak or mail), Keycloak's client bounded, admin's JDBC socketTimeout; alert UserEventOutboxStuck on platform main |
+| chat PR 17: USER_CREATED cached | MERGED 14f9e45, in production 2026-11-20 00:15Z: chat never read admin's one creation event - a new user never reached chat (not invitable, re-provisioned on every request). Open, a decision: chat's admin-channel membership reads chat_users.admin, set only by ADMIN_GRANTED, which admin never sends |
 | masi | its owner's session, the same handler |
 
 ## Why
