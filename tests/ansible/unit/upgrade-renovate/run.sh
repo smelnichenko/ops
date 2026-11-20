@@ -350,4 +350,10 @@ mine = [r for r in d["packageRules"] if r.get("groupSlug") == "gateway-api"]
 print(any(gw in r["matchPackageNames"] for r in istio), [(r["matchPackageNames"], r["group"]["branchTopic"]) for r in mine])
 PYGATEWAY
 )" "False [(['https://github.com/kubernetes-sigs/gateway-api'], 'gateway-api-{{{newMajor}}}.{{{newMinor}}}')]"
+# Renovate's pull requests are mailed to whoever watches the repos: their body the table of what changes (package, update,
+# from -> to) and Renovate's warnings alone - no header, configuration, controls, footer, release notes or the
+# "no github.com credentials" note (operator 2026-11-20). Renovate puts its debug comment after the template whatever it
+# holds (upgrade-units.py reads the unit's labels there)
+check "the preset: a pull request's body the table of what changes and Renovate's warnings, nothing else" \
+  "$("$PY" -c 'import json; print(json.load(open("renovate/upgrade-cycle.json")).get("prBodyTemplate"))')" "{{{table}}}{{{warnings}}}"
 if [ "$fails" = 0 ]; then echo "upgrade-renovate: ALL-PASS"; else echo "upgrade-renovate: $fails FAILED"; exit 1; fi

@@ -27,6 +27,7 @@
   "rebaseWhen": "conflicted",
   "prConcurrentLimit": 0,
   "prHourlyLimit": 0,
+  "prBodyTemplate": "{{{table}}}{{{warnings}}}",
   "branchConcurrentLimit": 0,
   "branchPrefix": "renovate/",
   "labels": [
