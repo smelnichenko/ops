@@ -292,18 +292,18 @@ tasks:
   # (ignored on promote:check, CONFIRM=1 would look like a promotion that never happened). SERVICES="monitor masi" limits
   # either; without it, every service (operator: "no SERVICES like SERVICES=all")
   promote:check:
-    desc: "The test environment's image tags against production's, read only (scripts/promote.sh): the plan printed. SERVICES=\"site monitor\" limits it (default all 7)"
+    desc: "Show which services' test image differs from production's. Read-only. SERVICES=\"monitor masi\" limits the list (default: all)."
     preconditions:
       - sh: '[ -z "{{.CONFIRM}}" ]'
-        msg: "REFUSED: CONFIRM is gone - task promote:check prints the plan, task promote:run SERVICES=... writes it"
+        msg: "REFUSED: CONFIRM is gone. promote:check only shows; promote:run writes."
     cmds:
       - cmd: scripts/promote.sh {{.SERVICES}}
 
   promote:run:
-    desc: "PRODUCTION: the test environment's image tags promoted to production's - infra committed and pushed, Argo syncs (scripts/promote.sh --run). SERVICES=\"monitor masi\" limits it (default all 7). task promote:check prints the plan"
+    desc: "PRODUCTION. Copy each differing test image tag to production and push infra; Argo deploys it. SERVICES=\"monitor masi\" limits it (default: all)."
     preconditions:
       - sh: '[ -z "{{.CONFIRM}}" ]'
-        msg: "REFUSED: CONFIRM is gone - task promote:run writes; task promote:check prints the plan"
+        msg: "REFUSED: CONFIRM is gone. promote:run writes; promote:check only shows."
     cmds:
       - cmd: scripts/promote.sh --run {{.SERVICES}}
 
@@ -652,15 +652,15 @@ tasks:
   # upgrade:apps:run writes - LOOKUP given to it is refused, never ignored (ignored, it would write); no prompt, the
   # refusal its guard (operator 2026-11-20: "LOOKUP refusal is enough")
   upgrade:apps:check:
-    desc: "monitor's and masi's Renovate, read only (scripts/upgrade-renovate.sh --apps --lookup): their repos and registries read, the updates it would make in its log (.copy/renovate-*.log) - no branch or pull request"
+    desc: "Show what Renovate would update in monitor and masi. Read-only."
     cmds:
       - cmd: scripts/upgrade-renovate.sh --apps --lookup
 
   upgrade:apps:run:
-    desc: "monitor's and masi's Renovate, by hand on the workstation (scripts/upgrade-renovate.sh --apps): their dependency pull requests from each repo's renovate.json, as renovate-bot (ops/.env RENOVATE_TOKEN) - patch, pin and digest updates merge once CI is green (each repo's renovate.json) and their CD deploys the test environment. task upgrade:apps:check reads only"
+    desc: "Renovate opens dependency PRs in monitor and masi. Patch updates merge on green CI and deploy to the test environment."
     preconditions:
       - sh: '[ -z "{{.LOOKUP}}" ]'
-        msg: "REFUSED: upgrade:apps:run takes no LOOKUP - it writes; task upgrade:apps:check reads only"
+        msg: "REFUSED: LOOKUP is gone. upgrade:apps:check only reads; upgrade:apps:run writes."
     cmds:
       - cmd: scripts/upgrade-renovate.sh --apps
 
@@ -673,18 +673,18 @@ tasks:
   # 24 h notice (one run gives it, a later one applies it). No shadow mode (operator 2026-11-15; gone from the runner
   # 2026-11-20): SHADOW=true, typed from habit, is refused below - ignored, it would have been the applying run
   upgrade:check:
-    desc: "The upgrade cycle's Renovate, read only (scripts/upgrade-renovate.sh --lookup): infra, platform and ops and their registries read, the updates it would make in its log (.copy/renovate-*.log) - no branch, pull request, label, copy or production touched"
+    desc: "Show what Renovate would update in infra, platform and ops. Read-only: no branches, PRs or deploys."
     cmds:
       - cmd: scripts/upgrade-renovate.sh --lookup
 
   upgrade:run:
-    desc: "PRODUCTION: the upgrade cycle - Renovate on the workstation (its branches and pull requests in infra, platform, ops), then one unit proven on the Vagrant copy and applied (scripts/upgrade-cycle.sh; a major after its 24 h notice). Stop the radar first: the copy needs its memory. task upgrade:check reads only"
+    desc: "PRODUCTION. Renovate opens or updates PRs in infra, platform and ops; then one update is tested on the Vagrant copy, reviewed and applied to production (majors and agent-fixed updates wait 24 h for a veto). Stop the radar first."
     deps: [deploy:install]
-    prompt: "The upgrade cycle: Renovate's branches, then one unit proven on the copy and applied to PRODUCTION - the radar stopped?"
+    prompt: "Run the upgrade cycle against PRODUCTION? The radar must be stopped."
     preconditions:
       # the old task's mode variables refused, never ignored: upgrade:run LOOKUP=true would be the applying run
       - sh: '[ -z "{{.LOOKUP}}{{.RUNNER}}{{.SHADOW}}" ]'
-        msg: "REFUSED: upgrade:run takes no LOOKUP, RUNNER or SHADOW - it writes and applies; task upgrade:check reads only"
+        msg: "REFUSED: LOOKUP, RUNNER and SHADOW are gone. upgrade:check only reads; upgrade:run writes and applies."
     cmds:
       # one copy run at a time (scripts/copy-lock.sh): the run's own nested copy tasks share it
       - cmd: scripts/copy-lock.sh
