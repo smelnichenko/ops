@@ -9,8 +9,10 @@ Status: IN PROGRESS 2026-11-20 (operator: "CI run as a root?! you are kidding me
 - DONE: step 2 for ops (its pipeline non-root, the ci-nonroot harness), platform, infra, radar, game-scp, monitor,
   target-scorer, keycloak-theme, sonar-scanner, hyperfoil. site: its pull request (non-root, ci-deploy) in CI.
 - DONE: `git.pmon.dev/schnappy/ci-tools` - the tools steps used to apk/apt-install as root (git, python3 + PyYAML,
-  helm, ...), user 1000 - and its `ci-deploy`, the one copy of every app's update-infra / promote-prod (never
-  backwards; a lost push race retried). Its CD moves `:latest` only to an image its smoke test ran (ci-tools PR 3).
+  helm, ...), user 1000 - and its `ci-deploy`, the one copy of every app's update-infra / promote-prod.
+- IN PR (ci-tools PR 3): ci-deploy never backwards - judged in the pipeline's checkout plus the app's main fetched into
+  it (a re-run of an older pipeline holds only its own history): an environment already containing the commit is left
+  alone, a diverged or unjudgeable one refused; `:latest` moved only forward, to the digest its smoke test ran.
 - DONE: monitor on ONE Gradle home for every app, `/cache/gradle/shared`, each Gradle step holding a kernel flock on
   `/cache/gradle-shared.flock` (cancelled pods die 20 s after their step; their Gradle must not share the caches
   unlocked). The per-PR homes (51 GB) deleted, the cache volume owned by 1000.
@@ -69,7 +71,8 @@ libfontconfig1 at run time - to go: an image FROM godot-ci with the font baked i
    Also here: `WOODPECKER_BACKEND_K8S_PERMISSION_INIT_IMAGE` - a non-root clone adds an init container that is
    `busybox:stable-musl` from Docker Hub, pulled for every pipeline; an image of ours instead.
 4. **A check that keeps it**: each repo's CI runs a step asserting `id -u` is not 0, and ops' unit suite fails on a
-   pipeline step without a security context unless it is a Kaniko step.
+   pipeline step without a security context, or with `runAsUser: 0` on any image but the named exceptions (Kaniko,
+   godot-ci).
 
 ## User namespaces
 
