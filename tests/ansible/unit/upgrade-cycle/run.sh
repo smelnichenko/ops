@@ -955,7 +955,8 @@ check("a part with no production command: refused BEFORE the merge - nothing mer
       (rc, merged(calls, "wave-patches"), notices(calls)), (1, False, ["upgrade-notice.sh blocked wave-patches"]))
 for step, why in (("test:copy:playbook PLAYBOOK=upgrade-kubeadm.yml ARGS='-e k8s_version=1.36'", "no Kubernetes version"),
                   ("test:copy:playbook PLAYBOOK=upgrade-kubeadm.yml ARGS='-e k8s_upgrade_to=next'", "a Kubernetes version that is none"),
-                  ("test:copy:playbook PLAYBOOK=setup-kubeadm.yml ARGS='--tags cilium'", "no Cilium version")):
+                  ("test:copy:playbook PLAYBOOK=setup-kubeadm.yml ARGS='--tags cilium'", "no Cilium version"),
+                  ("test:copy:playbook PLAYBOOK=restart-mesh-workloads.yml ARGS=''", "no Istio version")):
     rc, calls = night("prove wave-patches patch", plan=step + "\n")
     check(f"{why} in the plan: refused before the merge, no command", (rc, merged(calls, "wave-patches"), has(calls, "task --yes")),
           (1, False, []))
@@ -963,7 +964,8 @@ for pb, cmd in (("upgrade-patroni.yml", "deploy:patroni:upgrade"), ("upgrade-con
                 ("upgrade-vault.yml", "deploy:vault:upgrade"),
                 ("setup-host-hardening.yml", "deploy:host-hardening"), ("setup-argocd.yml", "deploy:argocd"),
                 ("upgrade-forgejo.yml", "deploy:forgejo:upgrade"), ("setup-caddy.yml", "deploy:caddy"),
-                ("setup-kubeadm.yml ARGS='--tags cilium -e cilium_version=1.20.5'", "deploy:cilium:upgrade -- -e cilium_version=1.20.5")):
+                ("setup-kubeadm.yml ARGS='--tags cilium -e cilium_version=1.20.5'", "deploy:cilium:upgrade -- -e cilium_version=1.20.5"),
+                ("restart-mesh-workloads.yml ARGS='-e istio_version=1.32.0'", "deploy:mesh:restart -- -e istio_version=1.32.0")):
     rc, calls = night("prove centrifugo minor", plan=f"test:copy:playbook PLAYBOOK={pb}\n")
     check(f"{pb.split()[0]} -> task --yes {cmd}", (rc, [c[len("task --yes "):] for c in has(calls, "task --yes")]), (0, [cmd]))
     rc, calls = night("prove centrifugo minor", plan=f"test:copy:playbook PLAYBOOK={pb}\n",

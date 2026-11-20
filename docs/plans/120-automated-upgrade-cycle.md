@@ -179,6 +179,19 @@ minor first would have picked them before it. Operator: a unit of its own, after
 `renovate/gateway-api-<X.Y>` (one minor at a time); FAMILIES puts gateway-api right after istio; the copy's proof
 catches a Gateway API the running Istio does not support.
 
+Istio's sidecars (2026-11-20): the chain's review blocked istio-1.32 as CRITICAL. The copy had proven istiod 1.32
+against the 1.31.4 sidecars alone (only fresh pods - the gateway, k6's Job - ran a 1.32 proxy), and the apply mapped the
+unit to no command, so `deploy:mesh:restart` never ran. Production's pods, the data stores among them, would have taken
+the unproven 1.32 proxy whenever each rescheduled, and the 1.31.4 proxy left in production's inventory would have blocked
+every later copy build (inventory-diff). Now a unit moving istiod's chart (infra's `istiod.yaml`) ends its proof with
+`restart-mesh-workloads.yml -e istio_version=<the chart's>` on the copy, after Argo applied the chart (the data tier one
+workload at a time, then the rest, until every sidecar runs that version - the playbook's last wait is the check), and
+the apply runs `task deploy:mesh:restart -- -e istio_version=<it>` after Argo settled on the merge. Refused before
+anything is built: ops' `istio_version` (setup-istio.yml, setup-kubeadm.yml) that is not the chart's, or that moves
+without it, and a chart version that is no X.Y.Z. A move is what the unit itself changes - its merge base against its
+tip: judged against main, the open units cut before wave-patches (their tips at 1.31.1, main at 1.31.4) were refused,
+and one planned a restart down to 1.31.1. istio-1.32 is proven again by the operator's next run.
+
 **The first clean shadow proof (2026-11-17, SHADOW run 10):** wave-patches proven on the copy (built 49 min, proven 48)
 and reviewed CLEAN, nothing applied - `.upgrade-cycle/shadow-proven` written; runs 8 and 9 ended on Woodpecker's queue
 (the CI wait), no try counted. A run may take its START_SPAN (330 min): it is started detached (setsid), never under a

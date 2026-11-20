@@ -3,7 +3,8 @@
 # from origin in infra, platform and ops; infra's and platform's mirrored onto the copy with every check (task
 # test:copy:change), then each ops part the unit moves run as production would run it (task test:copy:playbook): the
 # ops checkout's playbook (main's), the unit's new values from its own branch handed to it (-e, a vars file beside) -
-# the ops checkout stays as it is. A changed ops value with no known proof is refused: the unit is not proven, never
+# the ops checkout stays as it is; a unit moving istiod's chart, every sidecar brought to it after (restart-mesh-workloads.yml).
+# A changed ops value with no known proof is refused: the unit is not proven, never
 # waved through; so is a value that is no version or hash (the values reach Ansible on this workstation, where the
 # operator's ssh, kube and Vault are in reach: a Jinja expression in one, or a connection setting, would run here).
 #
@@ -52,6 +53,59 @@ if [ "$ops_ref" != main ]; then
   fi
 fi
 
+# Istio's sidecars. A unit moving istiod's chart (infra's istiod app) is proven with every meshed pod's proxy on the
+# chart's version: production's restart-mesh-workloads.yml on the copy after Argo applied the chart (the data tier one
+# workload at a time, then the rest, until every sidecar runs that version), and task deploy:mesh:restart in production
+# (the runner's apply). Proven without it - istiod 1.32 against the 1.31 proxies alone - production's pods, the data
+# stores among them, would take the unproven proxy whenever each rescheduled, and the old proxy left in production's
+# inventory would block every later copy build (the istio-1.32 review's CRITICAL, 2026-11-20). Ops restates the version
+# (defaults-follow-production): an ops istio_version that is not the chart's, or one moving without it, is refused.
+istio_to=""
+if [ "$infra_ref" != main ]; then
+  istio_to=$(INFRA="$src/infra" BRANCH="$branch" "$py" - <<'PY'
+import os, re, subprocess, sys
+import yaml
+APP = "clusters/production/argocd/apps/istiod.yaml"
+INFRA, BRANCH = os.environ["INFRA"], os.environ["BRANCH"]
+def chart(ref):
+    r = subprocess.run(["git", "-C", INFRA, "show", f"{ref}:{APP}"], capture_output=True, text=True)
+    if r.returncode != 0:
+        return None
+    spec = (yaml.safe_load(r.stdout) or {}).get("spec") or {}
+    revs = [str(s.get("targetRevision")) for s in spec.get("sources") or [spec.get("source") or {}]
+            if s.get("chart") == "istiod"]
+    if len(revs) != 1:
+        print(f"REFUSED: {APP} at {ref} holds {len(revs)} istiod charts, not one")
+        sys.exit(1)
+    return revs[0]
+# what the unit changes, as copy-unit.sh reads every change (main...branch): its merge base against its tip - a branch cut
+# before main moved Istio still reads the old version at its tip, a move it never made (a downgrade planned)
+if not subprocess.run(["git", "-C", INFRA, "diff", "--name-only", f"main...{BRANCH}", "--", APP], capture_output=True,
+                      text=True, check=True).stdout.split():
+    sys.exit(0)
+base = subprocess.run(["git", "-C", INFRA, "merge-base", "main", BRANCH], capture_output=True, text=True,
+                      check=True).stdout.strip()
+old, new = chart(base), chart(BRANCH)
+if new != old:
+    if new is None or not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", new, re.ASCII):
+        print(f"REFUSED: istiod's chart on the branch is no X.Y.Z version ({new!r})")
+        sys.exit(1)
+    print(new)
+PY
+  ) || { echo "$istio_to"; exit 1; }
+fi
+if [ -n "$istio_to" ]; then
+  for f in deploy/ansible/playbooks/setup-istio.yml deploy/ansible/playbooks/setup-kubeadm.yml; do
+    v=$({ git -C "$ops_repo" show "$ops_ref:$f" 2> /dev/null || true; } | "$py" -c 'import sys, yaml
+d = yaml.safe_load(sys.stdin) or []
+print(((d[0].get("vars") or {}) if isinstance(d, list) and d and isinstance(d[0], dict) else {}).get("istio_version", ""))')
+    if [ -n "$v" ] && [ "$v" != "$istio_to" ]; then
+      echo "REFUSED: $branch moves istiod's chart to $istio_to, ops' istio_version in $f is $v (defaults-follow-production: its copy build and pre-pulled images would be another Istio)"
+      exit 1
+    fi
+  done
+fi
+
 steps=()
 if [ "$infra_ref" != main ] || [ "$platform_ref" != main ]; then
   steps+=("test:copy:change INFRA_REF=$infra_ref PLATFORM_REF=$platform_ref")
@@ -62,7 +116,7 @@ if [ "$ops_ref" != main ]; then
   # the unit's vars files, read from its branch, where test:copy:playbook reads them (-e @<file>)
   mkdir -p "$ops_repo/.copy"
   out=$(mktemp -d "$ops_repo/.copy/unit-$unit.XXXXXX")
-  ops_steps=$(OPS="$ops_repo" BRANCH="$branch" OUT="$out" "$py" - <<'PY'
+  ops_steps=$(OPS="$ops_repo" BRANCH="$branch" OUT="$out" ISTIO_TO="$istio_to" "$py" - <<'PY'
 import os, subprocess, sys
 import yaml
 OPS, BRANCH, OUT = os.environ["OPS"], os.environ["BRANCH"], os.environ["OUT"]
@@ -71,6 +125,12 @@ def show(ref, path):
     return r.stdout if r.returncode == 0 else None
 changed = subprocess.run(["git", "-C", OPS, "diff", "--name-only", f"main...{BRANCH}"], capture_output=True, text=True,
                          check=True).stdout.split()
+BASE = subprocess.run(["git", "-C", OPS, "merge-base", "main", BRANCH], capture_output=True, text=True,
+                      check=True).stdout.strip()
+def istio_moves(path):
+    """the unit moves ops' istio_version in path: its merge base against its tip (a branch cut before main moved it
+    reads the old one, a move it never made)"""
+    return play_vars(show(BASE, path) or "").get("istio_version") != play_vars(show(BRANCH, path) or "").get("istio_version")
 # the values ops restates from production's Argo charts (defaults-follow-production): they move with the infra unit
 FOLLOW = {"cert_manager_version", "external_secrets_chart_version", "metrics_server_chart_version", "istio_version",
           "argocd_chart_version", "local_path_provisioner_version", "gateway_api_version", "gateway_api_sha256",
@@ -167,6 +227,8 @@ for path in changed:
                 steps.append(("upgrade-kubeadm.yml", f"-e k8s_upgrade_to={version(new[k]).split('-')[0]}", True))
             elif k == "cilium_version":
                 steps.append(("setup-kubeadm.yml", f"--tags cilium -e cilium_version={version(new[k])}", False))
+            elif k == "istio_version" and not os.environ["ISTIO_TO"] and istio_moves(path):
+                refused.append(f"{path} istio_version (istiod's chart does not move with it)")
             elif k in FOLLOW or k in KUBEADM_PACKAGES:
                 continue  # production's Argo charts, or the packages kubeadm's upgrade brings along
             else:
@@ -229,6 +291,8 @@ for path in changed:
             refused.append(f"{path} (its tasks)")
         elif set(moved) - FOLLOW:
             refused.append(f"{path} {' '.join(sorted(set(moved) - FOLLOW))}")
+        elif "istio_version" in moved and not os.environ["ISTIO_TO"] and istio_moves(path):
+            refused.append(f"{path} istio_version (istiod's chart does not move with it)")
         else:
             refused += pins(old, new, path)
     elif path in VARS_FILES:
@@ -252,6 +316,8 @@ PY
 ) || { echo "$ops_steps"; exit 1; }
   while IFS= read -r line; do [ -n "$line" ] && steps+=("$line"); done <<< "$ops_steps"
 fi
+# the sidecars brought to istiod's new version: after Argo applied the chart (test:copy:change) and any ops part
+[ -z "$istio_to" ] || steps+=("test:copy:playbook PLAYBOOK=restart-mesh-workloads.yml ARGS='-e istio_version=$istio_to'")
 
 if [ "${#steps[@]}" -eq 0 ]; then
   echo "REFUSED: $branch changes nothing a proof runs - nothing to prove"

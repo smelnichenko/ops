@@ -250,7 +250,7 @@ Vault: 1.21 gets no more free fixes - Vault 2.x moves up in wave 3.
 
 | Component | From → to | Note |
 |---|---|---|
-| Istio + Gateway API | 1.31.1 → 1.32.0; 1.5.1 → 1.7.0 | together (Istio 1.32's supported Gateway API); sidecars restart (`deploy:mesh:restart`) |
+| Istio, then Gateway API | 1.31.1 → 1.32.0; 1.5.1 → 1.7.0 | the Gateway API a unit of its own after Istio (operator 2026-11-16); sidecars restart (`deploy:mesh:restart` - the cycle's apply since 2026-11-20) |
 | Argo CD | 3.5.4 (chart 10.9.7) → 3.6.1 (chart 10.18.0) | alone; ops `setup-argocd.yml` default + `argocd_image_pins` (argocd-versions harness) |
 | External Secrets | 2.12.0 → 2.15.0 | CRDs |
 | kube-prometheus-stack | 91.8.2 → 93.3.0 | two chart majors: CRDs, Prometheus 3.15 → 3.16, Alertmanager 0.34 → 0.35 |

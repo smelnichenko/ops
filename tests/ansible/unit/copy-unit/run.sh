@@ -8,7 +8,9 @@
 # value with no known proof, a value that is no version, no branch anywhere, a branch that changes nothing a proof
 # runs, a name that is no unit's. Argo CD's and node_exporter's new values handed to main's playbook (else main's version
 # is proven); a value handed to Ansible that is no version or hash (a template, a connection setting, a YAML tag) and a
-# changed task in setup-kubeadm refused.
+# changed task in setup-kubeadm refused. A unit moving istiod's chart: every sidecar brought to the chart's version after
+# it (restart-mesh-workloads.yml); refused: ops' istio_version not the chart's, or moving without it, or a chart version
+# that is no X.Y.Z.
 set -u
 cd "$(dirname "$0")/../../../.." || exit 1
 OPS=$PWD
@@ -19,7 +21,8 @@ for r in infra platform ops; do
   g init -q --bare "$W/origin/$r.git"
   g clone -q "$W/origin/$r.git" "$W/src/$r" 2> /dev/null
 done
-mkdir -p "$W/src/ops/deploy/ansible/playbooks" "$W/src/ops/deploy/ansible/vars" "$W/src/infra/clusters" "$W/src/platform/helm"
+mkdir -p "$W/src/ops/deploy/ansible/playbooks" "$W/src/ops/deploy/ansible/vars" "$W/src/infra/clusters/production/argocd/apps" \
+  "$W/src/platform/helm"
 cat > "$W/src/ops/deploy/ansible/playbooks/setup-kubeadm.yml" <<'Y'
 - name: kubeadm
   hosts: target
@@ -29,6 +32,7 @@ cat > "$W/src/ops/deploy/ansible/playbooks/setup-kubeadm.yml" <<'Y'
     cilium_version: "1.20.4"
     cert_manager_version: "v1.21.3"
     cnpg_chart_version: "0.29.1"
+    istio_version: "1.31.1"
     some_other_version: "1.0"
   tasks: []
 Y
@@ -82,10 +86,25 @@ printf 'forgejo_version: "15.0.11"\nforgejo_checksums:\n  arm64: %s\n' "$(printf
 printf 'vault_version: "1.21.4"\n' > "$W/src/ops/deploy/ansible/vars/vault.yml"
 printf 'patroni_version: "4.1.5"\n' > "$W/src/ops/deploy/ansible/vars/patroni.yml"
 echo "image: a:1" > "$W/src/infra/clusters/v.yaml"; echo "image: b:1" > "$W/src/platform/helm/v.yaml"
+# infra's istiod app as production's: the chart beside the values' git source
+cat > "$W/src/infra/clusters/production/argocd/apps/istiod.yaml" <<'Y'
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: istiod
+spec:
+  sources:
+    - repoURL: https://blob.istio.io/istio-release/charts
+      chart: istiod
+      targetRevision: 1.31.1
+    - repoURL: https://git.pmon.dev/schnappy/infra.git
+      targetRevision: main
+      ref: values
+Y
 for r in infra platform ops; do (cd "$W/src/$r" && g add -A && g commit -qm base && g push -q origin main 2> /dev/null); done
-# unit <repo> <unit> <sed on a file> <file>: the unit's branch on origin, the clone left on main
+# unit <repo> <unit> <sed on its files> <file>...: the unit's branch on origin, the clone left on main
 unit() {
-  (cd "$W/src/$1" && g switch -q -c "renovate/$2" && sed -i "$3" "$4" && g commit -qam "$2" && g push -q origin "renovate/$2" 2> /dev/null \
+  (cd "$W/src/$1" && g switch -q -c "renovate/$2" && sed -i "$3" "${@:4}" && g commit -qam "$2" && g push -q origin "renovate/$2" 2> /dev/null \
     && g switch -q main && g branch -q -D "renovate/$2")
 }
 unit infra wave-patches 's/a:1/a:2/' clusters/v.yaml
@@ -112,9 +131,24 @@ unit ops consul-task 's/"1.20.6"/"1.20.7"/; s/tasks: \[\]/tasks: [{name: x, comm
 unit ops caddy-peer 's/"2.10.0"/"2.10.2"/; s/10.0.0.2/10.0.0.3/' deploy/ansible/playbooks/setup-caddy.yml
 unit ops caddy-task 's/"2.10.0"/"2.10.2"/; s/tasks: \[\]/tasks: [{name: x, command: id}]/' deploy/ansible/playbooks/setup-caddy.yml
 unit ops caddy-bad 's/"2.10.0"/"2.10.2 -e x=y"/' deploy/ansible/playbooks/setup-caddy.yml
-# Istio's version restated in setup-istio.yml moves with infra's istiod chart (wave-patches, 2026-11-16)
-unit infra istio-follow 's/a:1/a:4/' clusters/v.yaml
-unit ops istio-follow 's/"1.31.1"/"1.31.4"/' deploy/ansible/playbooks/setup-istio.yml
+# Istio's version restated in setup-istio.yml and setup-kubeadm.yml moves with infra's istiod chart (wave-patches,
+# 2026-11-16): every sidecar brought to it after (the istio-1.32 review, 2026-11-20)
+ISTIOD=clusters/production/argocd/apps/istiod.yaml
+ISTIO_OPS="deploy/ansible/playbooks/setup-istio.yml deploy/ansible/playbooks/setup-kubeadm.yml"
+unit infra istio-follow 's/targetRevision: 1.31.1/targetRevision: 1.31.4/' $ISTIOD
+unit ops istio-follow 's/"1.31.1"/"1.31.4"/' $ISTIO_OPS
+unit infra istio-skew 's/targetRevision: 1.31.1/targetRevision: 1.32.0/' $ISTIOD
+unit ops istio-skew 's/"1.31.1"/"1.31.4"/' $ISTIO_OPS
+unit infra istio-half 's/targetRevision: 1.31.1/targetRevision: 1.31.4/' $ISTIOD
+unit ops istio-half 's/"1.31.1"/"1.31.4"/' deploy/ansible/playbooks/setup-istio.yml
+unit infra istio-chart-only 's/targetRevision: 1.31.1/targetRevision: 1.31.4/' $ISTIOD
+unit infra istio-chart-bad 's/targetRevision: 1.31.1/targetRevision: 1.32/' $ISTIOD
+unit infra istio-kubeadm-alone 's/a:1/a:8/' clusters/v.yaml
+unit ops istio-kubeadm-alone 's/"1.31.1"/"1.31.4"/' deploy/ansible/playbooks/setup-kubeadm.yml
+# cut before main moves Istio (at the end, below): its tips read the old version, a move it never made (the open units
+# cut before wave-patches read 1.31.1 at their tips beside main's 1.31.4 - one planned a restart down to 1.31.1)
+unit infra stale-other 's/a:1/a:9/' clusters/v.yaml
+unit ops stale-other 's/"0.29.1"/"0.29.3"/' deploy/ansible/playbooks/setup-kubeadm.yml
 unit infra istio-task 's/a:1/a:5/' clusters/v.yaml
 # a data operator's chart version restated in setup-kubeadm's play vars moves with infra's chart (2026-11-17)
 unit infra data-follow 's/a:1/a:7/' clusters/v.yaml
@@ -252,8 +286,21 @@ for u in caddy-peer caddy-task caddy-bad; do
     "$rc $(grep -c '^REFUSED' <<< "$out") $(grep -c 'test:copy:playbook' <<< "$out")" "1 1 0"
 done
 out=$(plan istio-follow); rc=$?
-check "Istio's version in setup-istio.yml beside infra's chart: no ops step of its own (it moves with the chart, Argo on the copy)" \
-  "$rc $out" "0 test:copy:change INFRA_REF=renovate/istio-follow PLATFORM_REF=main"
+check "Istio's version beside infra's istiod chart: Argo on the copy, then every sidecar brought to the chart's version" \
+  "$rc $(tr '\n' '|' <<< "$out")" \
+  "0 test:copy:change INFRA_REF=renovate/istio-follow PLATFORM_REF=main|test:copy:playbook PLAYBOOK=restart-mesh-workloads.yml ARGS='-e istio_version=1.31.4'|"
+for u in istio-skew:"setup-istio.yml is 1.31.4" istio-half:"setup-kubeadm.yml is 1.31.1" istio-chart-only:"setup-istio.yml is 1.31.1"; do
+  out=$(plan "${u%%:*}"); rc=$?
+  check "  ${u%%:*}: ops' istio_version not the chart's (${u#*:}) - refused, nothing run" \
+    "$rc $(grep -c "REFUSED: renovate/${u%%:*} moves istiod's chart to .*, ops' istio_version in deploy/ansible/playbooks/${u#*:} " <<< "$out") $(grep -c '^test:copy' <<< "$out")" \
+    "1 1 0"
+done
+out=$(plan istio-chart-bad); rc=$?
+check "  istiod's chart to no X.Y.Z version (1.32, a float to YAML): refused" \
+  "$rc $(grep -c "REFUSED: istiod's chart on the branch is no X.Y.Z version ('1.32')" <<< "$out")" "1 1"
+out=$(plan istio-kubeadm-alone); rc=$?
+check "  setup-kubeadm's istio_version moving, istiod's chart not: refused" \
+  "$rc $(grep -c "REFUSED.*setup-kubeadm.yml istio_version (istiod's chart does not move with it)" <<< "$out")" "1 1"
 out=$(plan data-follow); rc=$?
 check "a data operator's chart version in setup-kubeadm's play vars beside infra's chart: no ops step of its own (Argo on the copy)" \
   "$rc $out" "0 test:copy:change INFRA_REF=renovate/data-follow PLATFORM_REF=main"
@@ -263,7 +310,8 @@ out=$(plan istio-other); rc=$?
 check "  another value in setup-istio.yml (not a chart's restated version): refused" \
   "$rc $(grep -c 'REFUSED.*setup-istio.yml istio_cni_version' <<< "$out")" "1 1"
 out=$(plan istio-alone); rc=$?
-check "  setup-istio's version alone, no chart moving with it: nothing to prove - refused" "$rc $(grep -c 'nothing to prove' <<< "$out")" "1 1"
+check "  setup-istio's version alone, no chart moving with it: refused" \
+  "$rc $(grep -c "REFUSED.*setup-istio.yml istio_version (istiod's chart does not move with it)" <<< "$out")" "1 1"
 out=$(plan vault-keyed); rc=$?
 check "a unit changing the vendors' keys (renovate/keys): refused, never proven" \
   "$rc $(grep -c 'changes what vouches for the build hashes (renovate/keys/hashicorp.asc)' <<< "$out")" "1 1"
@@ -300,10 +348,21 @@ ops = sys.argv[1]
 cu = open(os.path.join(ops, "scripts/copy-unit.sh")).read()
 order = ast.literal_eval(re.search(r"^ORDER = (\{.*?\})", cu, re.S | re.M).group(1))
 varsf = set(re.findall(r'\("([a-z-]+\.yml)", ', cu[cu.index("VARS_FILES = {"):cu.index("}", cu.index("VARS_FILES = {"))]))
+literal = set(re.findall(r"test:copy:playbook PLAYBOOK=([a-z-]+\.yml)", cu))  # a step it names (the mesh restart)
 run = open(os.path.join(ops, "scripts/upgrade-cycle.sh")).read()
 mapped = set(re.findall(r'"test:copy:playbook PLAYBOOK=([a-z-]+\.yml)"\*\)', run))
-print(sorted((set(order) | varsf) - mapped), sorted(varsf - set(order)))
+print(sorted((set(order) | varsf | literal) - mapped), sorted(varsf - set(order)), "restart-mesh-workloads.yml" in literal)
 PYSTEPS
-)" "[] []"
+)" "[] [] True"
+# main moves Istio, its chart and ops' restatements together, after stale-other was cut
+(cd "$W/src/infra" && sed -i 's/targetRevision: 1.31.1/targetRevision: 1.31.2/' $ISTIOD && g commit -qam istio && g push -q origin main 2> /dev/null)
+(cd "$W/src/ops" && sed -i 's/"1.31.1"/"1.31.2"/' $ISTIO_OPS && g commit -qam istio && g push -q origin main 2> /dev/null)
+out=$(plan stale-other); rc=$?
+check "a unit cut before main moved Istio (its tips read the old version): no move of its own - no restart, no refusal" \
+  "$rc $(tr '\n' '|' <<< "$out")" "0 test:copy:change INFRA_REF=renovate/stale-other PLATFORM_REF=main|"
+out=$(plan istio-follow); rc=$?
+check "  an Istio unit cut before it: its own move (its merge base's 1.31.1 to 1.31.4) - the restart to its version" \
+  "$rc $(tr '\n' '|' <<< "$out")" \
+  "0 test:copy:change INFRA_REF=renovate/istio-follow PLATFORM_REF=main|test:copy:playbook PLAYBOOK=restart-mesh-workloads.yml ARGS='-e istio_version=1.31.4'|"
 echo "copy-unit: $([ $fails -eq 0 ] && echo ALL-PASS || echo "$fails FAILED")"
 [ $fails -eq 0 ]
