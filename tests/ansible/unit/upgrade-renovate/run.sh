@@ -383,4 +383,24 @@ PYGATEWAY
 # holds (upgrade-units.py reads the unit's labels there)
 check "the preset: a pull request's body the table of what changes and Renovate's warnings, nothing else" \
   "$("$PY" -c 'import json; print(json.load(open("renovate/upgrade-cycle.json")).get("prBodyTemplate"))')" "{{{table}}}{{{warnings}}}"
+# the app repos' shared preset (renovate/apps.json, each app repo's renovate.json extends it): one JDK and one Node
+# everywhere - the Gradle toolchain read by a regex manager (its major alone), the JDK images, mise's java and the toolchain
+# one group; node images, mise's node and @types/node one group, LTS (even) majors only; first-party images never touched
+check "the apps preset: the Gradle toolchain's major read (and nothing longer), its datasource Adoptium's, LTS majors only for node, the groups, first-party off" \
+  "$("$PY" - <<'PYAPPS'
+import json, re
+d = json.load(open("renovate/apps.json"))
+m = d["customManagers"][0]
+rx = re.compile(m["matchStrings"][0].replace("(?<", "(?P<"))  # JavaScript's named group, as Renovate reads it
+got = [g.group("currentValue") for g in rx.finditer("java {\n toolchain {\n  languageVersion = JavaLanguageVersion.of(25)\n }\n}\nJavaLanguageVersion.of(x)")]
+files = re.compile(m["managerFilePatterns"][0].strip("/"))
+node = next(r for r in d["packageRules"] if r.get("groupName") == "node")
+allowed = re.compile(node["allowedVersions"].strip("/"))
+lts = [v for v in ("22-alpine", "24", "26.13.1", "25", "23-alpine", "v24.1.0") if allowed.search(v)]
+groups = sorted(r["groupName"] for r in d["packageRules"] if r.get("groupName"))
+off = [r for r in d["packageRules"] if r.get("enabled") is False and "git\\.pmon\\.dev" in "".join(r.get("matchPackageNames", []))]
+print(got, bool(files.search("build.gradle")), bool(files.search("backend/build.gradle.kts")), bool(files.search("settings.gradle")),
+      m["datasourceTemplate"], m["extractVersionTemplate"], lts, groups, len(off), "config:recommended" in d["extends"])
+PYAPPS
+)" "['25'] True True False java-version ^(?<version>\d+) ['22-alpine', '24', '26.13.1', 'v24.1.0'] ['java', 'node', 'playwright'] 1 True"
 if [ "$fails" = 0 ]; then echo "upgrade-renovate: ALL-PASS"; else echo "upgrade-renovate: $fails FAILED"; exit 1; fi
