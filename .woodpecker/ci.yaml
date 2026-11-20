@@ -30,9 +30,15 @@ clone:
     settings:
       partial: false
       depth: 100
+      # non-root: its credentials file in a HOME it can write
+      home: /tmp
       # a pull request's target too (origin/main): scripts/ci-build-hashes.sh's base, fetched with the clone's
       # credentials - a step's own git has none
       fetch_target_branch: true
+    backend_options:
+      kubernetes:
+        # non-root: uid 1000 clones, so the steps after it (uid 1000) own the workspace
+        securityContext: &nonroot { runAsNonRoot: true, runAsUser: 1000, runAsGroup: 1000 }
 
 steps:
   - name: ansible-lint
@@ -41,6 +47,7 @@ steps:
       - ansible-lint deploy/ansible/playbooks/*.yml --exclude deploy/ansible/roles/
     backend_options:
       kubernetes:
+        securityContext: *nonroot
         resources:
           requests: { memory: 256Mi }
           limits: { memory: 512Mi }
@@ -51,6 +58,7 @@ steps:
       - bash tests/ansible/unit/run.sh
     backend_options:
       kubernetes:
+        securityContext: *nonroot
         resources:
           requests: { memory: 256Mi }
           limits: { memory: 1Gi }
@@ -63,6 +71,7 @@ steps:
       - promtool test rules tests/promql/*.test.yml
     backend_options:
       kubernetes:
+        securityContext: { runAsNonRoot: true, runAsUser: 65534, runAsGroup: 65534 }  # the image's own nobody
         resources:
           requests: { memory: 64Mi }
           limits: { memory: 256Mi }
@@ -75,6 +84,7 @@ steps:
       - bash scripts/ci-build-hashes.sh
     backend_options:
       kubernetes:
+        securityContext: *nonroot
         resources:
           requests: { memory: 128Mi }
           limits: { memory: 512Mi }
@@ -85,6 +95,7 @@ steps:
       - python3 .claude/skills/check-skills.py
     backend_options:
       kubernetes:
+        securityContext: *nonroot
         resources:
           requests: { memory: 128Mi }
           limits: { memory: 256Mi }
@@ -107,6 +118,7 @@ steps:
     depends_on: [ansible-lint, ansible-unit, promql, skills]
     backend_options:
       kubernetes:
+        securityContext: *nonroot  # the node image's own user (uid 1000): the scanner's cache in its home
         secrets:
           - name: woodpecker-ci-secrets
             key: sonar_token
