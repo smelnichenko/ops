@@ -86,12 +86,17 @@
       delay: 30
 
     # a raw repository takes the file as it is, PUT at its path - streamed from disk (uri sends src as a file, its
-    # length said), its answer shown when it fails; the password is the module's own no_log
+    # length said), its answer shown when it fails; the password is the module's own no_log. Its type said: with none,
+    # urllib calls the body a form (application/x-www-form-urlencoded) and Nexus's Jetty parses a PUT's form too -
+    # "Form is larger than max length 200000", a 400 before the body is read, the upload a "Broken pipe" (test:nexus,
+    # 2026-11-20)
     - name: Upload the missing files to models
       ansible.builtin.uri:
         follow_redirects: none
         url: "http://localhost:{{ nexus_port }}/repository/models/{{ item.path }}"
         method: PUT
+        headers:
+          Content-Type: application/octet-stream
         src: "{{ _models_tmp.path }}/{{ item.sha256 }}"
         remote_src: true
         url_username: admin
@@ -115,7 +120,8 @@
 - name: Read each file's checksum from Nexus
   ansible.builtin.uri:
     follow_redirects: none
-    url: "http://localhost:{{ nexus_port }}/service/rest/v1/search/assets?repository=models&name={{ item.path | urlencode }}"
+    # a raw asset's name starts with a slash on Nexus 3.90's datastore: by the bare path the search finds nothing
+    url: "http://localhost:{{ nexus_port }}/service/rest/v1/search/assets?repository=models&name={{ ('/' ~ item.path) | urlencode }}"
     url_username: admin
     url_password: "{{ nexus_admin_password }}"
     force_basic_auth: true
