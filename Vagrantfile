@@ -182,8 +182,10 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
       # the Pi stack uses ~1.3 GB (measured 2026-10-06); 4 GB left qemu holding idle guest memory the host swapped -
       # three VMs at 28 GB on the 30 GB workstation kept it in swap through every step. 2 GB since 2026-11-13: the
       # workstation runs the radar station too, which the copy's 25 GB starved (it died 22:17) - the three VMs 22 GB,
-      # started only with the host's room for them and a reserve, watched while they run (scripts/copy-host-guard.sh)
-      v.memory = 2048
+      # started only with the host's room for them and a reserve, watched while they run (scripts/copy-host-guard.sh).
+      # VAGRANT_PI_MEMORY for a test that runs more on the Pis than the copy does (test:nexus: Nexus beside the stack);
+      # the host guard reads the same variable
+      v.memory = Integer(ENV.fetch("VAGRANT_PI_MEMORY", "2048"))
       v.cpus = 2
     end
     pi1.vm.provision "shell", inline: OS_UPGRADE_SCRIPT, reboot: true
@@ -199,8 +201,10 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
       # the Pi stack uses ~1.3 GB (measured 2026-10-06); 4 GB left qemu holding idle guest memory the host swapped -
       # three VMs at 28 GB on the 30 GB workstation kept it in swap through every step. 2 GB since 2026-11-13: the
       # workstation runs the radar station too, which the copy's 25 GB starved (it died 22:17) - the three VMs 22 GB,
-      # started only with the host's room for them and a reserve, watched while they run (scripts/copy-host-guard.sh)
-      v.memory = 2048
+      # started only with the host's room for them and a reserve, watched while they run (scripts/copy-host-guard.sh).
+      # VAGRANT_PI_MEMORY for a test that runs more on the Pis than the copy does (test:nexus: Nexus beside the stack);
+      # the host guard reads the same variable
+      v.memory = Integer(ENV.fetch("VAGRANT_PI_MEMORY", "2048"))
       v.cpus = 2
     end
     pi2.vm.provision "shell", inline: OS_UPGRADE_SCRIPT, reboot: true
@@ -215,7 +219,8 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
     k.vm.provider "libvirt" do |v|
       # 18 GB (2026-11-13; was 20): the workstation's radar station needs its room (pi1's comment) - the copy's requests
       # and the JVMs' heaps sized to it (tests/ansible/copy/vagrant-overlay, ~14.8 GiB of ~17.4 allocatable)
-      v.memory = 18432
+      # VAGRANT_TEN_MEMORY for a test that runs no cluster on it (test:nexus: Gluster's arbiter alone); the guard reads it
+      v.memory = Integer(ENV.fetch("VAGRANT_TEN_MEMORY", "18432"))
       # production's pods request ~8 CPUs (ten: 20, 44% requested). With 8 the copy sat at 98% and a new pod - the
       # k6 smoke, a rollout's surge pod - could not be scheduled (2026-10-03). vCPUs cost the host no memory.
       v.cpus = 14

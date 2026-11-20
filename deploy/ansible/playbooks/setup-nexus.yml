@@ -130,10 +130,13 @@
         nexus_version_file is failed or
         (nexus_version_file.content | default('') | b64decode | trim) != nexus_version
       block:
-        # a private directory: a tarball or tree planted at a fixed /tmp name was installed
+        # a private directory: a tarball or tree planted at a fixed /tmp name was installed. Beside the install directory,
+        # on its disk - not /tmp, a RAM disk: the tarball and its tree (the JDK in it) filled a 2 GB Pi VM's 1 GB /tmp
+        # (2026-11-20), and the move into the install directory is a rename on one filesystem
         - name: A private directory for the Nexus download
           ansible.builtin.tempfile:
             state: directory
+            path: "{{ nexus_install_dir | dirname }}"
             suffix: .nexus
           check_mode: false
           register: _nexus_tmp

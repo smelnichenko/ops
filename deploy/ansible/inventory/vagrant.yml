@@ -84,6 +84,9 @@ all:
     backup_root_user: "velero-admin"
     backup_root_password: "vagrant-minio-pw"
     nexus_admin_password: "vagrant-nexus-pw"
+    # Nexus on a 4 GB Pi VM beside the Pi stack (test:nexus; production's Pis have 8 GB and run setup-nexus.yml's 4g/2g)
+    nexus_heap_max: 1g
+    nexus_direct_memory_max: 512m
     keepalived_vrrp_password: "k33p4l1v"
     argocd_keycloak_client_secret: "vagrant-argocd-oidc-secret"
 
