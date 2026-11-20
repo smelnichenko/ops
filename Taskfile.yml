@@ -287,46 +287,25 @@ tasks:
     cmds:
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-patroni.yml {{.CLI_ARGS}}
 
-  promote:prod:
-    desc: 'Promote test image tags -> prod. DRY-RUN by default; CONFIRM=1 commits+pushes. SERVICES="site monitor" limits scope (default all 7).'
+  # test -> production image tags (scripts/promote.sh): two tasks, no mode variable (operator 2026-11-20) - promote:check
+  # prints the plan, promote:run commits and pushes it. CONFIRM, the old task's switch, is refused by both, never ignored
+  # (ignored on promote:check, CONFIRM=1 would look like a promotion that never happened). SERVICES="monitor masi" limits
+  # either; without it, every service (operator: "no SERVICES like SERVICES=all")
+  promote:check:
+    desc: "The test environment's image tags against production's, read only (scripts/promote.sh): the plan printed. SERVICES=\"site monitor\" limits it (default all 7)"
+    preconditions:
+      - sh: '[ -z "{{.CONFIRM}}" ]'
+        msg: "REFUSED: CONFIRM is gone - task promote:check prints the plan, task promote:run SERVICES=... writes it"
     cmds:
-      - |
-        cd {{.SRC_DIR}}/infra
-        # CD writes a tag commit to this repo on every merge: read the tags from what is on the remote NOW, not from a
-        # checkout that may be hours old (a stale one promotes yesterday's image)
-        [ -z "$(git status --porcelain)" ] || { echo "infra has uncommitted changes: commit or discard them first"; exit 1; }
-        git pull -q --rebase
-        TEST=clusters/production/schnappy-test-apps/values.yaml
-        PROD=clusters/production/schnappy-production-apps/values.yaml
-        SERVICES="${SERVICES:-monitor admin chat chess masi site game-scp}"
-        PLAN=""; SVCS=""
-        for svc in $SERVICES; do
-          TAG=$(grep -E "#[[:space:]]*${svc}[[:space:]]*$" "$TEST" | grep -oP 'tag: "\K[^"]+' | head -1)
-          if [ -z "$TAG" ]; then echo "  ! ${svc}: not found in test values — skipping"; continue; fi
-          CUR=$(grep -E "#[[:space:]]*${svc}[[:space:]]*$" "$PROD" | grep -oP 'tag: "\K[^"]+' | head -1)
-          if [ "$TAG" = "$CUR" ]; then
-            echo "  = ${svc}: ${CUR} (up to date)"
-          else
-            echo "  + ${svc}: ${CUR:-<none>} -> ${TAG}"
-            PLAN="${PLAN} ${svc}=${TAG}"; SVCS="${SVCS} ${svc}"
-          fi
-        done
-        if [ -z "$PLAN" ]; then echo "Nothing to promote."; exit 0; fi
-        if [ "${CONFIRM:-0}" != "1" ]; then
-          echo; echo "DRY-RUN — re-run with CONFIRM=1 to commit + push (Argo then syncs prod)."
-          exit 0
-        fi
-        for entry in $PLAN; do
-          svc="${entry%=*}"; tag="${entry#*=}"
-          sed -i -E "s|(tag: \")[^\"]*(\"[[:space:]]*#[[:space:]]*${svc}[[:space:]]*)$|\1${tag}\2|" "$PROD"
-        done
-        git add "$PROD"
-        git commit -m "promote(prod):${SVCS} from test"
-        # a CD run may have pushed in the seconds since the pull above: the commit is made, so rebase it and push
-        # (2026-09-21: the push was rejected and the promotion sat unpushed until somebody noticed)
-        git pull -q --rebase
-        git push
-        echo "Promoted:${SVCS}. Argo will sync prod."
+      - cmd: scripts/promote.sh {{.SERVICES}}
+
+  promote:run:
+    desc: "PRODUCTION: the test environment's image tags promoted to production's - infra committed and pushed, Argo syncs (scripts/promote.sh --run). SERVICES=\"monitor masi\" limits it (default all 7). task promote:check prints the plan"
+    preconditions:
+      - sh: '[ -z "{{.CONFIRM}}" ]'
+        msg: "REFUSED: CONFIRM is gone - task promote:run writes; task promote:check prints the plan"
+    cmds:
+      - cmd: scripts/promote.sh --run {{.SERVICES}}
 
   # ============== ONBOARDING ==============
   onboard:dev:

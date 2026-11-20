@@ -109,7 +109,7 @@
   ],
   "packageRules": [
     {
-      "description": "First-party images are promoted by GitOps (task promote:prod), never by Renovate",
+      "description": "First-party images are promoted by GitOps (task promote:run), never by Renovate",
       "matchPackageNames": [
         "/^git\\.pmon\\.dev\\//"
       ],

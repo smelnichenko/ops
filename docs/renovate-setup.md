@@ -55,7 +55,7 @@ always go through Vault + the ExternalSecret.
   shows the status check; confirm **automerge** fires for a patch/digest PR once
   green.
 - Confirm `git.pmon.dev/schnappy/*` images are **not** proposed (first-party
-  images are promoted via `task promote:prod`, never Renovate — see the
+  images are promoted via `task promote:run`, never Renovate — see the
   `packageRules` `enabled:false` in `renovate.json`).
 - Tune `prConcurrentLimit` / schedule from the first run's PR volume.
 
