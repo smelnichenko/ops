@@ -40,7 +40,13 @@ args=(run --rm -e RENOVATE_TOKEN -e RENOVATE_ALLOWED_COMMANDS
       -e "RENOVATE_REPOSITORIES=$repos"
       -e "RENOVATE_GIT_AUTHOR=Renovate Bot <renovate-bot@pmon.dev>"
       -e RENOVATE_ONBOARDING=false -e RENOVATE_REQUIRE_CONFIG=required -e LOG_LEVEL=info)
-if [ -n "$dry" ]; then args+=(-e RENOVATE_DRY_RUN=lookup); fi
+# a lookup prints what it found: Renovate's report written in the container (no bind mount) and printed after it, behind a
+# marker; summarised below by scripts/upgrade-report.py (its log alone shows nothing of the updates at info level)
+cmd=()
+if [ -n "$dry" ]; then
+  args+=(-e RENOVATE_DRY_RUN=lookup -e RENOVATE_REPORT_TYPE=file -e RENOVATE_REPORT_PATH=/tmp/renovate-report.json)
+  cmd=(sh -c 'renovate; rc=$?; echo "=== renovate report ==="; cat /tmp/renovate-report.json 2> /dev/null; exit $rc')
+fi
 if [ -n "${RENOVATE_GITHUB_TOKEN:-}" ]; then
   GITHUB_COM_TOKEN=$RENOVATE_GITHUB_TOKEN
   export GITHUB_COM_TOKEN
@@ -49,11 +55,16 @@ fi
 mkdir -p "$ops/.copy"
 log=$ops/.copy/renovate-$(date +%Y%m%d-%H%M%S)-$$.log
 echo "Renovate ${dry:-run} ($image) - its log: $log"
-if ! "${UPGRADE_DOCKER:-docker}" "${args[@]}" "$image" > "$log" 2>&1; then
+if ! "${UPGRADE_DOCKER:-docker}" "${args[@]}" "$image" "${cmd[@]}" > "$log" 2>&1; then
   echo "Renovate FAILED - the last of its log ($log):" >&2
   tail -n 20 "$log" >&2
   exit 1
 fi
+# the report out of the log (the checks below read Renovate's log alone)
+report=$log.report.json
+sed -n '/^=== renovate report ===$/,$p' "$log" | tail -n +2 > "$report"
+sed -i '/^=== renovate report ===$/,$d' "$log"
+[ -s "$report" ] || rm -f "$report"
 # a run that logged an error or a fatal ended 0 all the same: its errors said, and the task stops before the runner
 if grep -qE '"level":(50|60)|^ *(ERROR|FATAL):' "$log"; then
   echo "Renovate logged errors - the runner not started ($log):" >&2
@@ -71,3 +82,6 @@ if [ "$done_n" != "$want" ] || [ -n "$odd" ] || grep -q 'Repository is disabled'
   exit 1
 fi
 echo "Renovate done"
+if [ -n "$dry" ]; then
+  python3 -I "$ops/scripts/upgrade-report.py" "$report" || { echo "Renovate's report missing - what it found is in its log only ($log)" >&2; exit 1; }
+fi

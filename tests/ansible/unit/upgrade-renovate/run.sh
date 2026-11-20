@@ -70,8 +70,22 @@ check "Forgejo's API, the three repos, no onboarding, its config required, the b
   "7 0"
 check "no GitHub token: none passed (an empty one was a 401)" "$(grep -c GITHUB_COM_TOKEN "$W/argv") $(grep -c '^github=unset$' "$W/env")" "0 1"
 ARGS=(--lookup)
-check "--lookup: Renovate reads only" "$(run RENOVATE_TOKEN=$TOKEN) $(grep -cx RENOVATE_DRY_RUN=lookup "$W/argv")" "0 1"
+# a lookup prints what it found: Renovate's report (written in the container, printed after it behind a marker) summarised
+# per repository and branch - a lookup builds no branches, each dependency's updates name the branch they would go to
+REPORT='{"problems":[],"repositories":{"schnappy/infra":{"problems":[],"branches":[],"packageFiles":{"argocd":[{"packageFile":"apps/istiod.yaml","deps":[{"depName":"istiod","currentValue":"1.31.4","updates":[{"newValue":"1.32.0","updateType":"minor","branchName":"renovate/istio-1.32"}]}]}]}},"schnappy/ops":{"problems":[],"branches":[],"packageFiles":{}},"schnappy/platform":{"problems":[],"branches":[],"packageFiles":{}}}}'
+LOOKUP_LOG="$OK_LOG"$'\n''=== renovate report ==='$'\n'"${REPORT//done/x}"
+check "--lookup: Renovate reads only, its report asked for in the container (no bind mount) and printed after it" \
+  "$(run RENOVATE_TOKEN=$TOKEN FAKE_LOG="$LOOKUP_LOG") $(grep -cx RENOVATE_DRY_RUN=lookup "$W/argv") $(grep -cx RENOVATE_REPORT_TYPE=file "$W/argv") $(tail -1 "$W/argv" | grep -c 'cat /tmp/renovate-report.json')" "0 1 1 1"
+check "  what it found printed: the repository, the branch, the dependency current -> new; the others nothing to update" \
+  "$(grep -c '^schnappy/infra: 1 update(s) in 1 branch(es)$' "$W/out") $(grep -c '^  renovate/istio-1.32$' "$W/out") $(grep -c '^    istiod: 1.31.4 -> 1.32.0 (minor)  \[apps/istiod.yaml\]$' "$W/out") $(grep -c '^schnappy/ops: nothing to update$' "$W/out")" "1 1 1 1"
+log=$(sed -n 's/^Renovate lookup ([^)]*) - its log: //p' "$W/out")
+check "  the log the checks read has no report in it (a report's own results never taken for a repository's)" \
+  "$(grep -c 'renovate report' "$log") $([ -s "$log.report.json" ] && echo report-kept)" "0 report-kept"
+check "  a lookup that left no report: the task fails, never 'nothing to update'" \
+  "$(run RENOVATE_TOKEN=$TOKEN) $(grep -c 'report missing' "$W/out") $(grep -c 'nothing to update' "$W/out")" "1 1 0"
 ARGS=()
+check "a real run: no report asked for, nothing after the image" \
+  "$(run RENOVATE_TOKEN=$TOKEN) $(grep -c RENOVATE_REPORT "$W/argv") $(tail -1 "$W/argv")" "0 0 $(sed -n 's/^image=//p' scripts/upgrade-renovate.sh)"
 # --apps: monitor's and masi's Renovate (task upgrade:apps:run) - those two repos alone, read through; with --lookup too
 APPS_LOG=$(printf '%s\n' ' INFO: Repository started (repository=schnappy/monitor)' ' INFO: Repository finished (repository=schnappy/monitor)' \
   '       "result": "done",' ' INFO: Repository started (repository=schnappy/masi)' ' INFO: Repository finished (repository=schnappy/masi)' \
@@ -81,7 +95,9 @@ check "--apps: monitor and masi alone, a real run, both read through" \
   "$(run RENOVATE_TOKEN=$TOKEN FAKE_LOG="$APPS_LOG") $(grep -cx 'RENOVATE_REPOSITORIES=schnappy/monitor,schnappy/masi' "$W/argv") $(grep -c RENOVATE_DRY_RUN "$W/argv") $(grep -c 'schnappy/infra' "$W/argv")" "0 1 0 0"
 check "  one of them not read through: the task fails" "$(run RENOVATE_TOKEN=$TOKEN FAKE_LOG="$(head -3 <<< "$APPS_LOG")")" "1"
 ARGS=(--apps --lookup)
-check "  with --lookup: read only" "$(run RENOVATE_TOKEN=$TOKEN FAKE_LOG="$APPS_LOG") $(grep -cx RENOVATE_DRY_RUN=lookup "$W/argv")" "0 1"
+APPS_REPORT='{"problems":[],"repositories":{"schnappy/monitor":{"problems":[],"branches":[],"packageFiles":{}},"schnappy/masi":{"problems":[],"branches":[],"packageFiles":{}}}}'
+check "  with --lookup: read only, what it found printed" \
+  "$(run RENOVATE_TOKEN=$TOKEN FAKE_LOG="$APPS_LOG"$'\n''=== renovate report ==='$'\n'"$APPS_REPORT") $(grep -cx RENOVATE_DRY_RUN=lookup "$W/argv") $(grep -c '^nothing to update anywhere$' "$W/out")" "0 1 1"
 ARGS=(--bogus)
 check "an argument it does not know: refused" "$(run RENOVATE_TOKEN=$TOKEN) $(grep -c REFUSED "$W/out")" "2 1"
 ARGS=()
