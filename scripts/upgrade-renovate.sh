@@ -10,9 +10,9 @@
 # no bind mount - Renovate clones into its own container. Its log in .copy/. Never beside a runner: the runner's lock
 # (.upgrade-cycle/lock) held while it runs.
 #
-# --apps: monitor's and masi's Renovate instead (task renovate:apps) - their dependency pull requests, each repo's own
-# renovate.json; the same bot and image, by hand (their weekly Woodpecker cron and its CI-secret token gone,
-# 2026-11-16: the token could push to infra, platform and ops from any pipeline).
+# --apps: monitor's and masi's Renovate instead (task upgrade:apps:run; upgrade:apps:check its --lookup) - their
+# dependency pull requests, each repo's own renovate.json; the same bot and image, by hand (their weekly Woodpecker
+# cron and its CI-secret token gone, 2026-11-16: the token could push to infra, platform and ops from any pipeline).
 #
 # Usage: scripts/upgrade-renovate.sh [--apps] [--lookup]   --lookup: the repos and registries read, nothing changed
 # Env:   RENOVATE_TOKEN (required), RENOVATE_GITHUB_TOKEN, UPGRADE_DOCKER (the harness's docker, default docker)

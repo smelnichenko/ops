@@ -8,9 +8,9 @@ Two Renovates use the `renovate-bot` account:
   (`.env` `RENOVATE_TOKEN`, by name) and the shared preset `renovate/upgrade-cycle.json` (each repo's `renovate.json`
   extends it), then `scripts/upgrade-cycle.sh` proves one unit on the Vagrant copy and applies it. `task
   upgrade:check` reads only. Its Woodpecker pipeline (`.woodpecker/renovate.yaml` in ops) is gone.
-- **monitor's and masi's** - `task renovate:apps`, by hand on the workstation (operator 2026-11-16):
+- **monitor's and masi's** - `task upgrade:apps:run`, by hand on the workstation (operator 2026-11-16):
   `scripts/upgrade-renovate.sh --apps` - the same image and bot (`.env` `RENOVATE_TOKEN`), each repo's own
-  `renovate.json`, dependency PRs on `schnappy/monitor` and `schnappy/masi`; `LOOKUP=true` reads only. Their weekly
+  `renovate.json`, dependency PRs on `schnappy/monitor` and `schnappy/masi`; `task upgrade:apps:check` reads only. Their weekly
   Woodpecker cron and pipeline (`.woodpecker/renovate.yaml`) are gone, and with them the token `woodpecker-ci-secrets`
   carried (`renovate_token`, `renovate_github_token`): it was renovate-bot's, which can push to infra, platform and ops,
   and every pipeline can mount that secret. No second bot.

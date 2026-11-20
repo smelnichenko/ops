@@ -72,7 +72,7 @@ check "no GitHub token: none passed (an empty one was a 401)" "$(grep -c GITHUB_
 ARGS=(--lookup)
 check "--lookup: Renovate reads only" "$(run RENOVATE_TOKEN=$TOKEN) $(grep -cx RENOVATE_DRY_RUN=lookup "$W/argv")" "0 1"
 ARGS=()
-# --apps: monitor's and masi's Renovate (task renovate:apps) - those two repos alone, read through; with --lookup too
+# --apps: monitor's and masi's Renovate (task upgrade:apps:run) - those two repos alone, read through; with --lookup too
 APPS_LOG=$(printf '%s\n' ' INFO: Repository started (repository=schnappy/monitor)' ' INFO: Repository finished (repository=schnappy/monitor)' \
   '       "result": "done",' ' INFO: Repository started (repository=schnappy/masi)' ' INFO: Repository finished (repository=schnappy/masi)' \
   '       "result": "done",')
@@ -116,7 +116,9 @@ check "an unknown argument refused" "$(run RENOVATE_TOKEN=$TOKEN) $([ -e "$W/arg
 # the tasks: upgrade:check - Renovate's lookup alone, nothing to give it (no variable, prompt, precondition or dependency);
 # upgrade:run - a prompt, the copy lock and the runner's gates first, Renovate, then the runner given the bot's token by the
 # environment; the old task's LOOKUP, RUNNER or SHADOW, at any value, refused (ignored, `upgrade:run SHADOW=true` was the
-# applying run); `task upgrade` itself gone (go-task refuses a task it does not have). Their preconditions run as go-task
+# applying run); `task upgrade` itself gone (go-task refuses a task it does not have). monitor's and masi's the same:
+# upgrade:apps:check their lookup alone, upgrade:apps:run writing - no prompt (operator 2026-11-20: "LOOKUP refusal is
+# enough"), LOOKUP at any value refused; renovate:apps gone. Their preconditions run as go-task
 # runs them (sh -c, a {{.NAME}} rendered to its value or empty), their commands as rendered against scripts that record
 PY=python3
 "$PY" -c 'import yaml' 2> /dev/null || PY=deploy/ansible/venv/bin/python3
@@ -152,6 +154,10 @@ print("PRODUCTION" in run_t.get("prompt", "") and "radar" in run_t.get("prompt",
       any("ignore_error" in c for c in run_t["cmds"] if isinstance(c, dict)), admitted(run_t, {}),
       [g for g in OLD if admitted(run_t, g)], sep="|")
 print(ran(run_t))
+ac, ar = tasks["upgrade:apps:check"], tasks["upgrade:apps:run"]
+print(any(k.startswith("renovate:apps") for k in tasks), sorted(k for k in ac if k != "desc"), ran(ac), sep="|")
+print("prompt" in ar, ar.get("deps"), ar.get("vars"), admitted(ar, {}),
+      [g for g in ({"LOOKUP": v} for v in ("true", "false", "1", "yes")) if admitted(ar, g)], ran(ar), sep="|")
 PYCHECK
 )
 check "task upgrade gone; upgrade:check: Renovate's lookup alone - no variable, prompt, precondition or dependency to change it" \
@@ -160,6 +166,10 @@ check "upgrade:run: a prompt naming production and the radar, the venv first, no
   "$(sed -n 2p <<< "$got")" "True|['deploy:install']|None|False|True|[]"
 check "upgrade:run's commands as run: the lock, the gates, Renovate writing, the runner (no option) with the bot's token" \
   "$(sed -n 3p <<< "$got")" "['copy-lock.sh  token=none', 'upgrade-cycle.sh --preflight token=none', 'upgrade-renovate.sh  token=none', 'upgrade-cycle.sh  token=the-bots']"
+check "task renovate:apps (and :check, :run) gone; upgrade:apps:check: monitor's and masi's lookup alone - no variable, prompt, precondition or dependency" \
+  "$(sed -n 4p <<< "$got")" "False|['cmds']|['upgrade-renovate.sh --apps --lookup token=none']"
+check "upgrade:apps:run: no prompt, no variable; admitted with nothing given, refused with LOOKUP at any value; Renovate writing" \
+  "$(sed -n 5p <<< "$got")" "False|None|None|True|[]|['upgrade-renovate.sh --apps token=none']"
 ARGS=()
 exec 8>> .upgrade-cycle/lock
 flock -n 8 || { echo "the lock is held by something else - the next check cannot run"; exit 1; }
