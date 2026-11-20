@@ -1,6 +1,12 @@
 # Plan 128 - CI steps run as non-root
 
-Status: PLANNED 2026-11-20 (operator: "CI run as a root?! you are kidding me").
+Status: IN PROGRESS 2026-11-20 (operator: "CI run as a root?! you are kidding me", "use user namespaces for all CI pods").
+
+- DONE: every CI pod in a user namespace of its own (infra 8f395019: the agent's WOODPECKER_BACKEND_K8S_USER_NAMESPACES;
+  infra pipeline 1121 green with its pods on hostUsers: false) - a container's root is no longer ten's root.
+- DONE: step 1 - the ansible-lint image's collections readable by any user and a uid-1000 user (ansible-lint d11e437);
+  argocd-reader, ci-bot and git-mirror ALL-PASS as uid 1000, ops' whole suite green as uid 1000 with nothing excused.
+- step 2 for ops: its pipeline non-root and the ci-nonroot harness that keeps it.
 
 ## The problem
 
@@ -46,6 +52,13 @@ in each pipeline.
    loudly instead of staying root.
 4. **A check that keeps it**: each repo's CI runs a step asserting `id -u` is not 0, and ops' unit suite fails on a
    pipeline step without a security context unless it is a Kaniko step.
+
+## User namespaces
+
+Woodpecker's agent puts every pod in a user namespace of its own (hostUsers: false), so even a step that is
+root inside its container - Kaniko's - maps to an unprivileged uid on ten. With that, the Kaniko exception in step 3
+is root inside its namespace only. ten has what it needs: containerd 2.3.6, Linux 6.12 (idmapped mounts on ext4),
+Kubernetes 1.36.6.
 
 ## Proof
 
