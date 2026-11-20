@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The upgrade cycle's Renovate on the workstation - task upgrade's first half (the operator's decisions of 2026-11-15:
+# The upgrade cycle's Renovate on the workstation - task upgrade:run's first half, task upgrade:check its --lookup (2026-11-15:
 # Renovate and the runner one task, started by hand, run locally - no CI cron).
 # One run against infra, platform and ops, their policy the shared preset renovate/upgrade-cycle.json: one branch and
 # pull request per unit, the same name in each repo. Renovate never merges (automerge off) - the runner proves, applies.

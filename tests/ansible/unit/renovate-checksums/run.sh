@@ -425,7 +425,7 @@ check("the preset: one post-upgrade task, the script's --changed, once a branch,
       (1, ["schnappy/ops"], [CMD], "branch", []))
 allowed = json.load(open("renovate/allowed-commands.json"))
 launcher = open("scripts/upgrade-renovate.sh").read()
-check("the allowed commands: that one, nothing chained to it; task upgrade's Renovate (scripts/upgrade-renovate.sh) "
+check("the allowed commands: that one, nothing chained to it; task upgrade:run's Renovate (scripts/upgrade-renovate.sh) "
       "reads them from renovate/allowed-commands.json",
       ([bool(re.match(rx, CMD)) for rx in allowed], [bool(re.match(rx, CMD + "; rm -rf /")) for rx in allowed],
        'RENOVATE_ALLOWED_COMMANDS=$(cat "$ops/renovate/allowed-commands.json")' in launcher),

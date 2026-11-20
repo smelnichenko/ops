@@ -10,9 +10,6 @@ grouped by branch (renovate/<unit> - the same name in each repo).
                    prove   a patch or minor unit (proven, then applied in the same run)
                    notice  a major with no veto notice yet (proven, then its 24 h notice posted - applied a later run)
                    apply   a major whose notice has run out, unvetoed (proven again, then applied)
-                 --shadow (a shadow run's): the test environment's units left out - a shadow merges none, so a test
-                 unit there is only a comment (no copy, no proof) and every shadow run would stop at it; the production
-                 units in their order, a twin still waiting while its test unit is open.
                  A unit carrying the agent's fix (labelled agent-fixed by the runner) waits for its notice as a major
                  does, whatever its kind: what an agent wrote reaches production only after the operator was mailed it
                  and 24 h passed unvetoed.
@@ -205,7 +202,7 @@ def waits_notice(u):
     return u["kind"] == "major" or bool({"agent-fixed", "one-way"} & set(u["labels"]))
 
 
-def pick(shadow=False):
+def pick():
     if paused():
         return "PAUSED"
     all_units = units()
@@ -214,10 +211,10 @@ def pick(shadow=False):
     open_units = {n: u for n, u in all_units.items() if not ({"upgrade-blocked", "veto"} & u["labels"]) and not u["unlabelled"]
                   and not n.startswith("manual-")}
     tests = sorted((n for n in open_units if n.startswith("test-")), key=lambda n: order(n, open_units[n]))
-    if tests and not shadow:
+    if tests:
         return f"test {tests[0]} {open_units[tests[0]]['kind']}"
     # a production unit waits while its test environment's is open - blocked or vetoed too (its twin goes first); a test
-    # unit itself is never a production one (a shadow's pick reaches here with them open)
+    # unit itself is never a production one
     open_units = {n: u for n, u in open_units.items() if f"test-{n}" not in all_units and not n.startswith("test-")}
     for name in sorted((n for n, u in open_units.items() if not waits_notice(u)), key=lambda n: order(n, open_units[n])):
         return f"prove {name} {open_units[name]['kind']}"
@@ -245,8 +242,8 @@ def show_list():
     return 0
 
 
-def show_pick(shadow=False):
-    print(pick(shadow))
+def show_pick():
+    print(pick())
     return 0
 
 
@@ -277,7 +274,7 @@ def show_noticed(name):  # its time and the heads it announced
 
 
 def main(argv):
-    commands = {("list",): show_list, ("pick",): show_pick, ("pick", "--shadow"): lambda: show_pick(shadow=True)}
+    commands = {("list",): show_list, ("pick",): show_pick}
     unit_commands = {"held": show_held, "noticed": show_noticed}
     try:
         if tuple(argv) in commands:
@@ -287,7 +284,7 @@ def main(argv):
     except NotRead as e:
         print(f"NOT READ: Forgejo's answer - {e}")
         return 1
-    print("usage: upgrade-units.py list | pick [--shadow] | noticed UNIT | held UNIT")
+    print("usage: upgrade-units.py list | pick | noticed UNIT | held UNIT")
     return 2
 
 

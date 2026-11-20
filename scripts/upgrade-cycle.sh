@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# The upgrade cycle's run - task upgrade's second half, after Renovate (started by hand, run locally): one Renovate
+# The upgrade cycle's run - task upgrade:run's second half, after Renovate (started by hand, run locally): one Renovate
 # unit - picked, proven on the Vagrant copy (one fix by the Claude agent when red), reviewed, gated (a major, or a unit
 # carrying the agent's fix, waits out a 24 h veto notice), backed up before a one-way change, applied to production,
 # verified, recorded, reported (scripts/upgrade-notice.sh: one mail to the single admin address). Nothing in production
 # moves before the merge; from the merge on, a run that cannot finish PAGES (a one-way failure: the cycle paused, the
-# runner refusing until it is resolved) - half a unit applied is never left unsaid. An applying run waits for the
-# cycle's first shadow proof (--shadow, proven and reviewed clean: .upgrade-cycle/shadow-proven).
+# runner refusing until it is resolved) - half a unit applied is never left unsaid. No shadow mode (operator 2026-11-15:
+# "deploy once it works in vagrant tests"; its flag gone 2026-11-20 - the first applying run's gate it was had passed).
 #
-#   0. gates    before anything (and alone with --preflight, which task upgrade runs before Renovate) and again right
+#   0. gates    before anything (and alone with --preflight, which task upgrade:run runs before Renovate) and again right
 #               before the merge: no backup window within the run's span (its start: the proof's time and the
 #               apply's, 330 min; before the merge: the apply's own waits, 210); no page open (posted again -
 #               Alertmanager forgets them on a restart); no run stopped mid-apply (its journal - one found with no page
@@ -18,8 +18,7 @@
 #               copy's memory (the operator stops the radar) for a unit that builds it - refused, never waited
 #   1. pick     scripts/upgrade-units.py pick - NOTHING / PAUSED end the run quietly; a one-way unit whose store has a part
 #               with no backup yet (scripts/upgrade-stores.json) blocked at once, the part named; one
-#               without Renovate's labels (its kind not known) never applied. A shadow run's pick leaves the test
-#               environment's units out (pick --shadow): it merges none, so it would stop at one with nothing proven
+#               without Renovate's labels (its kind not known) never applied
 #   2. prove    the unit's heads read (and its bases); its branches, in every repo, on main but for CD's promotions
 #               (Renovate rebases only on a conflict: a unit behind brought up to date by Forgejo first, its new heads
 #               waited for - an empty answer never a head; never read as the unit's defect); then its CI green (a
@@ -39,8 +38,8 @@
 #               CI waited for, proven again; red again, or no fix: blocked (labelled upgrade-blocked only on a verdict
 #               - the agent's NO FIX); the heads after the proof the ones proven. A failure with no verdict (CI red, a
 #               review or fix that did not finish, Forgejo refusing the update) counts a try for the unit's pull
-#               requests (the same name later is another unit): their third in a row blocks it; a notice, a shadow
-#               proof or an apply starts the count again
+#               requests (the same name later is another unit): their third in a row blocks it; a notice or an
+#               apply starts the count again
 #   3. review   the review of the unit's diff (the agent, headless, --restricted: no instructions from the clones; the
 #               reviewers' own agents handed to it, a definition that does not read refusing the review) - VERDICT:
 #               CLEAN and every pass named exactly, or blocked (labelled only on a VERDICT: CRITICAL line, any of them -
@@ -78,9 +77,8 @@
 # commits carry it for unmodified and rebases over them); the review changes nothing. Their clones live outside every checkout. A test environment's unit after
 # which anything not placed in the test environment is not settled (a read that failed, a critical alert) pages.
 #
-# Usage: scripts/upgrade-cycle.sh [--dry|--shadow|--preflight]
+# Usage: scripts/upgrade-cycle.sh [--dry|--preflight]
 #        --dry       every step said, nothing run (the gates read)
-#        --shadow    picked, proven, reviewed, the result a comment on the unit's pull requests - nothing applied
 #        --preflight the gates (and the copy's memory) alone: exit 0 when a run may start
 # Env:   UPGRADE_FORGEJO_TOKEN (the bot's), UPGRADE_AGENT (the agent's command, default claude), UPGRADE_AGENT_TIMEOUT
 #        (seconds, 3600), UPGRADE_WORK (the agents' clones, default <ops>/../.upgrade-cycle-work - the agents' settings
@@ -95,15 +93,14 @@ set -uo pipefail
 export LC_ALL=C.UTF-8
 ops=$(cd "$(dirname "$0")/.." && pwd)
 cd "$ops" || exit 1
-dry=""; shadow=""; preflight=""
+dry=""; preflight=""
 case "${1:-}" in
   "") ;;
   --dry) dry=1 ;;
-  --shadow) shadow=1 ;;
   --preflight) preflight=1 ;;
-  *) echo "REFUSED: upgrade-cycle.sh [--dry|--shadow|--preflight]"; exit 2 ;;
+  *) echo "REFUSED: upgrade-cycle.sh [--dry|--preflight]"; exit 2 ;;
 esac
-# the cycle's state - the open pages, the journal of an apply under way, the run's lock, the first shadow proof:
+# the cycle's state - the open pages, the journal of an apply under way, the run's lock:
 # gitignored, not .copy's scratch
 state=$ops/.upgrade-cycle
 work=${UPGRADE_WORK:-$(dirname "$ops")/.upgrade-cycle-work}
@@ -126,15 +123,9 @@ page() {  # a one-way failure: paged, the cycle paused on Forgejo (durable - the
     || say "NOT PAUSED: the dashboard's upgrades-paused not set - the runner's own record refuses the next run all the same"
 }
 
-# one run at a time, whoever starts it (task upgrade, Renovate's step of it, or by hand)
+# one run at a time, whoever starts it (task upgrade:run, Renovate's step of it, or by hand)
 exec 9>> "$state/lock"
 flock -n 9 || { echo "REFUSED: another upgrade run holds $state/lock"; exit 1; }
-
-# an applying run waits for the cycle's first shadow proof (a unit proven and reviewed clean, nothing applied)
-if [ -z "$shadow$dry$preflight" ] && [ ! -e "$state/shadow-proven" ]; then
-  echo "REFUSED: an applying run waits for the cycle's first shadow proof (task upgrade SHADOW=true: $state/shadow-proven)"
-  exit 1
-fi
 
 agent=${UPGRADE_AGENT:-claude}
 agent_timeout=${UPGRADE_AGENT_TIMEOUT:-3600}
@@ -270,7 +261,7 @@ gates "$START_SPAN" start || exit 1
 gate_head=$(git -C "$ops" rev-parse HEAD)  # what ops' main may hold at the merge: this, and the unit's own merge
 
 # 1. the pick
-picked=$(scripts/upgrade-units.py pick ${shadow:+--shadow}) || { say "NOT READ: Forgejo - the run changes nothing ($picked)"; exit 1; }
+picked=$(scripts/upgrade-units.py pick) || { say "NOT READ: Forgejo - the run changes nothing ($picked)"; exit 1; }
 say "PICK $picked"
 case "$picked" in
   NOTHING|PAUSED) exit 0 ;;
@@ -416,7 +407,7 @@ held_now() {  # a veto, upgrade-blocked or the kill switch set since the pick: r
 }
 # a failure with no verdict (a red CI, a review or fix that did not finish, Forgejo refusing its update): counted for
 # the unit's pull requests (the same name later is another unit) - its third in a row blocks it (labelled, said),
-# never the head of the queue run after run; a run that gets it further (noticed, shadow-proven, applied, the test
+# never the head of the queue run after run; a run that gets it further (noticed, applied, the test
 # environment's merged) starts the count again
 retry() {
   local n key=${tries_key:-none}
@@ -504,11 +495,6 @@ PY
 # production): no copy, no review, no backup (its data is no store to keep); merged at the heads judged, settled, recorded
 if [ "$action" = test ]; then
   stop_if_one_way
-  if [ -n "$shadow" ]; then
-    run scripts/upgrade-label.py "$unit" --comment "UPGRADE SHADOW $(date -u +%Y-%m-%dT%H:%M:%SZ) - test: the test environment's unit, merged first in a real run; nothing applied"
-    say "SHADOW $unit"
-    exit 0
-  fi
   read_heads "$heads" || { notice blocked "$unit" "its pull requests not read - nothing merged" "$log"; exit 1; }
   green
   held_now
@@ -787,16 +773,6 @@ fi
 copy_gone="the copy halted: the radar may start"
 run scripts/copy-snapshot.sh used || say "THE COPY NOT MARKED USED - task test:copy:drop by hand"
 if run vagrant halt; then built=""; else copy_gone="THE COPY NOT HALTED - the radar stays off"; say "$copy_gone"; fi
-
-# shadow: proven and reviewed is where the run ends - the result on the pull requests, nothing applied; the cycle's
-# first such proof lets applying runs start
-if [ -n "$shadow" ]; then
-  run scripts/upgrade-label.py "$unit" --comment "UPGRADE SHADOW $(date -u +%Y-%m-%dT%H:%M:%SZ) - $action: proven on the Vagrant copy and reviewed clean${fixed:+ (with the fix by the agent)}; nothing applied"
-  [ -n "$dry" ] || [ -e "$state/shadow-proven" ] || printf 'unit %s\nlog %s\nat %s\n' "$unit" "$log" "$(date -u +%FT%TZ)" > "$state/shadow-proven"
-  progress
-  say "SHADOW $unit"
-  exit 0
-fi
 
 # a major's notice: what it changes, bounded - each repo's files and commits, the diff itself (its first 80 KB), the
 # review's verdict (the run's log is hundreds of KB: a mail carries what the operator reads)

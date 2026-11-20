@@ -9,11 +9,11 @@ lookup) run - its findings fixed below, three questions open. 2026-11-15: one ma
 - Renovate: `renovate/upgrade-cycle.json` (the shared preset - units, groups, one minor at a time for Kubernetes/
   Cilium/Istio, ClickHouse's and Forgejo's lines held, majors labelled, 3 days' release age; validated by
   renovate-config-validator 44.198.3), `renovate.json` in ops (infra and platform: their `upgrade-cycle/renovate`
-  branches), `.woodpecker/renovate.yaml` (cron, image pinned, lookup mode - gone 2026-11-15 for `task upgrade`), 15 ops
+  branches), `.woodpecker/renovate.yaml` (cron, image pinned, lookup mode - gone 2026-11-15 for `task upgrade`, now `upgrade:run`), 15 ops
   version vars annotated.
 - Its proof on the copy: `scripts/copy-unit.sh` / `task test:copy:unit UNIT=<it> [PLAN=true]` (the unit's branches,
   test:copy:change, each ops part's playbook from the branch's values; an unknown value refused).
-- The run: `scripts/upgrade-cycle.sh` (`--dry`, `--preflight`; `--shadow` - task upgrade SHADOW=true), `upgrade-units.py` (the pick),
+- The run: `scripts/upgrade-cycle.sh` (`--dry`, `--preflight`; `--shadow` gone 2026-11-20), `upgrade-units.py` (the pick),
   `upgrade-label.py` (labels, comments, merges - whole or not at all), `upgrade-verify.sh`, `upgrade-record.sh`,
   `upgrade-notice.sh` (platform's `upgrade-cycle/notices` branch routes the UpgradeCycle alert), the agent's
   `.claude/skills/upgrade-fix`.
@@ -23,6 +23,12 @@ ops/.env RENOVATE_TOKEN, write access to infra/platform/ops (operator: "grant it
 name, the allowed command from its file, no bind mount; a run that logs an error or reads a repository short stops
 before the runner; harness `upgrade-renovate`) - `LOOKUP=true` alone: the real run is refused until the runner's open
 items below are done (its first real run's review, 2026-11-15, found them - the runner had never run).
+**Two tasks since 2026-11-20 (operator: "make just 2 tasks instead of these variables"):** `task upgrade:check` reads
+(Renovate's lookup, nothing else), `task upgrade:run` writes and applies (the lock, the gates, Renovate, the runner).
+No LOOKUP, RUNNER or SHADOW: one typed in lower case or misspelt was read as unset, and unset was the applying run -
+upgrade:run refuses all three. Shadow mode gone with them (operator: "what use of variable if we don't have shadow
+mode?"): the runner's `--shadow`, `upgrade-units.py pick --shadow` and the `.upgrade-cycle/shadow-proven` gate - its one
+use, holding the first applying run until a clean shadow proof, passed 2026-11-17.
 **The runner's open items - DONE 2026-11-15 (each with its harness; the first real run's review found them):** the
 headless agents (fix, review) run with a clean environment (`env -i` HOME PATH: none of ops/.env, the account's login
 rather than the API key), settings of their own (`.claude/upgrade-agent/fix.json`, `review.json`, `--permission-mode
@@ -268,7 +274,7 @@ Kafka 4.2.2, ...). What it found, fixed in the preset and the runner (harness ca
 
 ## Decisions (operator, 2026-11-15)
 
-- **One task, started by hand, run locally - `task upgrade`** ("it should be started by hand by a single task with
+- **One task, started by hand, run locally - `task upgrade` (`upgrade:run` since 2026-11-20)** ("it should be started by hand by a single task with
   renovate, since they work in tandem, run locally"): Renovate on the workstation (docker, its image pinned, the
   shared preset, `renovate/allowed-commands.json`), then the runner. No systemd timer, no Woodpecker cron -
   `.woodpecker/renovate.yaml` and ops' `renovate` cron go. The copy runs on the workstation; the operator stops the
@@ -285,7 +291,7 @@ Kafka 4.2.2, ...). What it found, fixed in the preset and the runner (harness ca
 
 **1. Renovate CLI - finds the upgrades, opens the PRs** (chosen over Updatecli, Dependabot, Argo CD Image Updater,
 Flux image automation, Keel, Kargo: the only one with native Forgejo, every version source here, and grouping;
-comparison 2026-11-13). Runs on the workstation as `task upgrade`'s first half (docker, the image pinned exactly - a
+comparison 2026-11-13). Runs on the workstation as `task upgrade:run`'s first half (docker, the image pinned exactly - a
 Woodpecker cron until 2026-11-15), against
 `schnappy/infra`, `schnappy/platform`, `schnappy/ops`; the existing `renovate-bot` account and secrets
 (docs/renovate-setup.md). Shared preset:
@@ -305,7 +311,7 @@ Woodpecker cron until 2026-11-15), against
   rendered charts, in CI).
 
 **2. The upgrade runner - proves and applies** (on the workstation: the copy needs ~25 GB and libvirt; nowhere else).
-`task upgrade`, started by the operator after Renovate's run (outside the backup windows - the runner's list, from the
+`task upgrade:run`, started by the operator after Renovate's run (outside the backup windows - the runner's list, from the
 real schedules: it refuses a run a window would meet, at its start and again before the merge), runs a deterministic
 driver,
 `scripts/upgrade-cycle.sh`; no CI agent on the
@@ -389,7 +395,7 @@ merge), the Pis (Consul snapshot, Forgejo's own pg_dump, Patroni's base backup -
 **4. Build hashes, verified (operator 2026-11-15: "yes" - with option B's lookups).** A version Renovate moves takes
 its pinned hashes with it, each read from what the vendor signs - never from the file it guards:
 - **The writer**: Renovate's post-upgrade task, once a branch on every ops update (`scripts/renovate-checksums.py
-  --changed`, the one command `renovate/allowed-commands.json` allows - `task upgrade` reads that file) rewrites the pins of each version the branch moved. The upgrade-fix skill moves a pin only with `--changed --base origin/main` on the unit's
+  --changed`, the one command `renovate/allowed-commands.json` allows - `scripts/upgrade-renovate.sh` reads that file) rewrites the pins of each version the branch moved. The upgrade-fix skill moves a pin only with `--changed --base origin/main` on the unit's
   branch, never writing a hash itself.
 - **The gates**: `scripts/copy-unit.sh`, before a unit's proof, checks the branch's moved pins against main's keys
   (`--check --changed --base main --ref renovate/<unit>`) and refuses a unit that changes the keys, the checker or the
@@ -434,7 +440,8 @@ workstation off, the copy not building) changes nothing in production and says s
 1. Renovate in lookup mode (`RENOVATE_DRY_RUN=lookup`) until its log reproduces plan 119's tables.
 2. ~~Renovate opening PRs; the runner proving them, applying nothing, a week (shadow).~~ The week dropped 2026-11-15:
    `task upgrade` - Renovate's branches and PRs, then one unit proven and applied - after one clean shadow proof
-   (`task upgrade SHADOW=true`) that the cycle runs end to end.
+   (`task upgrade SHADOW=true`) that the cycle runs end to end. Both done 2026-11-17; since 2026-11-20 the tasks are
+   `upgrade:check` and `upgrade:run`, and shadow mode is gone.
 3. Patches and minors applied automatically.
 4. Majors with the 24 h notice; the pre-change backups proven first.
 Each step reviewed before the next.

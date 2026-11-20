@@ -6,7 +6,7 @@
 #   theirs; the gates (before anything, and again before the merge): an open page (posted again), a run stopped
 #   mid-apply (its journal - paged now), ops not on main / changed (but for the copy's inventory) / not origin's, the
 #   local mains stale (at the start alone), production's Alertmanager not routing the notices (its loaded config),
-#   production not settled - each refuses; an applying run before the first shadow proof; the copy's memory for a unit
+#   production not settled - each refuses; the copy's memory for a unit
 #   that builds it; one apply a day; --preflight
 #   a patch unit: its CI green, proven, reviewed (CLEAN and every pass, --restricted, the reviewers handed over), the
 #   copy halted (its snapshot kept), its commands mapped (a version that is none refused), the etcd snapshot BEFORE the merge, held read
@@ -215,7 +215,7 @@ H1_UPDATED = "schnappy/infra 4 " + "5" * 40 + " " + "e" * 40 + "\nschnappy/ops 7
 H1_BASE_MOVED = "schnappy/infra 4 " + "a" * 40 + " " + "9" * 40 + "\nschnappy/ops 7 " + "c" * 40 + " " + "e" * 40 + "\n"
 CLEAN = "PASSES: correctness, security, architecture, reliability, tests\nVERDICT: CLEAN"
 def setup(pick, proofs=(0,), plan="test:copy:change INFRA_REF=renovate/x PLATFORM_REF=main\n", verdict=CLEAN, mem=30000,
-          files=None, heads=(H1,), records=(), inflight=False, proven=True, tries=0, journal=None, pending=None):
+          files=None, heads=(H1,), records=(), inflight=False, tries=0, journal=None, pending=None):
     for f in os.listdir(ST):
         os.remove(os.path.join(ST, f))
     for d in (".copy", "docs", ".upgrade-cycle"):
@@ -225,8 +225,6 @@ def setup(pick, proofs=(0,), plan="test:copy:change INFRA_REF=renovate/x PLATFOR
         os.makedirs(os.path.join(OPS, "docs/upgrades"), exist_ok=True)
         open(os.path.join(OPS, "docs/upgrades", r), "w").write("x\n")
     os.makedirs(os.path.join(OPS, ".upgrade-cycle"), exist_ok=True)
-    if proven:
-        open(os.path.join(OPS, ".upgrade-cycle/shadow-proven"), "w").write("unit wave-patches\n")
     if inflight:
         open(os.path.join(OPS, ".upgrade-cycle/inflight"), "w").write(journal or "unit wave-patches\nlog x\nmerged\n")
     if tries:  # earlier runs' tries for the unit
@@ -351,14 +349,6 @@ check("ops checked clean but for the copy's inventory record (the build rewrites
       ". :!tests/ansible/copy/prod-inventory.txt :!tests/ansible/copy/pi-versions.yml")
 check("Alertmanager's loaded config probed (its API), not the file mounted",
       [("--alertmanager.url=http://localhost:9093" in c, "--config.file" in c) for c in calls if "amtool" in c][:1], [(True, False)])
-rc, calls = night("prove wave-patches patch", proven=False)
-check("an applying run before the cycle's first shadow proof: refused, nothing read", (rc, calls), (1, []))
-rc, calls = night("prove wave-patches patch", proven=False, args=("--shadow",))
-check("--shadow before it: on - and a clean shadow proof lets applying runs start (its record written)",
-      (rc, picked(calls), os.path.exists(os.path.join(OPS, ".upgrade-cycle/shadow-proven"))), (0, True, True))
-rc, calls = night("prove wave-patches patch", proven=False, args=("--shadow",), verdict="VERDICT: CRITICAL x\nPASSES: a")
-check("  a shadow run that does not end clean: no record", (rc, os.path.exists(os.path.join(OPS, ".upgrade-cycle/shadow-proven"))),
-      (1, False))
 rc, calls = night("prove wave-patches patch", mem=20000)
 check("memory short (the radar running), a unit that builds the copy: refused at once - no wait, no build",
       (rc, has(calls, "task"), has(calls, "sleep")), (1, [], []))
@@ -725,7 +715,7 @@ check(f"the apply's span ({aspan} min) holds the etcd snapshot ({etcd}), Argo's 
       f"verify's hold ({vhold}) and 30 min of commands", aspan >= etcd + 2 * vsettle + vhold + 30, True)
 AF = {"list": "istio-1.32 minor schnappy/infra agent-fixed,stop-updating,upgrade-cycle\n"}
 rc, calls = night("notice istio-1.32 minor", files=AF)
-check("a unit an earlier run fixed (agent-fixed; a shadow run, a review that did not finish), noticed now - its diff not "
+check("a unit an earlier run fixed (agent-fixed; a review that did not finish), noticed now - its diff not "
       "on record: blocked, no clock", (rc, notices(calls), has(calls, "upgrade-label.py istio-1.32 --comment")),
       (1, ["upgrade-notice.sh blocked istio-1.32"], []))
 setup("notice istio-1.32 minor", files=AF)
@@ -1129,16 +1119,13 @@ HO = "schnappy/ops 7 " + "c" * 40 + " " + "e" * 40 + "\n"
 rc, calls = night("prove centrifugo minor", heads=(HO,), plan="test:copy:playbook PLAYBOOK=upgrade-forgejo.yml ARGS='-e @/x/f.yml'\n")
 check("a unit of ops alone: no merge commit of infra's or platform's for Argo to reach - none asked of verify",
       (rc, [c for c in calls if c.startswith("upgrade-verify.sh AFTER")]), (0, ["upgrade-verify.sh AFTER "]))
-# ── --shadow, refusals, the lock ──────────────────────────────────────────────────────────────────────────────────────
-rc, calls = night("prove wave-patches patch", plan=PLAN, args=("--shadow",))
-check("--shadow: proven and reviewed, the result a comment - no notice, no merge, no production command, the copy halted",
-      (rc, [words(c, 3) for c in has(calls, "upgrade-label.py") if "--heads" not in c and "--green" not in c], notices(calls),
-       has(calls, "task --yes"), bool(has(calls, "vagrant halt"))), (0, ["upgrade-label.py wave-patches --comment"], [], [], True))
-check("  its pick the shadow's: no test environment's unit (a shadow merges none, so it would stop at one)",
-      has(calls, "upgrade-units.py pick"), ["upgrade-units.py pick --shadow"])
+# ── refusals, the lock ──────────────────────────────────────────────────────────────────────────────────────
 rc, calls = night("prove wave-patches patch", plan=PLAN)
-check("  an applying run's pick the plain one (the test environment's units first)", has(calls, "upgrade-units.py pick"),
+check("the run's pick the plain one (the test environment's units first)", has(calls, "upgrade-units.py pick"),
       ["upgrade-units.py pick"])
+# no shadow mode (operator 2026-11-15; its flag gone 2026-11-20): --shadow is an option like any other it does not take
+rc, calls = night("prove wave-patches patch", plan=PLAN, args=("--shadow",))
+check("--shadow: refused, nothing read, nothing built", (rc, calls), (2, []))
 r = subprocess.run(["bash", os.path.join(OPS, "scripts/upgrade-cycle.sh"), "--apply-all"], capture_output=True, text=True)
 check("an option it does not take: refused", r.returncode, 2)
 for pick in ("prove Bad/Unit patch", "prove istio huge", "explode istio minor"):

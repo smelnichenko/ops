@@ -149,14 +149,8 @@ check("a major's test unit: merged as a test unit (the 24 h notice is its produc
       (0, "test test-grafana-k6-2.x major"))
 fixture(infra=[pr(1, "test-grafana-k6-2.x", "veto"), pr(2, "grafana-k6-2.x", "major")])
 check("a vetoed test unit holds its production twin too: nothing", run("pick"), (0, "NOTHING"))
-# a shadow run merges nothing: a test environment's unit there is a comment, no proof (no copy) - every shadow run would
-# stop at it; the shadow's pick leaves them out, the production units in their order (a twin still waits for its test unit)
-fixture(infra=[pr(1, "wave-patches"), pr(2, "observability")], platform=[pr(3, "test-observability")])
-check("--shadow: the test environment's units left out - the first production unit proven", run("pick", "--shadow"),
-      (0, "prove wave-patches patch"))
-fixture(infra=[pr(1, "test-observability"), pr(2, "observability")])
-check("  a production twin still waits while its test unit is open: nothing", run("pick", "--shadow"), (0, "NOTHING"))
-check("  pick takes --shadow, nothing else", run("pick", "--all")[0], 2)
+# no shadow mode (its pick, the test environment's units left out, gone 2026-11-20): pick takes no option
+check("pick takes no option - --shadow nor any other", (run("pick", "--shadow")[0], run("pick", "--all")[0]), (2, 2))
 fixture(infra=[pr(2, "istio-x.32"), pr(3, "istio")])
 check("a name that only looks versioned is not (istio-x.32 is no istio minor): the family's own unit first",
       run("pick"), (0, "prove istio minor"))
@@ -164,7 +158,7 @@ fixture(infra=[pr(1, "wave-patches", "upgrade-blocked"), pr(2, "istio", "veto"),
 check("a blocked unit and a vetoed one left out", run("pick"), (0, "prove observability minor"))
 # a manual- unit (renovate/manual-woodpecker): what the copy cannot prove - applied by hand, never picked
 fixture(infra=[pr(1, "manual-woodpecker")])
-check("a manual- unit alone: nothing picked (applied by hand)", (run("pick"), run("pick", "--shadow")), ((0, "NOTHING"), (0, "NOTHING")))
+check("a manual- unit alone: nothing picked (applied by hand)", run("pick"), (0, "NOTHING"))
 fixture(infra=[pr(1, "manual-woodpecker"), pr(2, "observability")], platform=[pr(3, "manual-woodpecker")])
 check("  beside another unit: that one proven, the manual one left - and listed", (run("pick"), "manual-woodpecker" in run("list")[1]),
       ((0, "prove observability minor"), True))
