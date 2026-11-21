@@ -301,7 +301,7 @@ def judge_doc(o, n, table, fix_store):
         if lo[p] != ln[p]:
             judge_changed(p, kind, lo, ln, n, table, fix_store)
     removed = list(lo.keys() - ln.keys())
-    for p in list(ln.keys() - lo.keys()):
+    for p in ln.keys() - lo.keys():
         removed.remove(judge_added(p, kind, lo, ln, removed))
     if removed:
         refuse(f"{'.'.join(map(str, removed[0]))} dropped - a value dropped is never the agent's (a backup, an alert, an injection turned off)")
