@@ -648,12 +648,12 @@ tasks:
       - cmd: scripts/package-cleanup.py {{if eq .APPLY "true"}}--apply{{end}}
 
   # the app repos' Renovate by hand (operator 2026-11-16 - monitor's and masi's weekly Woodpecker cron gone with its
-  # token; every app repo since 2026-11-21, the list in scripts/upgrade-renovate.sh). Two
+  # token; every app repo and the CI tool images since 2026-11-21, the list in scripts/upgrade-renovate.sh). Two
   # tasks and no mode variable, as the upgrade cycle's (operator 2026-11-20): upgrade:apps:check reads,
   # upgrade:apps:run writes - LOOKUP given to it is refused, never ignored (ignored, it would write); no prompt, the
   # refusal its guard (operator 2026-11-20: "LOOKUP refusal is enough")
   upgrade:apps:check:
-    desc: "Show what Renovate would update in the app repos (admin, chat, chess, masi, monitor, radar, radio-scheduler, site, target-scorer). Read-only."
+    desc: "Show what Renovate would update in the app repos and the CI tool images (the list in scripts/upgrade-renovate.sh). Read-only."
     cmds:
       - cmd: scripts/upgrade-renovate.sh --apps --lookup
 

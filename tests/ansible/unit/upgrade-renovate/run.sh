@@ -100,13 +100,14 @@ check "  a lookup that left no report: the task fails, never 'nothing to update'
 ARGS=()
 check "a real run: no report asked for, nothing after the image" \
   "$(run RENOVATE_TOKEN=$TOKEN) $(grep -c RENOVATE_REPORT "$W/argv") $(tail -1 "$W/argv")" "0 0 $(sed -n 's/^image=//p' scripts/upgrade-renovate.sh)"
-# --apps: the app repos' Renovate (task upgrade:apps:run) - every app repo (the bot has write on each since 2026-11-21),
+# --apps: the app repos' Renovate (task upgrade:apps:run) - every app repo and the CI tool images (the bot has write on
+# each since 2026-11-21),
 # never the upgrade cycle's three; each read through; with --lookup too
-APPS=schnappy/admin,schnappy/chat,schnappy/chess,schnappy/masi,schnappy/monitor,schnappy/radar,schnappy/radio-scheduler,schnappy/site,schnappy/target-scorer
+APPS=schnappy/admin,schnappy/ansible-lint,schnappy/chat,schnappy/chess,schnappy/ci-tools,schnappy/hyperfoil,schnappy/masi,schnappy/monitor,schnappy/radar,schnappy/radio-scheduler,schnappy/site,schnappy/sonar-scanner,schnappy/target-scorer
 APPS_LOG=$(for r in ${APPS//,/ }; do printf '%s\n' " INFO: Repository started (repository=$r)" " INFO: Repository finished (repository=$r)" \
   '       "result": "done",'; done)
 ARGS=(--apps)
-check "--apps: the nine app repos alone, a real run, each read through" \
+check "--apps: the thirteen app and CI-tool repos alone, a real run, each read through" \
   "$(run RENOVATE_TOKEN=$TOKEN FAKE_LOG="$APPS_LOG") $(grep -cx "RENOVATE_REPOSITORIES=$APPS" "$W/argv") $(grep -c RENOVATE_DRY_RUN "$W/argv") $(grep -cE 'schnappy/(infra|platform|ops)(,|$)' "$W/argv")" "0 1 0 0"
 check "  one of them not read through (the last one's finish missing): the task fails" "$(run RENOVATE_TOKEN=$TOKEN FAKE_LOG="$(head -n -2 <<< "$APPS_LOG")")" "1"
 ARGS=(--apps --lookup)

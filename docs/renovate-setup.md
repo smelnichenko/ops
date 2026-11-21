@@ -11,8 +11,10 @@ Two Renovates use the `renovate-bot` account:
 - **The app repos'** - `task upgrade:apps:run`, by hand on the workstation (operator 2026-11-16):
   `scripts/upgrade-renovate.sh --apps` - the same image and bot (`.env` `RENOVATE_TOKEN`), each repo's `renovate.json`
   extending the shared preset `renovate/apps.json`, dependency PRs on admin, chat, chess, masi, monitor, radar,
-  radio-scheduler, site and target-scorer (the first two since 2026-11-16, the rest since 2026-11-21 - the bot has write on
-  each, it pushes `renovate/*` branches); `task upgrade:apps:check` reads only. monitor's and masi's weekly
+  radio-scheduler, site and target-scorer, and the CI tool images ci-tools, ansible-lint, sonar-scanner and hyperfoil (the
+  first two since 2026-11-16, the rest since 2026-11-21 - the bot has write on each, it pushes `renovate/*` branches; the
+  tool images but ci-tools have no PR CI, so their PRs never merge themselves - each built and tried by hand, ansible-lint's
+  against ops's whole unit suite); `task upgrade:apps:check` reads only. monitor's and masi's weekly
   Woodpecker cron and pipeline (`.woodpecker/renovate.yaml`) are gone, and with them the token `woodpecker-ci-secrets`
   carried (`renovate_token`, `renovate_github_token`): it was renovate-bot's, which can push to infra, platform and ops,
   and every pipeline can mount that secret. No second bot.
