@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # The upgrade cycle's run - task upgrade:run's second half, after Renovate (started by hand, run locally): one Renovate
-# unit - picked, proven on the Vagrant copy (one fix by the Claude agent when red), reviewed, gated (a major, or a unit
-# carrying the agent's fix, waits out a 24 h veto notice), backed up before a one-way change, applied to production,
+# unit - picked (a step of an upgrade path only after the steps below it), proven on the Vagrant copy (one fix by the
+# Claude agent when red), reviewed (its compatibility among the passes: each version it moves against what production
+# runs, its path from the version running, one version everywhere), backed up before a one-way change, applied to production,
 # verified, recorded, reported on the terminal and in its log (nothing mailed: the runs are started by hand - operator
 # 2026-11-20). Nothing in production
 # moves before the merge; from the merge on, a run that cannot finish PAGES (a one-way failure: the cycle paused, the
@@ -39,8 +40,8 @@
 #               run cannot take further - red after its fix, no fix (the agent's NO FIX), a failure with no verdict (CI
 #               red, a review or fix that did not finish, Forgejo refusing the update) - is said (the log and the
 #               terminal, never a mail: nothing in it for the operator) and counts a try for the unit's pull requests
-#               (the same name later is another unit): the next pick takes the units with none first; a notice or an
-#               apply clears them
+#               (the same name later is another unit): the next pick takes the units with none first; an apply clears
+#               them
 #   3. review   the review of the unit's diff (the agent, headless, --restricted: no instructions from the clones; the
 #               reviewers' own agents handed to it, a definition that does not read refusing the review) - CLEAN is no
 #               FINDING line at all, VERDICT: CLEAN and every pass named exactly; any finding, whatever its severity
@@ -48,13 +49,9 @@
 #               reviewed again - findings left after the last fix a try, an INCOMPLETE or unfinished review a try. The
 #               copy halted then, marked used (no change or check on it until the next run readies it - its base
 #               snapshot kept)
-#   4. gate     patch/minor: on; a major's first run, or any unit carrying the agent's fix (this run's or an earlier
-#               one's): labelled stop-updating (a newer release pushed by Renovate would void the notice), then its
-#               UPGRADE NOTICE comment on its pull requests with the heads proven (the clock), said on the terminal -
-#               nothing mailed; a major or fixed unit whose notice ran out unvetoed: on - when its heads are the ones announced,
-#               main merged in alone (git judges it: the announced head an ancestor of the head now, and merging the
-#               head now into main the very tree merging the announced one makes); a newer release, a fix since, an
-#               evil or octopus merge, a rebase, main's work dropped: noticed again
+#   4. (no gate) a major, a one-way unit and one carrying the agent's fix apply in the run that proves and reviews them,
+#               as a patch does (operator 2026-11-21: "fuck 24h veto notice, just need to make sure versions are
+#               compatible") - compatibility is the review's pass (3.), a path of several steps the pick's order (1.)
 #   5. plan     its production commands read from the proof's plan - a step with none, or a version that is none,
 #               refuses the unit, nothing merged
 #   6. apply    the gates again; the backups a one-way change needs (an etcd snapshot before Kubernetes, its store's from
@@ -143,7 +140,7 @@ fix_flags=(--restricted --tools "Bash,Read,Edit,Glob,Grep,WebFetch"
 # the review's reviewers: ops main's own agent definitions, handed over on the command line (--restricted reads no
 # settings, skills or instructions from anywhere but its flags)
 REVIEWERS="code-architecture-reviewer platform-reliability-reviewer test-quality-reviewer"
-REVIEW_PASSES="correctness security architecture reliability tests"
+REVIEW_PASSES="correctness security architecture reliability tests compatibility"
 reviewers_json() {
   python3 -I - "$ops/.claude/agents" $REVIEWERS <<'PY'
 import json, re, sys
@@ -219,7 +216,7 @@ gates() {  # $1: the span (minutes) no backup window may meet; $2: start or merg
     return 1
   fi
   if [ -e "$state/inflight" ] && tail -n 1 "$state/inflight" | grep -q ' verified$'; then
-    say "REFUSED: the last apply verified, its record not pushed ($state/inflight) - push it (scripts/upgrade-record.sh), then remove the journal"
+    say "REFUSED: the last apply verified, its record not pushed ($state/inflight) - task test:copy:inventory first (the record carries production's inventory after it), then push it (scripts/upgrade-record.sh) and remove the journal"
     return 1
   fi
   if [ -e "$state/inflight" ]; then
@@ -266,7 +263,7 @@ case "$picked" in
   NOTHING|PAUSED) exit 0 ;;
 esac
 read -r action unit kind <<< "$picked"
-[[ $action =~ ^(test|prove|notice|apply)$ && $unit =~ ^[a-z0-9][a-z0-9.-]*$ && $kind =~ ^(patch|minor|major)$ ]] \
+[[ $action =~ ^(test|prove)$ && $unit =~ ^[a-z0-9][a-z0-9.-]*$ && $kind =~ ^(patch|minor|major)$ ]] \
   || { say "REFUSED: the pick's answer '$picked'"; exit 1; }
 [ "$action" != test ] || [[ $unit == test-* ]] || { say "REFUSED: a test action for '$unit' (no test- unit)"; exit 1; }
 heads=$state/heads-$unit-$$
@@ -321,7 +318,7 @@ still_running() {  # its CI still running after an hour (Woodpecker's queue), or
 # Renovate rebases a branch only on a conflict, so the runner brings the unit it picked onto main itself - Forgejo's
 # update (main merged into each pull request behind it), as the bot; what the unit changes stays
 repo_dir() { case "$1" in schnappy/ops) echo "$ops" ;; *) echo "$ops/../${1#schnappy/}" ;; esac; }
-fetch_unit() {  # the unit's branches into the local checkouts (the proof and the notice's check read them there)
+fetch_unit() {  # the unit's branches into the local checkouts (the proof reads them there)
   local repo
   [ -z "$dry" ] || return 0
   for repo in $(cut -d' ' -f1 "$heads"); do
@@ -367,7 +364,7 @@ fresh_or_end() {
 # the message naming each (a vague "no backup path" told the operator nothing, 2026-11-17). A test environment's unit needs
 # none (its data is no store to keep - the test environment is where a one-way change runs first). The labels or the
 # table not read: nothing applied
-unit_labels=""
+unit_labels="" unit_store=""  # the one-way store the unit is (its fix may move that store's version alone)
 one_way_backups=() one_way_taken=() one_way_minutes=0
 stop_if_one_way() {
   local labels line need judged=$unit
@@ -385,6 +382,7 @@ stop_if_one_way() {
   case "$need" in
     none) return 0 ;;
     store\ *)
+      unit_store=$(awk 'NR == 1 {print $2}' <<< "$need")
       [ "$action" != test ] || { say "ONE-WAY $unit: its production twin's store can take it - no backup in the test environment"; return 0; }
       mapfile -t one_way_backups < <(sed -n 's/^backup //p' <<< "$need")
       mapfile -t one_way_taken < <(sed -n 's/^taken-by //p' <<< "$need")
@@ -405,7 +403,7 @@ held_now() {  # a veto or the kill switch set since the pick: refused, nothing m
 # said (never mailed), a try recorded for the unit's pull requests (the same name later is another unit). There is no
 # blocked state (operator 2026-11-20): the next pick takes the units with no try first (scripts/upgrade-units.py), so
 # one that keeps failing never holds the queue, and is taken up again once the others are through; a cause in ops is
-# mine to fix at once. A run that gets the unit further (noticed, applied, the test environment's merged) clears them
+# mine to fix at once. A run that gets the unit further (applied, the test environment's merged) clears them
 retry() {
   local n key
   [ -n "$tries_key" ] || read_heads "$heads.key" || say "its pull requests not read - the try recorded without them"
@@ -522,8 +520,25 @@ if [ "$action" = test ]; then
   exit 0
 fi
 
+# a major, a one-way unit and a family minor are judged by their release notes (the review's compatibility pass - no
+# notice since 2026-11-21): scripts/upgrade-units.py notes says whether the unit needs them and has them - Renovate
+# fetches them only with a github.com token, and says nothing in the body when it did not. None: refused before anything
+# is built, a try; the token is ops/.env's RENOVATE_GITHUB_TOKEN (a read-only GitHub token, no scopes)
+notes_or_end() {
+  local out rc
+  [ -z "$dry" ] || { say "RUN upgrade-units.py notes $unit (its release notes, before the build)"; return 0; }
+  out=$(scripts/upgrade-units.py notes "$unit" 2>> "$log"); rc=$?
+  case $rc in
+    0) return 0 ;;
+    3) retry "no release notes in its pull requests ($(echo $out | tr -d '\r')) - a ${kind}, one-way or family unit is judged by them: RENOVATE_GITHUB_TOKEN in ops/.env (a read-only GitHub token) - nothing built" ;;
+  esac
+  stopped "its release notes not read (exit $rc) - nothing built" "$log"
+  exit 1
+}
+
 memory || exit 1
 stop_if_one_way
+notes_or_end
 
 # clones of the unit's proven commits - the agents' working directory, outside every checkout (a commit there never
 # lands in the operator's tree)
@@ -537,6 +552,18 @@ clones() {  # into $1, one per repo of the unit (from $heads), each on renovate/
     bot_git clone -q "$forgejo/$repo.git" "$dir/${repo#*/}" < /dev/null >> "$log" 2>&1 9>&- || return 1
     git -C "$dir/${repo#*/}" checkout -q -B "renovate/$unit" "$sha" < /dev/null >> "$log" 2>&1 || return 1
   done 3< "$heads"
+}
+# the review's context: each repository the unit does not touch, at main, in $1/context/<repo> (one commit deep) - with
+# the unit's own clones, all three repos: production's inventory (ops' tests/ansible/copy/prod-inventory.txt) and every
+# other pin of a dependency the unit moves (one version everywhere) are read there - the review reads nothing outside
+context_clones() {
+  local dir=$1 repo
+  [ -n "$dry" ] && { say "RUN context clones (the repos renovate/$unit does not touch, at main) into $dir/context"; return 0; }
+  mkdir -p "$dir/context"
+  for repo in schnappy/infra schnappy/platform schnappy/ops; do
+    awk -v r="$repo" '$1 == r {f = 1} END {exit !f}' "$heads" && continue
+    bot_git clone -q --depth 1 "$forgejo/$repo.git" "$dir/context/${repo#*/}" < /dev/null >> "$log" 2>&1 9>&- || return 1
+  done
 }
 # beside each clone in $1: <repo>.diff and <repo>.commits, the unit's diff and commits against main - the review's
 # reviewers read them with Read alone (their Bash is plain read-only git, one command a call: a reviewer's `cd <path>`
@@ -553,50 +580,37 @@ diffs() {
   done 3< "$heads"
 }
 # what the agent may change in each repo: the unit's own kind of files - never CI, scripts, tasks, the trust files or an
-# agent's instructions (each would run, or steer a later run, unproven)
+# agent's instructions (each would run, or steer a later run, unproven); of platform's charts their values alone - a
+# template, a subchart or a chart's files/ is code, a Chart.yaml's dependency another chart, and what the agent writes
+# reaches production in the run that proves it (no notice since 2026-11-21)
 allowed() {  # allowed <repo> <path>
   case "$2" in
     */CLAUDE.md|CLAUDE.md|*/AGENTS.md|AGENTS.md|.claude/*|*/.claude/*|.woodpecker/*|.gitattributes|*/.gitattributes|.gitmodules|renovate.json) return 1 ;;
   esac
-  case "$1:$2" in
-    schnappy/infra:clusters/*|schnappy/platform:helm/*) return 0 ;;
-    schnappy/ops:deploy/ansible/vars/*.yml|schnappy/ops:deploy/ansible/playbooks/*.yml) return 0 ;;
+  # anchored: a case pattern's * crosses '/' (helm/x/ci/values.yaml, playbooks/tasks/*.yml, vars/vault-recovery/* got in)
+  case "$1" in
+    schnappy/infra) [[ $2 =~ ^clusters/[^[:space:]]+\.ya?ml$ ]] ;;
+    schnappy/platform) [[ $2 =~ ^helm/[^/]+/values[^/]*\.yaml$ ]] ;;
+    schnappy/ops) [[ $2 =~ ^deploy/ansible/(vars|playbooks)/[^/]+\.yml$ ]] ;;
+    *) return 1 ;;
   esac
-  return 1
 }
-# a file of the agent's: UTF-8 text (a binary showed as "Binary files differ"), each line it adds printable ASCII and
-# tab alone - a carriage return, a NEL or a U+2028 is a line break to YAML and none to git (a key hidden from the notice
-# and the review), a no-break space indenting a key made it another key that read the same, a zero-width or bidi
-# character, a look-alike letter the same; a line it keeps stays as it was
-plain_fix() {  # plain_fix <repository> <proven> <tip> <path>
-  python3 -I - "$@" <<'PY'
-import collections, subprocess, sys
-repo, proven, tip, path = sys.argv[1:]
-def blob(rev):
-    r = subprocess.run(["git", "-C", repo, "cat-file", "blob", f"{rev}:{path}"], capture_output=True, stdin=subprocess.DEVNULL)
-    return r.stdout if r.returncode == 0 else None
-new = blob(tip)
-try:
-    text = new.decode("utf-8")
-except (AttributeError, UnicodeDecodeError):  # not there, or not UTF-8
-    sys.exit(1)
-kept = collections.Counter((blob(proven) or b"").decode("utf-8", "replace").split("\n"))
-for line in text.split("\n"):
-    if kept[line] > 0:
-        kept[line] -= 1
-    elif any(c != "\t" and not " " <= c <= "~" for c in line):
-        sys.exit(1)
-PY
+# a file of the agent's - its fix applies in the run that proves it, steered by upstream release notes no human read:
+# UTF-8, each line it adds printable ASCII and tab, and judged on the parsed YAML - versions moved, an image's tag, a value
+# renamed or dropped outside security paths, nothing new, no store but the unit's own (scripts/upgrade-fix-judge.py says
+# what, and why each is refused, in the log)
+plain_fix() {  # plain_fix <repository> <proven> <tip> <path> - judged on the parsed YAML (scripts/upgrade-fix-judge.py)
+  FIX_STORE=$unit_store FIX_STORES_TABLE=$ops/scripts/upgrade-stores.json python3 -I "$ops/scripts/upgrade-fix-judge.py" "$@"
 }
 # the agent's commits, checked, pushed by the runner: fetched from its clone into a repository of the runner's own (its
 # hooks and config - the agent's - never run), on top of the proven head, inside allowed(), their tree pushed as one
 # commit of the runner's on the proven head - every repo judged before
-# any is pushed (half a fix pushed, unlabelled, was a fix a later run would apply with no notice); the unit labelled
-# agent-fixed (and stop-updating) before the first push; pushed as the bot to Forgejo's URL itself; their diff kept
-# for the veto notice. The heads file read on a descriptor of its own: nothing in the loop reads it away
+# any is pushed (half a fix pushed, unlabelled, was a fix with no record of who wrote it); the unit labelled agent-fixed
+# (and stop-updating: Renovate never rewrites the fixed branches) before the first push; pushed as the bot to Forgejo's URL
+# itself; their diff kept on record (.upgrade-cycle/fixes). The heads file read on a descriptor of its own: nothing in the loop reads it away
 fixed=""
 push_fix() {
-  local dir=$1 repo n sha clone mirror tip bad
+  local dir=$1 repo n sha clone mirror tip bad raw
   local -a push=()
   pushed=""  # this call's fix pushed (fixed: any of the run's)
   : > "$fixdiff"; : > "$fixdiff.stat"
@@ -613,12 +627,16 @@ push_fix() {
       git -C "$mirror" merge-base --is-ancestor "$sha" "$tip" < /dev/null || { say "the fix rewrote $repo's proven commit - not pushed"; return 1; }
       [ -z "$(git -C "$mirror" rev-list --merges "$sha..$tip" < /dev/null)" ] || { say "the fix holds a merge commit in $repo - nothing pushed"; return 1; }
       # each file: both sides of a rename (a script moved into clusters/ is a script gone from its place), a plain file
-      # or a deletion alone (a symlink is followed by whatever reads the tree unsandboxed; a submodule is another repo)
-      bad=$(git -C "$mirror" diff --raw --no-renames "$sha" "$tip" < /dev/null | while IFS=$'\t' read -r meta f; do
-              mode=$(cut -d' ' -f2 <<< "$meta")
-              { [[ $mode =~ ^(100644|100755|000000)$ ]] && allowed "$repo" "$f" \
-                && { [ "$mode" = 000000 ] || plain_fix "$mirror" "$sha" "$tip" "$f" < /dev/null; }; } || echo "$f"
-            done)
+      # changed in place - no symlink (followed by whatever reads the tree unsandboxed), no submodule (another repo), no file
+      # of its own (a new manifest, a new Argo application) and none deleted (a NetworkPolicy, a PeerAuthentication gone)
+      # the files read, or nothing pushed (a failed diff listed none: the tree went up unjudged)
+      raw=$(git -C "$mirror" diff --raw --no-renames "$sha" "$tip" < /dev/null) && [ -n "$raw" ] \
+        || { say "the fix's files not read in $repo (its tip moved, its diff empty or failed) - nothing pushed"; return 1; }
+      bad=$(while IFS=$'\t' read -r meta f; do
+              mode=$(cut -d' ' -f2 <<< "$meta"); status=$(cut -d' ' -f5 <<< "$meta")
+              { [[ $mode =~ ^(100644|100755)$ ]] && [ "$status" = M ] && allowed "$repo" "$f" \
+                && plain_fix "$mirror" "$sha" "$tip" "$f" < /dev/null 2>> "$log"; } || echo "$f"
+            done <<< "$raw")
       [ -z "$bad" ] || { say "the fix changed what it may not in $repo: $(echo $bad) - nothing pushed"; return 1; }
       { echo "=== $repo"; git -C "$mirror" diff --stat --no-ext-diff --no-textconv --no-color --no-renames "$sha" "$tip"; } < /dev/null >> "$fixdiff.stat"
       { echo "=== $repo"; git -C "$mirror" log --format='%h %s' "$sha..$tip" | LC_ALL=C tr -c '[:print:]\n' '?' | cut -c1-200
@@ -636,21 +654,21 @@ push_fix() {
   done 3< "$heads"
   [ "${#push[@]}" -gt 0 ] || return 0
   # the fix on record before anything is pushed (.upgrade-cycle/fixes - its commit is on the pull requests too) - every repo's
-  # stat first, then each commit and diff (appended: a second fix noticed with the first)
+  # stat first, then each commit and diff (appended: a second fix recorded with the first)
   if [ -z "$dry" ]; then
     mkdir -p "$state/fixes"
     # a unit of this name fixed before (applied, closed) is not this one: its record starts again
     [[ ,$unit_labels, == *,agent-fixed,* ]] || : > "$state/fixes/$unit.diff"
     { echo "=== the agent's fix of renovate/$unit, $(date -u +%FT%TZ) - files:"; cat "$fixdiff.stat"; cat "$fixdiff"; } >> "$state/fixes/$unit.diff"
   fi
-  run scripts/upgrade-label.py "$unit" agent-fixed || { say "NOT LABELLED agent-fixed - nothing pushed: its 24 h notice would not hold"; return 1; }
+  run scripts/upgrade-label.py "$unit" agent-fixed || { say "NOT LABELLED agent-fixed - nothing pushed: what the agent wrote would carry no mark of it"; return 1; }
   run scripts/upgrade-label.py "$unit" stop-updating || { say "NOT LABELLED stop-updating - nothing pushed: Renovate would rewrite the fixed branches"; return 1; }
   unit_labels+=",stop-updating"
-  fixed=1 pushed=1  # labelled: from here a push that went in waits for its notice, whatever follows
+  fixed=1 pushed=1  # labelled: from here a push that went in is on the unit's pull requests, whatever follows
   for p in "${push[@]}"; do
     read -r repo tip <<< "$p"
     run bot_git -C "$dir.push/${repo#*/}" -c core.hooksPath=/dev/null push -q "$forgejo/$repo.git" "$tip:refs/heads/renovate/$unit" \
-      || { say "the fix's push to $repo refused (the unit labelled agent-fixed: what went in waits for its notice)"; return 1; }
+      || { say "the fix's push to $repo refused (the unit labelled agent-fixed: what went in is reviewed again before any apply)"; return 1; }
   done
 }
 # Forgejo shows a push to a pull request in a moment of its own: read until the heads are the ones pushed
@@ -745,12 +763,29 @@ review_unit() {  # 0: clean; 1: findings (in $review); a review that did not fin
   reviewers=$(reviewers_json 2>> "$log") || { stopped "the reviewers' definitions not read - not reviewed, nothing applied" "$log"; exit 1; }
   clones "$revdir" || { stopped "its branches not cloned for the review - nothing applied" "$log"; exit 1; }
   diffs "$revdir" || { stopped "its diffs not written for the review - nothing applied" "$log"; exit 1; }
-  (cd "$revdir" && timeout "$agent_timeout" "${clean_env[@]}" "$agent" -p "upgrade-cycle review: review the unit renovate/$unit - its diff in each repo cloned here (one directory per repo, its diff against origin/main in <repo>.diff and its commits in <repo>.commits beside it) - as the review instructions say. Each finding, whatever its severity, on a line of its own: 'FINDING: <critical|warning|suggestion> <where> - <what>'. End with two lines: 'PASSES: <the passes that ran, comma-separated>' and 'VERDICT: CLEAN' (no finding at all) or 'VERDICT: FINDINGS <how many>'. Change nothing." \
+  context_clones "$revdir" || { stopped "the other repos not cloned for the review's context - nothing applied" "$log"; exit 1; }
+  # Renovate's tables and release notes (its pull requests' bodies) beside them - what the compatibility pass reads
+  scripts/upgrade-units.py bodies "$unit" "$revdir" >> "$log" 2>&1 || { stopped "its pull requests' bodies not read for the review - nothing applied" "$log"; exit 1; }
+  # what production runs NOW - the inventory test:copy:ready read this run (ops' committed copy may be older): the
+  # compatibility pass judges each version moved against it
+  cp -- "$ops/tests/ansible/copy/prod-inventory.txt" "$ops/tests/ansible/copy/pi-versions.yml" "$revdir/" 2>> "$log" \
+    || { stopped "production's inventory not handed to the review - nothing applied" "$log"; exit 1; }
+  (cd "$revdir" && timeout "$agent_timeout" "${clean_env[@]}" "$agent" -p "upgrade-cycle review: review the unit renovate/$unit - its diff in each repo cloned here (one directory per repo, its diff against origin/main in <repo>.diff, its commits in <repo>.commits and its pull request's body - Renovate's table and release notes - in <repo>.pr.md beside it; what production runs now in prod-inventory.txt and pi-versions.yml; the repos it does not touch at main in context/) - as the review instructions say. A version left elsewhere that the fix agent cannot move goes on a 'NOTE: <where> - <what>' line, never a FINDING. Each finding, whatever its severity, on a line of its own: 'FINDING: <critical|warning|suggestion> <where> - <what>'. End with two lines: 'PASSES: <the passes that ran, comma-separated>' and 'VERDICT: CLEAN' (no finding at all) or 'VERDICT: FINDINGS <how many>'. Change nothing." \
      --restricted --tools "Bash,Read,Glob,Grep,Agent,Skill" --agents "$reviewers" \
      --append-system-prompt-file "$ops/.claude/upgrade-agent/review.md" --settings "$ops/.claude/upgrade-agent/review.json" \
      --strict-mcp-config --permission-mode dontAsk --permission-prompts none) < /dev/null > "$review" 2>&1 9>&-
   rc=$?
   cat "$review" >> "$log"
+  # the review's notes - stragglers the fix agent cannot reach (another repo, tests/, a CI image, a digest): said on the
+  # terminal and kept in the record, aligned in ops by hand; they never hold the unit. Text the review wrote from upstream
+  # release notes: printable alone (an escape sequence never reaches the terminal or the committed record), cut short
+  grep -E '^NOTE: ' "$review" | head -50 | LC_ALL=C tr -c '[:print:]\n' '?' | cut -c1-300 \
+    | while IFS= read -r note; do say "REVIEW $note"; done
+  # a request the review refused (a release note asking for a resource, a permission, another source): the unit ends
+  # here, a try - never handed to the fix agent as a task
+  if grep -qE '^REFUSE: ' "$review"; then
+    retry "its review refused it: $(grep -m1 -E '^REFUSE: ' "$review" | LC_ALL=C tr -c '[:print:]' '?' | cut -c9-200)" "$review"
+  fi
   verdict=$(grep -E '^VERDICT: ' "$review" | tail -1)
   passes=$(grep -E '^PASSES: .+' "$review" | tail -1)
   missing=""
@@ -775,54 +810,6 @@ done
 copy_gone="the copy halted: the radar may start"
 run scripts/copy-snapshot.sh used || say "THE COPY NOT MARKED USED - task test:copy:drop by hand"
 if run vagrant halt; then built=""; else copy_gone="THE COPY NOT HALTED - the radar stays off"; say "$copy_gone"; fi
-
-# a major (or a unit carrying the agent's fix) applies only what its notice announced: the heads on its comment, each
-# an ancestor of the head proven now, and merging the head now into main makes the very tree merging the announced one
-# makes - main merged in since (Forgejo's update) changes nothing of it; a newer release, a fix since, a rebase, an evil
-# or octopus merge (git judges only two parents of a merge - one that took an old main as its second dropped main's
-# work), main's work dropped: noticed again
-notice_holds() {
-  local line announced repo sha cur dir tree_now tree_announced pair
-  [ -z "$dry" ] || return 0
-  line=$(scripts/upgrade-units.py noticed "$unit" 2>> "$log") || return 1
-  announced=$(awk '{print $2}' <<< "$line")
-  [ -n "$announced" ] || return 1
-  [ "$(tr ',' '\n' <<< "$announced" | cut -d@ -f1 | sort | tr '\n' ' ')" = "$(cut -d' ' -f1 "$heads" | sort | tr '\n' ' ')" ] || return 1
-  for pair in ${announced//,/ }; do
-    repo=${pair%@*}; sha=${pair#*@}
-    [[ $sha =~ ^[0-9a-f]{40}$ ]] || return 1
-    cur=$(awk -v r="$repo" '$1 == r {print $3}' "$heads"); dir=$(repo_dir "$repo")
-    git -C "$dir" merge-base --is-ancestor "$sha" "$cur" 2>> "$log" || return 1
-    # each merge clean (a conflict prints more than a tree and exits 1) and the same tree
-    tree_now=$(git -C "$dir" merge-tree --write-tree origin/main "$cur" 2>> "$log") || return 1
-    tree_announced=$(git -C "$dir" merge-tree --write-tree origin/main "$sha" 2>> "$log") || return 1
-    [ "$tree_now" = "$tree_announced" ] || return 1
-  done
-}
-
-# 4. the gate - a major's first run, a unit this run fixed, or one whose notice no longer holds: its notice - a comment on
-# its pull requests, said on the terminal (nothing mailed: the runs are started by hand) - starts the 24 h; a later run
-# applies it unless its pull requests carry the label veto
-again=""
-[ "$action" != apply ] || notice_holds || { again=1; say "its notice does not hold for the heads proven now (a newer release, a fix since) - noticed again"; }
-if [ "$action" = notice ] || [ -n "$fixed" ] || [ -n "$again" ]; then
-  why="major, proven and reviewed"
-  if [ -n "$fixed" ] || [[ ,$unit_labels, == *,agent-fixed,* ]]; then
-    # the agent's fix, whichever run pushed it: its commit on the unit's pull requests (the runner's record of it:
-    # $state/fixes/<unit>.diff)
-    why="$kind, proven and reviewed with the agent's fix (its commit on the pull requests)"; fixed=1
-  fi
-  # what the notice announces: the heads proven now - a later run applies these (main merged in aside), or notices again;
-  # Renovate kept off its branches from here (a newer release it pushed would void the notice, the loop never ending)
-  announce=$(awk '{printf "%s%s@%s", (NR > 1 ? "," : ""), $1, $3}' "$heads")
-  [[ ,$unit_labels, == *,stop-updating,* ]] || run scripts/upgrade-label.py "$unit" stop-updating \
-    || { say "NOT NOTICED: stop-updating not set - Renovate would void the notice; the next run notices it again"; exit 1; }
-  run scripts/upgrade-label.py "$unit" --comment "UPGRADE NOTICE $(date -u +%Y-%m-%dT%H:%M:%SZ) heads=$announce - applies after 24 h unless vetoed (label veto)${fixed:+ - with the fix by the agent}" \
-    || { say "NOT NOTICED: the comment not posted - the next run notices it again"; exit 1; }
-  progress
-  say "NOTICED $unit: $why - a run after $(date -d '+24 hours' '+%F %H:%M') applies it, unless its pull requests carry the label veto"
-  exit 0
-fi
 
 # 5. the plan: its production commands, every one known and its version one - or the unit refused, nothing merged
 if [ -n "$dry" ]; then
@@ -904,5 +891,7 @@ journal "verified"
 run task test:copy:inventory || say "the inventory not read after it - the record says so"
 run scripts/upgrade-record.sh "$unit" "$log" \
   || { stopped "applied and verified, not recorded - push the record, then remove $state/inflight" "$log"; exit 1; }
-[ -n "$dry" ] || rm -f "$state/inflight" "$state/tries/$unit" "$state/fixes/$unit.diff"
-say "APPLIED $unit: $kind, applied and verified ($copy_gone)"
+[ -n "$dry" ] || rm -f "$state/inflight" "$state/tries/$unit" "$state/fixes/$unit.diff"  # the fix's commit merged with it
+withfix=""
+[ -z "$fixed" ] && [[ ,$unit_labels, != *,agent-fixed,* ]] || withfix=", with the agent's fix (its commit merged with it)"
+say "APPLIED $unit: $kind$withfix, applied and verified ($copy_gone)"

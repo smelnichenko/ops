@@ -668,9 +668,9 @@ tasks:
   # the operator, run locally; no timer, no CI cron. Two tasks and no mode variable (operator 2026-11-20 - one typed in
   # lower case or misspelt was read as unset, and unset was the applying run): upgrade:check reads, upgrade:run writes.
   # upgrade:run: the copy lock taken first and the runner's gates read before Renovate (a window near, a page open, ops
-  # not origin's main, the radar running, an apply today: refused before anything moved), Renovate's branches and pull
-  # requests, then the runner - it applies what it proved; a major, or a unit carrying the agent's fix, waits out its
-  # 24 h notice (one run gives it, a later one applies it). No shadow mode (operator 2026-11-15; gone from the runner
+  # not origin's main, the radar running: refused before anything moved), Renovate's branches and pull
+  # requests, then the runner - it applies what it proved and reviewed, a major and a unit carrying the agent's fix
+  # too (no notice, no wait: operator 2026-11-21 - the review's compatibility pass judges the versions). No shadow mode (operator 2026-11-15; gone from the runner
   # 2026-11-20): SHADOW=true, typed from habit, is refused below - ignored, it would have been the applying run
   upgrade:check:
     desc: "Show what Renovate would update in infra, platform and ops. Read-only: no branches, PRs or deploys."
@@ -678,7 +678,7 @@ tasks:
       - cmd: scripts/upgrade-renovate.sh --lookup
 
   upgrade:run:
-    desc: "PRODUCTION. Renovate opens or updates PRs in infra, platform and ops; then one update is tested on the Vagrant copy, reviewed and applied to production (majors and agent-fixed updates wait 24 h for a veto). Stop the radar first."
+    desc: "PRODUCTION. Renovate opens or updates PRs in infra, platform and ops; then one update is tested on the Vagrant copy, reviewed (compatibility with what production runs among its passes) and applied to production. Stop the radar first."
     deps: [deploy:install]
     prompt: "Run the upgrade cycle against PRODUCTION? The radar must be stopped."
     preconditions:

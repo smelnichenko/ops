@@ -4,6 +4,8 @@ Status: **BUILDING** (operator 2026-11-14: "start building plan 120 meanwhile", 
 vagrant") - the review answered 2026-11-14 (below); plan 119's wave 1 done by hand (2026-11-14); rollout step 1 (the
 lookup) run - its findings fixed below, three questions open. 2026-11-15: one manual task, Kafka's operator first
 (decisions below); review rounds two to eight done - the applying runner waits for its first clean shadow proof.
+2026-11-21: no veto notice - majors and fixed units apply in the run that proves and reviews them; a compatibility
+review pass; upgrade paths taken one step at a time; one version of each dependency everywhere (below).
 
 **Built 2026-11-14 (ops upgrade/wave-1 branch, each with its harness):**
 - Renovate: `renovate/upgrade-cycle.json` (the shared preset - units, groups, one minor at a time for Kubernetes/
@@ -41,10 +43,51 @@ all"):**
 - A test unit that leaves the test environment unsettled puts its production twin behind the others (a try of its own);
   its own copy proof still gates production.
 - Nothing is mailed or posted: no applied, veto, blocked or page mail, no Alertmanager route (platform's UpgradeCycle
-  route removed), no preflight probe of it. The run's terminal and log say what happened. A major or agent-fixed unit
-  still waits 24 h after its notice - a comment on its pull requests, printed by the run with the time it may apply -
-  and the label `veto` still stops it. A one-way failure still records a page (`scripts/upgrade-notice.sh`, local) and
-  pauses the cycle: production may be half changed.
+  route removed), no preflight probe of it. The run's terminal and log say what happened. The label `veto` still stops
+  a unit (no notice since 2026-11-21, below). A one-way failure still records a page (`scripts/upgrade-notice.sh`,
+  local) and pauses the cycle: production may be half changed.
+**No veto notice; compatibility; steps; one version everywhere (operator 2026-11-21: "fuck 24h veto notice, just need
+to make sure versions are compatible", "some upgrades may need several steps like 17->19 majors", "dependencies should
+be grouped, we should not have different versions for different modules"):**
+- A major, a one-way unit and a unit carrying the agent's fix apply in the run that proves and reviews them, as a patch
+  does: no notice comment, no clock. The pick answers `test` or `prove` alone (`notice`/`apply` refused by the runner);
+  `upgrade-units.py noticed`, the runner's notice check and `upgrade-label.py --comment` are gone. The label `veto`
+  still stops a unit (read again right before the merge); `agent-fixed` and `stop-updating` stay as records, and the
+  APPLIED line names the agent's fix.
+- Compatibility is a review pass of its own (`.claude/upgrade-agent/review.md`; the runner requires it among the passes
+  named): each version the unit moves against what production runs (`tests/ansible/copy/prod-inventory.txt`), its path
+  from the version running (a required intermediate step missing is a finding - Kubernetes one minor, Istio two,
+  ScyllaDB one release line, PostgreSQL through pg_upgrade/CNPG, the Vault, Consul, Kafka and Strimzi guides), the
+  breaking changes and migrations in the release notes, and one version everywhere. The review is handed Renovate's
+  pull request bodies (`<repo>.pr.md`: its table and release notes - `prBodyTemplate` carries `{{{changelogs}}}`) and
+  each repo the unit does not touch, at main (`context/`).
+- Steps: a unit named for one step of a path (`separateMultipleMajor`: `postgresql-18.x`, `postgresql-19.x`) waits while
+  a lower step of the same dependency is open (`upgrade-units.py`: `<base>-<version>`, versions compared as numbers) -
+  17->19 goes 17->18, applied, then 18->19.
+- One version everywhere: `task upgrade:check` lists each dependency pinned at more than one version across the repos
+  (DIFFERENT VERSIONS); the review makes a straggler a finding (the agent's fix aligns it in the unit's own files); the
+  platform charts' defaults aligned with production (fluent-bit, nginx, scylla). Left to converge through units, as
+  upgrade:check lists them: rclone, curl, k6.
+- From the change's two reviews (2026-11-21): a straggler the fix agent cannot reach (another repo, `tests/`, ops, a CI
+  image, a digest, a store) is a `NOTE:` line the runner prints - sanitised, it is upstream-steered text - never a finding
+  that holds the unit; a release note asking for more than moving versions is a `REFUSE:` line: the unit ends, a try,
+  never handed to the fix agent. The review reads the inventory this run read (`prod-inventory.txt`, `pi-versions.yml`
+  beside the clones); `<repo>.pr.md` and `context/` are untrusted data to both agents. Release notes are a positive gate
+  (`upgrade-units.py notes`): a major, a one-way unit or a family minor (istio, gateway-api, kubernetes, cilium) needs
+  Renovate's "### Release Notes" in each pull request (it fetches them only with a github.com token and says nothing in
+  the body otherwise) - refused before the build, a try, until ops/.env's RENOVATE_GITHUB_TOKEN is set; docker-library's
+  postgres publishes none (review.md's path rule). What the fix agent pushes is judged on the parsed YAML, every scalar
+  as written (`scripts/upgrade-fix-judge.py` - three reviews found edits each looser judge let through: an image to
+  another registry, a hub, mTLS, a root app's prune, a duplicate key moving ScyllaDB's release line, a dropped backup,
+  a retention 168h -> 1h, a chart range 1.x, a downgrade, an IP, a rename into an env var): documents kept; a value moved
+  to a newer version of the same shape or the same image's newer tag (no digest-pinned image); a value renamed beside
+  itself (no free-form map, no ALL_CAPS key, none in ops); nothing dropped or new; no duplicate key, alias or tag; no
+  security path, no Role/binding/policy/Namespace; an Argo application's targetRevision and Helm values alone; a store's
+  version in its own unit only (by image, by an Argo source's chart, by a path naming it, by a value equal to its image's
+  tag); no file added or deleted, no Chart.yaml, no subfolder (allowed() anchored); a failed diff refuses the push. Steps are also
+  keyed on the packages in Renovate's own table (its first; never one in the release notes), names normalised; a test
+  unit waits for the production unit of a lower step, never for its own twin; a test unit with a try never holds an
+  untried production unit back.
 **The runner's open items - DONE 2026-11-15 (each with its harness; the first real run's review found them):** the
 headless agents (fix, review) run with a clean environment (`env -i` HOME PATH: none of ops/.env, the account's login
 rather than the API key), settings of their own (`.claude/upgrade-agent/fix.json`, `review.json`, `--permission-mode
@@ -283,7 +326,8 @@ Kafka 4.2.2, ...). What it found, fixed in the preset and the runner (harness ca
   them to production - **minors and majors, the node and the Pis included**.
 - **Patches and minors apply directly** after a green proof, a notification after each.
 - **Majors: a veto notice first** - what, the proof's results, when it applies - **24 h** to say no; applied if nothing
-  is heard.
+  is heard. **Superseded 2026-11-21:** no notice - a major applies in the run that proves and reviews it, its
+  compatibility a review pass.
 - Delivery through Argo CD: one infra and one platform branch per unit, as plan 119; what Argo cannot carry (node,
   Cilium, Argo CD itself, Gateway API CRDs, the Pis) through ops version vars and their `deploy:*` tasks.
 - Vault needs no new access: each Pi unseals its own Vault already; `deploy:vault:upgrade` runs as by hand.
@@ -296,8 +340,8 @@ Kafka 4.2.2, ...). What it found, fixed in the preset and the runner (harness ca
   `.woodpecker/renovate.yaml` and ops' `renovate` cron go. The copy runs on the workstation; the operator stops the
   radar for a run.
 - **No shadow** ("no shadow mode, deploy once it works in vagrant tests"): rollout step 2 dropped - the task runs the
-  runner for real: a unit proven on the copy and reviewed clean is applied (a major after its 24 h notice: one run gives
-  the notice, a later one applies it). `--shadow` stays a flag of the script, never the task's default.
+  runner for real: a unit proven on the copy and reviewed clean is applied (a major in the same run since 2026-11-21;
+  before, after its 24 h notice). `--shadow` stays a flag of the script, never the task's default.
 - **Kafka: the operator first** ("operator first!"): Strimzi's operator - one, shared by production's and the test
   environment's Kafka - a unit of its own, proven on the copy against production's Kafka; a Kafka version
   (`strimzi.kafkaVersion`, each environment's, annotated then) becomes a unit only once the operator supporting it is
@@ -332,20 +376,19 @@ real schedules: it refuses a run a window would meet, at its start and again bef
 driver,
 `scripts/upgrade-cycle.sh`; no CI agent on the
 workstation (a Woodpecker agent there would give any pipeline a shell on it). Each run, one unit:
-1. **Pick**: the next open Renovate unit in order - wave-patches, then minor groups, then one major whose 24 h notice
-   has run out unvetoed. Paused when an `upgrades-paused` label is on ops' dashboard issue (the kill switch).
+1. **Pick**: the next open Renovate unit in order - wave-patches, then minor groups, then majors; a step of an upgrade
+   path only after the steps below it. Paused when an `upgrades-paused` label is on ops' dashboard issue (the kill switch).
 2. **Prove**: the copy lock; `test:copy:build` (from main = production), `test:copy:change` with the unit's infra and
    platform branches, `test:copy:playbook` for each ops part the unit moves (Kubernetes → upgrade-kubeadm.yml, a Pi
    service → its upgrade playbook, Cilium → its playbook, Argo CD → setup-argocd.yml, node_exporter →
    setup-host-hardening.yml; containerd not yet - refused); every check. Then the unit's diff gets a review (the
-   review agent, its passes named). A shadow run's result goes on the PRs.
+   review agent, its passes named, compatibility among them).
 3. **Fix**: a failed proof calls the Claude agent (headless, a skill of its own) to diagnose and commit a fix in clones
    of the unit's branches; the runner checks and pushes it (labelled `stop-updating` so Renovate leaves them, and
-   `agent-fixed`), then proves again - once. Still red: labelled `upgrade-blocked`, reported, the next unit next run.
-   Green: reviewed, then a 24 h notice with the fix's diff - applied by a later run, unvetoed.
-4. **Gate**: patches and minors go on. A major, or a unit carrying the agent's fix, gets its notice (the mail first,
-   then the PR comment that starts the clock) and waits 24 h; a `veto` label stops it for good (read again right before
-   the merge).
+   `agent-fixed`), then proves again. Still red: a try, reported, the next unit next run. Green: reviewed again, then
+   applied in the same run.
+4. **Gate**: none of its own since 2026-11-21 - a major, a one-way unit and a fixed unit go on as a patch does, the
+   review's compatibility pass their check; a `veto` label stops a unit (read again right before the merge).
 5. **Back up** before any one-way change (below), before the merge: today etcd before Kubernetes (its restore covered
    by production's own daily restore checks, not by the copy); the others blocked until theirs exist.
 6. **Apply**: merge the infra/platform PRs (the bot through Forgejo's API, never an admin account), Argo syncs; the ops
@@ -375,7 +418,8 @@ kind of issues in the future". Now:
   whole - its backups before the merge, their bound in the apply's span; taken_by - that command in the unit's plan or
   nothing merged; a test environment's unit takes no backup but runs only when its production twin could. The labels and
   the table read again after the proof.
-- the pick: a one-way unit waits out the 24 h notice as a major does (ScyllaDB's release lines are minors by number).
+- the pick: a one-way unit waits out the 24 h notice as a major does (ScyllaDB's release lines are minors by number) -
+  superseded 2026-11-21: no notice, a one-way unit applies in the run that proves it (its release notes required).
 - the plan read before the copy is built: a part the copy cannot prove (Keycloak's - copy-unit.sh has no proof for it;
   Consul's has one since 2026-11-18) refused there, labelled, nothing built and no fix agent.
 - ScyllaDB's version (the ScyllaCluster's, scyllaOperator.version) annotated beside the cqlsh image in both data values -
@@ -459,7 +503,7 @@ workstation off, the copy not building) changes nothing in production and says s
    (`task upgrade SHADOW=true`) that the cycle runs end to end. Both done 2026-11-17; since 2026-11-20 the tasks are
    `upgrade:check` and `upgrade:run`, and shadow mode is gone.
 3. Patches and minors applied automatically.
-4. Majors with the 24 h notice; the pre-change backups proven first.
+4. Majors in the run that proves and reviews them (the 24 h notice until 2026-11-21); the pre-change backups proven first.
 Each step reviewed before the next.
 
 ## The operator's review (answered 2026-11-14)

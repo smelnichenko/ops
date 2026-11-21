@@ -51,6 +51,9 @@ if [ -n "${RENOVATE_GITHUB_TOKEN:-}" ]; then
   GITHUB_COM_TOKEN=$RENOVATE_GITHUB_TOKEN
   export GITHUB_COM_TOKEN
   args+=(-e GITHUB_COM_TOKEN)
+else
+  # said, never silent: what the runner then refuses (scripts/upgrade-units.py notes - Renovate says nothing in the body)
+  echo "NO GITHUB TOKEN (RENOVATE_GITHUB_TOKEN in ops/.env is empty): Renovate fetches no release notes - the runner refuses majors, one-way units and family minors until it is set (a read-only GitHub token, no scopes)"
 fi
 mkdir -p "$ops/.copy"
 log=$ops/.copy/renovate-$(date +%Y%m%d-%H%M%S)-$$.log

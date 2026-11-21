@@ -3,7 +3,6 @@
 and ops), as the renovate-bot:
 
   UNIT LABEL          the label on each of the unit's pull requests (made in the repo where missing)
-  UNIT --comment TEXT the comment on each (the veto notice: "UPGRADE NOTICE <iso> ...")
   UNIT --heads        each pull request's head and its base branch's commit, "<repo> <number> <head> <base>" a line -
                       what the runner proves
   UNIT --green [SECONDS]
@@ -114,12 +113,6 @@ def label(unit, name):
             have[name] = call("POST", f"/repos/{repo}/labels", {"name": name, "color": "#d93f0b"})["id"]
         call("POST", f"/repos/{repo}/issues/{pr['number']}/labels", {"labels": [have[name]]})
         print(f"LABELLED {repo}#{pr['number']} {name}")
-
-
-def comment(unit, text):
-    for repo, pr in prs(unit):
-        call("POST", f"/repos/{repo}/issues/{pr['number']}/comments", {"body": text})
-        print(f"COMMENTED {repo}#{pr['number']}")
 
 
 def base_of(repo, pr):
@@ -343,7 +336,7 @@ def pause(text):
     print(f"PAUSED schnappy/ops#{number}")
 
 
-USAGE = ("usage: upgrade-label.py UNIT LABEL | UNIT --comment TEXT | UNIT --heads | UNIT --green [SECONDS] | "
+USAGE = ("usage: upgrade-label.py UNIT LABEL | UNIT --heads | UNIT --green [SECONDS] | "
          "UNIT --update | UNIT --merge --expect FILE | --pause TEXT")
 
 
@@ -357,8 +350,6 @@ def unit_action(unit, args):
         return lambda: update(unit)
     if len(args) == 3 and args[:2] == ["--merge", "--expect"]:
         return lambda: merge(unit, read_expected(args[2]))
-    if len(args) == 2 and args[0] == "--comment" and args[1]:
-        return lambda: comment(unit, args[1])
     if len(args) == 1 and re.fullmatch(r"[a-z0-9][a-z0-9-]*", args[0]):
         return lambda: label(unit, args[0])
     return None

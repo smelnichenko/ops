@@ -37,8 +37,17 @@ def flavour(t):
 
 
 def version_of(v):
-    m = VERSION.match(v)
-    return m.group(1) if m else v
+    """the version a pin names, as written: its numbers alone (^1.58.2 -> 1.58.2, 25.0.4_7-jdk -> 25.0.4_7)"""
+    m = re.search(r"\d+(?:[._+]\d+)*", v)
+    return m.group(0) if m else v
+
+
+def apart(a, b):
+    """two pins of one dependency that disagree - neither the other's line (25 and 25.0.4 agree: one names the line the
+    other is in)"""
+    x, y = numbers(a)[0], numbers(b)[0]
+    n = min(len(x), len(y))
+    return x[:n] != y[:n]
 
 
 def package_files(r):
@@ -114,6 +123,7 @@ def pins_of(repos):
     for repo, r in sorted(repos.items()):
         for f in package_files(r):
             for d in f.get("deps") or []:
+                # what each pin resolves to (mise's `java = "25"` -> 25.0.5+8: within the line 25, no drift - apart())
                 name, v = d.get("packageName") or d.get("depName"), d.get("currentVersion") or d.get("currentValue")
                 if d.get("skipReason") or not name or not v:
                     continue
@@ -124,7 +134,7 @@ def pins_of(repos):
 
 
 def show_drift(repos):
-    drift = {n: vs for n, vs in pins_of(repos).items() if len(vs) > 1}
+    drift = {n: vs for n, vs in pins_of(repos).items() if any(apart(a, b) for a in vs for b in vs)}
     if not drift:
         print("one version of each dependency everywhere")
         return

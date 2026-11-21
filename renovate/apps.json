@@ -1,7 +1,11 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "description": "The app repos' shared preset (each repo's renovate.json extends local>schnappy/ops//renovate/apps; task upgrade:apps:run / :check): one JDK and one Node everywhere - a repo's CI images, its Dockerfile, its mise.toml (the workstation's toolchain, a major alone: java temurin-25, node 22 - Adoptium's build numbers are not mise's) and its Gradle toolchain move together",
-  "extends": ["config:recommended", ":dependencyDashboard", ":semanticCommits"],
+  "extends": [
+    "config:recommended",
+    ":dependencyDashboard",
+    ":semanticCommits"
+  ],
   "prBodyTemplate": "{{{table}}}{{{warnings}}}",
   "prConcurrentLimit": 5,
   "prHourlyLimit": 0,
@@ -9,8 +13,12 @@
     {
       "customType": "regex",
       "description": "The Gradle Java toolchain - java { toolchain { languageVersion = JavaLanguageVersion.of(N) } } - read by no manager: its major alone, from Adoptium's releases (an LTS major, config:recommended's javaLTSVersions)",
-      "managerFilePatterns": ["/(^|/)build\\.gradle(\\.kts)?$/"],
-      "matchStrings": ["JavaLanguageVersion\\.of\\((?<currentValue>\\d+)\\)"],
+      "managerFilePatterns": [
+        "/(^|/)build\\.gradle(\\.kts)?$/"
+      ],
+      "matchStrings": [
+        "JavaLanguageVersion\\.of\\((?<currentValue>\\d+)\\)"
+      ],
       "depNameTemplate": "java",
       "packageNameTemplate": "java-jdk",
       "datasourceTemplate": "java-version",
@@ -21,33 +29,69 @@
   "packageRules": [
     {
       "description": "First-party images are promoted via GitOps (task promote:run), never by Renovate",
-      "matchDatasources": ["docker"],
-      "matchPackageNames": ["/^git\\.pmon\\.dev\\/schnappy\\//"],
+      "matchDatasources": [
+        "docker"
+      ],
+      "matchPackageNames": [
+        "/^git\\.pmon\\.dev\\/schnappy\\//"
+      ],
       "enabled": false
     },
     {
       "description": "Auto-merge low-risk updates once CI is green",
-      "matchUpdateTypes": ["patch", "pin", "digest"],
+      "matchUpdateTypes": [
+        "patch",
+        "pin",
+        "digest"
+      ],
       "automerge": true
     },
     {
       "description": "One JDK everywhere: the eclipse-temurin images (Dockerfiles, CI steps), mise's java and the Gradle toolchain in one pull request",
-      "matchPackageNames": ["eclipse-temurin", "java", "java-jdk", "java-jre"],
+      "matchPackageNames": [
+        "eclipse-temurin",
+        "java",
+        "java-jdk",
+        "java-jre"
+      ],
       "groupName": "java",
       "groupSlug": "java"
     },
     {
       "description": "One Node everywhere: the node images, mise's node and @types/node (the types of the runtime's major) in one pull request - LTS (even) majors only",
-      "matchPackageNames": ["node", "/(^|\\/)node$/"],
+      "matchPackageNames": [
+        "node",
+        "/(^|\\/)node$/"
+      ],
       "groupName": "node",
       "groupSlug": "node",
       "allowedVersions": "/^v?\\d*[02468](\\.|-|$)/"
     },
     {
       "description": "Playwright's browsers image and its library together - a version apart and the tests fail to start",
-      "matchPackageNames": ["mcr.microsoft.com/playwright", "@playwright/test", "playwright", "com.microsoft.playwright:playwright"],
+      "matchPackageNames": [
+        "mcr.microsoft.com/playwright",
+        "@playwright/test",
+        "playwright",
+        "com.microsoft.playwright:playwright"
+      ],
       "groupName": "playwright",
       "groupSlug": "playwright"
+    },
+    {
+      "description": "The Gradle wrapper's checksum moved with its version (a pinned distributionSha256Sum would fail the build on the old sum): Gradle's own published sum over HTTPS - never Nexus's .sha256, which takes the zip's plain-http hop - 64 hex or nothing written; a wrapper with no distributionSha256Sum line left as it is. The version an argument, never shell text",
+      "matchManagers": [
+        "gradle-wrapper"
+      ],
+      "postUpgradeTasks": {
+        "commands": [
+          "sh -c 'set -eu; s=$(curl -fsSL --proto =https \"https://services.gradle.org/distributions/gradle-$1-bin.zip.sha256\"); printf %s \"$s\" | grep -qxE \"[0-9a-f]{64}\"; sed -i \"s/^distributionSha256Sum=.*/distributionSha256Sum=$s/\" gradle/wrapper/gradle-wrapper.properties' gradle-sum {{{newVersion}}}"
+        ],
+        "fileFilters": [
+          "gradle/wrapper/gradle-wrapper.properties"
+        ],
+        "executionMode": "update"
+      }
     }
   ]
 }

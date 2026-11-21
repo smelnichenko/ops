@@ -68,11 +68,12 @@ check "the allowed post-upgrade command read from renovate/allowed-commands.json
 check "Forgejo's API, the three repos, no onboarding, its config required, the bot as author, info logging; branches made" \
   "$(grep -cxE 'RENOVATE_PLATFORM=forgejo|RENOVATE_ENDPOINT=https://git.pmon.dev/api/v1/|RENOVATE_REPOSITORIES=schnappy/infra,schnappy/platform,schnappy/ops|RENOVATE_ONBOARDING=false|RENOVATE_REQUIRE_CONFIG=required|RENOVATE_GIT_AUTHOR=Renovate Bot <renovate-bot@pmon.dev>|LOG_LEVEL=info' "$W/argv") $(grep -c RENOVATE_DRY_RUN "$W/argv")" \
   "7 0"
-check "no GitHub token: none passed (an empty one was a 401)" "$(grep -c GITHUB_COM_TOKEN "$W/argv") $(grep -c '^github=unset$' "$W/env")" "0 1"
+check "no GitHub token: none passed (an empty one was a 401), and said - what the runner refuses without release notes" \
+  "$(grep -c GITHUB_COM_TOKEN "$W/argv") $(grep -c '^github=unset$' "$W/env") $(grep -c '^NO GITHUB TOKEN ' "$W/out")" "0 1 1"
 ARGS=(--lookup)
 # a lookup prints what it found: Renovate's report (written in the container, printed after it behind a marker) summarised
 # per repository, one line per dependency - its version now -> the newest offered, any other target noted
-REPORT='{"problems":[],"repositories":{"schnappy/infra":{"problems":[],"branches":[],"packageFiles":{"argocd":[{"packageFile":"apps/istiod.yaml","deps":[{"depName":"istiod","currentValue":"1.31.4","updates":[{"newValue":"1.32.0","updateType":"minor","branchName":"renovate/istio-1.32"}]},{"depName":"postgres","currentValue":"17-alpine","currentVersion":"17","updates":[{"newValue":"18-alpine","newVersion":"18","updateType":"major","branchName":"renovate/postgres-18.x"},{"newValue":"19-alpine","newVersion":"19","updateType":"major","branchName":"renovate/postgres-19.x"}]},{"depName":"opensearch","currentValue":"3.9.0","updates":[{"newValue":"3.10.0","newVersion":"3.10.0","updateType":"minor"},{"newValue":"3.9.0","updateType":"digest","newDigest":"sha256:3bf4fe26aeb9"}]},{"depName":"nginx","currentValue":"1.27-alpine","updates":[{"newValue":"1.31-alpine","updateType":"minor"}]},{"depName":"nginx","currentValue":"1.28.3-alpine","updates":[{"newValue":"1.31.9-alpine","newVersion":"1.31.9","updateType":"minor"}]},{"depName":"kps","currentValue":"91.8.2","updates":[{"newValue":"100.1.0","newVersion":"100.1.0","updateType":"major"},{"newValue":"92.22.0","newVersion":"92.22.0","updateType":"major"}]},{"depName":"busybox","currentValue":"stable-musl","updates":[{"newValue":"stable-musl","updateType":"digest","newDigest":"sha256:abcdef1234567"}]},{"depName":"eclipse-temurin","currentValue":"25.0.4_7-jdk","currentVersion":"25.0.4_7-jdk","updates":[{"newValue":"25.0.5_8-jdk","updateType":"patch"}]},{"depName":"eclipse-temurin","currentValue":"25.0.4_7-jre","currentVersion":"25.0.4_7-jre","updates":[{"newValue":"25.0.5_8-jre","updateType":"patch"}]}]}]}},"schnappy/ops":{"problems":[],"branches":[],"packageFiles":{}},"schnappy/platform":{"problems":[],"branches":[],"packageFiles":{}}}}'
+REPORT='{"problems":[],"repositories":{"schnappy/infra":{"problems":[],"branches":[],"packageFiles":{"argocd":[{"packageFile":"apps/istiod.yaml","deps":[{"depName":"istiod","currentValue":"1.31.4","updates":[{"newValue":"1.32.0","updateType":"minor","branchName":"renovate/istio-1.32"}]},{"depName":"postgres","currentValue":"17-alpine","currentVersion":"17","updates":[{"newValue":"18-alpine","newVersion":"18","updateType":"major","branchName":"renovate/postgres-18.x"},{"newValue":"19-alpine","newVersion":"19","updateType":"major","branchName":"renovate/postgres-19.x"}]},{"depName":"opensearch","currentValue":"3.9.0","updates":[{"newValue":"3.10.0","newVersion":"3.10.0","updateType":"minor"},{"newValue":"3.9.0","updateType":"digest","newDigest":"sha256:3bf4fe26aeb9"}]},{"depName":"nginx","currentValue":"1.27-alpine","updates":[{"newValue":"1.31-alpine","updateType":"minor"}]},{"depName":"nginx","currentValue":"1.28.3-alpine","updates":[{"newValue":"1.31.9-alpine","newVersion":"1.31.9","updateType":"minor"}]},{"depName":"kps","currentValue":"91.8.2","updates":[{"newValue":"100.1.0","newVersion":"100.1.0","updateType":"major"},{"newValue":"92.22.0","newVersion":"92.22.0","updateType":"major"}]},{"depName":"busybox","currentValue":"stable-musl","updates":[{"newValue":"stable-musl","updateType":"digest","newDigest":"sha256:abcdef1234567"}]},{"depName":"eclipse-temurin","currentValue":"25.0.4_7-jdk","currentVersion":"25.0.4_7-jdk","updates":[{"newValue":"25.0.5_8-jdk","updateType":"patch"}]},{"depName":"eclipse-temurin","currentValue":"25.0.4_7-jre","currentVersion":"25.0.4_7-jre","updates":[{"newValue":"25.0.5_8-jre","updateType":"patch"}]},{"depName":"java","packageName":"java-jdk","currentValue":"25","currentVersion":"25.0.5+8.0.LTS","updates":[]},{"depName":"java","packageName":"java-jdk","currentValue":"25","currentVersion":"25","updates":[]}]}]}},"schnappy/ops":{"problems":[],"branches":[],"packageFiles":{}},"schnappy/platform":{"problems":[],"branches":[],"packageFiles":{}}}}'
 LOOKUP_LOG="$OK_LOG"$'\n''=== renovate report ==='$'\n'"${REPORT//done/x}"
 check "--lookup: Renovate reads only, its report asked for in the container (no bind mount) and printed after it" \
   "$(run RENOVATE_TOKEN=$TOKEN FAKE_LOG="$LOOKUP_LOG") $(grep -cx RENOVATE_DRY_RUN=lookup "$W/argv") $(grep -cx RENOVATE_REPORT_TYPE=file "$W/argv") $(tail -1 "$W/argv" | grep -c 'cat /tmp/renovate-report.json')" "0 1 1 1"
@@ -86,6 +87,8 @@ check "  a tag's flavours (one version, -jdk and -jre) on one line, each with it
   "$(grep -c '^  eclipse-temurin: ' "$W/out") $(grep -c '^  eclipse-temurin: 25.0.4_7-jdk -> 25.0.5_8-jdk (patch); 25.0.4_7-jre -> 25.0.5_8-jre (patch)  \[apps/istiod.yaml\]$' "$W/out")" "1 1"
 check "  flavours of one version are no drift (eclipse-temurin's -jdk and -jre: no line of it under DIFFERENT VERSIONS)" \
   "$(sed -n '/^DIFFERENT VERSIONS/,/^[^ ]/p' "$W/out" | grep -c 'eclipse-temurin')" "0"
+check "  a pin naming its line (mise's java = \"25\", resolved to 25.0.5+8) beside the same line elsewhere: no drift - the pins as written" \
+  "$(sed -n '/^DIFFERENT VERSIONS/,/^[^ ]/p' "$W/out" | grep -c 'java-jdk')" "0"
 check "  the newest by its numbers, not as text (100.1.0 above 92.22.0)" "$(grep -c '^  kps: 91.8.2 -> 100.1.0 (major, also offered: 92.22.0)' "$W/out")" "1"
 check "  a rebuild of the same tag (a digest update) said as one - beside a new version, and alone - never as a version" \
   "$(grep -c '^  opensearch: 3.9.0 -> 3.10.0 (minor, also offered: 3.9.0 rebuilt)  \[apps/istiod.yaml\]$' "$W/out") $(grep -c '^  busybox: stable-musl - same tag, new image (digest abcdef1)  \[apps/istiod.yaml\]$' "$W/out")" "1 1"
@@ -377,12 +380,13 @@ mine = [r for r in d["packageRules"] if r.get("groupSlug") == "gateway-api"]
 print(any(gw in r["matchPackageNames"] for r in istio), [(r["matchPackageNames"], r["group"]["branchTopic"]) for r in mine])
 PYGATEWAY
 )" "False [(['https://github.com/kubernetes-sigs/gateway-api'], 'gateway-api-{{{newMajor}}}.{{{newMinor}}}')]"
-# Renovate's pull requests are mailed to whoever watches the repos: their body the table of what changes (package, update,
-# from -> to) and Renovate's warnings alone - no header, configuration, controls, footer, release notes or the
-# "no github.com credentials" note (operator 2026-11-20). Renovate puts its debug comment after the template whatever it
-# holds (upgrade-units.py reads the unit's labels there)
-check "the preset: a pull request's body the table of what changes and Renovate's warnings, nothing else" \
-  "$("$PY" -c 'import json; print(json.load(open("renovate/upgrade-cycle.json")).get("prBodyTemplate"))')" "{{{table}}}{{{warnings}}}"
+# A pull request's body: the table of what changes (package, update, from -> to), Renovate's warnings, and the release
+# notes - what the review's compatibility pass reads (<repo>.pr.md, operator 2026-11-21: "just need to make sure versions
+# are compatible"); no header, configuration, controls, footer or the "no github.com credentials" note (operator
+# 2026-11-20 - the release notes cut then, when the pull requests were mailed; the repos unwatched since). Renovate puts its
+# debug comment after the template whatever it holds (upgrade-units.py reads the unit's labels there)
+check "the preset: a pull request's body the table of what changes, Renovate's warnings and the release notes, nothing else" \
+  "$("$PY" -c 'import json; print(json.load(open("renovate/upgrade-cycle.json")).get("prBodyTemplate"))')" "{{{table}}}{{{warnings}}}{{{changelogs}}}"
 # the app repos' shared preset (renovate/apps.json, each app repo's renovate.json extends it): one JDK and one Node
 # everywhere - the Gradle toolchain read by a regex manager (its major alone), the JDK images, mise's java and the toolchain
 # one group; node images, mise's node and @types/node one group, LTS (even) majors only; first-party images never touched
@@ -403,4 +407,36 @@ print(got, bool(files.search("build.gradle")), bool(files.search("backend/build.
       m["datasourceTemplate"], m["extractVersionTemplate"], lts, groups, len(off), "config:recommended" in d["extends"])
 PYAPPS
 )" "['25'] True True False java-version ^(?<version>\d+) ['22-alpine', '24', '26.13.1', 'v24.1.0'] ['java', 'node', 'playwright'] 1 True"
+# the Gradle wrapper's checksum moved with its version (apps preset): the command allowed for a release version alone
+# (never shell text from a crafted one), Gradle's sum written when it is 64 hex, the file as it was otherwise
+check "the apps preset's wrapper checksum: allowed for 9.9.2 alone; the sum written; garbage, a failed fetch, no sum line: the file as it was" \
+  "$("$PY" - "$W" <<'PYGW'
+import json, os, re, subprocess, sys
+w = sys.argv[1]
+rule = next(r for r in json.load(open("renovate/apps.json"))["packageRules"] if r.get("matchManagers") == ["gradle-wrapper"])
+cmd = rule["postUpgradeTasks"]["commands"][0]
+allowed = json.load(open("renovate/allowed-commands.json"))
+def ok(v):
+    return any(re.fullmatch(a, cmd.replace("{{{newVersion}}}", v)) for a in allowed)
+bad = [v for v in ("9.9.2; touch /tmp/x", "9.9.2$(id)", "9.9.2 x", "9") if ok(v)]
+GOOD = "971fcd7150ca4ba04852c0b2ca0d2d0ab9468e14b03473eab19528809914c76b"
+OLD = "distributionUrl=http\\://nexus/x/gradle-9.9.2-bin.zip\ndistributionSha256Sum=" + "a" * 64 + "\n"
+def run(curl_out, curl_rc=0, text=OLD):
+    d = os.path.join(w, "gw"); os.makedirs(os.path.join(d, "gradle/wrapper"), exist_ok=True)
+    bin_ = os.path.join(w, "gwbin"); os.makedirs(bin_, exist_ok=True)
+    open(os.path.join(bin_, "curl"), "w").write(f"#!/bin/sh\necho \"$*\" > {w}/gw-curl-args\nprintf '%s\\n' '{curl_out}'\nexit {curl_rc}\n")
+    os.chmod(os.path.join(bin_, "curl"), 0o755)
+    f = os.path.join(d, "gradle/wrapper/gradle-wrapper.properties"); open(f, "w").write(text)
+    r = subprocess.run(["sh", "-c", cmd.replace("{{{newVersion}}}", "9.9.2")], cwd=d, env={**os.environ, "PATH": bin_ + ":" + os.environ["PATH"]},
+                       capture_output=True, text=True)
+    return r.returncode, open(f).read()
+rc, good = run(GOOD)
+args = open(os.path.join(w, "gw-curl-args")).read().strip()
+rc2, garbage = run("<html>not a sum</html>")
+rc3, failed = run("", 22)
+rc4, none = run(GOOD, text="distributionUrl=x\n")
+print(ok("9.9.2"), bad, rc, good.splitlines()[1] == "distributionSha256Sum=" + GOOD, "--proto =https" in args and "services.gradle.org/distributions/gradle-9.9.2-bin.zip.sha256" in args,
+      rc2 != 0 and garbage == OLD, rc3 != 0 and failed == OLD, rc4 == 0 and none == "distributionUrl=x\n")
+PYGW
+)" "True [] 0 True True True True True"
 if [ "$fails" = 0 ]; then echo "upgrade-renovate: ALL-PASS"; else echo "upgrade-renovate: $fails FAILED"; exit 1; fi

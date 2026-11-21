@@ -32,7 +32,7 @@ mkdir -p docs/upgrades
   echo "## The run"
   echo
   echo '```'
-  grep -E ' (PICK|RUN|RED|NOTICED|APPLIED|BLOCKED) ' "$log" | sed -E 's/(TOKEN|PASSWORD|token|password)=[^ ]*/\1=***/g'
+  grep -E ' (PICK|RUN|RED|ONE-WAY|REVIEW|APPLIED) ' "$log" | sed -E 's/(TOKEN|PASSWORD|token|password)=[^ ]*/\1=***/g'
   echo '```'
   echo
   echo "## Production's inventory after it"

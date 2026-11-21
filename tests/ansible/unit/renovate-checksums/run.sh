@@ -430,11 +430,12 @@ check("the preset: one post-upgrade task, the script's --changed, once a branch,
       (1, ["schnappy/ops"], [CMD], "branch", []))
 allowed = json.load(open("renovate/allowed-commands.json"))
 launcher = open("scripts/upgrade-renovate.sh").read()
-check("the allowed commands: that one, nothing chained to it; task upgrade:run's Renovate (scripts/upgrade-renovate.sh) "
+check("the allowed commands: this one matched by exactly one (the app repos' gradle-wrapper checksum has its own, tested in "
+      "upgrade-renovate), nothing chained to it allowed by any; task upgrade:run's Renovate (scripts/upgrade-renovate.sh) "
       "reads them from renovate/allowed-commands.json",
-      ([bool(re.match(rx, CMD)) for rx in allowed], [bool(re.match(rx, CMD + "; rm -rf /")) for rx in allowed],
+      (sum(bool(re.match(rx, CMD)) for rx in allowed), any(re.match(rx, CMD + "; rm -rf /") for rx in allowed),
        'RENOVATE_ALLOWED_COMMANDS=$(cat "$ops/renovate/allowed-commands.json")' in launcher),
-      ([True], [False], True))
+      (1, False, True))
 annotated = {p["name"]: bool(re.search(rf"#\s*renovate:.*\n\s*{p['version']}:", open(p["file"]).read()))
              for p in rc.PINS if "version" in p}
 check("each pin Renovate moves is annotated where its version is; each it does not move is not, and says why",

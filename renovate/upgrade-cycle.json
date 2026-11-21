@@ -27,7 +27,7 @@
   "rebaseWhen": "conflicted",
   "prConcurrentLimit": 0,
   "prHourlyLimit": 0,
-  "prBodyTemplate": "{{{table}}}{{{warnings}}}",
+  "prBodyTemplate": "{{{table}}}{{{warnings}}}{{{changelogs}}}",
   "branchConcurrentLimit": 0,
   "branchPrefix": "renovate/",
   "labels": [
@@ -352,7 +352,7 @@
       "allowedVersions": "/^15\\./"
     },
     {
-      "description": "Majors wait out the operator's 24 h veto notice; one-way ones take their stores' backup first (the cycle)",
+      "description": "Majors: proven, reviewed for compatibility (each step from the version running) and applied like any unit - one major a unit, the lower first (separateMultipleMajor); one-way ones take their stores' backup first (the cycle)",
       "matchUpdateTypes": [
         "major"
       ],

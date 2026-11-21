@@ -14,8 +14,10 @@
 #   before the commands, verified on them, recorded, the journal gone
 #   red: the agent's fix (commits only, sandboxed, --restricted, the checksum script the runner's) fetched into a
 #   repository of the runner's, kept inside the unit's own files, pushed to Forgejo's URL as the bot, labelled
-#   stop-updating and agent-fixed, read until Forgejo shows it, proven again - then a 24 h notice (its diff), never
-#   merged in that run; no fix: blocked (labelled on the agent's NO FIX alone), no rebuild
+#   stop-updating and agent-fixed, read until Forgejo shows it, proven again, reviewed - then applied in that run (no
+#   notice: operator 2026-11-21), a major or one-way unit too; the review handed Renovate's pull request bodies and the
+#   repos the unit does not touch, its compatibility pass required; no fix: blocked (labelled on the agent's NO FIX
+#   alone), no rebuild
 #   a refused merge: the journal gone; a partial one, a failed command, a stop after (or during) the merge: paged and
 #   paused; a stop before it: nothing; a closed terminal after the journal: nothing stops; --dry runs and writes
 #   nothing; one run at a time; no step holds the run's lock
@@ -35,7 +37,7 @@ def check(name, got, want):
 OPS = os.path.join(W, "ops"); BIN = os.path.join(W, "bin"); ST = os.path.join(W, "state"); WORK = os.path.join(W, "work")
 for d in (os.path.join(OPS, "scripts"), BIN, ST, os.path.join(OPS, ".claude/agents")):
     os.makedirs(d, exist_ok=True)
-for f in ("upgrade-cycle.sh", "upgrade-stores.py", "upgrade-stores.json"):  # the runner, what one-way stores need
+for f in ("upgrade-cycle.sh", "upgrade-stores.py", "upgrade-stores.json", "upgrade-fix-judge.py"):  # the runner, what one-way stores need, the fix's judge
     shutil.copy(os.path.join(REAL, "scripts", f), os.path.join(OPS, "scripts"))
 for name in ("code-architecture-reviewer", "platform-reliability-reviewer", "test-quality-reviewer"):
     shutil.copy(os.path.join(REAL, ".claude/agents", name + ".md"), os.path.join(OPS, ".claude/agents"))
@@ -56,7 +58,8 @@ case "$1" in
     if [ "$n" -gt 1 ] && [ -e "$ST/list.later" ]; then cat "$ST/list.later"
     elif [ -e "$ST/list" ]; then cat "$ST/list"; else read -r _ u k < "$ST/pick"; echo "$u $k schnappy/infra upgrade-cycle"; fi ;;
   held) [ ! -e "$ST/held.fail" ] || exit 1; cat "$ST/held" 2>/dev/null; exit 0 ;;
-  noticed) cat "$ST/noticed" 2>/dev/null || echo NONE ;;
+  bodies) [ ! -e "$ST/bodies.rc" ] || exit "$(cat "$ST/bodies.rc")"; echo "| x | 1 -> 2 |" > "$3/infra.pr.md"; echo "$3/infra.pr.md" ;;
+  notes) [ ! -e "$ST/notes.rc" ] || { echo "schnappy/infra: release notes skipped"; exit "$(cat "$ST/notes.rc")"; } ;;
   *) cat "$ST/pick"; exit "$(cat "$ST/pick.rc" 2>/dev/null || echo 0)" ;;
 esac''')
 stub(os.path.join(OPS, "scripts/upgrade-label.py"), LOG + '''
@@ -121,6 +124,7 @@ n=$(ls "$ST"/agent.* 2>/dev/null | wc -l)
 echo "${GIT_AUTHOR_NAME:-} <${GIT_AUTHOR_EMAIL:-}> ${GIT_COMMITTER_NAME:-} <${GIT_COMMITTER_EMAIL:-}>" > "$ST/author.$n"
 case "$*" in
   *"upgrade-cycle review"*) { ls; cat ./*.commits ./*.diff; } > "$ST/review.saw" 2>&1  # what lies beside its clones
+    cat ./prod-inventory.txt > "$ST/review.saw-inventory" 2>&1
     n=$(( $(cat "$ST/review.n" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$ST/review.n"
     if [ -e "$ST/verdict.$n" ]; then cat "$ST/verdict.$n"; else cat "$ST/verdict"; fi
     exit "$(cat "$ST/review.rc" 2>/dev/null || echo 0)" ;;
@@ -137,7 +141,7 @@ stub(os.path.join(BIN, "git"), LOG + '''
 args="$*"
 dir=""; prev=""; for a in "$@"; do [ "$prev" != -C ] || { dir=$a; break; }; prev=$a; done  # -C wherever it stands
 case "$args" in
-  *" clone "*) cat > /dev/null; mkdir -p "${@: -1}" ;;
+  *" clone "*) cat > /dev/null; case "${@: -1}" in */context/*) [ ! -e "$ST/ctxclone.rc" ] || exit 1 ;; esac; mkdir -p "${@: -1}" ;;
   "init -q --bare "*) cat > /dev/null; mkdir -p "${@: -1}" ;;
   *"fetch -q --no-tags"*) cat > /dev/null; exit "$(cat "$ST/fetchfix.rc" 2>/dev/null || echo 0)" ;;
   *"rev-parse refs/fix"*)
@@ -145,7 +149,8 @@ case "$args" in
       */infra) if [ -e "$ST/fixed" ]; then echo bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb; else echo aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa; fi ;;
       */ops) if [ -e "$ST/fixed.ops" ]; then echo dddddddddddddddddddddddddddddddddddddddd; else echo cccccccccccccccccccccccccccccccccccccccc; fi ;;
     esac ;;
-  *" diff "*"--raw"*) case "$dir" in  # each file a plain one (100644) unless the case gives raw lines of its own
+  *" diff "*"--raw"*) [ ! -e "$ST/rawdiff.rc" ] || exit "$(cat "$ST/rawdiff.rc")"
+    case "$dir" in  # each file a plain one (100644) unless the case gives raw lines of its own
       */ops) sfx=.ops; def=deploy/ansible/vars/vault.yml ;;
       *) sfx=""; def=clusters/production/istio/values.yaml ;;
     esac
@@ -174,20 +179,19 @@ case "$args" in
       h="$ST/heads.$n"; [ -e "$h" ] || h="$ST/heads.last"; [ ! -e "$ST/heads.override" ] || h="$ST/heads.override"
       awk -v r="schnappy/$r" '$1 == r {print $3}' "$h"; fi ;;
   *"cat-file blob"*) case "${*: -1}" in  # the proven head's file as it was; the fix's as the case gives it
-      aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:*|cccccccccccccccccccccccccccccccccccccccc:*) echo "v: 1" ;;
-      *) cat "$ST/blob" 2>/dev/null || echo "v: 2" ;; esac ;;
+      aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:*|cccccccccccccccccccccccccccccccccccccccc:*) echo "v: 1.0.0" ;;
+      *) cat "$ST/blob" 2>/dev/null || echo "v: 1.0.1" ;; esac ;;
   *" diff --text --no-ext-diff --no-textconv --no-color origin/main...HEAD"*)  # the review's diff of a clone
     [ ! -e "$ST/revdiff.$(basename "$dir").rc" ] || exit "$(cat "$ST/revdiff.$(basename "$dir").rc")"
     echo "the diff of $(basename "$dir")" ;;
-  *" diff --text"*) cat "$ST/blob" 2>/dev/null; exit 0 ;;  # no blob: an empty diff (git's answer, exit 0)
+  *" diff --text"*) cat "$ST/blob" 2>/dev/null || echo "+v: 2 the fix's line"; exit 0 ;;  # the fix's diff (blob: its file)
   *" log --no-color --format=%h %an <%ae> %s origin/main..HEAD"*)  # the review's commits of a clone
     [ ! -e "$ST/revlog.$(basename "$dir").rc" ] || exit "$(cat "$ST/revlog.$(basename "$dir").rc")"
     echo "the commits of $(basename "$dir")" ;;
-  *"merge-tree --write-tree origin/main "*)  # merging a head into main: one tree whatever the head - unless a commit came
-    # since the notice ($ST/sincenotice): then each head its own tree (the head now and the announced one differ)
-    if [ -s "$ST/sincenotice" ]; then echo "tree-of-${*: -1}"; else echo tree-the-announced-ones; fi ;;
   *"diff --stat --no-ext-diff --no-textconv --no-color --no-renames origin/main..."*) [ ! -e "$ST/summary.fail" ] || exit 128; echo " clusters/production/x.yaml | 2 +-" ;;
   *"log --format=%h %s origin/main.."*) printf 'abc1234 bump x to 2 \033[2J\n' ;;  # a subject with a terminal escape
+  *"log --format=%h %s "*..*) echo "bbbbbbb the agent's own subject" ;;  # the fix's commits in the runner's repository
+  *" diff --stat --no-ext-diff --no-textconv --no-color --no-renames "*) echo " clusters/production/fixed.yaml | 2 +-" ;;
   *" commit-tree "*) case "$dir" in  # the runner's commit of the fix's tree: the agent's tip for the case's purposes
       */ops) echo dddddddddddddddddddddddddddddddddddddddd ;; *) echo bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb ;; esac ;;
   *"rev-list origin/main --not"*)  # ops' main beyond the gate and the unit's ops head: the unit's merge alone
@@ -216,7 +220,7 @@ H2 = "schnappy/infra 4 " + "b" * 40 + " " + "e" * 40 + "\nschnappy/ops 7 " + "c"
 H3 = "schnappy/infra 4 " + "b" * 40 + " " + "e" * 40 + "\nschnappy/ops 7 " + "d" * 40 + " " + "e" * 40 + "\n"
 H1_UPDATED = "schnappy/infra 4 " + "5" * 40 + " " + "e" * 40 + "\nschnappy/ops 7 " + "c" * 40 + " " + "e" * 40 + "\n"
 H1_BASE_MOVED = "schnappy/infra 4 " + "a" * 40 + " " + "9" * 40 + "\nschnappy/ops 7 " + "c" * 40 + " " + "e" * 40 + "\n"
-CLEAN = "PASSES: correctness, security, architecture, reliability, tests\nVERDICT: CLEAN"
+CLEAN = "PASSES: correctness, security, architecture, reliability, tests, compatibility\nVERDICT: CLEAN"
 def setup(pick, proofs=(0,), plan="test:copy:change INFRA_REF=renovate/x PLATFORM_REF=main\n", verdict=CLEAN, mem=30000,
           files=None, heads=(H1,), records=(), inflight=False, tries=0, journal=None, pending=None, verdicts=()):
     for f in os.listdir(ST):
@@ -228,6 +232,9 @@ def setup(pick, proofs=(0,), plan="test:copy:change INFRA_REF=renovate/x PLATFOR
         os.makedirs(os.path.join(OPS, "docs/upgrades"), exist_ok=True)
         open(os.path.join(OPS, "docs/upgrades", r), "w").write("x\n")
     os.makedirs(os.path.join(OPS, ".upgrade-cycle"), exist_ok=True)
+    os.makedirs(os.path.join(OPS, "tests/ansible/copy"), exist_ok=True)  # production's inventory as test:copy:ready read it
+    open(os.path.join(OPS, "tests/ansible/copy/prod-inventory.txt"), "w").write("image istio/proxyv2 1.31.4 read-this-run\n")
+    open(os.path.join(OPS, "tests/ansible/copy/pi-versions.yml"), "w").write("vault: 1.21.1\n")
     if inflight:
         open(os.path.join(OPS, ".upgrade-cycle/inflight"), "w").write(journal or "unit wave-patches\nlog x\nmerged\n")
     if tries:  # earlier runs' tries for the unit
@@ -282,7 +289,7 @@ def run_log():  # the run's own log - every line it said, the terminal gone or n
     logs = sorted(f for f in os.listdir(d) if f.startswith("upgrade-cycle-")) if os.path.isdir(d) else []
     return open(os.path.join(d, logs[-1]), errors="replace").read() if logs else ""
 def notices(calls):
-    """What the run said of its unit - stopped, applied, noticed (nothing is mailed: operator 2026-11-20) - and the pages
+    """What the run said of its unit - stopped, applied (a NOTICED, retired 2026-11-21, still caught) - and the pages
     it recorded (its calls)."""
     said = [f"{m.group(1).lower()} {m.group(2)}" for m in re.finditer(r"^\S+ \S+ (STOPPED|APPLIED|NOTICED) ([a-z0-9.-]+):", run_log(), re.M)]
     return said + [f"page {c.split()[2]}" for c in has(calls, "upgrade-notice.sh page")]
@@ -307,8 +314,13 @@ def inflight():
 def stopped(sig, flag_file, pick="prove wave-patches patch", **kw):
     """the run started, the signal sent once flag_file shows the step under way - its exit and calls"""
     setup(pick, **kw)
+    # the run's signals at their defaults, whoever started the harness: an ignored SIGINT (a shell's `&` job starts so)
+    # survives the exec, and the Ctrl-C case passed or failed on how it was launched, not on the runner
+    def defaults():
+        for s_ in (signal.SIGINT, signal.SIGQUIT, signal.SIGTERM, signal.SIGHUP):
+            signal.signal(s_, signal.SIG_DFL)
     p = subprocess.Popen(["bash", os.path.join(OPS, "scripts/upgrade-cycle.sh")], stdout=subprocess.DEVNULL,
-                         stderr=subprocess.DEVNULL, env=environ("12:00", "3"))
+                         stderr=subprocess.DEVNULL, env=environ("12:00", "3"), preexec_fn=defaults)
     for _ in range(400):
         if os.path.exists(os.path.join(ST, flag_file)):
             break
@@ -429,7 +441,14 @@ check("  the review's clones as the bot (its token by a helper of the call's own
        [c.split()[-1] for c in calls if c.startswith("git -C " + WORK) and "checkout -q -B" in c],
        all('test "$h" = git.pmon.dev' in c for c in calls if c.startswith("git -c credential.helper=")),
        os.listdir(WORK) if os.path.exists(WORK) else []),
-      (["https://git.pmon.dev/schnappy/infra.git", "https://git.pmon.dev/schnappy/ops.git"], ["a" * 40, "c" * 40], True, []))
+      (["https://git.pmon.dev/schnappy/infra.git", "https://git.pmon.dev/schnappy/ops.git", "https://git.pmon.dev/schnappy/platform.git"],
+       ["a" * 40, "c" * 40], True, []))
+check("  the review's context: each repo the unit does not touch cloned at main, one commit deep, under context/ (production's "
+      "inventory and every other pin read there); Renovate's pull request bodies written beside the clones",
+      ([" ".join(c.split()[-5:-2]) + " " + c.split()[-1].split("/context/")[-1] for c in calls
+        if c.startswith("git -c credential.helper=") and " clone " in c and "/context/" in c],
+       [c.split()[:3] + [c.split()[3].startswith(WORK)] for c in has(calls, "upgrade-units.py bodies")]),
+      (["-q --depth 1 platform"], [["upgrade-units.py", "bodies", "wave-patches", True]]))
 check("  Kubernetes to the proven version", has(calls, "task --yes deploy:kubeadm"),
       ["task --yes deploy:kubeadm:upgrade -- -e k8s_upgrade_to=1.36.7"])
 check("  the journal of the apply gone with its record; no step that may leave a process behind (task - the copy's host "
@@ -461,7 +480,7 @@ check("  beside each clone, before the review starts: its diff against main and 
       "refused, platform's and ops' diffs never read) - as text, git's external diff and textconv off",
       (open(os.path.join(ST, "review.saw")).read().splitlines(),
        len([c for c in calls if c.startswith("git -C " + WORK) and "diff --text --no-ext-diff --no-textconv --no-color origin/main...HEAD" in c])),
-      (["infra", "infra.commits", "infra.diff", "ops", "ops.commits", "ops.diff", "the commits of infra", "the commits of ops",
+      (["context", "infra", "infra.commits", "infra.diff", "infra.pr.md", "ops", "ops.commits", "ops.diff", "pi-versions.yml", "prod-inventory.txt", "the commits of infra", "the commits of ops",
         "the diff of infra", "the diff of ops"], 2))
 rc, calls = night("prove centrifugo minor")
 check("a unit with no production command: ops brought to origin's main all the same (its ops part may be a file no "
@@ -564,12 +583,12 @@ check("  its commits fetched into the runner's own repository (never run in the 
 check("  the fix's own CI waited for before its proof (green read again after the push)",
       [words(c, 4) for c in calls if c.startswith(("upgrade-label.py istio --green", "upgrade-label.py istio agent-fixed"))],
       ["upgrade-label.py istio --green 3600", "upgrade-label.py istio agent-fixed", "upgrade-label.py istio --green 3600"])
-check("  then, proven and reviewed: its 24 h notice - its comment, said on the terminal (nothing mailed), the fix's record "
-      "kept - never merged in this run",
-      (notices(calls), has(calls, "upgrade-label.py istio --comment")[0][:47] if has(calls, "upgrade-label.py istio --comment") else None,
-       merged(calls, "istio"), "=== schnappy/infra" in open(os.path.join(OPS, ".upgrade-cycle/fixes/istio.diff")).read()
-       if os.path.exists(os.path.join(OPS, ".upgrade-cycle/fixes/istio.diff")) else None),
-      (["noticed istio"], "upgrade-label.py istio --comment UPGRADE NOTICE", False, True))
+check("  then, proven again and reviewed: applied in this run (no notice, no comment - operator 2026-11-21), said with "
+      "the agent's fix named; its record gone with the apply (its commit merged)",
+      (notices(calls), has(calls, "upgrade-label.py istio --comment"), merged(calls, "istio"),
+       any("APPLIED istio: minor, with the agent's fix" in l for l in run_log().splitlines()),
+       os.path.exists(os.path.join(OPS, ".upgrade-cycle/fixes/istio.diff"))),
+      (["applied istio"], [], True, True, False))
 for files, why in (({"fix.heads": H2, "fix.files": ".woodpecker/ci.yaml\n"}, "changed CI (outside the unit's own files)"),
                    ({"fix.heads": H2, "fix.files": "clusters/production/CLAUDE.md\n"}, "wrote an agent's instructions"),
                    ({"fix.heads": H2, "fix.files": "clusters/x.yaml\nscripts/copy-unit.sh\n"}, "changed a script beside a value"),
@@ -580,6 +599,9 @@ for files, why in (({"fix.heads": H2, "fix.files": ".woodpecker/ci.yaml\n"}, "ch
     check(f"a fix that {why}: not pushed, blocked, proven no more, nothing merged",
           (rc, merged(calls, "istio"), pushes(calls) if "push.rc" not in files else [], notices(calls), len(has(calls, "task test:copy:ready"))),
           (1, False, [], ["stopped istio"], 1))
+rc, calls = night("prove istio minor", proofs=(1, 0), files={"fix.heads": H2, "rawdiff.rc": "128"})
+check("a fix whose files git does not list (its diff failing): nothing pushed, blocked - never its tree pushed unjudged",
+      (rc, pushes(calls), any("the fix's files not read" in l for l in run_log().splitlines())), (1, [], True))
 rc, calls = night("prove istio minor", proofs=(1, 0), files={"fix.heads": H2, "fix.raw": ":000000 120000 0000000 3333333 A\tclusters/production/x.yaml\n"})
 check("a fix committing a symlink (or a submodule) under the unit's own files: nothing pushed, blocked (the copy reads "
       "the tree unsandboxed)", (rc, pushes(calls), notices(calls)), (1, [], ["stopped istio"]))
@@ -591,33 +613,38 @@ for blob, why in (("v: 2\r  extra: evil\n", "a carriage return (a YAML key hidde
 rc, calls = night("prove istio minor", proofs=(1, 0), files={"fix.heads": H2}, env={"LABEL_FAIL": "stop-updating"})
 check("a fix whose stop-updating label does not set (Renovate would rewrite it): nothing pushed, blocked", (rc, pushes(calls), notices(calls)),
       (1, [], ["stopped istio"]))
-setup("prove istio minor", proofs=(1, 0), files={"fix.heads": H2})
+setup("prove istio minor", proofs=(1, 0), files={"fix.heads": H2, "merge.rc": "1"})  # ends before the apply clears it
 os.makedirs(os.path.join(OPS, ".upgrade-cycle/fixes"), exist_ok=True)
 open(os.path.join(OPS, ".upgrade-cycle/fixes/istio.diff"), "w").write("=== the agent's fix of renovate/istio, long ago (applied) - files:\nOLD\n")
 subprocess.run(["bash", os.path.join(OPS, "scripts/upgrade-cycle.sh")], capture_output=True, text=True, env=environ("12:00", "3"), timeout=120)
 check("a unit of a name fixed before (its record of an applied instance): this fix's record alone - the old one never mailed",
       "OLD" in open(os.path.join(OPS, ".upgrade-cycle/fixes/istio.diff")).read(), False)
-rc, calls = night("prove istio minor", proofs=(1, 0), files={"fix.heads": H2, "blob": "x: " + "y" * 120000 + "\n"})
-check("a fix of any size (over the 100 KB a mail once took): noticed all the same - nothing is mailed, never labelled",
-      (rc, has(calls, "upgrade-label.py istio upgrade-blocked"), notices(calls)), (0, [], ["noticed istio"]))
+rc, calls = night("prove istio minor", proofs=(1, 0), files={"fix.heads": H2, "blob": "v: 1.0.1\n# " + "y" * 120000 + "\n"})
+check("a fix of any size (over the 100 KB a mail once took): applied all the same - nothing is mailed, never labelled",
+      (rc, has(calls, "upgrade-label.py istio upgrade-blocked"), notices(calls)), (0, [], ["applied istio"]))
 rc, calls = night("prove istio minor", proofs=(1, 0), files={"fix.heads": H2, "fix.raw": ":100644 000000 1111111 0000000 D\tclusters/production/old.yaml\n"})
-check("a fix deleting a file of the unit's own: pushed (a deletion is no symlink)", (rc, len(pushes(calls))), (0, 1))
-rc, calls = night("prove istio minor", proofs=(1, 0), files={"fix.heads": H2})
+check("a fix deleting a file of the unit's own: refused, nothing pushed (a NetworkPolicy or a PeerAuthentication gone is no fix)",
+      (rc, len(pushes(calls))), (1, 0))
+rc, calls = night("prove istio minor", proofs=(1, 0), files={"fix.heads": H2, "merge.rc": "1"})  # ends before the apply clears it
 fixrec = os.path.join(OPS, ".upgrade-cycle/fixes/istio.diff")
+rec = open(fixrec).read() if os.path.exists(fixrec) else ""
 check("  the fix on record (.upgrade-cycle/fixes/<unit>.diff): every repo's files first, then its commits and diff",
-      open(fixrec).read().split("\n")[:2] if os.path.exists(fixrec) else None,
-      ["=== the agent's fix of renovate/istio, " + open(fixrec).read().split(", ", 1)[1].split("\n")[0] if os.path.exists(fixrec) else "", "=== schnappy/infra"])
+      (rec.startswith("=== the agent's fix of renovate/istio, "), rec.split("\n")[1:3],
+       rec.find("bbbbbbb the agent's own subject") > rec.find("fixed.yaml | 2 +-") > 0, "+v: 2 the fix's line" in rec),
+      (True, ["=== schnappy/infra", " clusters/production/fixed.yaml | 2 +-"], True, True))
 rc, calls = night("prove istio minor", proofs=(1, 0), files={"fix.heads": H2}, env={"LABEL_FAIL": "agent-fixed"})
-check("a fix whose agent-fixed label does not set (its 24 h notice would not hold): nothing pushed, blocked, not proven again",
+check("a fix whose agent-fixed label does not set (what the agent wrote would carry no mark of it): nothing pushed, "
+      "blocked, not proven again",
       (rc, pushes(calls), len(has(calls, "task test:copy:ready")), notices(calls), merged(calls, "istio")),
       (1, [], 1, ["stopped istio"], False))
-rc, calls = night("prove istio minor", proofs=(1, 0), files={"fix.heads": H3, "fixed.ops": ""})
+# ops' merge on main: its second parent the fixed ops head (dddd) - the unit goes on to its apply now
+rc, calls = night("prove istio minor", proofs=(1, 0), files={"fix.heads": H3, "fixed.ops": "", "opsparent2": "d" * 40 + "\n"})
 labelled_at = min([i for i, c in enumerate(calls) if c.startswith("upgrade-label.py istio agent-fixed")] or [10 ** 6])
 pushed_at = [i for i, c in enumerate(calls) if c.startswith("git ") and " push " in c]
 check("a fix in two repos (the clone and its list read past every step that reads stdin): both judged, labelled "
       "agent-fixed BEFORE the first push, both pushed, proven again on both heads Forgejo shows",
       (rc, [p[1][:4] for p in pushes(calls)], bool(pushed_at) and labelled_at < min(pushed_at), len(has(calls, "task test:copy:ready")),
-       notices(calls)), (0, ["bbbb", "dddd"], True, 2, ["noticed istio"]))
+       notices(calls)), (0, ["bbbb", "dddd"], True, 2, ["applied istio"]))
 readies = [i for i, c in enumerate(calls) if c.startswith("task test:copy:ready")]
 forgets = [i for i, c in enumerate(calls) if c.startswith("copy-snapshot.sh forget")]
 check("  the proof after the fix on a base built fresh: the snapshot forgotten between the two readies, once (never one base twice)",
@@ -633,7 +660,7 @@ check("a fix fine in infra, outside the unit's files in ops: NOTHING pushed (nev
       (rc, pushes(calls), has(calls, "upgrade-label.py istio agent-fixed"), notices(calls)), (1, [], [], ["stopped istio"]))
 rc, calls = night("prove istio minor", proofs=(1, 0), files={"fix.heads": H3, "fixed.ops": "", "push.ops.rc": "1"})
 check("a fix whose second push is refused after the first went in: blocked - the unit labelled agent-fixed already (what "
-      "went in waits for its notice)", (rc, len(pushes(calls)), bool(has(calls, "upgrade-label.py istio agent-fixed")), notices(calls)),
+      "went in is proven and reviewed again before any apply)", (rc, len(pushes(calls)), bool(has(calls, "upgrade-label.py istio agent-fixed")), notices(calls)),
       (1, 2, True, ["stopped istio"]))
 rc, calls = night("prove wave-patches patch", plan=PLAN, files={"branchtip.infra": "9" * 40 + "\n"})
 check("a checkout's branch not the head its pull request names (Forgejo's record behind its git): nothing built, no try",
@@ -683,39 +710,41 @@ for verdict, files, label, why in (("VERDICT: CRITICAL a bad thing\nPASSES: x", 
                                    ("PASSES: a\nVERDICT: CLEAN\nVERDICT: CRITICAL later", {}, True, "a later CRITICAL: a finding, to the fix agent"),
                                    ("VERDICT: CRITICAL first\n" + CLEAN, {}, True, "a CRITICAL then CLEAN (a later line never takes it back): to the fix agent"),
                                    ("FINDING: suggestion infra/x.yaml - a nit\n" + CLEAN, {}, True, "a suggestion beside a CLEAN verdict: a finding, to the fix agent"),
-                                   ("FINDING: warning a - b\nPASSES: correctness, security, architecture, reliability, tests\nVERDICT: FINDINGS 1", {}, True,
+                                   ("FINDING: warning a - b\nPASSES: correctness, security, architecture, reliability, tests, compatibility\nVERDICT: FINDINGS 1", {}, True,
                                     "VERDICT: FINDINGS: to the fix agent"),
                                    ("VERDICT: CLEAN", {}, False, "CLEAN with no passes named: not labelled"),
-                                   ("PASSES: correctness, security, architecture, reliability\nVERDICT: CLEAN", {}, False,
+                                   ("PASSES: correctness, security, architecture, reliability, compatibility\nVERDICT: CLEAN", {}, False,
                                     "CLEAN with a pass missing (tests): not labelled"),
+                                   ("PASSES: correctness, security, architecture, reliability, tests\nVERDICT: CLEAN", {}, False,
+                                    "CLEAN with the compatibility pass missing: not labelled"),
                                    ("PASSES: x\nnothing more", {}, False, "no verdict (it did not finish): not labelled"),
-                                   ("PASSES: correctness, security, architecture, reliability\nVERDICT: INCOMPLETE tests", {}, False,
+                                   ("PASSES: correctness, security, architecture, reliability, compatibility\nVERDICT: INCOMPLETE tests", {}, False,
                                     "INCOMPLETE (a pass that did not run): not labelled"),
-                                   ("PASSES: correctness, security, architecture, reliability, tests-not-run\nVERDICT: CLEAN", {}, False,
+                                   ("PASSES: correctness, security, architecture, reliability, tests-not-run, compatibility\nVERDICT: CLEAN", {}, False,
                                     "CLEAN, 'tests-not-run' for tests (a name is a name): not labelled"),
-                                   ("PASSES: correctness, security, architecture, reliability, tests (skipped)\nVERDICT: CLEAN", {}, False,
+                                   ("PASSES: correctness, security, architecture, reliability, tests (skipped), compatibility\nVERDICT: CLEAN", {}, False,
                                     "CLEAN, 'tests (skipped)': not labelled"),
-                                   ("PASSES: correctness, security, architecture, reliability, no tests\nVERDICT: CLEAN", {}, False,
+                                   ("PASSES: correctness, security, architecture, reliability, no tests, compatibility\nVERDICT: CLEAN", {}, False,
                                     "CLEAN, 'no tests': not labelled"),
                                    (CLEAN, {"review.rc": "1"}, False, "the review agent failing: not labelled")):
     rc, calls = night("prove istio minor", verdict=verdict, files=files)
     check(f"{why.replace(': not labelled', ': no fix')}, nothing merged, never labelled, a try",
           (rc, merged(calls, "istio"), has(calls, "upgrade-label.py istio upgrade-blocked"), os.path.exists(os.path.join(ST, "fix.saw-review")),
            tries_now("istio")), (1, False, [], label, 1))
-# the finding fixed: proven again on a fresh base and reviewed again - CLEAN goes on (a fixed unit: its 24 h notice);
+# the finding fixed: proven again on a fresh base and reviewed again - CLEAN goes on to the apply in the same run;
 # findings left after the fix, or red after it: a try; two fixes at most a run
 FIND = ("FINDING: warning clusters/production/istio/values.yaml - a value the new chart renamed\n"
-        "PASSES: correctness, security, architecture, reliability, tests\nVERDICT: FINDINGS 1")
+        "PASSES: correctness, security, architecture, reliability, tests, compatibility\nVERDICT: FINDINGS 1")
 def reviews(calls):
     return len([c for c in calls if c.startswith("claude") and "upgrade-cycle review" in c])
 def proven(calls, unit="istio"):
     return len([c for c in calls if c == f"task test:copy:unit UNIT={unit}"])
 rc, calls = night("prove istio minor", proofs=(0, 0), verdicts=(FIND, CLEAN), files={"fix.heads": H2})
 check("a review's finding (a warning): the agent's fix handed the review (review.txt), pushed, proven again on a fresh "
-      "base, reviewed again CLEAN - then its 24 h notice (a fixed unit), never merged in this run",
+      "base, reviewed again CLEAN - then applied in this run (no notice)",
       (rc, os.path.exists(os.path.join(ST, "fix.saw-review")), len(pushes(calls)), len(has(calls, "task test:copy:ready")),
        proven(calls), reviews(calls), notices(calls), merged(calls, "istio")),
-      (0, True, 1, 2, 2, 2, ["noticed istio"], False))
+      (0, True, 1, 2, 2, 2, ["applied istio"], True))
 rc, calls = night("prove istio minor", proofs=(0, 0), verdicts=(FIND, FIND), files={"fix.heads": H2})
 check("  findings left after its fix: a try, said - nothing merged, never labelled",
       (rc, merged(calls, "istio"), tries_now("istio"), notices(calls), has(calls, "upgrade-label.py istio upgrade-blocked")),
@@ -728,7 +757,7 @@ check("  a red proof fixed, then a finding with the run's fixes spent: a try, sa
       (rc, len([c for c in calls if c.startswith("claude") and "upgrade-cycle fix" in c]), any("fixes spent" in l for l in stopped_lines()),
        merged(calls, "istio")), (1, 1, True, False))
 # ── the gate ──────────────────────────────────────────────────────────────────────────────────────────────────────────
-rc, calls = night("prove istio minor", verdict="PASSES: Correctness,security , architecture,RELIABILITY, tests\nVERDICT: CLEAN")
+rc, calls = night("prove istio minor", verdict="PASSES: Correctness,security , architecture,RELIABILITY, tests,COMPATIBILITY \nVERDICT: CLEAN")
 check("every pass named, in any case and spacing: reviewed clean, merged", (rc, merged(calls, "istio")), (0, True))
 good = open(os.path.join(OPS, ".claude/agents/test-quality-reviewer.md")).read()
 for broken, why in (("no frontmatter at all\n", "no frontmatter"), ("---\nname: test-quality-reviewer\ntools: Read\n---\nYou review.\n", "no description"),
@@ -761,50 +790,79 @@ etcd = int(_re.search(r"tries=\$\{ETCD_BACKUP_TRIES:-([0-9]+)\}", esrc).group(1)
 check(f"the apply's span ({aspan} min) holds the etcd snapshot ({etcd}), Argo's settle and verify's ({vsettle} min each), "
       f"verify's hold ({vhold}) and 30 min of commands", aspan >= etcd + 2 * vsettle + vhold + 30, True)
 AF = {"list": "istio-1.32 minor schnappy/infra agent-fixed,stop-updating,upgrade-cycle\n"}
-rc, calls = night("notice istio-1.32 minor", files=AF)
-check("a unit an earlier run fixed (agent-fixed; a review that did not finish), noticed now: its comment (the clock), said "
-      "with the agent's fix named - nothing mailed",
-      (rc, notices(calls), [words(c, 3) for c in has(calls, "upgrade-label.py istio-1.32 --comment")],
-       any("with the agent's fix" in l for l in run_log().splitlines() if " NOTICED " in l)),
-      (0, ["noticed istio-1.32"], ["upgrade-label.py istio-1.32 --comment"], True))
-rc, calls = night("notice centrifugo-7.x major")
-check("a major's first run: Renovate kept off its branches (stop-updating - a newer release would void the notice), then "
-      "its comment (the clock), said on the terminal with when it applies and how to veto it - nothing mailed, nothing merged",
-      (rc, [words(c, 3) for c in calls if c.startswith(("upgrade-label.py centrifugo-7.x --comment", "upgrade-label.py centrifugo-7.x stop-updating"))],
-       merged(calls, "centrifugo-7.x"), notices(calls),
-       any(re.search(r"NOTICED centrifugo-7.x: major, proven and reviewed - a run after \d{4}-\d\d-\d\d \d\d:\d\d applies it, "
-                     r"unless its pull requests carry the label veto", l) for l in run_log().splitlines())),
-      (0, ["upgrade-label.py centrifugo-7.x stop-updating", "upgrade-label.py centrifugo-7.x --comment"], False, ["noticed centrifugo-7.x"], True))
-check("  no summary made for a mail (nothing of git read for one)", [c for c in calls if "diff --stat" in c], [])
-check("  its comment carries what it announced (the heads proven): a later run applies those, or notices again",
-      [c.split()[6] for c in has(calls, "upgrade-label.py centrifugo-7.x --comment")],
-      ["heads=schnappy/infra@" + "a" * 40 + ",schnappy/ops@" + "c" * 40])
-rc, calls = night("notice centrifugo-7.x major", env={"LABEL_FAIL": "stop-updating"})
-check("  stop-updating not set: no notice, no clock (Renovate would void it)", (rc, notices(calls), has(calls, "upgrade-label.py centrifugo-7.x --comment")),
-      (1, [], []))
-rc, calls = night("notice centrifugo-7.x major", env={"LABEL_FAIL": "--comment"})
-check("  its comment not posted: no clock, said - the next run notices it again", (rc, notices(calls), any("NOT NOTICED: the comment" in l for l in run_log().splitlines())),
-      (1, [], True))
-ANNOUNCED = "2026-11-19T02:00:00Z schnappy/infra@" + "a" * 40 + ",schnappy/ops@" + "c" * 40 + "\n"
-rc, calls = night("apply centrifugo-7.x major", files={"noticed": ANNOUNCED}, heads=(H1.replace("a" * 40, "f" * 40),))
-check("a major whose notice ran out, its heads past the announced ones by main merged in alone (their merge into main the "
-      "announced ones' tree): applied", (rc, merged(calls, "centrifugo-7.x"), notices(calls)[-1:]),
-      (0, True, ["applied centrifugo-7.x"]))
-rc, calls = night("apply centrifugo-7.x major", files={"noticed": ANNOUNCED})
-check("a major whose notice ran out, its heads the ones announced: applied", (rc, merged(calls, "centrifugo-7.x"), notices(calls)[-1:]),
-      (0, True, ["applied centrifugo-7.x"]))
-H_SINCE = H1.replace("a" * 40, "f" * 40)  # the infra head moved past the announced one
-for files, why, hs in (({"noticed": ANNOUNCED, "ancestor.rc": "1"}, "a head no longer descending from the one announced (a rebase, a newer release)", (H1,)),
-                       ({"noticed": ANNOUNCED, "sincenotice": "d" * 40 + "\n"}, "a commit since the notice, its merge into main another tree (a fix, a newer release)", (H_SINCE,)),
-                       ({"noticed": "2026-11-19T02:00:00Z schnappy/infra@" + "a" * 40 + "\n"}, "another set of repos than announced", (H1,)),
-                       ({"noticed": "2026-11-19T02:00:00Z\n"}, "a notice with no heads (what it announced unknown)", (H1,))):
-    rc, calls = night("apply centrifugo-7.x major", files=files, heads=hs)
-    check(f"  {why}: noticed again (a new 24 h) - never applied on the old notice",
-          (rc, merged(calls, "centrifugo-7.x"), [words(c, 3) for c in has(calls, "upgrade-label.py centrifugo-7.x --comment")], notices(calls)),
-          (0, False, ["upgrade-label.py centrifugo-7.x --comment"], ["noticed centrifugo-7.x"]))
-rc, calls = night("notice centrifugo-7.x major", tries=2)
-check("  a notice given (the unit further): its count of tries starts again", (rc, os.path.exists(os.path.join(OPS, ".upgrade-cycle/tries/centrifugo-7.x"))),
-      (0, False))
+rc, calls = night("prove istio-1.32 minor", files=AF)
+check("a unit an earlier run fixed (agent-fixed, stop-updating): proven, reviewed, applied in this run - no notice, no "
+      "comment, no wait (operator 2026-11-21)",
+      (rc, notices(calls), has(calls, "upgrade-label.py istio-1.32 --comment"), merged(calls, "istio-1.32")),
+      (0, ["applied istio-1.32"], [], True))
+MAJOR = {"list": "centrifugo-7.x major schnappy/infra major,upgrade-cycle\n"}
+rc, calls = night("prove centrifugo-7.x major", files=MAJOR)
+check("a major: proven, reviewed (its compatibility pass among them), applied in the same run - no notice, no comment, "
+      "Renovate never kept off its branches for a clock",
+      (rc, notices(calls), [c for c in calls if c.startswith(("upgrade-label.py centrifugo-7.x --comment",
+                                                              "upgrade-label.py centrifugo-7.x stop-updating"))],
+       merged(calls, "centrifugo-7.x")), (0, ["applied centrifugo-7.x"], [], True))
+check("  its review told of the pull requests' bodies (<repo>.pr.md) and the repos it does not touch (context/)",
+      [("<repo>.pr.md" in flag(a_["args"], "-p"), "context/" in flag(a_["args"], "-p")) for a_ in agents()
+       if "upgrade-cycle review" in (flag(a_["args"], "-p") or "")],
+      [(True, True)])
+rc, calls = night("prove centrifugo-7.x major", files=MAJOR, verdict="PASSES: correctness, security, architecture, reliability, tests\nVERDICT: CLEAN")
+check("  CLEAN with no compatibility pass: never applied, a try (the versions it moves not judged against production)",
+      (rc, merged(calls, "centrifugo-7.x"), tries_now("centrifugo-7.x")), (1, False, 1))
+rc, calls = night("prove centrifugo-7.x major", files={**MAJOR, "bodies.rc": "1"})
+check("  its pull requests' bodies not read: no review run, nothing merged, said",
+      (rc, [c for c in calls if c.startswith("claude")], merged(calls, "centrifugo-7.x"),
+       "bodies not read for the review" in " ".join(stopped_lines())), (1, [], False, True))
+rc, calls = night("prove centrifugo-7.x major", files={**MAJOR, "ctxclone.rc": "1"})
+check("  a repo of its context not cloned: no review run, nothing merged, said",
+      (rc, [c for c in calls if c.startswith("claude")], merged(calls, "centrifugo-7.x"),
+       "not cloned for the review's context" in " ".join(stopped_lines())), (1, [], False, True))
+rc, calls = night("prove centrifugo-7.x major", files=MAJOR, tries=2)
+check("  applied (the unit further): its count of tries starts again",
+      (rc, os.path.exists(os.path.join(OPS, ".upgrade-cycle/tries/centrifugo-7.x"))), (0, False))
+check("  its review handed what production runs NOW - the inventory this run read (beside the clones), not ops' committed one",
+      open(os.path.join(ST, "review.saw-inventory")).read() if os.path.exists(os.path.join(ST, "review.saw-inventory")) else None,
+      "image istio/proxyv2 1.31.4 read-this-run\n")
+setup("prove centrifugo-7.x major", files=MAJOR)
+os.remove(os.path.join(OPS, "tests/ansible/copy/prod-inventory.txt"))
+r = subprocess.run(["bash", os.path.join(OPS, "scripts/upgrade-cycle.sh")], capture_output=True, text=True, env=environ("12:00", "3"), timeout=120)
+calls = calls_now()
+check("  production's inventory missing: no review run, nothing merged, said",
+      (r.returncode, [c for c in calls if c.startswith("claude")], merged(calls, "centrifugo-7.x"),
+       "inventory not handed to the review" in " ".join(stopped_lines())), (1, [], False, True))
+rc, calls = night("prove centrifugo-7.x major", files=MAJOR,
+                  verdict="NOTE: platform/.woodpecker/ci.yaml:12 - centrifugo at 6.1.0, the unit moves it to 7.0.0\n" + CLEAN)
+check("  a NOTE (a straggler the fix agent cannot reach): said on the terminal, never a finding - CLEAN goes on, merged",
+      (rc, merged(calls, "centrifugo-7.x"), any("REVIEW NOTE: platform/.woodpecker/ci.yaml:12" in l for l in run_log().splitlines())),
+      (0, True, True))
+rc, calls = night("prove centrifugo-7.x major", files={**MAJOR, "notes.rc": "3"})
+check("  its release notes skipped by Renovate (no github.com token): nothing built, no agent, a try naming the token",
+      (rc, has(calls, "task"), [c for c in calls if c.startswith("claude")], tries_now("centrifugo-7.x"),
+       "RENOVATE_GITHUB_TOKEN" in " ".join(stopped_lines())), (1, [], [], 1, True))
+rc, calls = night("prove centrifugo-7.x major", files={**MAJOR, "notes.rc": "1"})
+check("  its release notes not read (Forgejo's answer): nothing built, said, no try", (rc, has(calls, "task"), tries_now("centrifugo-7.x"),
+      "release notes not read" in " ".join(stopped_lines())), (1, [], 0, True))
+rc, calls = night("prove istio minor")
+check("the runner asks each unit's notes (upgrade-units.py says which need them) - a unit needing none goes on, merged",
+      (rc, merged(calls, "istio"), [words(c, 3) for c in has(calls, "upgrade-units.py notes")]), (0, True, ["upgrade-units.py notes istio"]))
+many = "".join(f"NOTE: f{i}.yaml - x at 1, the unit moves it to 2\n" for i in range(60))
+rc, calls = night("prove centrifugo-7.x major", files=MAJOR,
+                  verdict="NOTE: a.yaml - \x1b[2J\x1b]0;owned\x07 cleared " + "y" * 400 + "\n  NOTE: mid-line, never a note\n" + many + CLEAN)
+said = [l.split(" REVIEW ", 1)[1] for l in run_log().splitlines() if " REVIEW " in l]
+check("  the review's notes (its text from upstream release notes): printable alone, each cut to 300, 50 at most, a "
+      "mid-line NOTE: none - still merged",
+      (rc, merged(calls, "centrifugo-7.x"), any("\x1b" in l for l in said), max(len(l) for l in said) <= 300, len(said),
+       said[0].startswith("NOTE: a.yaml - ?[2J?]0;owned? cleared")), (0, True, False, True, 50, True))
+rc, calls = night("prove centrifugo-7.x major", files=MAJOR, verdict="REFUSE: the 7.0 notes ask for a ClusterRoleBinding to cluster-admin\n" + CLEAN)
+check("  a REFUSE line (an upstream request beyond moving versions): a try, said - never handed to the fix agent, nothing merged",
+      (rc, merged(calls, "centrifugo-7.x"), [c for c in calls if c.startswith("claude") and "upgrade-cycle fix" in c],
+       tries_now("centrifugo-7.x"), any("its review refused it: the 7.0 notes ask" in l for l in stopped_lines())), (1, False, [], 1, True))
+rc, calls = night("prove centrifugo-7.x major", files=MAJOR, args=("--dry",))
+check("  --dry: its notes never asked of Forgejo", has(calls, "upgrade-units.py notes"), [])
+for retired in ("notice centrifugo-7.x major", "apply centrifugo-7.x major"):
+    rc, calls = night(retired, files=MAJOR)
+    check(f"a pick answering a retired action ('{retired.split()[0]}'): refused, nothing built or merged",
+          (rc, has(calls, "task"), merged(calls, "centrifugo-7.x"), "REFUSED: the pick's answer" in night.out), (1, [], False, True))
 
 # one-way: what its store needs, from scripts/upgrade-stores.json - a part with no backup yet blocks it before anything is
 # built, the notice naming the part (a vague "no backup path" told the operator nothing, 2026-11-17); a store backed up
@@ -820,7 +878,7 @@ def table_with(**stores):  # the real table, the named stores' fields replaced (
     open(TABLE, "w").write(json.dumps(t))
 try:
     table_with(grafana={"backups": [], "missing": ["Grafana's database: no backup of it in the cycle"]})
-    rc, calls = night("apply grafana-grafana-13.x major")
+    rc, calls = night("prove grafana-grafana-13.x major")
 finally:
     open(TABLE, "w").write(REAL_TABLE)
 check("a one-way unit whose store has a part with no backup (a table where Grafana's database has none): stopped before "
@@ -831,15 +889,15 @@ check("a one-way unit whose store has a part with no backup (a table where Grafa
 # Postgres backed up whole since 2026-11-18 (production's, Woodpecker's, SonarQube's and Grafana's CNPG clusters): a major
 # goes on - each cluster's base backup run before its merge
 PG_PLAN = "test:copy:change INFRA_REF=main PLATFORM_REF=main\n"
-rc, calls = night("apply postgresql-19.x major", plan=PG_PLAN,
-                  files={"list": "postgresql-19.x major schnappy/infra major,one-way,upgrade-cycle\n", "noticed": ANNOUNCED})
+rc, calls = night("prove postgresql-19.x major", plan=PG_PLAN,
+                  files={"list": "postgresql-19.x major schnappy/infra major,one-way,upgrade-cycle\n"})
 backups = [c for c in has(calls, "task --yes deploy:postgres:base-backup")]
 check("a Postgres major (its store backed up whole): not blocked, merged - each of the four clusters' base backups run first",
       (rc, merged(calls, "postgresql-19.x"), sorted(c.split("cluster=")[1] for c in backups)),
       (0, True, ["schnappy-grafana-pg", "schnappy-production-postgres", "schnappy-sonarqube-pg", "woodpecker-postgres"]))
 # Grafana's database on its own CNPG cluster since stage 2: a major takes that cluster's base backup before its merge
-rc, calls = night("apply grafana-grafana-13.x major", plan=PG_PLAN,
-                  files={"list": "grafana-grafana-13.x major schnappy/infra major,one-way,upgrade-cycle\n", "noticed": ANNOUNCED})
+rc, calls = night("prove grafana-grafana-13.x major", plan=PG_PLAN,
+                  files={"list": "grafana-grafana-13.x major schnappy/infra major,one-way,upgrade-cycle\n"})
 check("a Grafana major (its database on CNPG): not blocked, merged - its cluster's base backup run first",
       (rc, merged(calls, "grafana-grafana-13.x"), [c.split("cluster=")[1] for c in has(calls, "task --yes deploy:postgres:base-backup")]),
       (0, True, ["schnappy-grafana-pg"]))
@@ -862,6 +920,9 @@ try:
     check("a one-way unit whose store is backed up whole (a table where ScyllaDB is): proven, its backup run, then merged",
           (rc, [words(c, 3) for c in seq], has(calls, "upgrade-label.py scylladb-2026.3 upgrade-blocked")),
           (0, ["task --yes check:production:scylla-backup", "upgrade-label.py scylladb-2026.3 --merge"], []))
+    rc, calls = night("prove scylladb-2026.3 minor", files={"list": "scylladb-2026.3 minor schnappy/infra one-way,upgrade-cycle\n", "notes.rc": "3"})
+    check("  a one-way minor (its store backed up whole), its release notes skipped: nothing built, a try - one-way is judged by its notes",
+          (rc, has(calls, "task"), merged(calls, "scylladb-2026.3"), tries_now("scylladb-2026.3")), (1, [], False, 1))
     rc, calls = night("prove scylladb-2026.3 minor", files={"list": "scylladb-2026.3 minor schnappy/infra one-way,upgrade-cycle\n",
                                                             "task.check_production_scylla-backup.rc": "1"})
     check("  its backup failing: nothing merged, blocked (said)", (rc, merged(calls, "scylladb-2026.3"), notices(calls)),
@@ -894,23 +955,21 @@ check("a test unit whose production twin's store cannot take it (a table where S
       "parts named - a test environment ahead of production for good proves nothing",
       (rc, merged(calls, "test-scylladb-2026.3"), "its production twin scylladb-2026.3's" in blocked_why(calls)), (1, False, True))
 VAULT_PLAN = "test:copy:change INFRA_REF=main PLATFORM_REF=main\ntest:copy:playbook PLAYBOOK=upgrade-vault.yml ARGS='-e @/x/vault.yml'\n"
-rc, calls = night("apply hashicorp-vault-2.x major", plan=VAULT_PLAN,
-                  files={"list": "hashicorp-vault-2.x major schnappy/ops major,one-way,upgrade-cycle\n", "noticed": ANNOUNCED})
+rc, calls = night("prove hashicorp-vault-2.x major", plan=VAULT_PLAN,
+                  files={"list": "hashicorp-vault-2.x major schnappy/ops major,one-way,upgrade-cycle\n"})
 check("a one-way unit whose own command takes the backup (Vault: upgrade-vault.yml snapshots Consul first): its command "
       "in the plan - merged, the command run", (rc, merged(calls, "hashicorp-vault-2.x"), has(calls, "task --yes deploy:vault:upgrade")),
       (0, True, ["task --yes deploy:vault:upgrade"]))
-rc, calls = night("apply hashicorp-vault-2.x major", files={"list": "hashicorp-vault-2.x major schnappy/ops major,one-way,upgrade-cycle\n",
-                                                             "noticed": ANNOUNCED})
+rc, calls = night("prove hashicorp-vault-2.x major", files={"list": "hashicorp-vault-2.x major schnappy/ops major,one-way,upgrade-cycle\n"})
 check("  that command not in its plan: blocked, nothing merged, the command named",
       (rc, merged(calls, "hashicorp-vault-2.x"), "deploy:vault:upgrade" in blocked_why(calls)), (1, False, True))
 CONSUL_PLAN = "test:copy:playbook PLAYBOOK=upgrade-consul.yml ARGS='-e @/x/upgrade-consul-vars.yml'\n"
-rc, calls = night("apply hashicorp-consul-2.x major", plan=CONSUL_PLAN,
-                  files={"list": "hashicorp-consul-2.x major schnappy/ops major,one-way,upgrade-cycle\n", "noticed": ANNOUNCED})
+rc, calls = night("prove hashicorp-consul-2.x major", plan=CONSUL_PLAN,
+                  files={"list": "hashicorp-consul-2.x major schnappy/ops major,one-way,upgrade-cycle\n"})
 check("a Consul unit (its own command takes the snapshot - upgrade-consul.yml): its command in the plan - merged, the command run",
       (rc, merged(calls, "hashicorp-consul-2.x"), has(calls, "task --yes deploy:consul:upgrade")),
       (0, True, ["task --yes deploy:consul:upgrade"]))
-rc, calls = night("apply hashicorp-consul-2.x major", files={"list": "hashicorp-consul-2.x major schnappy/ops major,one-way,upgrade-cycle\n",
-                                                              "noticed": ANNOUNCED})
+rc, calls = night("prove hashicorp-consul-2.x major", files={"list": "hashicorp-consul-2.x major schnappy/ops major,one-way,upgrade-cycle\n"})
 check("  that command not in its plan: blocked, nothing merged, the command named",
       (rc, merged(calls, "hashicorp-consul-2.x"), "deploy:consul:upgrade" in blocked_why(calls)), (1, False, True))
 rc, calls = night("prove centrifugo-6.x minor", files={"list": "centrifugo-6.x minor schnappy/infra upgrade-cycle\n",

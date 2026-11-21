@@ -22,6 +22,8 @@ cat > "$LOG" <<'L'
 2026-11-20 20:00:01 PICK prove wave-patches patch
 some tool chatter that is not a step
 2026-11-20 20:00:02 RUN task test:copy:build
+2026-11-20 20:00:03 ONE-WAY wave-patches: store postgres 15 - backed up before the merge
+2026-11-20 21:05:00 REVIEW NOTE: platform/x.yaml - curl at 8.10.1, the unit moves it to 8.23.0
 2026-11-20 21:10:00 RUN scripts/upgrade-label.py wave-patches --merge TOKEN=abc123
 2026-11-20 22:30:00 APPLIED wave-patches
 L
@@ -31,9 +33,11 @@ out=$(cd "$R" && UPGRADE_RECORD_NO_PUSH=1 bash scripts/upgrade-record.sh wave-pa
 day=$(date -u +%Y-%m-%d)
 rec="$R/docs/upgrades/$day-wave-patches.md"
 check "recorded, committed" "$rc $(head -c 8 <<< "$out")" "0 RECORDED"
-check "the run's steps alone, the secret masked" "$(sed -n '/^```$/,/^```$/p' "$rec" | sed -n 2,5p)" \
+check "the run's steps alone - its one-way backups and the review's notes among them - the secret masked" "$(sed -n '/^```$/,/^```$/p' "$rec" | sed -n 2,7p)" \
 "2026-11-20 20:00:01 PICK prove wave-patches patch
 2026-11-20 20:00:02 RUN task test:copy:build
+2026-11-20 20:00:03 ONE-WAY wave-patches: store postgres 15 - backed up before the merge
+2026-11-20 21:05:00 REVIEW NOTE: platform/x.yaml - curl at 8.10.1, the unit moves it to 8.23.0
 2026-11-20 21:10:00 RUN scripts/upgrade-label.py wave-patches --merge TOKEN=***
 2026-11-20 22:30:00 APPLIED wave-patches"
 check "a production unit's record: proven on the copy, reviewed" "$(sed -n 3p "$rec")" \
