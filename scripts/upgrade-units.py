@@ -103,29 +103,34 @@ def ours(repo, pr):
     return (pr.get("user") or {}).get("login") == BOT and head_repo == repo
 
 
+def add_pr(found, repo, pr):
+    """the bot's pull request on renovate/<unit>, into its unit"""
+    ref = (pr.get("head") or {}).get("ref") or ""
+    if not ref.startswith("renovate/") or not ours(repo, pr):
+        return
+    u = found.setdefault(ref[len("renovate/"):], {"repos": {}, "labels": set(), "unlabelled": False, "bodies": {}})
+    u["repos"][repo] = pr["number"]
+    u["bodies"][repo] = pr.get("body") or ""
+    names = {lb["name"] for lb in pr.get("labels") or []} | renovate_labels(pr)
+    u["labels"] |= names
+    # Renovate's own labels on every pull request of it (the preset: upgrade-cycle, major, one-way - Forgejo applies
+    # only labels the repo has): without them its kind, its one-way mark are not known
+    u["unlabelled"] |= not names & RENOVATE_LABELS
+
+
+def kind_of(name, u):
+    if "major" in u["labels"]:
+        return "major"
+    return "patch" if twin(name) == "wave-patches" else "minor"
+
+
 def units():
     found = {}
     for repo in REPOS:
         for pr in get(f"/repos/{repo}/pulls", state="open"):
-            ref = (pr.get("head") or {}).get("ref") or ""
-            if not ref.startswith("renovate/") or not ours(repo, pr):
-                continue
-            name = ref[len("renovate/"):]
-            u = found.setdefault(name, {"repos": {}, "labels": set(), "unlabelled": False, "bodies": {}})
-            u["repos"][repo] = pr["number"]
-            u["bodies"][repo] = pr.get("body") or ""
-            names = {lb["name"] for lb in pr.get("labels") or []} | renovate_labels(pr)
-            u["labels"] |= names
-            # Renovate's own labels on every pull request of it (the preset: upgrade-cycle, major, one-way - Forgejo
-            # applies only labels the repo has): without them its kind, its one-way mark are not known
-            u["unlabelled"] |= not names & RENOVATE_LABELS
+            add_pr(found, repo, pr)
     for name, u in found.items():
-        if "major" in u["labels"]:
-            u["kind"] = "major"
-        elif twin(name) == "wave-patches":
-            u["kind"] = "patch"
-        else:
-            u["kind"] = "minor"
+        u["kind"] = kind_of(name, u)
     return found
 
 
@@ -200,28 +205,32 @@ def package(cell):
     return re.sub(r"^(docker\.io/)?(library/)?", "", name)
 
 
+def table_rows(body):
+    """{column: cell} of each row of the body's first table (Renovate's own: | Package | Update | Change |, the columns
+    found by their headers) - one in the release notes below it is upstream's text, never read"""
+    cols, rows = None, 0
+    for line in body.splitlines():
+        if not line.startswith("|"):
+            if rows:
+                return
+            continue
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if "Package" in cells and "Change" in cells:
+            cols = {c: i for i, c in enumerate(cells)}
+        elif cols and len(cells) >= len(cols) and not set(cells[0]) <= {"-", ":"}:
+            rows += 1
+            yield {c: cells[i] for c, i in cols.items()}
+
+
 def table_steps(u):
-    """{package: the version it moves to, as numbers} for each major or minor row of Renovate's tables in the unit's
-    pull requests (| Package | Update | Change |, the columns found by their headers)."""
+    """{package: the version it moves to, as numbers} for each major or minor row of the unit's pull requests' tables -
+    two rows of one package (a minor and a major): its highest target."""
     found = {}
     for body in u.get("bodies", {}).values():
-        cols, rows = None, 0
-        for line in body.splitlines():
-            if not line.startswith("|"):
-                if rows:  # Renovate's own table ended - one in the release notes below is upstream's text, never a step
-                    break
-                continue
-            cells = [c.strip() for c in line.strip().strip("|").split("|")]
-            if "Package" in cells and "Change" in cells:
-                cols = {c: i for i, c in enumerate(cells)}
-                continue
-            if not cols or len(cells) < len(cols) or set(cells[0]) <= {"-", ":"}:
-                continue
-            rows += 1
-            update = cells[cols["Update"]] if "Update" in cols else ""
-            values = re.findall(r"`([^`]+)`", cells[cols["Change"]])
-            if update in ("major", "minor") and values:
-                pkg = package(cells[cols["Package"]])  # two rows of one package (a minor and a major): its highest target
+        for row in table_rows(body):
+            values = re.findall(r"`([^`]+)`", row["Change"])
+            if row.get("Update", "") in ("major", "minor") and values:
+                pkg = package(row["Package"])
                 found[pkg] = max(found.get(pkg, ()), numbers(values[-1]))
     return found
 

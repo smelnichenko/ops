@@ -272,7 +272,7 @@ fixture(infra=[tabled(5, "test-k6-1.8", [("grafana/k6", "minor", "2.4.0", "2.5.0
 check("  a test unit moving a package higher than its production twin (k6: 2.x in test, 1.x in production): no deadlock - the "
       "test unit first (the twin rule)", run("pick"), (0, "test test-k6-1.8 minor"))
 nb = tabled(7, "scylladb-scylla-2027.x", [("scylladb/scylla", "major", "2026.2.3", "2027.1.0")], "major", "one-way")
-nb["body"] += "\n---\n\n### Release Notes\n\n| Package | Update | Change |\n|---|---|---|\n| [golang](x) | minor | `1.24` → `1.25` |\n"
+nb["body"] += "\n---\n\n### Release Notes\n\n| Package | Update | Change |\n|---|---|---|\n| [golang](x) | minor | `1.20` → `1.21` |\n"  # lower than golang-1.x's: read as a step, it would hold golang-1.x
 fixture(infra=[nb, tabled(8, "golang-1.x", [("golang", "minor", "1.23", "1.24")])])
 check("  a table in the release notes (upstream's text) is no step: golang-1.x not held, the major not held by it",
       run("pick"), (0, "prove golang-1.x minor"))

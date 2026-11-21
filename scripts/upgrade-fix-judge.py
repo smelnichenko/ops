@@ -27,9 +27,10 @@ import sys
 
 import yaml
 
-VERSION = re.compile(r"v?(?P<nums>[0-9]+(?:[._+-][0-9]+)*)(?P<flavour>-[A-Za-z][A-Za-z0-9.-]*)?")
-IPV4 = re.compile(r"[0-9]{1,3}(\.[0-9]{1,3}){3}")
-IMAGE = re.compile(r"(?P<name>[a-z0-9][a-z0-9._/-]*(?::[0-9]+/[a-z0-9._/-]+)?)(?::(?P<tag>[A-Za-z0-9._-]+))?(?P<digest>@sha256:[0-9a-f]{64})?")
+NUM = re.compile(r"\d+", re.ASCII)
+VERSION = re.compile(r"v?(?P<nums>\d+(?:[._+-]\d+)*)(?P<flavour>-[A-Za-z][A-Za-z0-9.-]*)?", re.ASCII)
+IPV4 = re.compile(r"\d{1,3}(\.\d{1,3}){3}", re.ASCII)
+IMAGE = re.compile(r"(?P<name>[a-z0-9][a-z0-9._/-]*(?::\d+/[a-z0-9._/-]+)?)(?::(?P<tag>[A-Za-z0-9._-]+))?(?P<digest>@sha256:[0-9a-f]{64})?", re.ASCII)
 SECURE = re.compile(r"securitycontext|runas|fsgroup|supplementalgroups|capabilit|seccomp|apparmor|selinux|readonlyrootfilesystem"
                     r"|privileged|allowprivilegeescalation|hostnetwork|hostpid|hostipc|hostpath|hostport|networkpolic"
                     r"|peerauthentication|authorizationpolic|mtls|rbac|^rules$|serviceaccount|clusterrole|rolebinding"
@@ -102,28 +103,32 @@ def docs(text):
         refuse(f"not plain YAML ({str(e).splitlines()[0][:80]})")
 
 
+def helm_values(path, k, v):
+    """an Argo source's helm.values - a YAML string - read as YAML"""
+    if path[-1:] != ("helm",) or k != "values" or not isinstance(v, str):
+        return v
+    try:
+        return yaml.load(v, Loader=Strict)
+    except yaml.YAMLError:
+        refuse("an Argo CD source's helm.values that is no YAML")
+
+
 def leaves(node, path=(), out=None):
-    """{path: value} of every scalar; an Argo source's helm.values (a YAML string) read as YAML too"""
+    """{path: value} of every scalar (an empty map or list a value of its own)"""
     out = {} if out is None else out
     if len(out) > MAX_LEAVES:
         refuse(f"over {MAX_LEAVES} values (an alias expanded beyond any values file)")
     if isinstance(node, dict):
-        for k, v in node.items():
-            if path[-1:] == ("helm",) and k == "values" and isinstance(v, str):
-                try:
-                    v = yaml.load(v, Loader=Strict)
-                except yaml.YAMLError:
-                    refuse("an Argo CD source's helm.values that is no YAML")
-            leaves(v, path + (k,), out)
-        if not node:
-            out[path] = "{}"
+        items = [(k, helm_values(path, k, v)) for k, v in node.items()]
     elif isinstance(node, list):
-        for i, v in enumerate(node):
-            leaves(v, path + (i,), out)
-        if not node:
-            out[path] = "[]"
+        items = list(enumerate(node))
     else:
         out[path] = node
+        return out
+    for k, v in items:
+        leaves(v, path + (k,), out)
+    if not items:
+        out[path] = "{}" if isinstance(node, dict) else "[]"
     return out
 
 
@@ -144,13 +149,12 @@ def version_move(old, new):
     a, b = VERSION.fullmatch(old), VERSION.fullmatch(new)
     if not (a and b) or IPV4.fullmatch(old) or IPV4.fullmatch(new):
         return False
-    shape = re.sub(r"[0-9]+", "N", a["nums"])
-    if shape != re.sub(r"[0-9]+", "N", b["nums"]) or a["flavour"] != b["flavour"]:
+    shape = NUM.sub("N", a["nums"])
+    if shape != NUM.sub("N", b["nums"]) or a["flavour"] != b["flavour"]:
         return False
     if shape == "N" and not a["flavour"]:
         return False  # a bare number is a count, a mode, a retention - no version
-    na, nb = [int(x) for x in re.findall(r"[0-9]+", a["nums"])], [int(x) for x in re.findall(r"[0-9]+", b["nums"])]
-    return nb > na
+    return [int(x) for x in NUM.findall(b["nums"])] > [int(x) for x in NUM.findall(a["nums"])]
 
 
 def image_moved(old, new):
@@ -177,20 +181,23 @@ def stores():
     return out
 
 
+def store_named(table, image_name):
+    """the one-way store an image is, by its name - or None"""
+    return next((name for name, pats, _ in table if any(x.search(image_name) for x in pats)), None)
+
+
 def store_tags(lo, table):
     """{tag: store} of the store images the document runs - a value equal to one is that store's version too"""
     tags = {}
     for p, v in lo.items():
-        m = IMAGE.fullmatch(v) if isinstance(v, str) else None
-        if m and m["tag"]:
-            for name, pats, _ in table:
-                if any(x.search(m["name"]) for x in pats):
-                    tags[m["tag"]] = name
-        if p[-1:] == ("repository",) and isinstance(v, str):
-            tag = lo.get(p[:-1] + ("tag",))
-            for name, pats, _ in table:
-                if tag and any(x.search(v) for x in pats):
-                    tags[tag] = name
+        if not isinstance(v, str):
+            continue
+        m = IMAGE.fullmatch(v)
+        if m and m["tag"] and store_named(table, m["name"]):
+            tags[m["tag"]] = store_named(table, m["name"])
+        tag = lo.get(p[:-1] + ("tag",)) if p[-1:] == ("repository",) else None
+        if tag and store_named(table, v):
+            tags[tag] = store_named(table, v)
     return tags
 
 
@@ -241,51 +248,73 @@ def rename_ok(r, p):
     return not PATH.startswith("deploy/ansible/")  # ops: versions alone (a play's any_errors_fatal renamed ignore_errors)
 
 
-def judge(old_text, new_text):
+def marks_kept(old_text, new_text):
     (alias_old, tag_old), (alias_new, tag_new) = marks(old_text), marks(new_text)
     if alias_new > alias_old:
         refuse("an alias added (YAML that expands what it holds)")
     if tag_new > tag_old:
         refuse("an explicit tag added (!vault, !!binary: a value made another thing)")
+
+
+def kind_of(d):
+    return d.get("kind") if isinstance(d, dict) else None
+
+
+def judge_changed(p, kind, lo, ln, doc, table, fix_store):
+    """a value changed in its place: a newer version or the same image's newer tag, outside security and Argo paths,
+    a store's in its own unit alone"""
+    where = ".".join(map(str, p))
+    if kind in ARGO_KINDS and not argo_ok(p):
+        refuse(f"{where} changed in an Argo CD {kind} (its targetRevision and Helm values alone are the agent's)")
+    if secure(p):
+        refuse(f"{where} changed (a security path)")
+    if not version_move(lo[p], ln[p]) and not image_moved(lo[p], ln[p]):
+        refuse(f"{where}: {str(lo[p])[:60]!r} -> {str(ln[p])[:60]!r} - neither a newer version of its shape nor the same image's newer tag")
+    s = store_of(p, lo[p], ln[p], doc, lo, table)
+    if s and s != fix_store:
+        refuse(f"{where} moves the one-way store {s}'s version in a unit that is not {s}'s")
+
+
+def judge_added(p, kind, lo, ln, removed):
+    """a value added: a rename of one gone beside it, outside security and Argo paths - the one it renames"""
+    where = ".".join(map(str, p))
+    match = next((r for r in removed if lo[r] == ln[p] and rename_ok(r, p)), None)
+    if match is None:
+        refuse(f"{where}: a new value ({str(ln[p])[:60]!r}) - the agent renames a value beside itself, never adds one")
+    if secure(p) or secure(match):
+        refuse(f"{where}: renamed into or out of a security path")
+    if kind in ARGO_KINDS and not (argo_ok(p) and argo_ok(match)):
+        refuse(f"{where}: renamed in an Argo CD {kind} outside its Helm values")
+    return match
+
+
+def judge_doc(o, n, table, fix_store):
+    kind = kind_of(o)
+    if kind_of(n) != kind:
+        refuse(f"a document's kind changed ({kind} -> {kind_of(n)})")
+    if o == n:
+        return
+    if kind in SECURE_KINDS:
+        refuse(f"a {kind} changed (a security kind: never the agent's)")
+    lo, ln = leaves(o), leaves(n)
+    for p in lo.keys() & ln.keys():
+        if lo[p] != ln[p]:
+            judge_changed(p, kind, lo, ln, n, table, fix_store)
+    removed = list(lo.keys() - ln.keys())
+    for p in list(ln.keys() - lo.keys()):
+        removed.remove(judge_added(p, kind, lo, ln, removed))
+    if removed:
+        refuse(f"{'.'.join(map(str, removed[0]))} dropped - a value dropped is never the agent's (a backup, an alert, an injection turned off)")
+
+
+def judge(old_text, new_text):
+    marks_kept(old_text, new_text)
     old_docs, new_docs = docs(old_text), docs(new_text)
     if len(old_docs) != len(new_docs):
         refuse(f"{len(new_docs)} documents where there were {len(old_docs)} (a resource of its own)")
     table, fix_store = stores(), os.environ.get("FIX_STORE", "")
     for o, n in zip(old_docs, new_docs):
-        kind = o.get("kind") if isinstance(o, dict) else None
-        if (n.get("kind") if isinstance(n, dict) else None) != kind:
-            refuse(f"a document's kind changed ({kind} -> {n.get('kind') if isinstance(n, dict) else None})")
-        if o == n:
-            continue
-        if kind in SECURE_KINDS:
-            refuse(f"a {kind} changed (a security kind: never the agent's)")
-        lo, ln = leaves(o), leaves(n)
-        changed = [p for p in lo.keys() & ln.keys() if lo[p] != ln[p]]
-        added = [p for p in ln.keys() - lo.keys()]
-        removed = [p for p in lo.keys() - ln.keys()]
-        for p in changed:
-            where = ".".join(map(str, p))
-            if kind in ARGO_KINDS and not argo_ok(p):
-                refuse(f"{where} changed in an Argo CD {kind} (its targetRevision and Helm values alone are the agent's)")
-            if secure(p):
-                refuse(f"{where} changed (a security path)")
-            if not version_move(lo[p], ln[p]) and not image_moved(lo[p], ln[p]):
-                refuse(f"{where}: {str(lo[p])[:60]!r} -> {str(ln[p])[:60]!r} - neither a newer version of its shape nor the same image's newer tag")
-            s = store_of(p, lo[p], ln[p], n, lo, table)
-            if s and s != fix_store:
-                refuse(f"{where} moves the one-way store {s}'s version in a unit that is not {s}'s")
-        for p in added:
-            where = ".".join(map(str, p))
-            match = next((r for r in removed if lo[r] == ln[p] and rename_ok(r, p)), None)
-            if match is None:
-                refuse(f"{where}: a new value ({str(ln[p])[:60]!r}) - the agent renames a value beside itself, never adds one")
-            if secure(p) or secure(match):
-                refuse(f"{where}: renamed into or out of a security path")
-            if kind in ARGO_KINDS and not (argo_ok(p) and argo_ok(match)):
-                refuse(f"{where}: renamed in an Argo CD {kind} outside its Helm values")
-            removed.remove(match)
-        for p in removed:
-            refuse(f"{'.'.join(map(str, p))} dropped - a value dropped is never the agent's (a backup, an alert, an injection turned off)")
+        judge_doc(o, n, table, fix_store)
 
 
 if __name__ == "__main__":
