@@ -100,14 +100,15 @@ check "  a lookup that left no report: the task fails, never 'nothing to update'
 ARGS=()
 check "a real run: no report asked for, nothing after the image" \
   "$(run RENOVATE_TOKEN=$TOKEN) $(grep -c RENOVATE_REPORT "$W/argv") $(tail -1 "$W/argv")" "0 0 $(sed -n 's/^image=//p' scripts/upgrade-renovate.sh)"
-# --apps: monitor's and masi's Renovate (task upgrade:apps:run) - those two repos alone, read through; with --lookup too
-APPS_LOG=$(printf '%s\n' ' INFO: Repository started (repository=schnappy/monitor)' ' INFO: Repository finished (repository=schnappy/monitor)' \
-  '       "result": "done",' ' INFO: Repository started (repository=schnappy/masi)' ' INFO: Repository finished (repository=schnappy/masi)' \
-  '       "result": "done",')
+# --apps: the app repos' Renovate (task upgrade:apps:run) - every app repo (the bot has write on each since 2026-11-21),
+# never the upgrade cycle's three; each read through; with --lookup too
+APPS=schnappy/admin,schnappy/chat,schnappy/chess,schnappy/masi,schnappy/monitor,schnappy/radar,schnappy/radio-scheduler,schnappy/site,schnappy/target-scorer
+APPS_LOG=$(for r in ${APPS//,/ }; do printf '%s\n' " INFO: Repository started (repository=$r)" " INFO: Repository finished (repository=$r)" \
+  '       "result": "done",'; done)
 ARGS=(--apps)
-check "--apps: monitor and masi alone, a real run, both read through" \
-  "$(run RENOVATE_TOKEN=$TOKEN FAKE_LOG="$APPS_LOG") $(grep -cx 'RENOVATE_REPOSITORIES=schnappy/monitor,schnappy/masi' "$W/argv") $(grep -c RENOVATE_DRY_RUN "$W/argv") $(grep -c 'schnappy/infra' "$W/argv")" "0 1 0 0"
-check "  one of them not read through: the task fails" "$(run RENOVATE_TOKEN=$TOKEN FAKE_LOG="$(head -3 <<< "$APPS_LOG")")" "1"
+check "--apps: the nine app repos alone, a real run, each read through" \
+  "$(run RENOVATE_TOKEN=$TOKEN FAKE_LOG="$APPS_LOG") $(grep -cx "RENOVATE_REPOSITORIES=$APPS" "$W/argv") $(grep -c RENOVATE_DRY_RUN "$W/argv") $(grep -cE 'schnappy/(infra|platform|ops)(,|$)' "$W/argv")" "0 1 0 0"
+check "  one of them not read through (the last one's finish missing): the task fails" "$(run RENOVATE_TOKEN=$TOKEN FAKE_LOG="$(head -n -2 <<< "$APPS_LOG")")" "1"
 ARGS=(--apps --lookup)
 APPS_REPORT='{"problems":[],"repositories":{"schnappy/monitor":{"problems":[],"branches":[],"packageFiles":{}},"schnappy/masi":{"problems":[],"branches":[],"packageFiles":{}}}}'
 check "  with --lookup: read only, what it found printed" \
@@ -146,7 +147,7 @@ check "an unknown argument refused" "$(run RENOVATE_TOKEN=$TOKEN) $([ -e "$W/arg
 # the tasks: upgrade:check - Renovate's lookup alone, nothing to give it (no variable, prompt, precondition or dependency);
 # upgrade:run - a prompt, the copy lock and the runner's gates first, Renovate, then the runner given the bot's token by the
 # environment; the old task's LOOKUP, RUNNER or SHADOW, at any value, refused (ignored, `upgrade:run SHADOW=true` was the
-# applying run); `task upgrade` itself gone (go-task refuses a task it does not have). monitor's and masi's the same:
+# applying run); `task upgrade` itself gone (go-task refuses a task it does not have). The app repos' the same:
 # upgrade:apps:check their lookup alone, upgrade:apps:run writing - no prompt (operator 2026-11-20: "LOOKUP refusal is
 # enough"), LOOKUP at any value refused; renovate:apps gone. Their preconditions run as go-task
 # runs them (sh -c, a {{.NAME}} rendered to its value or empty), their commands as rendered against scripts that record
@@ -196,7 +197,7 @@ check "upgrade:run: a prompt naming production and the radar, the venv first, no
   "$(sed -n 2p <<< "$got")" "True|['deploy:install']|None|False|True|[]"
 check "upgrade:run's commands as run: the lock, the gates, Renovate writing, the runner (no option) with the bot's token" \
   "$(sed -n 3p <<< "$got")" "['copy-lock.sh  token=none', 'upgrade-cycle.sh --preflight token=none', 'upgrade-renovate.sh  token=none', 'upgrade-cycle.sh  token=the-bots']"
-check "task renovate:apps (and :check, :run) gone; upgrade:apps:check: monitor's and masi's lookup alone - no variable, prompt, precondition or dependency" \
+check "task renovate:apps (and :check, :run) gone; upgrade:apps:check: the app repos' lookup alone - no variable, prompt, precondition or dependency" \
   "$(sed -n 4p <<< "$got")" "False|['cmds']|['upgrade-renovate.sh --apps --lookup token=none']"
 check "upgrade:apps:run: no prompt, no variable; admitted with nothing given, refused with LOOKUP at any value; Renovate writing" \
   "$(sed -n 5p <<< "$got")" "False|None|None|True|[]|['upgrade-renovate.sh --apps token=none']"

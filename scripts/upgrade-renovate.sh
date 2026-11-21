@@ -10,9 +10,10 @@
 # no bind mount - Renovate clones into its own container. Its log in .copy/. Never beside a runner: the runner's lock
 # (.upgrade-cycle/lock) held while it runs.
 #
-# --apps: monitor's and masi's Renovate instead (task upgrade:apps:run; upgrade:apps:check its --lookup) - their
-# dependency pull requests, each repo's own renovate.json; the same bot and image, by hand (their weekly Woodpecker
-# cron and its CI-secret token gone, 2026-11-16: the token could push to infra, platform and ops from any pipeline).
+# --apps: the app repos' Renovate instead (task upgrade:apps:run; upgrade:apps:check its --lookup) - their dependency
+# pull requests, each repo's renovate.json extending renovate/apps.json; the same bot and image, by hand (monitor's and
+# masi's weekly Woodpecker cron and its CI-secret token gone, 2026-11-16: the token could push to infra, platform and
+# ops from any pipeline). Since 2026-11-21 every app repo: the bot has write on each (it pushes renovate/* branches).
 #
 # Usage: scripts/upgrade-renovate.sh [--apps] [--lookup]   --lookup: the repos and registries read, nothing changed
 # Env:   RENOVATE_TOKEN (required), RENOVATE_GITHUB_TOKEN, UPGRADE_DOCKER (the harness's docker, default docker)
@@ -24,7 +25,7 @@ dry=""
 for a in "$@"; do
   case "$a" in
     --lookup) dry=lookup ;;
-    --apps) repos=schnappy/monitor,schnappy/masi ;;
+    --apps) repos=schnappy/admin,schnappy/chat,schnappy/chess,schnappy/masi,schnappy/monitor,schnappy/radar,schnappy/radio-scheduler,schnappy/site,schnappy/target-scorer ;;
     *) echo "REFUSED: upgrade-renovate.sh [--apps] [--lookup]" >&2; exit 2 ;;
   esac
 done
