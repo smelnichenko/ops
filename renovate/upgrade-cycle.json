@@ -361,13 +361,11 @@
       ]
     },
     {
-      "description": "One-way majors (Postgres, ScyllaDB, Kafka and Strimzi, ClickHouse, Grafana, Vault, Consul): label one-way - the runner backs the store up first or blocks the unit, naming the part with no backup (scripts/upgrade-stores.json: each package here a store's there, the harness checks)",
+      "description": "One-way majors (Postgres - the CNPG image ghcr.io/cloudnative-pg/postgresql the databases run; the plain postgres image here is only the init-users Job's psql client and CI services, no store -, ScyllaDB, Kafka and Strimzi, ClickHouse, Grafana, Vault, Consul): label one-way - the runner backs the store up first or blocks the unit, naming the part with no backup (scripts/upgrade-stores.json: each package here a store's there, the harness checks)",
       "matchUpdateTypes": [
         "major"
       ],
       "matchPackageNames": [
-        "postgres",
-        "/(^|\\/)postgres$/",
         "/(^|\\/)postgresql$/",
         "/scylladb\\/scylla$/",
         "/(^|\\/)kafka$/",
@@ -421,10 +419,11 @@
       ]
     },
     {
-      "description": "Woodpecker, the CI server (its chart): a unit of its own, renovate/manual-woodpecker - the Vagrant copy runs no Woodpecker, so nothing proves it there and the copy refuses it (SHADOW run 7, 2026-11-16). The runner never picks a manual- unit: applied by hand - infra's pull request merged, then ops' (setup-woodpecker.yml's woodpecker_chart_default moves with it), a pipeline run checked (a bad one is CI down, reverted by its commit), then production's inventory read again and committed (task test:copy:inventory) - ops' main fails defaults-follow-production from ops' merge until then, as after every applied unit until its record. Last, so it takes Woodpecker out of wave-patches and every group (operator 2026-11-16). Its group.branchTopic too: the wave-patches rule names its branch by one, and a groupSlug alone left Woodpecker on renovate/manual-wave-patches (SHADOW run 8, 2026-11-16)",
+      "description": "Woodpecker, the CI server (its chart, and the server and agent images infra's values pin - registry and repository named there since 2026-11-21 so Renovate reads their tag; they move together): a unit of its own, renovate/manual-woodpecker - the Vagrant copy runs no Woodpecker, so nothing proves it there and the copy refuses it (SHADOW run 7, 2026-11-16). The runner never picks a manual- unit: applied by hand - infra's pull request merged, then ops' (setup-woodpecker.yml's woodpecker_chart_default moves with it), a pipeline run checked (a bad one is CI down, reverted by its commit), then production's inventory read again and committed (task test:copy:inventory) - ops' main fails defaults-follow-production from ops' merge until then, as after every applied unit until its record. Last, so it takes Woodpecker out of wave-patches and every group (operator 2026-11-16). Its group.branchTopic too: the wave-patches rule names its branch by one, and a groupSlug alone left Woodpecker on renovate/manual-wave-patches (SHADOW run 8, 2026-11-16)",
       "matchPackageNames": [
         "woodpecker",
-        "/woodpecker-ci\\/helm/"
+        "/woodpecker-ci\\/helm/",
+        "/woodpeckerci\\/woodpecker-(server|agent)$/"
       ],
       "groupName": "woodpecker",
       "groupSlug": "woodpecker",
