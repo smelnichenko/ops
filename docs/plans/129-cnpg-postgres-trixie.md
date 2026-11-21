@@ -53,6 +53,9 @@ select count(*) from pg_attribute a join pg_class c on c.oid = a.attrelid join p
 - platform `helm/schnappy-data/values.yaml` (`imageName` default and `ephemeralImage`)
 - platform `helm/schnappy-observability/values.yaml` (Grafana's, `imageName`)
 - platform `helm/schnappy-sonarqube/values.yaml` (SonarQube's, `imageName`)
+- ops `deploy/ansible/playbooks/setup-pi-restore-check.yml` (the Pi restore check restores production's base backups with
+  it - moved with production in step 5 and applied by its playbook (setup-pi-restore-check.yml), the operator
+  approving the Pi run; a restore of an 18.7 backup by the 18.6 image would still work - same major - but drifts)
 
 ## Steps
 
