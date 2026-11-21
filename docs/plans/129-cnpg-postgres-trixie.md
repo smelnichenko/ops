@@ -1,6 +1,6 @@
 # CNPG Postgres: from the bullseye image line to trixie (18.6 -> 18.7)
 
-Status: PLANNED (asked for by the operator 2026-11-21), not started.
+Status: DECIDED (operator 2026-11-21: "switchover, by hand, separate plan later"), not started.
 
 ## Why
 
@@ -62,10 +62,15 @@ select count(*) from pg_attribute a join pg_class c on c.oid = a.attrelid join p
 2. **The test environment** (one instance - down for its restart, ~1 min): infra test values. Checked as below.
 3. **Woodpecker's database** (CI down for ~1 min): with the CI queue empty.
 4. **SonarQube's and Grafana's** (one instance each, ~1 min each): platform values.
-5. **Production**, last: a base backup first and verified
+5. **Production**, last. First, production's primary set to update by **switchover** (decided): `primaryUpdateMethod:
+   switchover` named in platform's `helm/schnappy-data/templates/cnpg-cluster.yaml`, and `.spec.primaryUpdateMethod` taken
+   out of the `schnappy-data-envs` Argo application's ignoreDifferences in infra (it is ignored there because CNPG's
+   webhook fills the default, `restart` - left ignored, git's value would never reach the cluster); the live spec read back
+   as `switchover` before anything else. It changes nothing by itself and stays for every later minor. Then a base backup,
+   verified
    (`task deploy:postgres:base-backup -- -e pg_namespace=schnappy-production -e cluster=schnappy-production-postgres`);
-   then the image. CNPG restarts the replica on the new image, then the primary (writes unavailable while it restarts -
-   see question 1).
+   then the image. CNPG restarts the replica on the new image, promotes it (writes pause for a few seconds, connections
+   reset once), then restarts the old primary as the new replica.
 6. **After a day's soak:** `ALTER EXTENSION vector UPDATE` in masi's database (test, then production) - not before:
    pgvector has no downgrade script, so it is the step that closes the way back.
 
@@ -83,9 +88,12 @@ files, and `C` makes the glibc irrelevant. Open until step 6 (pgvector's catalog
 Renovate keeps the new suffix, so 18.8-system-trixie and on arrive as ordinary upgrade-cycle units (minors); a major
 stays one-way (the store table's Postgres store, the CNPG image).
 
-## Questions
+## Decisions (operator 2026-11-21)
 
-1. Production's primary: keep `primaryUpdateMethod: restart` (the primary restarts in place - writes unavailable for
-   about a minute) or switch to `switchover` (CNPG promotes the updated replica first - a few seconds)?
-2. By hand, step by step as above, or as a hand-made unit through the upgrade cycle (its copy proof, review and apply)?
-3. Later: CNPG's barman-cloud plugin and the `standard` image line - a plan of its own?
+1. Production's primary updates by **switchover** - set permanently (step 5), so this and every later minor costs
+   seconds of writes, not a minute. The other four clusters have one instance: they restart.
+2. **By hand**, step by step as above - not as a hand-made upgrade-cycle unit (the cycle applies a unit in one merge
+   and is built around Renovate's version units; this is a one-off switch of image line, staged cluster by cluster).
+   Later 18.x-system-trixie minors come through the cycle as ordinary units.
+3. CNPG's barman-cloud plugin and the `standard` image line: **a plan of its own, later** - before a CloudNativePG
+   upgrade removes the in-tree barman support.
