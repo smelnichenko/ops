@@ -40,12 +40,23 @@ clone:
         # non-root: uid 1000 clones, so the steps after it (uid 1000) own the workspace
         securityContext: &nonroot { runAsNonRoot: true, runAsUser: 1000, runAsGroup: 1000 }
 
-# 4 CPUs per build (operator 2026-11-21): every pod its own limit, and what runs at once adds up to 4 at most - the four
-# short checks side by side at 1 each (together ~1.5 min), then the unit suite alone at 4 (its UNIT_JOBS default),
+# 4 CPUs per build (operator 2026-11-21; ci-tools' ci-cpu-budget below holds every file here to it): every pod its own
+# limit, and what runs at once adds up to 4 at most - the budget check and the four short checks side by side (lint 1,
+# the rest 0.5 each; together ~1.5 min), then the unit suite alone at 4 (its UNIT_JOBS default),
 # then sonar alone at 4. Before, all five started together at 4 each (20 at the peak) while the suite - the build's
 # length - only ever had its 4. The suite runs whatever the checks found (status: failure too): one run still shows
 # every failure, as before.
 steps:
+  - name: cpu-budget
+    image: git.pmon.dev/schnappy/ci-tools:latest
+    commands:
+      - ci-cpu-budget .woodpecker
+    backend_options:
+      kubernetes:
+        securityContext: *nonroot
+        resources:
+          limits: { cpu: 500m }
+
   - name: ansible-lint
     image: git.pmon.dev/schnappy/ansible-lint:latest
     commands:
@@ -61,7 +72,7 @@ steps:
     image: git.pmon.dev/schnappy/ansible-lint:latest
     commands:
       - bash tests/ansible/unit/run.sh
-    depends_on: [ansible-lint, promql, build-hashes, skills]
+    depends_on: [cpu-budget, ansible-lint, promql, build-hashes, skills]
     when:
       - status: [success, failure]
     backend_options:
@@ -82,7 +93,7 @@ steps:
         securityContext: { runAsNonRoot: true, runAsUser: 65534, runAsGroup: 65534 }  # the image's own nobody
         resources:
           requests: { memory: 64Mi }
-          limits: { memory: 256Mi, cpu: 1 }
+          limits: { memory: 256Mi, cpu: 500m }
 
   # each build-hash pin the change moves, what its vendor signs (every pin when the checker or the keys change): the
   # hashes Renovate's post-upgrade task writes - or a hand - checked where ops lands
@@ -95,7 +106,7 @@ steps:
         securityContext: *nonroot
         resources:
           requests: { memory: 128Mi }
-          limits: { memory: 512Mi, cpu: 1 }
+          limits: { memory: 512Mi, cpu: 500m }
 
   - name: skills
     image: git.pmon.dev/schnappy/ansible-lint:latest
@@ -106,7 +117,7 @@ steps:
         securityContext: *nonroot
         resources:
           requests: { memory: 128Mi }
-          limits: { memory: 256Mi, cpu: 1 }
+          limits: { memory: 256Mi, cpu: 500m }
 
   - name: sonar
     image: git.pmon.dev/schnappy/sonar-scanner:latest
