@@ -408,7 +408,22 @@ off = [r for r in d["packageRules"] if r.get("enabled") is False and "git\\.pmon
 print(got, bool(files.search("build.gradle")), bool(files.search("backend/build.gradle.kts")), bool(files.search("settings.gradle")),
       m["datasourceTemplate"], m["extractVersionTemplate"], lts, groups, len(off), "config:recommended" in d["extends"])
 PYAPPS
-)" "['25'] True True False java-version ^(?<version>\d+) ['22-alpine', '24', '26.13.1', 'v24.1.0'] ['java', 'node', 'playwright'] 1 True"
+)" "['25'] True True False java-version ^(?<version>\d+) ['22-alpine', '24', '26.13.1', 'v24.1.0'] ['base image digests', 'java', 'node', 'playwright'] 1 True"
+# the six services' Dockerfile base images pinned by tag and digest (operator 2026-11-21, "do C"): the dockerfile manager
+# alone, those six repos alone (CI step images and the CI tool images stay plain tags), the digests one weekly group
+check "the apps preset: digests pinned for the six services' Dockerfiles alone - not the CI tool images, not CI steps; their digest moves one Monday group" \
+  "$("$PY" - <<'PYPIN'
+import json
+d = json.load(open("renovate/apps.json"))
+pin = [r for r in d["packageRules"] if r.get("pinDigests")]
+grp = [r for r in d["packageRules"] if r.get("groupName") == "base image digests"]
+six = ["schnappy/admin", "schnappy/chat", "schnappy/chess", "schnappy/masi", "schnappy/monitor", "schnappy/site"]
+tools = {"schnappy/ci-tools", "schnappy/ansible-lint", "schnappy/sonar-scanner", "schnappy/hyperfoil"}
+print(len(pin), pin[0]["matchManagers"], sorted(pin[0]["matchRepositories"]) == six, bool(tools & set(pin[0]["matchRepositories"])),
+      grp[0]["matchManagers"], sorted(grp[0]["matchUpdateTypes"]), grp[0]["matchRepositories"] == pin[0]["matchRepositories"],
+      grp[0]["schedule"])
+PYPIN
+)" "1 ['dockerfile'] True False ['dockerfile'] ['digest', 'pin', 'pinDigest'] True ['* * * * 1']"
 # the Gradle wrapper's checksum moved with its version (apps preset): the command allowed for a release version alone
 # (never shell text from a crafted one), Gradle's sum written when it is 64 hex, the file as it was otherwise
 check "the apps preset's wrapper checksum: allowed for 9.9.2 alone; the sum written; garbage, a failed fetch, no sum line: the file as it was" \

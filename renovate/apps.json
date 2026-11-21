@@ -92,6 +92,45 @@
         ],
         "executionMode": "update"
       }
+    },
+    {
+      "description": "The six services' Dockerfile base images pinned by tag AND digest (operator 2026-11-21, \"do C\"): every re-published base reaches an app through a reviewed, traceable pull request - not silently at its next code change. CI step images and the CI tool images stay plain tags (the decision covered these alone)",
+      "matchRepositories": [
+        "schnappy/admin",
+        "schnappy/chat",
+        "schnappy/chess",
+        "schnappy/masi",
+        "schnappy/monitor",
+        "schnappy/site"
+      ],
+      "matchManagers": [
+        "dockerfile"
+      ],
+      "pinDigests": true
+    },
+    {
+      "description": "Their digest moves (and the first pins) in ONE pull request per repo, weekly: Mondays - Renovate runs by hand (ops' task upgrade:apps:run), so a run on a Monday opens or refreshes it; version-tag bumps stay their own pull requests",
+      "matchRepositories": [
+        "schnappy/admin",
+        "schnappy/chat",
+        "schnappy/chess",
+        "schnappy/masi",
+        "schnappy/monitor",
+        "schnappy/site"
+      ],
+      "matchManagers": [
+        "dockerfile"
+      ],
+      "matchUpdateTypes": [
+        "pin",
+        "pinDigest",
+        "digest"
+      ],
+      "groupName": "base image digests",
+      "groupSlug": "base-image-digests",
+      "schedule": [
+        "* * * * 1"
+      ]
     }
   ]
 }
