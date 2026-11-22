@@ -1,6 +1,7 @@
 # CNPG Postgres: from the bullseye image line to trixie (18.6 -> 18.7)
 
-Status: DECIDED (operator 2026-11-21: "switchover, by hand, separate plan later"), not started.
+Status: DECIDED (operator 2026-11-21: "switchover, by hand, separate plan later"); steps 1 and 2 done 2026-11-22,
+step 3 next (on the operator's go).
 
 ## Why
 
@@ -63,6 +64,16 @@ select count(*) from pg_attribute a join pg_class c on c.oid = a.attrelid join p
    base backup taken and restored. Then **the way back rehearsed on the copy**: the image back to 18.6-bullseye, the
    clusters up and healthy again - before production moves, the return path is proven, not assumed.
 2. **The test environment** (one instance - down for its restart, ~1 min): infra test values. Checked as below.
+   **Done 2026-11-22.** Step 1 on the copy, both ways rc 0: production's and Grafana's clusters (the copy has no
+   Woodpecker, SonarQube or test cluster) on 18.7, every database libc C/C with no non-C column collation, a base
+   backup restored into a side cluster on the 18.7 image (10 000 rows, md5 equal, WAL replayed), the inventory
+   differing by the image only; back on 18.6 with every check green. The copy's GitOps mirror refuses a change to
+   what its overlay drops - the test environment's values - as untested, so that line moved on its own in step 2.
+   Step 2 at 13:03 (infra eef8431, the image pre-pulled on ten): the instance restarted on 18.7 in about a minute,
+   no container restart, the collations unchanged, ContinuousArchiving True and two segments archived after it
+   (no new failure), pgvector still 0.8.6 in masi and answering, the test apps Synced/Healthy with no database
+   error; ArgoCDAppDegraded went pending for the restart and cleared. The test environment takes no scheduled
+   backup, so that check waits for production.
 3. **Woodpecker's database** (CI down for ~1 min): with the CI queue empty.
 4. **SonarQube's and Grafana's** (one instance each, ~1 min each): platform values.
 5. **Production**, last. First, production's primary set to update by **switchover** (decided): `primaryUpdateMethod:
