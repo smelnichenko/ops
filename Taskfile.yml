@@ -1565,7 +1565,7 @@ tasks:
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/configure-node.yml {{.CLI_ARGS}}
 
   deploy:host-hardening:
-    desc: Host kernel hardening on ten (efi_pstore + systemd hardware watchdog)
+    desc: Host hardening on ten (efi_pstore, systemd hardware watchdog, node_exporter, unattended-upgrades and its 07:30 reboot)
     dir: deploy/ansible
     deps: [deploy:install]
     cmds:

@@ -109,8 +109,8 @@ OS_UPGRADE_SCRIPT = <<-'OSSCRIPT'
   # failed in grub-install on first boot (2026-10-02, 2 of 3 VMs, error hidden by its postinst) and aborted
   # provisioning: keep it at the box's version. The kernel still upgrades and its hook still adds the boot entry.
   apt-mark hold grub-pc grub-pc-bin > /dev/null
-  # production's hosts run no unattended upgrade (ten and the Pis: not installed, read 2026-11-14) - the box's would take
-  # the security updates production has not, between a copy's checks, and undo the Pis' pinned versions
+  # the box's unattended-upgrades gone: the Pis run none (it would undo their pinned versions), and ten's comes from
+  # setup-host-hardening.yml with production's configuration (2026-11-22; on the copy without its reboot)
   apt-get -o DPkg::Lock::Timeout=600 purge -y -qq unattended-upgrades > /dev/null
   apt-get -o DPkg::Lock::Timeout=600 update -qq
   apt-get -o DPkg::Lock::Timeout=600 full-upgrade -y -qq > /tmp/os-upgrade.log 2>&1 \

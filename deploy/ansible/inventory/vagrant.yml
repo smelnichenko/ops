@@ -95,6 +95,11 @@ all:
     # in resource-constrained VMs. Skip.
     install_scylla_manager: false
 
+    # setup-host-hardening.yml's unattended-upgrades: as on ten, but no reboot - a copy lives hours, and a kernel its
+    # morning run installs would reboot it at 07:30 in the middle of a run. Its reboot is proven by a run with
+    # -e auto_upgrades_reboot=true
+    auto_upgrades_reboot: false
+
   hosts:
     target:
       ansible_host: 192.168.56.10
