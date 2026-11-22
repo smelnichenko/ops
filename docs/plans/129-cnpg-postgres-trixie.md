@@ -1,7 +1,7 @@
 # CNPG Postgres: from the bullseye image line to trixie (18.6 -> 18.7)
 
-Status: DECIDED (operator 2026-11-21: "switchover, by hand, separate plan later"); steps 1-4 done 2026-11-22,
-step 5 (production) next, on the operator's go.
+Status: DECIDED (operator 2026-11-21: "switchover, by hand, separate plan later"); steps 1-5 done 2026-11-22,
+step 6 (pgvector's catalog) after a day's soak - from 2026-11-23 afternoon.
 
 ## Why
 
@@ -93,6 +93,15 @@ select count(*) from pg_attribute a join pg_class c on c.oid = a.attrelid join p
    (`task deploy:postgres:base-backup -- -e pg_namespace=schnappy-production -e cluster=schnappy-production-postgres`);
    then the image. CNPG restarts the replica on the new image, promotes it (writes pause for a few seconds, connections
    reset once), then restarts the old primary as the new replica.
+   **Done 2026-11-22.** platform ea43669 (the template's `primaryUpdateMethod: switchover`, the chart's own defaults
+   on 18.7) then infra e470f1b (the ignoreDifferences entry gone; the live spec read back `switchover`, nothing
+   restarted); a verified base backup; infra f98c524, the image: CloudNativePG upgraded the replica (12:27:53 UTC),
+   switched over to it (12:28:09 - writes paused for seconds, each app's connections reset once, their errors all in
+   that minute) and upgraded the old primary as the new replica (12:28:28). Both 18.7, replication streaming, the
+   collations unchanged, archiving on the new timeline (one failure at the promotion instant, none after), a base
+   backup on 18.7, the alerts clear. The Pi restore check followed production (ops 07649a93 - its harness wants the
+   playbook's image equal to production's recorded one), deployed on both Pis, and pi1 restored the 18.7 base backup
+   in the 18.7 image by hand (every part restored).
 6. **After a day's soak:** `ALTER EXTENSION vector UPDATE` in masi's database (test, then production) - not before:
    pgvector has no downgrade script, so it is the step that closes the way back.
 
