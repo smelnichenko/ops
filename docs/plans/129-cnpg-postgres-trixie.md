@@ -1,7 +1,7 @@
 # CNPG Postgres: from the bullseye image line to trixie (18.6 -> 18.7)
 
-Status: DECIDED (operator 2026-11-21: "switchover, by hand, separate plan later"); steps 1 and 2 done 2026-11-22,
-step 3 next (on the operator's go).
+Status: DECIDED (operator 2026-11-21: "switchover, by hand, separate plan later"); steps 1-4 done 2026-11-22,
+step 5 (production) next, on the operator's go.
 
 ## Why
 
@@ -75,7 +75,15 @@ select count(*) from pg_attribute a join pg_class c on c.oid = a.attrelid join p
    error; ArgoCDAppDegraded went pending for the restart and cleared. The test environment takes no scheduled
    backup, so that check waits for production.
 3. **Woodpecker's database** (CI down for ~1 min): with the CI queue empty.
+   **Done 2026-11-22 13:23** (infra 04014ce, `[CI SKIP]`: an infra pipeline would have run on the Woodpecker whose
+   database restarted - infra's checks and a kubeconform of the manifest ran locally; the queue was empty): 18.7,
+   collations unchanged, a segment archived after the restart, an on-demand base backup on 18.7, Woodpecker's API
+   answering from its database.
 4. **SonarQube's and Grafana's** (one instance each, ~1 min each): platform values.
+   **Done 2026-11-22 14:02** (platform 679ce50, `[CI SKIP]`: its Sonar step would have run against the restarting
+   SonarQube - the charts' lint and render checks ran locally, the production values rendering 18.7 for both):
+   18.7, collations unchanged, archiving on after the restarts, an on-demand base backup of each on 18.7, SonarQube
+   UP and Grafana's database ok; ArgoCDAppDegraded pending for the restarts, then clear.
 5. **Production**, last. First, production's primary set to update by **switchover** (decided): `primaryUpdateMethod:
    switchover` named in platform's `helm/schnappy-data/templates/cnpg-cluster.yaml`, and `.spec.primaryUpdateMethod` taken
    out of the `schnappy-data-envs` Argo application's ignoreDifferences in infra (it is ignored there because CNPG's
