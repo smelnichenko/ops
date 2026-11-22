@@ -1364,6 +1364,24 @@ tasks:
     cmds:
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/scylla-restore.yml {{.CLI_ARGS}}
 
+  deploy:scylla:way-back:
+    desc: "PRODUCTION: the way back from a ScyllaDB release line (a version cannot be downgraded) - after the unit is reverted in infra and Argo synced it: the cluster's data volumes and ScyllaCluster thrown away, Argo rebuilds it at git's version (the chart's schema Job its schema), chat's rows restored from the snapshot taken before the upgrade (-- -e confirm=schnappy-production-scylla -e version=<old> -e snapshot=sm_<UTC>; --check: every check before the deletion). Rehearsed on the copy: test:copy:scylla-way-back"
+    dir: deploy/ansible
+    deps: [deploy:install]
+    dotenv: ['../../.env']
+    prompt: "Throw away and rebuild PRODUCTION's ScyllaDB cluster from its backup?"
+    cmds:
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/scylla-way-back.yml {{.CLI_ARGS}}
+
+  test:copy:scylla-way-back:
+    desc: "Vagrant: ScyllaDB's way back from a release line with production's tasks - markers written into chat, backed up by Scylla Manager, the cluster thrown away and rebuilt by Argo, chat restored from the replaced cluster's snapshot, every marker back (scylla-way-back-check.yml). Rebuilds the copy's production cluster: a readied copy, alone"
+    dir: deploy/ansible
+    deps: [deploy:install]
+    cmds:
+      # the copy's VMs used: one run at a time (scripts/copy-lock.sh - a nested task shares its caller's lock)
+      - cmd: ../../scripts/copy-lock.sh
+      - venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/scylla-way-back-check.yml
+
   test:copy:scylla-restore:
     desc: "Vagrant: ScyllaDB's backups restore - a marker keyspace backed up by Scylla Manager, truncated, restored with production's restore tasks (sctool restore --restore-tables), its token back (scylla-restore-check.yml)"
     dir: deploy/ansible

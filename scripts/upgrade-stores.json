@@ -41,14 +41,13 @@
       "backups": [
         "check:production:scylla-backup"
       ],
-      "missing": [
-        "the way back from a release line (a new cluster at the old version, its schema restored by sctool restore --restore-schema, then its tables) not rehearsed on the copy - a release line cannot be downgraded; a table restore into the running cluster is (deploy:scylla:restore, test:copy:scylla-restore)"
-      ],
+      "missing": [],
       "examples": [
         "scylladb-2026.3",
         "scylladb-scylla-2027.x"
       ],
       "taken_by": [],
+      "_why": "a release line cannot be downgraded: the way back is task deploy:scylla:way-back (the unit reverted in infra first) - the cluster's data volumes and ScyllaCluster thrown away, Argo rebuilds it at git's version, a sync started by it runs the chart's schema Job, chat's rows restored from the snapshot this table's backup took before the merge, the cluster's clients (chat, monitor) restarted. Rehearsed whole on the copy with production's tasks: test:copy:scylla-way-back, SCYLLA WAY BACK OK 2026-11-22 (100 markers back, the clients with no driver error)",
       "minutes": 30
     },
     {
