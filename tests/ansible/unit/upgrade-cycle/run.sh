@@ -87,7 +87,7 @@ stub(os.path.join(OPS, "scripts/upgrade-verify.sh"), LOG + '''
 if [ "${UPGRADE_VERIFY_HOLD:-}" = 0 ] && [ "${UPGRADE_VERIFY_SETTLE:-}" = 0 ]; then exit "$(cat "$ST/health.rc" 2>/dev/null || echo 0)"; fi
 if [ "${UPGRADE_VERIFY_HOLD:-}" = 0 ]; then echo "upgrade-verify.sh ARGO ${UPGRADE_VERIFY_REVISIONS:-}" >> "$ST/calls"; exit "$(cat "$ST/argo.rc" 2>/dev/null || echo 0)"; fi
 echo "upgrade-verify.sh AFTER ${UPGRADE_VERIFY_REVISIONS:-}" >> "$ST/calls"
-[ ! -e "$ST/slowverify" ] || { touch "$ST/slowverify.started"; for _ in $(seq 50); do sleep 0.1; done; }
+[ ! -e "$ST/slowverify" ] || { echo "verify under way"; touch "$ST/slowverify.started"; for _ in $(seq 50); do sleep 0.1; done; }
 rc=$(cat "$ST/verify.rc" 2>/dev/null || echo 0); [ "$rc" = 0 ] || cat "$ST/verify.out" 2>/dev/null
 exit "$rc"''')
 stub(os.path.join(OPS, "scripts/upgrade-record.sh"), LOG + '\nexit "$(cat "$ST/record.rc" 2>/dev/null || echo 0)"')
@@ -1184,6 +1184,8 @@ check("a test unit partly merged: paged, paused", (rc, notices(calls), paused(ca
 rc, calls = stopped(signal.SIGTERM, "slowverify.started", pick="test test-observability minor", files={"slowverify": ""})
 check("a test unit stopped after its merge (during its verify): paged and paused", (rc, notices(calls), paused(calls)),
       (1, ["page test-observability"], True))
+check("  what its verify said before the stop already in the log (so on the console) - its lines as they come, not at its end",
+      "verify under way" in run_log().splitlines(), True)
 rc, calls = night("test observability minor")
 check("a test action for a unit with no test- name: refused, nothing done", (rc, has(calls, "upgrade-label.py")), (1, []))
 # the log keeps every line when the terminal is gone (its stdout a pipe whose reader died)
@@ -1192,6 +1194,22 @@ subprocess.run(f"bash {os.path.join(OPS, 'scripts/upgrade-cycle.sh')} | true", s
 logs = [os.path.join(OPS, ".copy", f) for f in os.listdir(os.path.join(OPS, ".copy")) if f.startswith("upgrade-cycle-")]
 check("stdout a pipe whose reader is gone (a closed terminal): the run goes on to its end, its log holds every line",
       (bool(logs) and "APPLIED wave-patches" in open(logs[0]).read(), notices(calls_now())[-1:]), (True, ["applied wave-patches"]))
+# the console (operator 2026-11-22: "make all this logging visible on the console where task runs"): the run's log line
+# for line as it is written - a step's own output too, not the runner's lines alone - its END last, nothing after it
+rc, calls = night("prove wave-patches patch", plan=PLAN, files={"verify.rc": "1", "verify.out": "a line of verify's own\n"})
+check("the console: the run's log line for line - a step's output too - its last line END with the run's exit code",
+      (rc, night.out == run_log(), "a line of verify's own" in night.out.splitlines(), night.out.splitlines()[-1][20:]),
+      (1, True, True, "END rc=1"))
+rc, _ = night("prove wave-patches patch", args=("--preflight",))
+check("  --preflight too (the task runs Renovate next: nothing of this run printed after it)",
+      (rc, night.out == run_log(), night.out.splitlines()[-1][20:]), (0, True, "END rc=0"))
+rc, calls = night("test test-observability minor", files={"verify.rc": "1", "verify.out":
+                  "16:30:00 not settled yet: app schnappy-production-apps OutOfSync Healthy -\nNOT SETTLED after 30 min:\n"
+                  "pod schnappy-test-valkey/valkey-0 unready: c0\n"})
+check("a test unit's verify: its progress lines on the console, never read as a complaint (one naming production as it "
+      "waited: the test environment alone still - its twin behind the others, not paged)",
+      (rc, notices(calls), "16:30:00 not settled yet: app schnappy-production-apps OutOfSync Healthy -" in night.out.splitlines()),
+      (1, ["stopped test-observability"], True))
 HO = "schnappy/ops 7 " + "c" * 40 + " " + "e" * 40 + "\n"
 rc, calls = night("prove centrifugo minor", heads=(HO,), plan="test:copy:playbook PLAYBOOK=upgrade-forgejo.yml ARGS='-e @/x/f.yml'\n")
 check("a unit of ops alone: no merge commit of infra's or platform's for Argo to reach - none asked of verify",

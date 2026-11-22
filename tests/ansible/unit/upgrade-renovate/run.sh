@@ -92,6 +92,11 @@ check "  a pin naming its line (mise's java = \"25\", resolved to 25.0.5+8) besi
 check "  the newest by its numbers, not as text (100.1.0 above 92.22.0)" "$(grep -c '^  kps: 91.8.2 -> 100.1.0 (major, also offered: 92.22.0)' "$W/out")" "1"
 check "  a rebuild of the same tag (a digest update) said as one - beside a new version, and alone - never as a version" \
   "$(grep -c '^  opensearch: 3.9.0 -> 3.10.0 (minor, also offered: 3.9.0 rebuilt)  \[apps/istiod.yaml\]$' "$W/out") $(grep -c '^  busybox: stable-musl - same tag, new image (digest abcdef1)  \[apps/istiod.yaml\]$' "$W/out")" "1 1"
+# the console (operator 2026-11-22: "make all this logging visible on the console where task runs"): Renovate's log as it
+# is written, before what follows it; the lookup's report (behind its marker) never printed raw
+check "  its log on the console, the whole of it right before 'Renovate done'; the raw report not printed" \
+  "$([ "$(grep -B "$(wc -l <<< "$OK_LOG")" '^Renovate done$' "$W/out" | head -n -1)" = "$OK_LOG" ] && echo whole-log-first) $(grep -c 'renovate report\|"repositories"' "$W/out")" \
+  "whole-log-first 0"
 log=$(sed -n 's/^Renovate lookup ([^)]*) - its log: //p' "$W/out")
 check "  the log the checks read has no report in it (a report's own results never taken for a repository's)" \
   "$(grep -c 'renovate report' "$log") $([ -s "$log.report.json" ] && echo report-kept)" "0 report-kept"

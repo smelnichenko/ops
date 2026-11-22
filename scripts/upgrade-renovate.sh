@@ -60,9 +60,14 @@ fi
 mkdir -p "$ops/.copy"
 log=$ops/.copy/renovate-$(date +%Y%m%d-%H%M%S)-$$.log
 echo "Renovate ${dry:-run} ($image) - its log: $log"
-if ! "${UPGRADE_DOCKER:-docker}" "${args[@]}" "$image" "${cmd[@]}" > "$log" 2>&1; then
-  echo "Renovate FAILED - the last of its log ($log):" >&2
-  tail -n 20 "$log" >&2
+# its log on the console as it is written (operator 2026-11-22: "make all this logging visible on the console where task
+# runs"), followed until docker is gone - so all of it before what this prints next; a lookup's report (behind its marker)
+# left out, summarised below. A reader gone (a closed terminal) stops the follower, never Renovate or its log
+"${UPGRADE_DOCKER:-docker}" "${args[@]}" "$image" "${cmd[@]}" > "$log" 2>&1 &
+renovate_pid=$!
+tail -n +1 -F -s 0.1 --pid="$renovate_pid" "$log" 2> /dev/null | sed -u '/^=== renovate report ===$/,$d' || true
+if ! wait "$renovate_pid"; then
+  echo "Renovate FAILED - its log above ($log)" >&2
   exit 1
 fi
 # the report out of the log (the checks below read Renovate's log alone)

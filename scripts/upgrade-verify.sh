@@ -153,16 +153,26 @@ while :; do
   else
     clean=0
     if [ "$(up)" -ge "$end" ]; then echo "NOT SETTLED after $settle min:"; echo "$out"; exit 1; fi
+    # still waiting: what this look found, on one line - the console's progress (the operator 2026-11-22: an hour with
+    # no line read as a hang); its time first, so never read as a complaint (the runner's test_only skips such lines)
+    echo "$(date '+%T') not settled yet: ${out//$'\n'/; }"
   fi
   sleep "$poll"
 done
 [ "$hold" -gt 0 ] || { echo "SETTLED AND QUIET ($need look$([ "$need" = 1 ] || echo "s in a row"))"; exit 0; }
-echo "SETTLED"
-end=$(( $(up) + hold * 60 ))
+echo "SETTLED at $(date '+%T') - the hold: $hold min"
+end=$(( $(up) + hold * 60 )); note=$(( $(up) + 600 ))
 declare -A seen=()
 while [ "$(up)" -lt "$end" ]; do
   sleep "$poll"
-  out=$(look critical) && { seen=(); continue; }
+  if out=$(look critical); then
+    seen=()
+    # every 10 minutes of the hold, one line: how far it is
+    if [ "$(up)" -ge "$note" ]; then
+      echo "$(date '+%T') quiet - $(( (hold * 60 - end + $(up)) / 60 )) of $hold min held"; note=$(( note + 600 ))
+    fi
+    continue
+  fi
   # what is wrong now, counted in a row by its subject - the app, the pod's owner (a pod recreated under a new name is
   # the same failure), the alert - whatever its words this look; gone from a look, its count starts again
   declare -A now=()
@@ -170,6 +180,7 @@ while [ "$(up)" -lt "$end" ]; do
     [ -n "$line" ] || continue
     key=$(subject "$line")
     now[$key]=$(( ${seen[$key]:-0} + 1 ))  # from the last look's count: once a look, however many of its pods are wrong
+    echo "$(date '+%T') not quiet (${now[$key]} of $streak looks in a row): $line"
     if [ "${now[$key]}" -ge "$streak" ]; then echo "NOT QUIET during the hold ($streak looks in a row):"; echo "$out"; exit 1; fi
   done <<< "$out"
   seen=(); for k in "${!now[@]}"; do seen[$k]=${now[$k]}; done

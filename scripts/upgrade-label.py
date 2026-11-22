@@ -145,9 +145,19 @@ class NoCI(Exception):
     """A head with no CI status at all at the wait's end: no pipeline was started for it (a webhook lost)."""
 
 
+def waiting(states, said):
+    """Still waiting: the heads' states said when they changed since the last said - the console's progress through an
+    hour's wait (operator 2026-11-22: a silent hour reads as a hang), flushed (the runner's log is a file, never a
+    terminal). What is said now returned."""
+    if states != said:
+        print(f"{time.strftime('%H:%M:%S')} waiting for CI: {', '.join(f'{n} {st}' for n, st in states)}", flush=True)
+    return states
+
+
 def green(unit, wait=0):
     """Every head's CI success - a running one waited for (up to wait seconds), a red one at once."""
     deadline = time.monotonic() + wait
+    said = None
     while True:
         states = [(f"{repo}#{pr['number']}", state(repo, pr["head"]["sha"]) or "none") for repo, pr in prs(unit)]
         red = [n for n, st in states if st in ("failure", "error")]
@@ -163,6 +173,7 @@ def green(unit, wait=0):
             if none:  # no CI ever reported on it: Forgejo's state "" (no statuses), or another status alone
                 raise NoCI(f"no CI on: {', '.join(none)}")
             raise Refused(f"not green yet: {', '.join(n for n, st in states if st != 'success')}")
+        said = waiting(states, said)
         time.sleep(float(os.environ.get("UPGRADE_GREEN_POLL", "60")))
 
 

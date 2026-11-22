@@ -58,7 +58,7 @@ python3 "$W/server.py" "$W" & echo $! > "$W/pid"
 for _ in $(seq 50); do [ -e "$W/port" ] && break; sleep 0.1; done
 [ -e "$W/port" ] || { echo "upgrade-label: the local server did not start"; exit 1; }
 W=$W PORT=$(cat "$W/port") python3 - <<'PYCHECK'
-import json, os, subprocess, sys, time
+import json, os, re, subprocess, sys, time
 W, PORT = os.environ["W"], os.environ["PORT"]
 fails = 0
 def check(name, got, want):
@@ -303,6 +303,12 @@ r = subprocess.run([sys.executable, "scripts/upgrade-label.py", "wave-patches", 
 t.join()
 check("green with a wait: the running one waited for until it is green - exit 0", (r.returncode, r.stdout.strip().split("\n")[-1]),
       (0, "schnappy/ops#8 success"))
+# the console's progress through the wait (operator 2026-11-22: a silent hour read as a hang): the heads' states said when
+# they change - once while the same, its time first; the verdict as before
+waited = [l for l in r.stdout.splitlines() if " waiting for CI: " in l]
+check("  while it waits: one line (the states unchanged), its time first, every head's state",
+      [re.sub(r"^\d\d:\d\d:\d\d ", "", l) for l in waited],
+      ["waiting for CI: schnappy/infra#1 success, schnappy/platform#5 pending, schnappy/ops#8 success"])
 fixture(UNIT, {"a1": "success", "b1": "pending", "c1": "success"})
 r = subprocess.run([sys.executable, "scripts/upgrade-label.py", "wave-patches", "--green", "1"], capture_output=True, text=True,
                    env={**env, "UPGRADE_GREEN_POLL": "0.2"}, timeout=60)

@@ -105,7 +105,16 @@ work=${UPGRADE_WORK:-$(dirname "$ops")/.upgrade-cycle-work}
 forgejo=${UPGRADE_FORGEJO_GIT:-https://git.pmon.dev}
 mkdir -p "$ops/.copy" "$state"
 log=$ops/.copy/upgrade-cycle-$(date +%Y%m%d-%H%M%S)-$$.log  # each run its own: a verdict is never an earlier run's
-say() { echo "$(date '+%F %T') $*" | tee -p -a "$log"; }  # -p: a reader gone (a closed terminal) never costs the log a line
+# the console follows the log as it is written - every step's output, not the runner's own lines alone (operator
+# 2026-11-22: "make all this logging visible on the console where task runs"); the log is the record, the console its
+# reader: a reader gone (a closed terminal) costs it no line. The run's last line (END) ends the follower, waited for -
+# what the task runs next never prints ahead of this run's tail; a run killed outright ends it through --pid
+: >> "$log"
+tail -n +1 -F -s 0.1 --pid=$$ "$log" 2> /dev/null | sed -Eu '/^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2} END rc=[0-9]+$/q' &
+follower=$!
+say() { echo "$(date '+%F %T') $*" >> "$log"; }
+console_end() { say "END rc=$1"; wait "$follower" 2> /dev/null; }
+trap 'console_end $?' EXIT
 # a step: said, and run unless --dry; its output in the log; nothing it runs reads the run's own input or holds its lock
 # (a daemon a step leaves - the copy's host guard - would keep the next run out)
 run() {
@@ -223,7 +232,7 @@ gates() {  # $1: the span (minutes) no backup window may meet; $2: start or merg
     # a run that stopped mid-apply with no page (killed outright, the machine off): paged now - its journal says how far
     unit=$(awk '$1 == "unit" {print $2; exit}' "$state/inflight")
     [[ $unit =~ ^[a-z0-9][a-z0-9.-]*$ ]] || unit=unknown-unit
-    say "REFUSED: a run stopped mid-apply - its journal ($state/inflight):"; sed 's/^/  /' "$state/inflight" | tee -a "$log"
+    say "REFUSED: a run stopped mid-apply - its journal ($state/inflight):"; sed 's/^/  /' "$state/inflight" >> "$log"
     page "a run stopped mid-apply, found by the next run - its journal: $(tr '\n' ';' < "$state/inflight")"
     return 1
   fi
@@ -275,7 +284,7 @@ cleanup() {  # however the run ends: the copy halted when it was readied (the ra
   [ -z "$built" ] || run vagrant halt || say "THE COPY NOT HALTED - the radar stays off: vagrant halt by hand"
   [ -n "$dry" ] || { chmod -R u+w "${dirs[@]}" 2> /dev/null; rm -rf "${dirs[@]}" "$heads" "$heads.after" "$heads.expected"; }
 }
-trap cleanup EXIT
+trap 'rc=$?; cleanup; console_end "$rc"' EXIT
 tries_key=""
 read_heads() {  # the unit's pull requests' heads and bases, "<repo> <number> <head> <base>" a line (into $1); the first
                 # read names the pull requests a try is counted for (a later read that fails leaves the file empty)
@@ -477,7 +486,8 @@ test_only() {  # $1: verify's output - every line it complains of placed in the 
   python3 -I - "$1" <<'PY'
 import re, sys
 lines = [l for l in open(sys.argv[1]).read().splitlines()
-         if l.strip() and not re.match(r"(SETTLED|NOT SETTLED|NOT QUIET)\b", l)]  # verify's own headers
+         # verify's own headers, and its progress lines (each its time first: what a look found then, said again at its end)
+         if l.strip() and not re.match(r"(SETTLED|NOT SETTLED|NOT QUIET)\b|\d\d:\d\d:\d\d ", l)]
 test = [l for l in lines if re.match(r"(app schnappy-test(-[^ ]+)? |pod schnappy-test(-[^/ ]+)?/)", l)]
 root = [l for l in lines if l.startswith("app root ")]
 sys.exit(0 if lines and test and len(test) + len(root) == len(lines) else 1)
@@ -495,8 +505,8 @@ if [ "$action" = test ]; then
   revs=$(revisions) || { page "merged, the merge's commits not read - its verify not run"; exit 1; }
   vout=$ops/.copy/upgrade-verify-$unit-$$.txt
   say "RUN scripts/upgrade-verify.sh (the test environment's merge)"
-  if [ -z "$dry" ] && ! UPGRADE_VERIFY_REVISIONS="$revs" scripts/upgrade-verify.sh < /dev/null > "$vout" 2>&1 9>&-; then
-    cat "$vout" >> "$log"
+  # its lines in the log (so on the console) as they come - its progress too -, and in $vout for test_only's reading
+  if [ -z "$dry" ] && ! UPGRADE_VERIFY_REVISIONS="$revs" scripts/upgrade-verify.sh < /dev/null 2>&1 9>&- | tee "$vout" >> "$log" 9>&-; then
     # the test environment's charts can carry what reaches beyond it: anything not placed in it pages - an app of its
     # own (root aside, when it is its children that are not settled), a pod in its namespaces; a critical alert, a read
     # that failed, anything else: production's
@@ -510,7 +520,6 @@ if [ "$action" = test ]; then
     stopped "merged to the test environment, it not settled after it - its production unit ${unit#test-} behind the others" "$log"
     exit 1
   fi
-  [ ! -e "$vout" ] || cat "$vout" >> "$log"
   journal "verified"
   run scripts/upgrade-record.sh "$unit" "$log" \
     || { stopped "applied and verified, not recorded - push the record, then remove $state/inflight" "$log"; exit 1; }
