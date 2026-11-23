@@ -665,6 +665,15 @@ tasks:
     cmds:
       - cmd: scripts/upgrade-renovate.sh --apps
 
+  # the app repos' Renovate PRs driven to merged by the bot (operator 2026-11-20 "don't leave open PRs on me", 2026-11-23
+  # "nothing should be left to me or behind in any way"): green ones merged, behind ones updated onto main, conflicted ones
+  # re-made on main (scripts/renovate-restack.py), red ones reported - fixed on their branches; never between the upgrade
+  # run's review and its merge, masi's merges spaced. Until nothing is pending (one round: the script's --once)
+  upgrade:apps:merge:
+    desc: "Merge the app repos' green Renovate PRs as the bot - round after round until none is pending (red ones listed, to fix on their branches)."
+    cmds:
+      - cmd: scripts/upgrade-apps-merge.py
+
   # the upgrade cycle by hand (the operator's decisions of 2026-11-15): Renovate and the runner work in tandem - started by
   # the operator, run locally; no timer, no CI cron. Two tasks and no mode variable (operator 2026-11-20 - one typed in
   # lower case or misspelt was read as unset, and unset was the applying run): upgrade:check reads, upgrade:run writes.
@@ -677,6 +686,18 @@ tasks:
     desc: "Show what Renovate would update in infra, platform and ops. Read-only: no branches, PRs or deploys."
     cmds:
       - cmd: scripts/upgrade-renovate.sh --lookup
+
+  # the runner alone - Renovate's PRs applied, Renovate not run (operator 2026-11-23: "why the fuck you run renovate? you
+  # was asked to apply his PRs"): upgrade:run's lock, gates and runner, without its Renovate step
+  upgrade:apply:
+    desc: "PRODUCTION. Apply the next of Renovate's open units in infra, platform and ops - tested on the Vagrant copy, reviewed, applied - without running Renovate."
+    deps: [deploy:install]
+    prompt: "Apply the next upgrade unit to PRODUCTION (Renovate not run)?"
+    cmds:
+      - cmd: scripts/copy-lock.sh
+      - cmd: scripts/upgrade-cycle.sh --preflight
+      # the bot's token (ops/.env RENOVATE_TOKEN) the runner's, by the environment - never on a command line
+      - cmd: 'UPGRADE_FORGEJO_TOKEN="$RENOVATE_TOKEN" scripts/upgrade-cycle.sh'
 
   upgrade:run:
     desc: "PRODUCTION. Renovate opens or updates PRs in infra, platform and ops; then one update is tested on the Vagrant copy, reviewed (compatibility with what production runs among its passes) and applied to production. Stop the radar first."
@@ -1337,6 +1358,13 @@ tasks:
     prompt: "Take a CNPG base backup on PRODUCTION?"
     cmds:
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/postgres-base-backup.yml {{.CLI_ARGS}}
+
+  # the hourly report's facts, read-only (was a session-scratch helper - operator 2026-11-23: "told you before not to
+  # keep things in scratchpad"): alerts (active, pending), readiness (pods, Argo), the open pull requests
+  check:production:report:
+    desc: "Production's alerts, its readiness (pods, Argo applications) and the org's open pull requests - read-only; a part not read: NOT READ, exit 1"
+    cmds:
+      - cmd: scripts/production-report.py
 
   check:production:data:
     desc: "PRODUCTION, read only: the data paths move - scrape targets up, Mimir fresh, logs in ClickHouse, datasources, CNPG, Kafka, ScyllaDB, no critical alert (production-data-check.yml)"

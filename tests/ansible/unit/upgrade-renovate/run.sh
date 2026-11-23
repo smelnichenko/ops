@@ -170,7 +170,7 @@ def render(text, given):
     return out
 TB = os.path.join(W, "tb")
 os.makedirs(os.path.join(TB, "scripts"), exist_ok=True)
-for name in ("copy-lock.sh", "upgrade-cycle.sh", "upgrade-renovate.sh"):
+for name in ("copy-lock.sh", "upgrade-cycle.sh", "upgrade-renovate.sh", "upgrade-apps-merge.py"):
     path = os.path.join(TB, "scripts", name)
     open(path, "w").write(f'#!/bin/sh\necho "{name} $* token=${{UPGRADE_FORGEJO_TOKEN:-none}}" >> "$REC"\n')
     os.chmod(path, 0o755)
@@ -195,6 +195,9 @@ ac, ar = tasks["upgrade:apps:check"], tasks["upgrade:apps:run"]
 print(any(k.startswith("renovate:apps") for k in tasks), sorted(k for k in ac if k != "desc"), ran(ac), sep="|")
 print("prompt" in ar, ar.get("deps"), ar.get("vars"), admitted(ar, {}),
       [g for g in ({"LOOKUP": v} for v in ("true", "false", "1", "yes")) if admitted(ar, g)], ran(ar), sep="|")
+ap, am = tasks["upgrade:apply"], tasks["upgrade:apps:merge"]
+print("PRODUCTION" in ap.get("prompt", ""), ap.get("deps"), ap.get("vars"), admitted(ap, {}), ran(ap), sep="|")
+print("prompt" in am, am.get("deps"), am.get("vars"), ran(am), sep="|")
 PYCHECK
 )
 check "task upgrade gone; upgrade:check: Renovate's lookup alone - no variable, prompt, precondition or dependency to change it" \
@@ -207,6 +210,12 @@ check "task renovate:apps (and :check, :run) gone; upgrade:apps:check: the app r
   "$(sed -n 4p <<< "$got")" "False|['cmds']|['upgrade-renovate.sh --apps --lookup token=none']"
 check "upgrade:apps:run: no prompt, no variable; admitted with nothing given, refused with LOOKUP at any value; Renovate writing" \
   "$(sed -n 5p <<< "$got")" "False|None|None|True|[]|['upgrade-renovate.sh --apps token=none']"
+# upgrade:apply (operator 2026-11-23, "you was asked to apply his PRs"): upgrade:run without its Renovate step - the lock,
+# the gates, the runner with the bot's token; upgrade:apps:merge: the app PRs driven to merged, nothing to give it
+check "upgrade:apply: a prompt naming production, the venv first, no variable; the lock, the gates and the runner with the bot's token - Renovate never" \
+  "$(sed -n 6p <<< "$got")" "True|['deploy:install']|None|True|['copy-lock.sh  token=none', 'upgrade-cycle.sh --preflight token=none', 'upgrade-cycle.sh  token=the-bots']"
+check "upgrade:apps:merge: no prompt, no variable; the merge script alone" \
+  "$(sed -n 7p <<< "$got")" "False|None|None|['upgrade-apps-merge.py  token=none']"
 ARGS=()
 exec 8>> .upgrade-cycle/lock
 flock -n 8 || { echo "the lock is held by something else - the next check cannot run"; exit 1; }
