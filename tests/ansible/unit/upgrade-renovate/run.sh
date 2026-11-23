@@ -461,4 +461,66 @@ print(ok("9.9.2"), bad, rc, good.splitlines()[1] == "distributionSha256Sum=" + G
       rc2 != 0 and garbage == OLD, rc3 != 0 and failed == OLD, rc4 == 0 and none == "distributionUrl=x\n")
 PYGW
 )" "True [] 0 True True True True True"
+# The wave (operator 2026-11-23: ~30 minors a unit each was a week of runs): every patch, digest and minor on
+# renovate/wave-patches - a store's minor its own unit (the rule's list is scripts/upgrade-stores.json's packages), a
+# family's minor its family's, a major its own. Each update's branch resolved as Renovate merges the rules: in order, a
+# later one overriding, the group object merged - the wave's group.branchTopic stays on a family that names none
+# (Woodpecker's manual-wave-patches, 2026-11-16); its patterns as Renovate's string-match reads them (a list of
+# negations alone: every one must hold)
+check "the preset: patches, digests and minors on the wave - a store's minor its own, a family's its family's, a major its own" \
+  "$("$PY" - <<'PYWAVE'
+import fnmatch, json, re
+d = json.load(open("renovate/upgrade-cycle.json"))
+t = json.load(open("scripts/upgrade-stores.json"))
+def one(value, p):
+    neg = p.startswith("!")
+    body = p[1:] if neg else p
+    if body.startswith("/") and body.rindex("/") > 0:
+        hit = re.search(body[1:body.rindex("/")], value) is not None
+    else:
+        hit = body == "*" or fnmatch.fnmatchcase(value.lower(), body.lower())
+    return hit != neg
+def listed(value, patterns):
+    pos = [p for p in patterns if not p.startswith("!")]
+    neg = [p for p in patterns if p.startswith("!")]
+    return (not pos or any(one(value, p) for p in pos)) and all(one(value, p) for p in neg)
+def branch(pkg, kind, path="helm/schnappy/values.yaml", version="1.2.0"):
+    c = {"group": {}}
+    for r in d["packageRules"]:
+        if "matchUpdateTypes" in r and kind not in r["matchUpdateTypes"]:
+            continue
+        names = r.get("matchPackageNames", []) + r.get("matchDepNames", [])
+        if names and not listed(pkg, names):
+            continue
+        if "matchFileNames" in r and not any(fnmatch.fnmatch(path, g) for g in r["matchFileNames"]):
+            continue
+        if "matchRepositories" in r or "matchDatasources" in r:
+            continue
+        for k, v in r.items():
+            if k == "group":
+                c["group"].update(v)
+            elif not k.startswith("match") and k != "description":
+                c[k] = v
+    if c.get("enabled") is False:
+        return None
+    if "groupName" not in c:
+        return c.get("additionalBranchPrefix", "") + "own"
+    major, minor = version.split(".")[:2]
+    topic = c["group"].get("branchTopic", c["groupSlug"]).replace("{{{newMajor}}}", major).replace("{{{newMinor}}}", minor)
+    return c.get("additionalBranchPrefix", "") + topic
+wave = next(r for r in d["packageRules"] if r.get("groupSlug") == "wave-patches" and r.get("matchUpdateTypes") == ["minor"])
+cases = [
+    ("nginx", "patch"), ("nginx", "digest"), ("nginx", "minor"), ("valkey/valkey", "minor"), ("prom/alertmanager", "minor"),
+    ("ghcr.io/cloudnative-pg/postgresql", "digest"), ("ghcr.io/cloudnative-pg/postgresql", "minor"), ("nginx", "major"),
+    ("kube-prometheus-stack", "minor"), ("grafana", "minor"), ("strimzi-kafka-operator", "minor"), ("scylla-operator", "minor"),
+    ("argo-cd", "minor"), ("hashicorp/vault", "minor"), ("forgejo/forgejo", "minor"), ("istiod", "minor", "1.32.0"),
+    ("registry.k8s.io/kube-apiserver", "minor", "1.37.2"), ("scylladb/scylla", "minor", "2026.3.6"),
+    ("https://github.com/kubernetes-sigs/gateway-api", "minor", "1.7.0"), ("ghcr.io/woodpecker-ci/helm/woodpecker", "minor"),
+    ("quay.io/strimzi/kafka", "minor"), ("clickhouse/clickhouse-server", "minor"), ("grafana/grafana", "minor"),
+    ("hashicorp/consul", "minor")]
+print([branch(c[0], c[1], version=c[2] if len(c) > 2 else "1.2.0") for c in cases],
+      branch("nginx", "minor", "clusters/production/schnappy-test/values.yaml"),
+      sorted(p[1:] for p in wave["matchPackageNames"]) == sorted({p for s in t["stores"] for p in s["packages"]}))
+PYWAVE
+)" "['wave-patches', 'wave-patches', 'wave-patches', 'wave-patches', 'wave-patches', 'wave-patches', 'own', 'own', 'observability', 'observability', 'data-operators', 'data-operators', 'argocd', 'pi-services', 'pi-services', 'istio-1.32', 'kubernetes-1.37', 'scylladb-2026.3', 'gateway-api-1.7', 'manual-woodpecker', 'data-operators', 'observability', 'observability', 'pi-services'] test-wave-patches True"
 if [ "$fails" = 0 ]; then echo "upgrade-renovate: ALL-PASS"; else echo "upgrade-renovate: $fails FAILED"; exit 1; fi

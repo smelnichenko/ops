@@ -4,7 +4,7 @@
     "The upgrade cycle's shared preset (ops docs/plans/120-automated-upgrade-cycle.md): Renovate finds the upgrades and",
     "opens one branch per unit, the same name in infra, platform and ops; the cycle proves a unit on the Vagrant copy",
     "(task test:copy:unit UNIT=<it>) and applies it - Renovate never merges. Units (scripts/upgrade-units.py reads these",
-    "names): renovate/wave-patches (every patch); renovate/<family>-<X.Y> for the families moved one minor at a time",
+    "names): renovate/wave-patches (every patch and digest, and every minor not a family's or a store's - operator 2026-11-23: one unit, not one each); renovate/<family>-<X.Y> for the families moved one minor at a time",
     "(istio, kubernetes, cilium); renovate/<family> for the other families' minors (observability, data-operators, argocd,",
     "pi-services); each other minor and every major on a branch of its own (Renovate's own name). Label one-way: a change",
     "its store cannot undo - the runner backs the store up first (scripts/upgrade-stores.json), or blocks it, naming the part with none.",
@@ -157,9 +157,34 @@
       "enabled": false
     },
     {
-      "description": "Every patch, every repo: one unit",
+      "description": "Every patch and digest, every repo: one unit",
       "matchUpdateTypes": [
-        "patch"
+        "patch",
+        "digest"
+      ],
+      "groupName": "wave patches",
+      "groupSlug": "wave-patches",
+      "group": {
+        "branchTopic": "wave-patches"
+      }
+    },
+    {
+      "description": "Every minor in the same unit (operator 2026-11-23: a unit each was a week of runs for ~30 minors) - the stores' minors aside (scripts/upgrade-stores.json's packages, each its own unit; the harness checks the two lists alike), and the families below take theirs back: each of them names its branch by group.branchTopic, or this rule's would stay",
+      "matchUpdateTypes": [
+        "minor"
+      ],
+      "matchPackageNames": [
+        "!/(^|\\/)postgresql$/",
+        "!/^(docker\\.io\\/)?scylladb\\/scylla$/",
+        "!/scylladb\\/scylla$/",
+        "!/(^|\\/)kafka$/",
+        "!strimzi-kafka-operator",
+        "!/^quay\\.io\\/strimzi\\//",
+        "!/clickhouse-server$/",
+        "!grafana",
+        "!grafana/grafana",
+        "!/(^|\\/)vault$/",
+        "!/(^|\\/)consul$/"
       ],
       "groupName": "wave patches",
       "groupSlug": "wave-patches",
@@ -251,7 +276,10 @@
         "/^quay\\.io\\/prometheus\\//"
       ],
       "groupName": "observability",
-      "groupSlug": "observability"
+      "groupSlug": "observability",
+      "group": {
+        "branchTopic": "observability"
+      }
     },
     {
       "description": "The data operators and their stores' minors (Strimzi with Kafka, the Scylla operator and Manager with ScyllaDB)",
@@ -266,7 +294,10 @@
         "/^(docker\\.io\\/)?scylladb\\//"
       ],
       "groupName": "data operators",
-      "groupSlug": "data-operators"
+      "groupSlug": "data-operators",
+      "group": {
+        "branchTopic": "data-operators"
+      }
     },
     {
       "description": "ScyllaDB's release lines (2026.1 -> 2026.3: a minor by number, one-way by format) - renovate/scylladb-<X.Y>, one at a time, out of the data operators' unit",
@@ -295,7 +326,10 @@
         "/^quay\\.io\\/argoproj\\//"
       ],
       "groupName": "argocd",
-      "groupSlug": "argocd"
+      "groupSlug": "argocd",
+      "group": {
+        "branchTopic": "argocd"
+      }
     },
     {
       "description": "The Pis' services (their upgrade playbooks, one Pi at a time)",
@@ -313,7 +347,10 @@
         "hashicorp/consul"
       ],
       "groupName": "pi services",
-      "groupSlug": "pi-services"
+      "groupSlug": "pi-services",
+      "group": {
+        "branchTopic": "pi-services"
+      }
     },
     {
       "description": "Kubernetes, Cilium, Istio and ScyllaDB's release lines: one minor at a time (each minor its own branch - the families above name it)",
