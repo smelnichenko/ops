@@ -178,6 +178,27 @@
         "major"
       ],
       "enabled": false
+    },
+    {
+      "description": "site: eslint / @eslint/js 10 wait for eslint-plugin-jsx-a11y (6.10.2 declares eslint ^3 .. ^9) and TypeScript 6.1+ for typescript-eslint (8.73 declares typescript <6.1.0) - in the repo's majors PR they kept the whole set from resolving (site#86, 2026-11-23). Lift each when its plugin's peer range takes the new major",
+      "matchRepositories": [
+        "schnappy/site"
+      ],
+      "matchPackageNames": [
+        "eslint",
+        "@eslint/js"
+      ],
+      "allowedVersions": "<10"
+    },
+    {
+      "description": "site: TypeScript below 6.1 - typescript-eslint 8.73's peer range (see the rule above)",
+      "matchRepositories": [
+        "schnappy/site"
+      ],
+      "matchPackageNames": [
+        "typescript"
+      ],
+      "allowedVersions": "<6.1"
     }
   ]
 }
