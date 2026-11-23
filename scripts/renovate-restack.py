@@ -28,10 +28,37 @@ OWNER = os.environ.get("RESTACK_OWNER", "schnappy")
 WORK = os.environ.get("RESTACK_DIR", os.path.join(OPS, ".copy", "restack"))
 BOT = "renovate-bot"
 MAIN = "origin/main"
-# a version inside an escaped line (re.escape writes its dots as \.): its dotted numbers, 2\.63\.0 - nothing nested, so
-# linear; a suffix (25.0.1_8-jre) stays literal, and a line whose suffix moved too is refused, never guessed
-VERSION = re.compile(r"\d+(?:\\\.\d+)+")
 ANY_VERSION = r"\d[\dA-Za-z._+-]*"
+
+
+def _digits_end(text, i):
+    while i < len(text) and text[i].isdigit():
+        i += 1
+    return i
+
+
+def _dotted_end(text, j):
+    """The index past the dotted numbers that follow position j (\\.63\\.0 as re.escape writes them) - j when none do."""
+    while text.startswith("\\.", j) and j + 2 < len(text) and text[j + 2].isdigit():
+        j = _digits_end(text, j + 2)
+    return j
+
+
+def generalized(escaped):
+    """The escaped line with each version - its dotted numbers, 2\\.63\\.0 - widened to ANY_VERSION; a number with no
+    dot after it (17-alpine) or inside a word (k8s) left as it is. Scanned by hand, no pattern: linear. A suffix
+    (25.0.1_8-jre) stays literal, so a line whose suffix moved too is refused, never guessed."""
+    out, i = [], 0
+    while i < len(escaped):
+        if not escaped[i].isdigit() or (i > 0 and escaped[i - 1].isalnum()):
+            out.append(escaped[i])
+            i += 1
+            continue
+        digits = _digits_end(escaped, i)
+        past = _dotted_end(escaped, digits)
+        out.append(ANY_VERSION if past > digits else escaped[i:digits])
+        i = past
+    return "".join(out)
 
 
 class Refused(Exception):
@@ -60,7 +87,7 @@ def replaced(text, olds, news, name):
     if len(olds) != len(news) or not olds:
         raise Refused(f"{name} is not a one-for-one line replacement ({len(olds)} removed, {len(news)} added)")
     for (old, new), times in Counter(zip(olds, news)).items():
-        for candidate in (re.escape(old), VERSION.sub(lambda _: ANY_VERSION, re.escape(old))):
+        for candidate in (re.escape(old), generalized(re.escape(old))):
             pattern = r"(?m)^" + candidate + r"$"
             if len(re.findall(pattern, text)) == times:
                 text = re.sub(pattern, lambda _: new, text)
