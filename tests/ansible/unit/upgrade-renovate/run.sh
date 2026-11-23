@@ -448,6 +448,21 @@ print([branch(p, k, preset=d) for p, k in cases],
       any("branchTopic" in (r.get("group") or {}) for r in d["packageRules"]))
 PYAPPWAVE
 )" "['app-wave', 'app-wave', 'app-wave', 'app-wave', 'app-wave', 'app-wave', 'app-wave', 'spring-boot', 'major-spring-boot', 'major-app-majors', 'java', 'node', 'playwright', 'major-app-majors', 'major-java', 'major-node', 'major-playwright'] ['base-image-digests', 'base-image-digests', 'app-wave'] [True, False] False"
+# target-scorer's Python minor and its locked torch/torchvision move only with a re-lock (its pip-compile lock is for
+# one Python; a Python 3.15 image over the 3.13 lock was CI red, #48): not proposed there - patches still - and another
+# repo's Python minor still in its wave
+check "the apps preset: target-scorer's Python and torch minors and majors not proposed, their patches and other repos' still" \
+  "$("$PY" - <<'PYTS'
+import json, sys
+sys.path.insert(0, "tests/ansible/unit")
+from renovate_preset import branch
+d = json.load(open("renovate/apps.json"))
+TS = "schnappy/target-scorer"
+print([branch(p, k, preset=d, repo=TS) for p, k in (("python", "minor"), ("python", "major"), ("torch", "minor"), ("torchvision", "major"))],
+      [branch(p, k, preset=d, repo=TS) for p, k in (("python", "patch"), ("torch", "patch"), ("pillow", "minor"))],
+      branch("python", "minor", preset=d, repo="schnappy/radar"))
+PYTS
+)" "[None, None, None, None] ['app-wave', 'app-wave', 'app-wave'] app-wave"
 # the six services' Dockerfile base images pinned by tag and digest (operator 2026-11-21, "do C"): the dockerfile manager
 # alone, those six repos alone (CI step images and the CI tool images stay plain tags), the digests one weekly group
 check "the apps preset: digests pinned for the six services' Dockerfiles alone - not the CI tool images, not CI steps; their digest moves one Monday group" \
