@@ -73,7 +73,8 @@ def replaced(text, olds, news, name):
 def restack(repo, number):
     tok = token()
     env = {**os.environ, "GIT_TERMINAL_PROMPT": "0", "BOT_TOKEN": tok}
-    req = urllib.request.Request(f"{API}/repos/{OWNER}/{repo}/pulls/{number}", headers={"Authorization": f"token {tok}"})
+    req = urllib.request.Request(f"{API}/repos/{OWNER}/{repo}/pulls/{number}")
+    req.add_unredirected_header("Authorization", f"token {tok}")  # never across a redirect
     with urllib.request.urlopen(req, timeout=60) as r:
         pr = json.loads(r.read())
     if pr.get("state") != "open" or (pr.get("user") or {}).get("login") != BOT:

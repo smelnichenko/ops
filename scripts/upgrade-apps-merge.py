@@ -49,8 +49,8 @@ def say(msg):
 
 def call(method, path, body=None):
     req = urllib.request.Request(API + path, method=method, data=json.dumps(body).encode() if body is not None else None,
-                                 headers={"Authorization": "token " + os.environ["RENOVATE_TOKEN"],
-                                          "Content-Type": "application/json"})
+                                 headers={"Content-Type": "application/json"})
+    req.add_unredirected_header("Authorization", "token " + os.environ["RENOVATE_TOKEN"])  # never across a redirect
     with urllib.request.urlopen(req, timeout=60) as r:
         raw = r.read()
         return json.loads(raw) if raw else None

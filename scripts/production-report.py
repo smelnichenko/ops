@@ -68,7 +68,8 @@ def readiness():
 
 
 def get(path):
-    req = urllib.request.Request(API + path, headers={"Authorization": "token " + os.environ.get("RENOVATE_TOKEN", "")})
+    req = urllib.request.Request(API + path)
+    req.add_unredirected_header("Authorization", "token " + os.environ.get("RENOVATE_TOKEN", ""))  # never across a redirect
     with urllib.request.urlopen(req, timeout=30) as r:
         return json.loads(r.read())
 
