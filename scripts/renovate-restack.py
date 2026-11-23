@@ -28,8 +28,9 @@ OWNER = os.environ.get("RESTACK_OWNER", "schnappy")
 WORK = os.environ.get("RESTACK_DIR", os.path.join(OPS, ".copy", "restack"))
 BOT = "renovate-bot"
 MAIN = "origin/main"
-# a version inside an escaped line (re.escape writes its dots as \. and its dashes as \-): 2\.63\.0, 25\.0\.1_8\-jre
-VERSION = re.compile(r"\d+(?:\\\.\d+)+(?:(?:\\-|\\\.|_)[A-Za-z0-9]+)*")
+# a version inside an escaped line (re.escape writes its dots as \. and its dashes as \-): 2\.63\.0, 25\.0\.1_8\-jre -
+# its numeric parts, then suffixes: a dot suffix starts with a letter, so no two parts can match the same text (linear)
+VERSION = re.compile(r"\d+(?:\\\.\d+)+(?:(?:\\-|_)[A-Za-z0-9]+|\\\.[A-Za-z][A-Za-z0-9]*)*")
 ANY_VERSION = r"\d[\dA-Za-z._+-]*"
 
 

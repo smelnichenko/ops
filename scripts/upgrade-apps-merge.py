@@ -154,7 +154,7 @@ def main(argv):
     while True:
         try:
             left = one_round(last_merge)
-        except (urllib.error.URLError, OSError) as e:
+        except OSError as e:  # urllib's URLError is one
             say(f"Forgejo not read: {e}")
             if once:
                 return 1
