@@ -47,7 +47,7 @@
       "automerge": true
     },
     {
-      "description": "Every patch, minor, digest and pin of a repo (the six Dockerfiles' digest pins: their weekly group's) in ONE pull request, renovate/app-wave (operator 2026-11-23: a pull request each was a CI run, a deploy and the next one's conflict each) - the groups below take theirs back (java, node, playwright, Spring Boot's minors, the six Dockerfiles' weekly digests: each its own slug, and no rule names a branch topic, so none stays on this one's); majors their own. It merges itself only when every update in it would (a branch automerges when all its updates do): with a minor in it, merged by hand on a green CI",
+      "description": "Every patch, minor, digest and pin of a repo (the six Dockerfiles' digest pins: their weekly group's) in ONE pull request, renovate/app-wave (operator 2026-11-23: a pull request each was a CI run, a deploy and the next one's conflict each) - the groups below take theirs back (java, node, playwright, Spring Boot's minors, the six Dockerfiles' weekly digests: each its own slug, and no rule names a branch topic, so none stays on this one's); majors their own pull request (the next rule). It merges itself only when every update in it would (a branch automerges when all its updates do): with a minor in it, merged by hand on a green CI",
       "matchUpdateTypes": [
         "patch",
         "minor",
@@ -56,6 +56,14 @@
       ],
       "groupName": "app wave",
       "groupSlug": "app-wave"
+    },
+    {
+      "description": "A repo's majors in ONE pull request of their own, renovate/major-app-majors (operator 2026-11-23: \"per-repo majors group is good idea, do it\") - each package's newest major alone (separateMultipleMajor's default); java, node and playwright keep theirs in their groups, Spring Boot's its own (the next rules); never merged by itself - a major that needs code changes is fixed on its branch",
+      "matchUpdateTypes": [
+        "major"
+      ],
+      "groupName": "app majors",
+      "groupSlug": "app-majors"
     },
     {
       "description": "One JDK everywhere: the eclipse-temurin images (Dockerfiles, CI steps), mise's java and the Gradle toolchain in one pull request",
@@ -69,9 +77,10 @@
       "groupSlug": "java"
     },
     {
-      "description": "Spring Boot's minors a pull request of their own, renovate/spring-boot (4.1 -> 4.2: the deprecations and removals a build meets) - never holding the app wave up; its patches in the wave, its majors their own",
+      "description": "Spring Boot's minors a pull request of their own, renovate/spring-boot (4.1 -> 4.2: the deprecations and removals a build meets), and its majors another (renovate/major-spring-boot) - never holding the app wave or the repo's other majors up; its patches in the wave",
       "matchUpdateTypes": [
-        "minor"
+        "minor",
+        "major"
       ],
       "matchPackageNames": [
         "/^org\\.springframework\\.boot(:|$)/"

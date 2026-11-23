@@ -413,12 +413,14 @@ off = [r for r in d["packageRules"] if r.get("enabled") is False and "git\\.pmon
 print(got, bool(files.search("build.gradle")), bool(files.search("backend/build.gradle.kts")), bool(files.search("settings.gradle")),
       m["datasourceTemplate"], m["extractVersionTemplate"], lts, groups, len(off), "config:recommended" in d["extends"])
 PYAPPS
-)" "['25'] True True False java-version ^(?<version>\d+) ['22-alpine', '24', '26.13.1', 'v24.1.0'] ['app wave', 'base image digests', 'java', 'node', 'playwright', 'spring boot'] 1 True"
+)" "['25'] True True False java-version ^(?<version>\d+) ['22-alpine', '24', '26.13.1', 'v24.1.0'] ['app majors', 'app wave', 'base image digests', 'java', 'node', 'playwright', 'spring boot'] 1 True"
 # The app wave (operator 2026-11-23, "do the same for apps"): a repo's patches, minors, digests and pins one pull request
 # (renovate/app-wave) - java, node, playwright, Spring Boot's minors and the six Dockerfiles' weekly digests their own
-# groups, a major its own; automerged only when all its updates are (a minor in it: merged by hand). No rule names a
-# branch topic, so none of the wave's stays on a group after it; each branch resolved as Renovate merges the rules
-check "the apps preset: patches, minors, digests and pins one pull request a repo - the groups and Spring Boot's minors their own, majors their own" \
+# groups; a repo's majors one pull request of their own (renovate/major-app-majors, "per-repo majors group is good
+# idea, do it"), java's, node's and playwright's in their groups, Spring Boot's its own (major-spring-boot); automerged
+# only when all its updates are (a minor in it: merged by hand). No rule names a branch topic, so none of the wave's
+# stays on a group after it; each branch resolved as Renovate merges the rules
+check "the apps preset: patches, minors, digests and pins one pull request a repo, its majors another - the groups and Spring Boot their own" \
   "$("$PY" - <<'PYAPPWAVE'
 import json, sys
 sys.path.insert(0, "tests/ansible/unit")
@@ -427,7 +429,8 @@ d = json.load(open("renovate/apps.json"))
 B = "org.springframework.boot:org.springframework.boot.gradle.plugin"
 cases = [("org.postgresql:postgresql", "patch"), ("com.github.spotbugs", "minor"), ("org.testcontainers:testcontainers-bom", "minor"),
          ("react", "minor"), ("redis", "digest"), ("react", "pin"), (B, "patch"), (B, "minor"), (B, "major"), ("react", "major"),
-         ("eclipse-temurin", "minor"), ("node", "minor"), ("@playwright/test", "minor")]
+         ("eclipse-temurin", "minor"), ("node", "minor"), ("@playwright/test", "minor"), ("com.fasterxml.jackson:jackson-bom", "major"),
+         ("eclipse-temurin", "major"), ("node", "major"), ("@playwright/test", "major")]
 dock = [("eclipse-temurin", "digest", "schnappy/monitor"), ("eclipse-temurin", "pinDigest", "schnappy/site"),
         ("alpine", "digest", "schnappy/ci-tools")]
 print([branch(p, k, preset=d) for p, k in cases],
@@ -435,7 +438,7 @@ print([branch(p, k, preset=d) for p, k in cases],
       [bool(resolved(p, k, preset=d).get("automerge")) for p, k in (("org.postgresql:postgresql", "patch"), ("com.github.spotbugs", "minor"))],
       any("branchTopic" in (r.get("group") or {}) for r in d["packageRules"]))
 PYAPPWAVE
-)" "['app-wave', 'app-wave', 'app-wave', 'app-wave', 'app-wave', 'app-wave', 'app-wave', 'spring-boot', 'own', 'own', 'java', 'node', 'playwright'] ['base-image-digests', 'base-image-digests', 'app-wave'] [True, False] False"
+)" "['app-wave', 'app-wave', 'app-wave', 'app-wave', 'app-wave', 'app-wave', 'app-wave', 'spring-boot', 'major-spring-boot', 'major-app-majors', 'java', 'node', 'playwright', 'major-app-majors', 'major-java', 'major-node', 'major-playwright'] ['base-image-digests', 'base-image-digests', 'app-wave'] [True, False] False"
 # the six services' Dockerfile base images pinned by tag and digest (operator 2026-11-21, "do C"): the dockerfile manager
 # alone, those six repos alone (CI step images and the CI tool images stay plain tags), the digests one weekly group
 check "the apps preset: digests pinned for the six services' Dockerfiles alone - not the CI tool images, not CI steps; their digest moves one Monday group" \
