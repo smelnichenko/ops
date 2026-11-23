@@ -58,7 +58,7 @@
       "groupSlug": "app-wave"
     },
     {
-      "description": "A repo's majors in ONE pull request of their own, renovate/major-app-majors (operator 2026-11-23: \"per-repo majors group is good idea, do it\") - each package's newest major alone (separateMultipleMajor's default); java, node and playwright keep theirs in their groups, Spring Boot's its own (the next rules); never merged by itself - a major that needs code changes is fixed on its branch",
+      "description": "A repo's majors in ONE pull request of their own, renovate/major-app-majors (the operator's decision, 2026-11-23) - each package's newest major alone (separateMultipleMajor's default); java, node and playwright keep theirs in their groups, Spring Boot's its own (the next rules); never merged by itself - a major that needs code changes is fixed on its branch",
       "matchUpdateTypes": [
         "major"
       ],

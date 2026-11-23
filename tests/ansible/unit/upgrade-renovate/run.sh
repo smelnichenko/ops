@@ -211,7 +211,7 @@ check "task renovate:apps (and :check, :run) gone; upgrade:apps:check: the app r
   "$(sed -n 4p <<< "$got")" "False|['cmds']|['upgrade-renovate.sh --apps --lookup token=none']"
 check "upgrade:apps:run: no prompt, no variable; admitted with nothing given, refused with LOOKUP at any value; Renovate writing" \
   "$(sed -n 5p <<< "$got")" "False|None|None|True|[]|['upgrade-renovate.sh --apps token=none']"
-# upgrade:apply (operator 2026-11-23, "you was asked to apply his PRs"): upgrade:run without its Renovate step - the lock,
+# upgrade:apply (operator 2026-11-23: apply Renovate's PRs, never run Renovate unasked): upgrade:run without its Renovate step - the lock,
 # the gates, the runner with the bot's token; upgrade:apps:merge: the app PRs driven to merged, nothing to give it
 check "upgrade:apply: a prompt naming production, the venv first, no variable; the lock, the gates and the runner with the bot's token - Renovate never" \
   "$(sed -n 6p <<< "$got")" "True|['deploy:install']|None|True|['copy-lock.sh  token=none', 'upgrade-cycle.sh --preflight token=none', 'upgrade-cycle.sh  token=the-bots']"
@@ -425,7 +425,7 @@ print(got, bool(files.search("build.gradle")), bool(files.search("backend/build.
       m["datasourceTemplate"], m["extractVersionTemplate"], lts, groups, len(off), "config:recommended" in d["extends"])
 PYAPPS
 )" "['25'] True True False java-version ^(?<version>\d+) ['22-alpine', '24', '26.13.1', 'v24.1.0'] ['app majors', 'app wave', 'base image digests', 'java', 'node', 'playwright', 'spring boot'] 1 True"
-# The app wave (operator 2026-11-23, "do the same for apps"): a repo's patches, minors, digests and pins one pull request
+# The app wave (operator 2026-11-23: the infra wave's grouping for the app repos too): a repo's patches, minors, digests and pins one pull request
 # (renovate/app-wave) - java, node, playwright, Spring Boot's minors and the six Dockerfiles' weekly digests their own
 # groups; a repo's majors one pull request of their own (renovate/major-app-majors, "per-repo majors group is good
 # idea, do it"), java's, node's and playwright's in their groups, Spring Boot's its own (major-spring-boot); automerged
@@ -553,7 +553,7 @@ PYWAVE
 )" "['wave-patches', 'wave-patches', 'wave-patches', 'wave-patches', 'wave-patches', 'wave-patches', 'own', 'observability', 'observability', 'data-operators', 'data-operators', 'argocd', 'pi-services', 'pi-services', 'istio-1.32', 'kubernetes-1.37', 'scylladb-2026.3', 'gateway-api-1.7', 'manual-woodpecker', 'data-operators', 'observability', 'observability', 'pi-services'] test-wave-patches True"
 # The wave-patches review (2026-11-23): SonarQube a store of its own (every release migrates its database one way) - its
 # updates out of the wave and the majors, on renovate/sonarqube-<N>.x, labelled one-way. Woodpecker's own database and
-# Renovate's image stay in the cycle's units (operator: "you are screwing all purpose of upgrade automation" - never a
+# Renovate's image stay in the cycle's units (operator 2026-11-23: a manual unit defeats the automation - never a
 # manual- unit for them): the runner waits for an idle Woodpecker before a merge that restarts its database, and the
 # copy proof smoke-runs a new Renovate image
 check "the preset: SonarQube a one-way unit of its own; Woodpecker's database and Renovate's image in the wave, no manual unit" \

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""upgrade-apps-merge.py - the app repos' Renovate PRs driven to merged (operator 2026-11-20 "don't leave open PRs on
-me", 2026-11-23 "nothing should be left to me or behind in any way"): round after round until none is pending.
+"""upgrade-apps-merge.py - the app repos' Renovate PRs driven to merged (the operator's decisions of 2026-11-20 and
+2026-11-23: no PR left open for the operator, nothing left behind): round after round until none is pending.
 
 Each round, every app repo, each open PR of the bot's (from the repo's own branch):
   green (its ci/ contexts - never Forgejo's combined state) and mergeable  merged at the head read (head_commit_id)
