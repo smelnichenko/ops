@@ -47,6 +47,17 @@
       "automerge": true
     },
     {
+      "description": "Every patch, minor, digest and pin of a repo (the six Dockerfiles' digest pins: their weekly group's) in ONE pull request, renovate/app-wave (operator 2026-11-23: a pull request each was a CI run, a deploy and the next one's conflict each) - the groups below take theirs back (java, node, playwright, Spring Boot's minors, the six Dockerfiles' weekly digests: each its own slug, and no rule names a branch topic, so none stays on this one's); majors their own. It merges itself only when every update in it would (a branch automerges when all its updates do): with a minor in it, merged by hand on a green CI",
+      "matchUpdateTypes": [
+        "patch",
+        "minor",
+        "digest",
+        "pin"
+      ],
+      "groupName": "app wave",
+      "groupSlug": "app-wave"
+    },
+    {
       "description": "One JDK everywhere: the eclipse-temurin images (Dockerfiles, CI steps), mise's java and the Gradle toolchain in one pull request",
       "matchPackageNames": [
         "eclipse-temurin",
@@ -56,6 +67,17 @@
       ],
       "groupName": "java",
       "groupSlug": "java"
+    },
+    {
+      "description": "Spring Boot's minors a pull request of their own, renovate/spring-boot (4.1 -> 4.2: the deprecations and removals a build meets) - never holding the app wave up; its patches in the wave, its majors their own",
+      "matchUpdateTypes": [
+        "minor"
+      ],
+      "matchPackageNames": [
+        "/^org\\.springframework\\.boot(:|$)/"
+      ],
+      "groupName": "spring boot",
+      "groupSlug": "spring-boot"
     },
     {
       "description": "One Node everywhere: the node images, mise's node and @types/node (the types of the runtime's major) in one pull request - LTS (even) majors only",

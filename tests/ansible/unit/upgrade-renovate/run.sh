@@ -413,7 +413,29 @@ off = [r for r in d["packageRules"] if r.get("enabled") is False and "git\\.pmon
 print(got, bool(files.search("build.gradle")), bool(files.search("backend/build.gradle.kts")), bool(files.search("settings.gradle")),
       m["datasourceTemplate"], m["extractVersionTemplate"], lts, groups, len(off), "config:recommended" in d["extends"])
 PYAPPS
-)" "['25'] True True False java-version ^(?<version>\d+) ['22-alpine', '24', '26.13.1', 'v24.1.0'] ['base image digests', 'java', 'node', 'playwright'] 1 True"
+)" "['25'] True True False java-version ^(?<version>\d+) ['22-alpine', '24', '26.13.1', 'v24.1.0'] ['app wave', 'base image digests', 'java', 'node', 'playwright', 'spring boot'] 1 True"
+# The app wave (operator 2026-11-23, "do the same for apps"): a repo's patches, minors, digests and pins one pull request
+# (renovate/app-wave) - java, node, playwright, Spring Boot's minors and the six Dockerfiles' weekly digests their own
+# groups, a major its own; automerged only when all its updates are (a minor in it: merged by hand). No rule names a
+# branch topic, so none of the wave's stays on a group after it; each branch resolved as Renovate merges the rules
+check "the apps preset: patches, minors, digests and pins one pull request a repo - the groups and Spring Boot's minors their own, majors their own" \
+  "$("$PY" - <<'PYAPPWAVE'
+import json, sys
+sys.path.insert(0, "tests/ansible/unit")
+from renovate_preset import branch, resolved
+d = json.load(open("renovate/apps.json"))
+B = "org.springframework.boot:org.springframework.boot.gradle.plugin"
+cases = [("org.postgresql:postgresql", "patch"), ("com.github.spotbugs", "minor"), ("org.testcontainers:testcontainers-bom", "minor"),
+         ("react", "minor"), ("redis", "digest"), ("react", "pin"), (B, "patch"), (B, "minor"), (B, "major"), ("react", "major"),
+         ("eclipse-temurin", "minor"), ("node", "minor"), ("@playwright/test", "minor")]
+dock = [("eclipse-temurin", "digest", "schnappy/monitor"), ("eclipse-temurin", "pinDigest", "schnappy/site"),
+        ("alpine", "digest", "schnappy/ci-tools")]
+print([branch(p, k, preset=d) for p, k in cases],
+      [branch(p, k, preset=d, repo=r, manager="dockerfile") for p, k, r in dock],
+      [bool(resolved(p, k, preset=d).get("automerge")) for p, k in (("org.postgresql:postgresql", "patch"), ("com.github.spotbugs", "minor"))],
+      any("branchTopic" in (r.get("group") or {}) for r in d["packageRules"]))
+PYAPPWAVE
+)" "['app-wave', 'app-wave', 'app-wave', 'app-wave', 'app-wave', 'app-wave', 'app-wave', 'spring-boot', 'own', 'own', 'java', 'node', 'playwright'] ['base-image-digests', 'base-image-digests', 'app-wave'] [True, False] False"
 # the six services' Dockerfile base images pinned by tag and digest (operator 2026-11-21, "do C"): the dockerfile manager
 # alone, those six repos alone (CI step images and the CI tool images stay plain tags), the digests one weekly group
 check "the apps preset: digests pinned for the six services' Dockerfiles alone - not the CI tool images, not CI steps; their digest moves one Monday group" \
@@ -467,51 +489,16 @@ PYGW
 # later one overriding, the group object merged - the wave's group.branchTopic stays on a family that names none
 # (Woodpecker's manual-wave-patches, 2026-11-16); its patterns as Renovate's string-match reads them (a list of
 # negations alone: every one must hold)
-check "the preset: patches, digests and minors on the wave - a store's minor its own, a family's its family's, a major its own" \
+check "the preset: patches, digests and minors on the wave - a store's minor its own, a family's its family's" \
   "$("$PY" - <<'PYWAVE'
-import fnmatch, json, re
-d = json.load(open("renovate/upgrade-cycle.json"))
+import json, sys
+sys.path.insert(0, "tests/ansible/unit")
+from renovate_preset import PRESET, branch
 t = json.load(open("scripts/upgrade-stores.json"))
-def one(value, p):
-    neg = p.startswith("!")
-    body = p[1:] if neg else p
-    if body.startswith("/") and body.rindex("/") > 0:
-        hit = re.search(body[1:body.rindex("/")], value) is not None
-    else:
-        hit = body == "*" or fnmatch.fnmatchcase(value.lower(), body.lower())
-    return hit != neg
-def listed(value, patterns):
-    pos = [p for p in patterns if not p.startswith("!")]
-    neg = [p for p in patterns if p.startswith("!")]
-    return (not pos or any(one(value, p) for p in pos)) and all(one(value, p) for p in neg)
-def branch(pkg, kind, path="helm/schnappy/values.yaml", version="1.2.0"):
-    c = {"group": {}}
-    for r in d["packageRules"]:
-        if "matchUpdateTypes" in r and kind not in r["matchUpdateTypes"]:
-            continue
-        names = r.get("matchPackageNames", []) + r.get("matchDepNames", [])
-        if names and not listed(pkg, names):
-            continue
-        if "matchFileNames" in r and not any(fnmatch.fnmatch(path, g) for g in r["matchFileNames"]):
-            continue
-        if "matchRepositories" in r or "matchDatasources" in r:
-            continue
-        for k, v in r.items():
-            if k == "group":
-                c["group"].update(v)
-            elif not k.startswith("match") and k != "description":
-                c[k] = v
-    if c.get("enabled") is False:
-        return None
-    if "groupName" not in c:
-        return c.get("additionalBranchPrefix", "") + "own"
-    major, minor = version.split(".")[:2]
-    topic = c["group"].get("branchTopic", c["groupSlug"]).replace("{{{newMajor}}}", major).replace("{{{newMinor}}}", minor)
-    return c.get("additionalBranchPrefix", "") + topic
-wave = next(r for r in d["packageRules"] if r.get("groupSlug") == "wave-patches" and r.get("matchUpdateTypes") == ["minor"])
+wave = next(r for r in PRESET["packageRules"] if r.get("groupSlug") == "wave-patches" and r.get("matchUpdateTypes") == ["minor"])
 cases = [
     ("nginx", "patch"), ("nginx", "digest"), ("nginx", "minor"), ("valkey/valkey", "minor"), ("prom/alertmanager", "minor"),
-    ("ghcr.io/cloudnative-pg/postgresql", "digest"), ("ghcr.io/cloudnative-pg/postgresql", "minor"), ("nginx", "major"),
+    ("ghcr.io/cloudnative-pg/postgresql", "digest"), ("ghcr.io/cloudnative-pg/postgresql", "minor"),
     ("kube-prometheus-stack", "minor"), ("grafana", "minor"), ("strimzi-kafka-operator", "minor"), ("scylla-operator", "minor"),
     ("argo-cd", "minor"), ("hashicorp/vault", "minor"), ("forgejo/forgejo", "minor"), ("istiod", "minor", "1.32.0"),
     ("registry.k8s.io/kube-apiserver", "minor", "1.37.2"), ("scylladb/scylla", "minor", "2026.3.6"),
@@ -522,5 +509,31 @@ print([branch(c[0], c[1], version=c[2] if len(c) > 2 else "1.2.0") for c in case
       branch("nginx", "minor", "clusters/production/schnappy-test/values.yaml"),
       sorted(p[1:] for p in wave["matchPackageNames"]) == sorted({p for s in t["stores"] for p in s["packages"]}))
 PYWAVE
-)" "['wave-patches', 'wave-patches', 'wave-patches', 'wave-patches', 'wave-patches', 'wave-patches', 'own', 'own', 'observability', 'observability', 'data-operators', 'data-operators', 'argocd', 'pi-services', 'pi-services', 'istio-1.32', 'kubernetes-1.37', 'scylladb-2026.3', 'gateway-api-1.7', 'manual-woodpecker', 'data-operators', 'observability', 'observability', 'pi-services'] test-wave-patches True"
+)" "['wave-patches', 'wave-patches', 'wave-patches', 'wave-patches', 'wave-patches', 'wave-patches', 'own', 'observability', 'observability', 'data-operators', 'data-operators', 'argocd', 'pi-services', 'pi-services', 'istio-1.32', 'kubernetes-1.37', 'scylladb-2026.3', 'gateway-api-1.7', 'manual-woodpecker', 'data-operators', 'observability', 'observability', 'pi-services'] test-wave-patches True"
+# The majors that can be undone in one unit too (operator 2026-11-23): renovate/wave-majors, each package's newest
+# major alone (two majors of one package in one branch collide - Renovate keeps either); a store's major (one-way,
+# backed up first) and a release line's (Kubernetes, Cilium, Istio, the Gateway API, ScyllaDB) each its own unit - the
+# rule's list exactly the stores' packages and the release lines' rule's (Woodpecker's newest alone too: its updates
+# share manual-woodpecker, where two majors would collide)
+check "the preset: majors that can be undone on wave-majors, the newest alone - a store's and a release line's major its own" \
+  "$("$PY" - <<'PYMAJORS'
+import json, sys
+sys.path.insert(0, "tests/ansible/unit")
+from renovate_preset import PRESET, branch, resolved
+t = json.load(open("scripts/upgrade-stores.json"))
+R = PRESET["packageRules"]
+group = next(r for r in R if r.get("groupSlug") == "wave-majors")
+newest = next(r for r in R if r.get("separateMultipleMajor") is False)
+lines = next(r for r in R if r.get("separateMultipleMinor") is True)
+alone = {p for s in t["stores"] for p in s["packages"]} | set(lines["matchPackageNames"])
+cases = ["kube-prometheus-stack", "grafana/k6", "postgres", "nginx", "argo-cd", "ghcr.io/cloudnative-pg/postgresql",
+         "hashicorp/vault", "hashicorp/consul", "scylladb/scylla", "quay.io/strimzi/kafka", "grafana/grafana",
+         "registry.k8s.io/kube-apiserver", "istiod", "cilium", "https://github.com/kubernetes-sigs/gateway-api",
+         "ghcr.io/woodpecker-ci/helm/woodpecker"]
+print([branch(c, "major") for c in cases], branch("nginx", "major", "clusters/production/schnappy-test/values.yaml"),
+      [resolved(c).get("separateMultipleMajor", PRESET["separateMultipleMajor"]) for c in cases],
+      {p[1:] for p in group["matchPackageNames"]} == alone, newest["matchPackageNames"] == group["matchPackageNames"],
+      "major" in resolved("kube-prometheus-stack", "major").get("addLabels", []))
+PYMAJORS
+)" "['wave-majors', 'wave-majors', 'wave-majors', 'wave-majors', 'wave-majors', 'own', 'own', 'own', 'own', 'own', 'own', 'own', 'own', 'own', 'own', 'manual-woodpecker'] test-wave-majors [False, False, False, False, False, True, True, True, True, True, True, True, True, True, True, False] True True True"
 if [ "$fails" = 0 ]; then echo "upgrade-renovate: ALL-PASS"; else echo "upgrade-renovate: $fails FAILED"; exit 1; fi

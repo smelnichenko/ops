@@ -6,7 +6,7 @@
     "(task test:copy:unit UNIT=<it>) and applies it - Renovate never merges. Units (scripts/upgrade-units.py reads these",
     "names): renovate/wave-patches (every patch and digest, and every minor not a family's or a store's - operator 2026-11-23: one unit, not one each); renovate/<family>-<X.Y> for the families moved one minor at a time",
     "(istio, kubernetes, cilium); renovate/<family> for the other families' minors (observability, data-operators, argocd,",
-    "pi-services); each other minor and every major on a branch of its own (Renovate's own name). Label one-way: a change",
+    "pi-services); every major that can be undone on renovate/wave-majors (its newest only); a store's and a release line's major on a branch of its own (Renovate's own name). Label one-way: a change",
     "its store cannot undo - the runner backs the store up first (scripts/upgrade-stores.json), or blocks it, naming the part with none.",
     "A test environment's files: renovate/test-<unit>, merged before its production twin.",
     "Renovate rebases a branch only on a conflict (rebaseWhen conflicted): infra's main moves many times a day by CD, and a rebase of every branch at every run was a queue of CI builds ahead of the apps' deploys - the cycle brings the one unit it picks onto main itself (Forgejo's update). No cap on pull requests: a cap per repo split one unit across the repos."
@@ -396,6 +396,77 @@
       "addLabels": [
         "major"
       ]
+    },
+    {
+      "description": "The majors that can be undone in one unit, renovate/wave-majors (operator 2026-11-23: a unit each was a day of runs for five) - each package's newest major alone (the next rule), the review judging every step's release notes; a store's major (scripts/upgrade-stores.json's packages: one-way, backed up first) and the release lines' (Kubernetes, Cilium, Istio, the Gateway API, ScyllaDB - the rule naming them above) each a unit of its own; the harness checks this list is those two",
+      "matchUpdateTypes": [
+        "major"
+      ],
+      "matchPackageNames": [
+        "!/(^|\\/)postgresql$/",
+        "!/^(docker\\.io\\/)?scylladb\\/scylla$/",
+        "!/scylladb\\/scylla$/",
+        "!/(^|\\/)kafka$/",
+        "!strimzi-kafka-operator",
+        "!/^quay\\.io\\/strimzi\\//",
+        "!/clickhouse-server$/",
+        "!grafana",
+        "!grafana/grafana",
+        "!/(^|\\/)vault$/",
+        "!/(^|\\/)consul$/",
+        "!registry.k8s.io/kube-apiserver",
+        "!alpine/k8s",
+        "!bitnami/kubectl",
+        "!docker.io/bitnami/kubectl",
+        "!cilium",
+        "!cilium/cilium",
+        "!/^quay\\.io\\/cilium\\//",
+        "!base",
+        "!istiod",
+        "!cni",
+        "!ztunnel",
+        "!gateway",
+        "!/^istio\\//",
+        "!/^docker\\.io\\/istio\\//",
+        "!https://github.com/kubernetes-sigs/gateway-api"
+      ],
+      "groupName": "wave majors",
+      "groupSlug": "wave-majors",
+      "group": {
+        "branchTopic": "wave-majors"
+      }
+    },
+    {
+      "description": "The wave's majors: each package's newest major alone (kube-prometheus-stack 91 -> 93, not 92 then 93) - two majors of one package in one branch collide and Renovate keeps either; the same packages as the rule above (without an update type: Renovate reads this before it knows one)",
+      "matchPackageNames": [
+        "!/(^|\\/)postgresql$/",
+        "!/^(docker\\.io\\/)?scylladb\\/scylla$/",
+        "!/scylladb\\/scylla$/",
+        "!/(^|\\/)kafka$/",
+        "!strimzi-kafka-operator",
+        "!/^quay\\.io\\/strimzi\\//",
+        "!/clickhouse-server$/",
+        "!grafana",
+        "!grafana/grafana",
+        "!/(^|\\/)vault$/",
+        "!/(^|\\/)consul$/",
+        "!registry.k8s.io/kube-apiserver",
+        "!alpine/k8s",
+        "!bitnami/kubectl",
+        "!docker.io/bitnami/kubectl",
+        "!cilium",
+        "!cilium/cilium",
+        "!/^quay\\.io\\/cilium\\//",
+        "!base",
+        "!istiod",
+        "!cni",
+        "!ztunnel",
+        "!gateway",
+        "!/^istio\\//",
+        "!/^docker\\.io\\/istio\\//",
+        "!https://github.com/kubernetes-sigs/gateway-api"
+      ],
+      "separateMultipleMajor": false
     },
     {
       "description": "One-way majors (Postgres - the CNPG image ghcr.io/cloudnative-pg/postgresql the databases run; the plain postgres image here is only the init-users Job's psql client and CI services, no store -, ScyllaDB, Kafka and Strimzi, ClickHouse, Grafana, Vault, Consul): label one-way - the runner backs the store up first or blocks the unit, naming the part with no backup (scripts/upgrade-stores.json: each package here a store's there, the harness checks)",
