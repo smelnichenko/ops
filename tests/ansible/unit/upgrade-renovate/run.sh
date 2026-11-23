@@ -467,16 +467,17 @@ PYTS
 )" "[None, None, None, None] ['app-wave', 'app-wave', 'app-wave'] app-wave"
 # site's eslint 10 and TypeScript 6.1+ held by their plugins' peer ranges (site#86: the majors PR did not resolve): the
 # hold site's alone - radar's TypeScript 7 still proposed
-check "the apps preset: site's eslint below 10 and TypeScript below 6.1, another repo's not held" \
+check "the apps preset: site's eslint below 10, TypeScript below 6.1 and jsdom below 29, another repo's not held" \
   "$("$PY" - <<'PYSITE'
 import json, sys
 sys.path.insert(0, "tests/ansible/unit")
 from renovate_preset import resolved
 d = json.load(open("renovate/apps.json"))
-print([resolved(p, "major", preset=d, repo="schnappy/site").get("allowedVersions") for p in ("eslint", "@eslint/js", "typescript", "vite")],
-      resolved("typescript", "major", preset=d, repo="schnappy/radar").get("allowedVersions"))
+print([resolved(p, "major", preset=d, repo="schnappy/site").get("allowedVersions") for p in ("eslint", "@eslint/js", "typescript", "jsdom", "vite")],
+      resolved("typescript", "major", preset=d, repo="schnappy/radar").get("allowedVersions"),
+      resolved("jsdom", "major", preset=d, repo="schnappy/radar").get("allowedVersions"))
 PYSITE
-)" "['<10', '<10', '<6.1', None] None"
+)" "['<10', '<10', '<6.1', '<29', None] None None"
 # the six services' Dockerfile base images pinned by tag and digest (operator 2026-11-21, "do C"): the dockerfile manager
 # alone, those six repos alone (CI step images and the CI tool images stay plain tags), the digests one weekly group
 check "the apps preset: digests pinned for the six services' Dockerfiles alone - not the CI tool images, not CI steps; their digest moves one Monday group" \

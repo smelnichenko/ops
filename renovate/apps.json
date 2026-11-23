@@ -199,6 +199,16 @@
         "typescript"
       ],
       "allowedVersions": "<6.1"
+    },
+    {
+      "description": "site: jsdom below 29 - @testing-library/user-event 14.6.1 (its latest) types nothing into inputs on jsdom 31: site's typing tests failed (site#86, 2026-11-23), on 28.1.0 they pass. Lift when a user-event release works on the newer jsdom",
+      "matchRepositories": [
+        "schnappy/site"
+      ],
+      "matchPackageNames": [
+        "jsdom"
+      ],
+      "allowedVersions": "<29"
     }
   ]
 }
