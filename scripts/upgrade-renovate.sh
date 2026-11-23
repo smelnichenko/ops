@@ -20,7 +20,7 @@
 # Env:   RENOVATE_TOKEN (required), RENOVATE_GITHUB_TOKEN, UPGRADE_DOCKER (the harness's docker, default docker)
 set -euo pipefail
 ops=$(cd "$(dirname "$0")/.." && pwd)
-image=renovate/renovate:44.198.3
+image=renovate/renovate:44.198.3@sha256:bf344aa39d5b592ec728e1db5c3e1d940a5093a89a4598073efcb18d592d121c
 repos=schnappy/infra,schnappy/platform,schnappy/ops
 dry=""
 for a in "$@"; do

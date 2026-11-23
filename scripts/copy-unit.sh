@@ -212,7 +212,10 @@ CADDY = {"caddy_version"}
 CONSUL = {"consul_version", "consul_checksums"}
 for path in changed:
     if not path.startswith("deploy/ansible/"):
-        continue  # renovate.json and the like: no part of a deploy
+        # no proof here: refused, never skipped - the Renovate image rode a wave unproven that way (its review,
+        # 2026-11-23); what Renovate moves outside deploy/ansible is a manual- unit's (the runner never picks one)
+        refused.append(f"{path} (outside deploy/ansible: no proof on the copy)")
+        continue
     if path == "deploy/ansible/playbooks/setup-kubeadm.yml":
         old, new = play_vars(show("main", path) or ""), play_vars(show(BRANCH, path) or "")
         if without_vars(show("main", path)) != without_vars(show(BRANCH, path)):

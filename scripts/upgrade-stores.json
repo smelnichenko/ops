@@ -140,6 +140,24 @@
       ],
       "_why": "its own command takes it: upgrade-consul.yml snapshots the whole state on pi1 (inspected) before any server restarts, the followers then the leader - proven on the copy by copy-unit (setup-consul.yml's version moved: upgrade-consul.yml there) and by test:consul-upgrade",
       "minutes": 0
+    },
+    {
+      "store": "sonarqube",
+      "units": "(^|-)sonarqube-[0-9]+\\.(x|[0-9]+)$",
+      "packages": [
+        "sonarqube",
+        "/(^|\\/)sonarqube$/"
+      ],
+      "backups": [
+        "deploy:postgres:base-backup -- -e pg_namespace=schnappy-infra -e cluster=schnappy-sonarqube-pg"
+      ],
+      "missing": [],
+      "examples": [
+        "sonarqube-26.x"
+      ],
+      "taken_by": [],
+      "_why": "every SonarQube release migrates its database one way (api/system/migrate_db in the setup hook) - the wave-patches review of 2026-11-23 found 26.9 -> 26.10 riding in the wave, unproven (the copy leaves SonarQube out) and with no backup: its CNPG cluster's base backup first; the way back a recovery from it (CNPG bootstrap.recovery, the path the copy rehearses on production's cluster every run)",
+      "minutes": 10
     }
   ]
 }

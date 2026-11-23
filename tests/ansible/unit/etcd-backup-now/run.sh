@@ -45,6 +45,15 @@ check "a pod failed, the Job retrying (Failed not set): read on, then Complete -
   "$(run $'/\n/\n/\nTrue/')" "0 4"
 r=$(run $'/\n/True'); check "the Job Failed (its retries spent): FAILED (exit 1), its logs said" \
   "$r $(grep -c 'FAILED' "$W/out") $(grep -c 'connection refused' "$W/out")" "1 2 1 1"
+# the Vagrant copy's run (test:copy:check: the rclone in its upload run for real, the wave-patches review 2026-11-23):
+# its ssh config handed to every ssh, the host its VM; none given - production's, no -F at all
+run 'True/' > /dev/null
+check "  production's run: ten, no ssh config" "$(grep -c -- '-F ' "$W/calls") $(grep -c ' ten kubectl' "$W/calls")" "0 4"
+rm -f "$W/calls" "$W/n"; printf 'True/\n' > "$W/states"
+PATH="$W/bin:$PATH" W="$W" ETCD_BACKUP_POLL=0 ETCD_BACKUP_HOST=kubeadm ETCD_BACKUP_SSH_CONFIG="$W/vagrant-ssh" \
+  bash scripts/etcd-backup-now.sh > "$W/out" 2>&1; rc=$?
+check "the copy's run: every ssh given its config (-F), the host its kubeadm VM; taken" \
+  "$rc $(grep -c -- "^-F $W/vagrant-ssh .* kubeadm kubectl" "$W/calls") $(wc -l < "$W/calls")" "0 4 4"
 run 'True/' > /dev/null; : > "$W/upload.log"
 PATH="$W/bin:$PATH" W="$W" ETCD_BACKUP_POLL=0 bash scripts/etcd-backup-now.sh > "$W/out" 2>&1; rc=$?
 check "Complete but no OK line in the upload's log: not taken as proof (exit 1)" "$rc $(grep -c 'not taken as proof' "$W/out")" "1 1"

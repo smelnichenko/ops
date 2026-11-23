@@ -54,10 +54,11 @@ check "no bot token: refused, docker never run" "$(run) $([ -e "$W/argv" ] && ec
   "1 not-run 1"
 rc=$(run RENOVATE_TOKEN=$TOKEN)
 # the pin read from the script (Renovate moves it: a literal here failed its own update's CI, ops#57 2026-11-16) - an exact
-# x.y.z, never a tag that moves
+# x.y.z and its digest (a Docker Hub tag can move, and this image holds the bot's token: the wave-patches review,
+# 2026-11-23), never a tag alone
 pin=$(sed -n 's/^image=//p' scripts/upgrade-renovate.sh)
-[[ $pin =~ ^renovate/renovate:[0-9]+\.[0-9]+\.[0-9]+$ ]] && exact=exact || exact="not exact: $pin"
-check "a run: docker run --rm, the image pinned exactly (x.y.z) and last" "$rc $(head -2 "$W/argv" | tr '\n' ' ')$(tail -1 "$W/argv") $exact" \
+[[ $pin =~ ^renovate/renovate:[0-9]+\.[0-9]+\.[0-9]+@sha256:[0-9a-f]{64}$ ]] && exact=exact || exact="not exact: $pin"
+check "a run: docker run --rm, the image pinned exactly (x.y.z and its digest) and last" "$rc $(head -2 "$W/argv" | tr '\n' ' ')$(tail -1 "$W/argv") $exact" \
   "0 run --rm $pin exact"
 check "the bot's token by name - its value on no argument; the container given it" \
   "$(grep -cx RENOVATE_TOKEN "$W/argv") $(grep -c "$TOKEN" "$W/argv") $(grep -c "^token=$TOKEN$" "$W/env")" "1 0 1"
@@ -380,10 +381,11 @@ for m in d["customManagers"]:
     if any(pat(p) for p in m.get("managerFilePatterns", [])):
         for ms in m["matchStrings"]:
             for g in re.finditer(ms.replace("(?<", "(?P<"), text):
-                found.append((g.group("depName"), bool(re.fullmatch(r"\d+\.\d+\.\d+", g.group("currentValue"))), m.get("datasourceTemplate")))
+                found.append((g.group("depName"), bool(re.fullmatch(r"\d+\.\d+\.\d+", g.group("currentValue"))), m.get("datasourceTemplate"),
+                              bool(re.fullmatch(r"sha256:[0-9a-f]{64}", g.group("currentDigest") or ""))))
 print(found)
 PYSELF
-)" "[('renovate/renovate', True, 'docker')]"
+)" "[('renovate/renovate', True, 'docker', True)]"
 # the Gateway API out of Istio's rule, on renovate/gateway-api-<X.Y> of its own (under istio's topic it was named by its own
 # version: istio-1.6, istio-1.7 - picked before istio-1.32)
 check "the preset: the Gateway API its own unit (gateway-api-<X.Y>), not in Istio's" \
@@ -549,6 +551,22 @@ print([branch(c[0], c[1], version=c[2] if len(c) > 2 else "1.2.0") for c in case
       sorted(p[1:] for p in wave["matchPackageNames"]) == sorted({p for s in t["stores"] for p in s["packages"]}))
 PYWAVE
 )" "['wave-patches', 'wave-patches', 'wave-patches', 'wave-patches', 'wave-patches', 'wave-patches', 'own', 'observability', 'observability', 'data-operators', 'data-operators', 'argocd', 'pi-services', 'pi-services', 'istio-1.32', 'kubernetes-1.37', 'scylladb-2026.3', 'gateway-api-1.7', 'manual-woodpecker', 'data-operators', 'observability', 'observability', 'pi-services'] test-wave-patches True"
+# The wave-patches review (2026-11-23): SonarQube a store of its own (every release migrates its database one way) - its
+# updates out of the wave and the majors, on renovate/sonarqube-<N>.x, labelled one-way; Woodpecker's own manifests (its
+# single-instance database) with Woodpecker on renovate/manual-woodpecker; Renovate's image on renovate/manual-renovate -
+# the runner picks neither manual- unit
+check "the preset: SonarQube a one-way unit of its own, Woodpecker's manifests and Renovate's image manual units" \
+  "$("$PY" - <<'PYSPLIT'
+import sys
+sys.path.insert(0, "tests/ansible/unit")
+from renovate_preset import branch, resolved
+print([branch("sonarqube", k, version="26.10.0") for k in ("patch", "minor", "major")],
+      ["one-way" in resolved("sonarqube", k).get("addLabels", []) for k in ("minor", "major")],
+      branch("ghcr.io/cloudnative-pg/postgresql", "digest", path="clusters/production/woodpecker/manifests/postgres.yaml"),
+      branch("ghcr.io/cloudnative-pg/postgresql", "digest", path="clusters/production/schnappy-production-data/values.yaml"),
+      [branch("renovate/renovate", k, path="scripts/upgrade-renovate.sh") for k in ("patch", "minor", "digest")])
+PYSPLIT
+)" "['sonarqube-26.x', 'sonarqube-26.x', 'sonarqube-26.x'] [True, True] manual-woodpecker wave-patches ['manual-renovate', 'manual-renovate', 'manual-renovate']"
 # The majors that can be undone in one unit too (operator 2026-11-23): renovate/wave-majors, each package's newest
 # major alone (two majors of one package in one branch collide - Renovate keeps either); a store's major (one-way,
 # backed up first) and a release line's (Kubernetes, Cilium, Istio, the Gateway API, ScyllaDB) each its own unit - the

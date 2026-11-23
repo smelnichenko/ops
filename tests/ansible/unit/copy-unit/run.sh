@@ -228,7 +228,9 @@ check "a changed value with no known proof: refused, named" "$rc $(grep -c 'REFU
 out=$(plan bad-value); rc=$?
 check "a value that is no version (a command in it): refused" "$rc $(grep -c 'REFUSED.*no version' <<< "$out")" "1 1"
 out=$(plan docs-only); rc=$?
-check "a branch changing nothing a proof runs: refused" "$rc $(grep -c 'nothing to prove' <<< "$out")" "1 1"
+# an ops path outside deploy/ansible (here a README; the Renovate image in scripts/upgrade-renovate.sh rode a wave
+# unproven that way, skipped - its review, 2026-11-23): refused by name, never skipped
+check "an ops file outside deploy/ansible: refused, named - never skipped" "$rc $(grep -c 'REFUSED.*README (outside deploy/ansible: no proof on the copy)' <<< "$out")" "1 1"
 out=$(plan no-such); rc=$?
 check "no branch anywhere: refused, no such unit" "$rc $(grep -c 'no such unit' <<< "$out")" "1 1"
 out=$(plan 'Bad/Name'); rc=$?
