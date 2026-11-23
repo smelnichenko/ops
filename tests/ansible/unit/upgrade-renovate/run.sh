@@ -552,10 +552,11 @@ print([branch(c[0], c[1], version=c[2] if len(c) > 2 else "1.2.0") for c in case
 PYWAVE
 )" "['wave-patches', 'wave-patches', 'wave-patches', 'wave-patches', 'wave-patches', 'wave-patches', 'own', 'observability', 'observability', 'data-operators', 'data-operators', 'argocd', 'pi-services', 'pi-services', 'istio-1.32', 'kubernetes-1.37', 'scylladb-2026.3', 'gateway-api-1.7', 'manual-woodpecker', 'data-operators', 'observability', 'observability', 'pi-services'] test-wave-patches True"
 # The wave-patches review (2026-11-23): SonarQube a store of its own (every release migrates its database one way) - its
-# updates out of the wave and the majors, on renovate/sonarqube-<N>.x, labelled one-way; Woodpecker's own manifests (its
-# single-instance database) with Woodpecker on renovate/manual-woodpecker; Renovate's image on renovate/manual-renovate -
-# the runner picks neither manual- unit
-check "the preset: SonarQube a one-way unit of its own, Woodpecker's manifests and Renovate's image manual units" \
+# updates out of the wave and the majors, on renovate/sonarqube-<N>.x, labelled one-way. Woodpecker's own database and
+# Renovate's image stay in the cycle's units (operator: "you are screwing all purpose of upgrade automation" - never a
+# manual- unit for them): the runner waits for an idle Woodpecker before a merge that restarts its database, and the
+# copy proof smoke-runs a new Renovate image
+check "the preset: SonarQube a one-way unit of its own; Woodpecker's database and Renovate's image in the wave, no manual unit" \
   "$("$PY" - <<'PYSPLIT'
 import sys
 sys.path.insert(0, "tests/ansible/unit")
@@ -566,7 +567,7 @@ print([branch("sonarqube", k, version="26.10.0") for k in ("patch", "minor", "ma
       branch("ghcr.io/cloudnative-pg/postgresql", "digest", path="clusters/production/schnappy-production-data/values.yaml"),
       [branch("renovate/renovate", k, path="scripts/upgrade-renovate.sh") for k in ("patch", "minor", "digest")])
 PYSPLIT
-)" "['sonarqube-26.x', 'sonarqube-26.x', 'sonarqube-26.x'] [True, True] manual-woodpecker wave-patches ['manual-renovate', 'manual-renovate', 'manual-renovate']"
+)" "['sonarqube-26.x', 'sonarqube-26.x', 'sonarqube-26.x'] [True, True] wave-patches wave-patches ['wave-patches', 'wave-patches', 'wave-patches']"
 # The majors that can be undone in one unit too (operator 2026-11-23): renovate/wave-majors, each package's newest
 # major alone (two majors of one package in one branch collide - Renovate keeps either); a store's major (one-way,
 # backed up first) and a release line's (Kubernetes, Cilium, Istio, the Gateway API, ScyllaDB) each its own unit - the

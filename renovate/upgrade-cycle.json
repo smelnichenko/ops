@@ -548,30 +548,6 @@
       ]
     },
     {
-      "description": "Renovate's own image (scripts/upgrade-renovate.sh): a unit of its own, renovate/manual-renovate - the copy runs no Renovate, so no proof covers it (the wave-patches review, 2026-11-23: it rode in the wave unproven, holding the bot's token): applied by hand after a smoke run of the new image (renovate --version, renovate-config-validator on both presets)",
-      "matchPackageNames": [
-        "renovate/renovate"
-      ],
-      "groupName": "renovate",
-      "groupSlug": "renovate",
-      "additionalBranchPrefix": "manual-",
-      "group": {
-        "branchTopic": "renovate"
-      }
-    },
-    {
-      "description": "Woodpecker's own manifests (its CNPG cluster: instances 1) with Woodpecker, on renovate/manual-woodpecker - a digest roll restarts its only database under every running pipeline, the CI of the merge itself included (the wave-patches review, 2026-11-23): applied by hand, when no pipeline runs",
-      "matchFileNames": [
-        "clusters/production/woodpecker/**"
-      ],
-      "groupName": "woodpecker",
-      "groupSlug": "woodpecker",
-      "additionalBranchPrefix": "manual-",
-      "group": {
-        "branchTopic": "woodpecker"
-      }
-    },
-    {
       "description": "Woodpecker, the CI server (its chart, and the server and agent images infra's values pin - registry and repository named there since 2026-11-21 so Renovate reads their tag; they move together): a unit of its own, renovate/manual-woodpecker - the Vagrant copy runs no Woodpecker, so nothing proves it there and the copy refuses it (SHADOW run 7, 2026-11-16). The runner never picks a manual- unit: applied by hand - infra's pull request merged, then ops' (setup-woodpecker.yml's woodpecker_chart_default moves with it), a pipeline run checked (a bad one is CI down, reverted by its commit), then production's inventory read again and committed (task test:copy:inventory) - ops' main fails defaults-follow-production from ops' merge until then, as after every applied unit until its record. Last, so it takes Woodpecker out of wave-patches and every group (operator 2026-11-16). Its group.branchTopic too: the wave-patches rule names its branch by one, and a groupSlug alone left Woodpecker on renovate/manual-wave-patches (SHADOW run 8, 2026-11-16)",
       "matchPackageNames": [
         "woodpecker",
