@@ -62,8 +62,11 @@ sub_pinned = keys_dir("keys-sub", [VENDOR], [VENDOR_SUB])           # the subkey
 old_keys = keys_dir("keys-old", [VENDOR, OLD], [VENDOR, OLD])       # a key expired since it signed, pinned
 
 # ── the mirror: each vendor's files where the script reads them ─────────────
-V = {"vault": "1.22.0", "forgejo": "15.0.12", "helm": "v3.21.0", "node_exporter": "1.13.0", "nexus": "3.91.0-02",
-     "versitygw": "1.9.0", "consul": "1.21.0", "keycloak": "26.6.0", "gateway_api": "v1.6.0", "insightface_buffalo_l": "0.8"}
+# a version no vendor publishes (its last part in the 900s): a real one is the next update's - Forgejo's 15.0.12 here was
+# the wave's own (2026-11-23), the harness's bump of the file a no-op, its assert a crash and the unit's CI red
+V = {"vault": "1.22.900", "forgejo": "15.0.900", "helm": "v3.21.900", "node_exporter": "1.13.900", "nexus": "3.91.900-02",
+     "versitygw": "1.9.900", "consul": "1.21.900", "keycloak": "26.6.900", "gateway_api": "v1.6.900",
+     "insightface_buffalo_l": "0.908"}
 M = os.path.join(W, "mirror")
 def put(url, data):
     p = os.path.join(M, url.split("://", 1)[1] + ("index.html" if url.endswith("/") else ""))
@@ -203,12 +206,13 @@ changed = diff_lines()
 check("  nothing else in the files changed: each moved version and each pin's hash, the rest as it was (the nexus "
       "map's sha256: prefix and quotes kept); versitygw's new version an entry of its own, as the ones before it; "
       "buffalo_l's version and hash, top-level keys of their vars file",
-      (all(re.search(r"_version:|^\+\s+\"1\.9\.0\":$|^[-+]\s*(-\s+)?\S+:\s*\"?(sha256:)?[0-9a-f]{64}", l) for l in changed),
+      (all(re.search(r"_version:|^\+\s+\"" + re.escape(V["versitygw"]) + r"\":$|^[-+]\s*(-\s+)?\S+:\s*\"?(sha256:)?[0-9a-f]{64}", l)
+           for l in changed),
        len([l for l in changed if l.startswith("+")]), any('"sha256:' + expect["nexus"]["x86_64"] + '"' in l for l in changed),
        len([l for l in changed if l.startswith("-") and "_version:" not in l])),
       (True, 9 + 8 + 4 + 3 + 2 + 2, True, 8 + 4 + 2 + 1))
 vg_text = open(os.path.join(R, PIN["versitygw"]["file"])).read()
-check("  versitygw's new entry after the ones before it", re.findall(r'^\s+"(\d+\.\d+\.\d+)":$', vg_text, re.M)[-1:], ["1.9.0"])
+check("  versitygw's new entry after the ones before it", re.findall(r'^\s+"(\d+\.\d+\.\d+)":$', vg_text, re.M)[-1:], [V["versitygw"]])
 code, out = run("--check")
 check("  --check after it: every pin ok; 0", (code, out.count("STALE"), out.count(" ok")), (0, 0, 17))
 
@@ -242,7 +246,7 @@ code, out = run("--changed")
 check("a committed bump with --changed alone (against HEAD): nothing read, said - never a silent pass",
       (code, "no pin's version or hash moved since HEAD" in out), (0, True))
 code, out = run("--changed", "--base", "main")
-check("  with --base main: vault read and rewritten, its stale pins the vendor's now", (code, "vault 1.22.0" in out,
+check("  with --base main: vault read and rewritten, its stale pins the vendor's now", (code, f"vault {V['vault']}" in out,
       "rewritten" in out, pins_now("vault")["vault"] == expect["vault"]), (0, True, True, True))
 # --ref: the branch's pins read from git, the working tree on main untouched
 sh("checkout", "-q", "--", ".")
@@ -263,7 +267,7 @@ shutil.rmtree(M)
 shutil.copytree(os.path.join(pristine, "releases.hashicorp.com"), os.path.join(M, "releases.hashicorp.com"))
 code, out = run("--changed", "--only", "vault")
 check("--only vault: vault alone read and rewritten (forgejo's bump left), 0",
-      (code, "vault 1.22.0" in out, "forgejo" in out, pins_now("vault")["vault"] == expect["vault"]), (0, True, False, True))
+      (code, f"vault {V['vault']}" in out, "forgejo" in out, pins_now("vault")["vault"] == expect["vault"]), (0, True, False, True))
 reset_mirror()
 
 def refused(case, setup, keys=None, pin="vault", other="node_exporter"):
@@ -302,7 +306,7 @@ def no_arm64():
     open(sums_path, "w").write("".join(kept_lines))
     sign(sums_path)
 out = refused("an artifact missing from the signed list", no_arm64)
-check("  said: not in the signed SHA256SUMS", "vault_1.22.0_linux_arm64.zip: not in" in out, True)
+check("  said: not in the signed SHA256SUMS", f"vault_{V['vault']}_linux_arm64.zip: not in" in out, True)
 fa = fj["amd64"]
 fname = fa.rsplit("/", 1)[1]
 out = refused("Forgejo's own .sha256 disagreeing with its signed .xz", lambda: put(fa + ".sha256", f"{h(b'other')}  {fname}\n"),
