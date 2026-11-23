@@ -146,7 +146,7 @@ def without_vars(text):
     if isinstance(doc, list) and doc and isinstance(doc[0], dict):
         doc[0] = {k: v for k, v in doc[0].items() if k != "vars"}
     return doc
-steps, refused = [], []
+steps, refused, smokes = [], [], []
 import re
 VERSION = re.compile(r"[0-9][0-9A-Za-z.+~-]*", re.ASCII)  # a value that reaches a command line: a version, nothing else
 def version(v):
@@ -211,9 +211,19 @@ CADDY = {"caddy_version"}
 # copy (setup-consul.yml installs only where Consul is not: a running one moves through the upgrade's rolling order)
 CONSUL = {"consul_version", "consul_checksums"}
 for path in changed:
+    if path == "scripts/upgrade-renovate.sh":
+        # Renovate's own image (the copy runs no Renovate): the new image smoke-run here - it starts and its config
+        # validator reads both presets (task test:copy:renovate-image) - one renovate/renovate:x.y.z@sha256 pin, else
+        # refused (the wave-patches review, 2026-11-23: it rode a wave unproven)
+        image = re.findall(r"(?m)^image=(\S+)$", show(BRANCH, path) or "")
+        if len(image) == 1 and re.fullmatch(r"renovate/renovate:\d+\.\d+\.\d+@sha256:[0-9a-f]{64}", image[0]):
+            smokes.append(f"test:copy:renovate-image IMAGE={image[0]}")
+        else:
+            refused.append(f"{path} (its image not one renovate/renovate:x.y.z@sha256 pin)")
+        continue
     if not path.startswith("deploy/ansible/"):
         # no proof here: refused, never skipped - the Renovate image rode a wave unproven that way (its review,
-        # 2026-11-23); what Renovate moves outside deploy/ansible is a manual- unit's (the runner never picks one)
+        # 2026-11-23); anything else Renovate moves outside deploy/ansible needs a proof of its own first
         refused.append(f"{path} (outside deploy/ansible: no proof on the copy)")
         continue
     if path == "deploy/ansible/playbooks/setup-kubeadm.yml":
@@ -315,6 +325,8 @@ if refused:
     sys.exit(1)
 for playbook, args, restarts in sorted(steps, key=lambda s: ORDER[s[0]]):
     print(f"test:copy:playbook PLAYBOOK={playbook} ARGS='{args}'" + (" RESTARTS_EXPECTED=true" if restarts else ""))
+for line in smokes:
+    print(line)
 PY
 ) || { echo "$ops_steps"; exit 1; }
   while IFS= read -r line; do [ -n "$line" ] && steps+=("$line"); done <<< "$ops_steps"

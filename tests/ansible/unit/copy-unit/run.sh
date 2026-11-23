@@ -86,6 +86,7 @@ printf 'forgejo_version: "15.0.11"\nforgejo_checksums:\n  arm64: %s\n' "$(printf
 printf 'vault_version: "1.21.4"\n' > "$W/src/ops/deploy/ansible/vars/vault.yml"
 printf 'patroni_version: "4.1.5"\n' > "$W/src/ops/deploy/ansible/vars/patroni.yml"
 echo "image: a:1" > "$W/src/infra/clusters/v.yaml"; echo "image: b:1" > "$W/src/platform/helm/v.yaml"
+mkdir -p "$W/src/ops/scripts"; printf 'image=renovate/renovate:44.198.3@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n' > "$W/src/ops/scripts/upgrade-renovate.sh"
 # infra's istiod app as production's: the chart beside the values' git source
 cat > "$W/src/infra/clusters/production/argocd/apps/istiod.yaml" <<'Y'
 apiVersion: argoproj.io/v1alpha1
@@ -131,6 +132,9 @@ unit ops consul-task 's/"1.20.6"/"1.20.7"/; s/tasks: \[\]/tasks: [{name: x, comm
 unit ops caddy-peer 's/"2.10.0"/"2.10.2"/; s/10.0.0.2/10.0.0.3/' deploy/ansible/playbooks/setup-caddy.yml
 unit ops caddy-task 's/"2.10.0"/"2.10.2"/; s/tasks: \[\]/tasks: [{name: x, command: id}]/' deploy/ansible/playbooks/setup-caddy.yml
 unit ops caddy-bad 's/"2.10.0"/"2.10.2 -e x=y"/' deploy/ansible/playbooks/setup-caddy.yml
+# Renovate's own image (the copy runs no Renovate): a new x.y.z@sha256 pin smoke-run; a tag alone refused
+unit ops renovate-image 's/44.198.3@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/44.258.1@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/' scripts/upgrade-renovate.sh
+unit ops renovate-tag 's/44.198.3@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/44.258.1/' scripts/upgrade-renovate.sh
 # Istio's version restated in setup-istio.yml and setup-kubeadm.yml moves with infra's istiod chart (wave-patches,
 # 2026-11-16): every sidecar brought to it after (the istio-1.32 review, 2026-11-20)
 ISTIOD=clusters/production/argocd/apps/istiod.yaml
@@ -227,6 +231,10 @@ out=$(plan unknown); rc=$?
 check "a changed value with no known proof: refused, named" "$rc $(grep -c 'REFUSED.*some_other_version' <<< "$out")" "1 1"
 out=$(plan bad-value); rc=$?
 check "a value that is no version (a command in it): refused" "$rc $(grep -c 'REFUSED.*no version' <<< "$out")" "1 1"
+check "Renovate's image moved (x.y.z@sha256): its smoke step - the new image, run and its validator on both presets" \
+  "$(plan renovate-image)" "test:copy:renovate-image IMAGE=renovate/renovate:44.258.1@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+out=$(plan renovate-tag); rc=$?
+check "Renovate's image moved to a tag alone (no digest): refused, named" "$rc $(grep -c 'REFUSED.*upgrade-renovate.sh (its image not one renovate/renovate:x.y.z@sha256 pin)' <<< "$out")" "1 1"
 out=$(plan docs-only); rc=$?
 # an ops path outside deploy/ansible (here a README; the Renovate image in scripts/upgrade-renovate.sh rode a wave
 # unproven that way, skipped - its review, 2026-11-23): refused by name, never skipped

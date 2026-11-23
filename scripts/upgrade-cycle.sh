@@ -853,6 +853,7 @@ while IFS= read -r step; do
       v=$(version_of istio_version "$step") || { stopped "no Istio version in its plan ($step) - nothing merged" "$log"; exit 1; }
       cmds+=("deploy:mesh:restart -- -e istio_version=$v") ;;
     "test:copy:change"*) continue ;;  # Argo applies infra's and platform's merge
+    "test:copy:renovate-image"*) continue ;;  # Renovate's image: no production command - the next Renovate run uses it
     *) stopped "a part with no production command: $step - nothing merged" "$log"; exit 1 ;;
   esac
 done <<< "$plan"
