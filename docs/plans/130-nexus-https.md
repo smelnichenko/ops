@@ -1,6 +1,6 @@
 # Nexus over HTTPS: every CI build through Caddy, the plain ports closed to pipelines
 
-Status: DECIDED (operator 2026-11-21: "there is not so much traffic, I prefer https"; the Docker mirror on its own name,
+Status: DECIDED (operator 2026-11-21: HTTPS preferred, the traffic being small; the Docker mirror on its own name,
 router record added the same day), not started.
 
 ## Why

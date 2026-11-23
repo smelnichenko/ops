@@ -60,8 +60,8 @@ fi
 mkdir -p "$ops/.copy"
 log=$ops/.copy/renovate-$(date +%Y%m%d-%H%M%S)-$$.log
 echo "Renovate ${dry:-run} ($image) - its log: $log"
-# its log on the console as it is written (operator 2026-11-22: "make all this logging visible on the console where task
-# runs"), followed until docker is gone - so all of it before what this prints next; a lookup's report (behind its marker)
+# its log on the console as it is written (operator 2026-11-22: all of the logging visible on the
+# console the task runs in), followed until docker is gone - so all of it before what this prints next; a lookup's report (behind its marker)
 # left out, summarised below. A reader gone (a closed terminal) stops the follower, never Renovate or its log
 "${UPGRADE_DOCKER:-docker}" "${args[@]}" "$image" "${cmd[@]}" > "$log" 2>&1 &
 renovate_pid=$!

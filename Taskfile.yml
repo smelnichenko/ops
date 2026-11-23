@@ -290,7 +290,7 @@ tasks:
   # test -> production image tags (scripts/promote.sh): two tasks, no mode variable (operator 2026-11-20) - promote:check
   # prints the plan, promote:run commits and pushes it. CONFIRM, the old task's switch, is refused by both, never ignored
   # (ignored on promote:check, CONFIRM=1 would look like a promotion that never happened). SERVICES="monitor masi" limits
-  # either; without it, every service (operator: "no SERVICES like SERVICES=all")
+  # either; without it, every service (operator: no SERVICES=all form)
   promote:check:
     desc: "Show which services' test image differs from production's. Read-only. SERVICES=\"monitor masi\" limits the list (default: all)."
     preconditions:
@@ -651,7 +651,7 @@ tasks:
   # token; every app repo and the CI tool images since 2026-11-21, the list in scripts/upgrade-renovate.sh). Two
   # tasks and no mode variable, as the upgrade cycle's (operator 2026-11-20): upgrade:apps:check reads,
   # upgrade:apps:run writes - LOOKUP given to it is refused, never ignored (ignored, it would write); no prompt, the
-  # refusal its guard (operator 2026-11-20: "LOOKUP refusal is enough")
+  # refusal its guard (operator 2026-11-20: the LOOKUP refusal suffices)
   upgrade:apps:check:
     desc: "Show what Renovate would update in the app repos and the CI tool images (the list in scripts/upgrade-renovate.sh). Read-only."
     cmds:

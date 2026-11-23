@@ -31,7 +31,7 @@ not the buffer.
 2. **Each chunk carries its sample time.** The reader stamps every chunk with the capture's sample index and the
    instant of its first sample (driver timestamp where the driver gives one, else the read instant minus what the
    driver still held). `IqStream` exposes it; decoders that stamp time take it from the chunk, not from the wall clock.
-   **One shared system for every decoder** (operator 2026-11-05: "all decoders should use this system, shared"): the
+   **One shared system for every decoder** (operator 2026-11-05: one system that every decoder shares): the
    sample time, the ring and the spill live in the common read path (`IqReadAhead` / `IqStream`), not per decoder;
    every decoder that stamps time reads it from the chunk. RS41 is the first one switched over only because its test
    is the sharpest; the rest follow in the same arc, and none keeps a private path.
@@ -40,8 +40,8 @@ not the buffer.
    dropping; once spilling has begun every chunk goes there until the consumer has drained it, so the order is the
    radio's. The consumer drains the ring, then the stream, then the ring again. A capture's stream is deleted when the
    capture's decode has caught up or the capture is closed and drained.
-4. **Bounded by TIME, like a Kafka topic's retention - never blocking** (operator 2026-11-05: "kafka sends received
-   data to decoders and once it times out - goes to log and out of the wheel"). The received data is a log the
+4. **Bounded by TIME, like a Kafka topic's retention - never blocking** (operator 2026-11-05: as Kafka hands
+   decoders the received data, and data past its timeout leaves the wheel, logged). The received data is a log the
    decoder reads at its own offset; a chunk older than the retention timeout leaves the wheel (Valkey `XTRIM MINID`,
    the stream ids being the chunks' air time) and, if its decoder had not read it, the decoder's offset jumps past it
    and the loss is logged ("RS41: 12.4 s of air timed out unread") and counted in `dropped_s`. No byte budgets: the
@@ -233,8 +233,8 @@ it; the LMAX `RingBuffer` for its fast path is next.
 
 ## Done 2026-11-07
 
-- **The read-ahead on a Disruptor ring** (radar #1189), one per capture; the operator kept it ("in any way disruptor will
-  stay"). No gain over the lock at hand-over, measured; a concurrency review and a test audit both fixed things in it.
+- **The read-ahead on a Disruptor ring** (radar #1189), one per capture; the operator kept it (the Disruptor
+  stays in any case). No gain over the lock at hand-over, measured; a concurrency review and a test audit both fixed things in it.
   Full with no store it drops the newest.
 - **AirStamp says when its anchor moves** (#1188, #1193): added up, at most once a minute, the longest read gap behind it,
   and what a capture ends with. This found the pi4-C start deficit.

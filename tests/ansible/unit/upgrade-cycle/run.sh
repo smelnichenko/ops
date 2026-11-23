@@ -379,7 +379,7 @@ check("memory short (the radar running), a unit that builds the copy: refused at
       (rc, has(calls, "task"), has(calls, "sleep")), (1, [], []))
 rc, calls = night("test test-observability minor", mem=20000)
 check("memory short, a test unit (no copy): on", (rc, merged(calls, "test-observability")), (0, True))
-# units back to back (operator 2026-11-17, "run them back to back"): an apply recorded today stops no run - a
+# units back to back (operator 2026-11-17: back to back): an apply recorded today stops no run - a
 # production unit's or a test environment's (one a day, counting the test unit's record, refused every later run)
 for rec in ("2026-11-20-istio.md", "2026-11-20-test-observability.md"):
     rc, calls = night("prove wave-patches patch", records=(rec,))
@@ -704,7 +704,7 @@ rc, calls = night("prove istio minor", files={"vagrant.rc": "1"})
 check("the copy not halted after the review: said in the run and the applied notice (the radar stays off)",
       (rc, "THE COPY NOT HALTED" in night.out), (0, True))
 # ── the review ────────────────────────────────────────────────────────────────────────────────────────────────────────
-# any finding - whatever its severity (operator 2026-11-20: "why only criticals?") - goes to the agent's fix (here it
+# any finding - whatever its severity (operator 2026-11-20: every severity, not criticals alone) - goes to the agent's fix (here it
 # commits none: a try); a review that did not finish is a try with no fix; nothing is ever labelled
 for verdict, files, label, why in (("VERDICT: CRITICAL a bad thing\nPASSES: x", {}, True, "a CRITICAL: a finding, to the fix agent"),
                                    ("PASSES: a\nVERDICT: CLEAN\nVERDICT: CRITICAL later", {}, True, "a later CRITICAL: a finding, to the fix agent"),
@@ -1194,7 +1194,7 @@ subprocess.run(f"bash {os.path.join(OPS, 'scripts/upgrade-cycle.sh')} | true", s
 logs = [os.path.join(OPS, ".copy", f) for f in os.listdir(os.path.join(OPS, ".copy")) if f.startswith("upgrade-cycle-")]
 check("stdout a pipe whose reader is gone (a closed terminal): the run goes on to its end, its log holds every line",
       (bool(logs) and "APPLIED wave-patches" in open(logs[0]).read(), notices(calls_now())[-1:]), (True, ["applied wave-patches"]))
-# the console (operator 2026-11-22: "make all this logging visible on the console where task runs"): the run's log line
+# the console (operator 2026-11-22: all of the logging visible on the console the task runs in): the run's log line
 # for line as it is written - a step's own output too, not the runner's lines alone - its END last, nothing after it
 rc, calls = night("prove wave-patches patch", plan=PLAN, files={"verify.rc": "1", "verify.out": "a line of verify's own\n"})
 check("the console: the run's log line for line - a step's output too - its last line END with the run's exit code",

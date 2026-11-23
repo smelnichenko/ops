@@ -1,6 +1,6 @@
 # Plan 128 - CI steps run as non-root
 
-Status: IN PROGRESS 2026-11-20 (operator: "CI run as a root?! you are kidding me", "use user namespaces for all CI pods").
+Status: IN PROGRESS 2026-11-20 (operator: no CI as root; user namespaces for every CI pod).
 
 - DONE: every CI pod in a user namespace of its own (infra 8f395019: the agent's WOODPECKER_BACKEND_K8S_USER_NAMESPACES;
   infra pipeline 1121 green with its pods on hostUsers: false) - a container's root is no longer ten's root.

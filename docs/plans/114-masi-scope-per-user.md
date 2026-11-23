@@ -1,18 +1,16 @@
 # Plan 114 — masi: each user's own scope (countries, remote work)
 
 **Status:** reviewed 2026-11-11 (architecture: 4 critical, 15 warnings, all merged below). **The operator accepted all six
-decisions as proposed the same day ("yes to everything"),** then amended them: "there should be an admin settings page,
-visible for admins, where the countries list can be configured, bootstrapped as estonia, this list will be used by people
-connections as well. turning on a new country is like extending to a new market", and "user should be able to configure,
-which companies and people - all data classes country filters apply to him", and "essentially, any masi entity should
-have some location, either physical or virtual, so it can be sorted by", "think about db performance!", and "there
-should be a list of estonia addresses - cities, etc. with postal indexes somewhere", "we will need to have periodic update
-service", "renames should be supported", "and remember, we are not deleting data when admin clears some country from list - we
-just modify filters and stop updating country-related data by subsystems", "later we will have address sources for other countries as well, should
-depend on supported list, configured by admin", "make addresses easily searcheable - like with something we have instead
-of elasticsearch". Phase 0 (Estonia's official places, kept current by masi), then 1-3, are next. Asked for by the operator: "set of countries scope and/or remote jobs should be
-configurable per user account in app settings" (2026-11-11), after "we don't care about company location that posts
-remote or work from home positions" (2026-11-10).
+decisions as proposed the same day,** then amended them: an admin settings page, for admins, configures the countries
+list (Estonia to start; people's connections use it too; turning a country on is entering a new market); each user
+chooses which data classes - companies, people and the rest - the country filters apply to; every masi entity has a
+location, physical or virtual, to sort by; the database's performance is a design concern; Estonia's addresses - cities
+and the like, with postal codes - are kept, updated periodically, renames supported; a country an admin clears from the
+list keeps its data (the filters change and its subsystems stop updating it); other countries' address sources come
+later, following the admin's list; addresses easily searchable, on something we run in place of Elasticsearch.
+Phase 0 (Estonia's official places, kept current by masi), then 1-3, are next. Asked for by the operator: the countries'
+scope and remote jobs configurable per user account in the app's settings (2026-11-11), after deciding that where a
+company posting remote or work-from-home positions is located does not matter (2026-11-10).
 
 > **2026-11-12:** jobs', companies' and people's addresses and the search by address and by range moved to
 > [plan 115](115-masi-addresses.md): its address model (many addresses per entity with roles, a full level hierarchy,
@@ -136,9 +134,8 @@ requires; a `Location` column on every list that shows one of these entities.
 
 ### Distance and travel time from a point
 
-The operator, 2026-11-11: "we need to be able to set radius in units from some point/address which to use in search by
-distance from home", "generic way - like which suburb you can reach by transport", "like by job location", "we use
-something like geospatial". A user's filter can hold a **reach**: an origin, a measure and a limit -
+The operator, 2026-11-11: a radius from a point or an address (home, say) to search by distance, generic - which
+suburbs can be reached by transport, from a job's location too - on something geospatial. A user's filter can hold a **reach**: an origin, a measure and a limit -
 `Reach = (origin, measure: DISTANCE | TIME, limit, unit: km | mi | min, mode: STRAIGHT | CAR | TRANSIT | BIKE | WALK,
 depart: weekday 08:30 by default for TRANSIT)`. "Within 30 km of Saku", "within 45 min of Mustamäe by public transport".
 It narrows any list of entities with a physical location (jobs by their place, companies by their office, people by their
@@ -152,8 +149,8 @@ stated place); remote and virtual locations are untouched by it and follow the r
 - **The origin** is the user's own: a place from the list (settlement, district or postal code, through `/places/search`)
   or a point picked on a map. No street addresses are kept and no address leaves the cluster: no outside geocoder.
   Never shown to another user.
-- **Computed once per user, never at read time** (the operator, 2026-11-11: "we will need to cache distances for users if
-  they use such filter, not to recalculate anything"): `user_reach_origin(user_uuid, mode, origin_of, computed_at)` (what
+- **Computed once per user, never at read time** (the operator, 2026-11-11: a user's distances cached once the
+  filter is used, nothing recalculated): `user_reach_origin(user_uuid, mode, origin_of, computed_at)` (what
   the rows were computed from) and `user_reach(user_uuid, mode, place_id, km real, minutes smallint)`, PK `(user_uuid,
   mode, place_id)`, indexes `(user_uuid, mode, km) include (place_id)`, `(user_uuid, mode, minutes) include (place_id)` and
   `(place_id)`; on `job`, `(loc_place_id) where status = 'OPEN'`; ~5,000 rows (about 1 MB with indexes) a user and mode, written only for a user who sets a reach (lazily, on saving it, in one batch), for the modes they use. A list's
@@ -205,8 +202,8 @@ Measured in production 2026-11-11: `company` 28,953 rows, `person` 11,956, `cont
   changeset with `runInTransaction="false"`), never locking writes; checks and EXPLAINs run on the standby (`-ro`).
 - **Backfill in batches** of 1,000 rows per transaction with a pause between, idempotent and resumable, outside the busy
   collection minutes; the gauge `masi_rows_without_reach{kind}` shows the rest.
-- **Every list is paged, everywhere** (the operator, 2026-11-11: "make sure we use paging everywhere and never get like
-  millions in result lists"): every endpoint that returns rows takes a page size clamped on the server (default 50, at
+- **Every list is paged, everywhere** (the operator, 2026-11-11: paging everywhere, never a result list of
+  millions): every endpoint that returns rows takes a page size clamped on the server (default 50, at
   most 200; a larger request gets 200, never more), large or ever-growing tables page by key, not `OFFSET`; a count is
   shown capped ("10,000+") where an exact count would scan; no client loop fetches every page; no service loads a large
   or growing table into a `List` (streamed or batched instead). A reach join is paged like any list (`LIMIT` on the
@@ -264,8 +261,8 @@ postings were dropped as abroad (2026-11-10). Replaced by the official data:
   Countries keep their former names the same way (`Countries` aliases: Turkey/Türkiye, Czech Republic/Czechia). Hosts on masi's egress allow-list (`s3.pilw.io` for EHAK, `geoportaal.maaruum.ee` for postal codes - the Land Board's address file, since plan 115 A3b - and `download.geonames.org` for former settlement names; production allows any host, the chart's default list needs all three).
 - **A fresh database and the tests** start from a snapshot in masi's resources (the same columns, its source dates in its
   header and in `NOTICE`); the service brings it current. A run that reads nothing changes nothing and fails.
-- **No guards (the operator, 2026-11-12: "drop guards"; "make sure we don't mass-retire after source issues") - DEFERRED
-  the same day ("guards/healing are a things of distant future/next plan"): until that plan, masi's places:ee runs WITH
+- **No guards (the operator, 2026-11-12: the guards dropped, with no mass retirement after a source's
+  failure) - DEFERRED the same day (guards and self-healing left to a later plan): until that plan, masi's places:ee runs WITH
   the guards below and retires a place on one read that lacks it.** The
   "far fewer places", "postal codes" and "mass rename" guards and Force update go: they compared a read with the
   database, so a hand edit looked like a mass rename and the guard protected the damage. Every run writes the source as
@@ -299,7 +296,7 @@ postings were dropped as abroad (2026-11-10). Replaced by the official data:
 
 ### One place from several address sources
 
-The operator, 2026-11-11: "we need to be smart in resolving address duplicates from several address data sources". A
+The operator, 2026-11-11: address duplicates from several address sources resolved with care. A
 country's places come from more than one source (Estonia: EHAK, GeoNames' postal file, the Board's own postal codes;
 later each market's own). They are never stored as separate places that happen to share a name.
 - **One source is the country's authority** (Estonia: EHAK): its code is the place's identity (`place.country, code`).
@@ -322,8 +319,8 @@ later each market's own). They are never stored as separate places that happen t
   (JTS in the service; nearest points only to pick the candidate polygons), never the nearest centre - a point near a
   boundary is often nearer the neighbour's. Each resolution keeps its method (`CODE`, `POSTAL`, `EXACT`, `FUZZY`,
   `POINT`, `MANUAL`) and score on the entity, so fuzzy and tied ones can be listed and fixed.
-- **Address levels with weights** (the operator, 2026-11-11: "we need like levels of address parts which have different
-  weights"). Each part of an address text gets a level - generic, mapped per country by its profile - and each level a
+- **Address levels with weights** (the operator, 2026-11-11: levels of address parts, each with its own
+  weight). Each part of an address text gets a level - generic, mapped per country by its profile - and each level a
   weight for agreeing and a penalty for contradicting a candidate place: macro-region (scope, out of scope = veto),
   country 1 (contradiction = veto), region 3 (-6), municipality 4 (-6), **settlement 6** (the anchor), district 3 (-4),
   postal code 4 (-3: codes get renumbered, sources lag), street 2 where streets are held (-1), house number 0. Times how the part
@@ -438,8 +435,8 @@ to the activity log with who and when.
   market list**, computed at read time; their saved choice is never rewritten, so the country comes back to everyone who had
   it when it is turned on again. One whose effective list is empty sees the list's first country until they choose.
 - At least one country stays on.
-- **Each country's address source, on the same page** (the operator, 2026-11-11: "admin should have settings in ui for
-  configuring address collector recurrency and triggering manual update and reset", "per country"): per market country
+- **Each country's address source, on the same page** (the operator, 2026-11-11: admin settings in the UI for each
+  country's address collector - how often it runs, a manual update and a reset): per market country
   its places source's schedule (how often: monthly by default, a day of the month and a time, shown in words and saved as
   the source's cron, Tallinn time), its last run (when, what changed, the note), **Run now** (one run at once, through the
   same runner and claims as any run - never two at a time). No Force update: with no guards (2026-11-12) every run
@@ -485,10 +482,10 @@ settings page; Sonar complexity checked by eye on `CountryReach`.
 6. **The partner API stays unscoped** (a relevance filter, not access control). Proposed: yes.
 
 7. **Travel time needs a new service** (the routing engine, ~2-3 GB of memory for Estonia, its data refreshed daily
-   from Transpordiamet and Geofabrik): accepted by the operator, 2026-11-11 ("that's ok"); distance by km needs nothing new.
+   from Transpordiamet and Geofabrik): accepted by the operator, 2026-11-11; distance by km needs nothing new.
 
-8. **OpenSearch for places, address resolution and search** (the operator, 2026-11-11: "PG is not enough!",
-   "libpostal is too primitive, tried it", "why not opensearch?" - then "yes"). One node on ten (~3-4 GB; ten has 64 GB,
+8. **OpenSearch for places, address resolution and search** (the operator, 2026-11-11: Postgres is not enough,
+   libpostal too primitive (tried), OpenSearch proposed and agreed). One node on ten (~3-4 GB; ten has 64 GB,
    63% requested), Postgres stays the truth and the index is derived - rebuilt from Postgres, so no snapshots and no
    Velero; `vm.max_map_count` is 524288 on ten already (setup-kubeadm.yml). See "Search: OpenSearch" above.
 9. **Production Postgres restart for statement statistics and the exporter's metrics**: yes (the operator,

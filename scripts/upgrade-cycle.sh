@@ -45,13 +45,13 @@
 #   3. review   the review of the unit's diff (the agent, headless, --restricted: no instructions from the clones; the
 #               reviewers' own agents handed to it, a definition that does not read refusing the review) - CLEAN is no
 #               FINDING line at all, VERDICT: CLEAN and every pass named exactly; any finding, whatever its severity
-#               (operator 2026-11-20: "why only criticals?"), goes to the agent's fix (2.), the unit proven and
+#               (operator 2026-11-20: every severity, not criticals alone), goes to the agent's fix (2.), the unit proven and
 #               reviewed again - findings left after the last fix a try, an INCOMPLETE or unfinished review a try. The
 #               copy halted then, marked used (no change or check on it until the next run readies it - its base
 #               snapshot kept)
 #   4. (no gate) a major, a one-way unit and one carrying the agent's fix apply in the run that proves and reviews them,
-#               as a patch does (operator 2026-11-21: "fuck 24h veto notice, just need to make sure versions are
-#               compatible") - compatibility is the review's pass (3.), a path of several steps the pick's order (1.)
+#               as a patch does (operator 2026-11-21: no 24 h veto notice - the versions'
+#               compatibility is what to make sure of) - compatibility is the review's pass (3.), a path of several steps the pick's order (1.)
 #   5. plan     its production commands read from the proof's plan - a step with none, or a version that is none,
 #               refuses the unit, nothing merged
 #   6. apply    the gates again; the backups a one-way change needs (an etcd snapshot before Kubernetes, its store's from

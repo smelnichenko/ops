@@ -196,7 +196,7 @@ check("a major: proven and applied in its run like any unit - no notice, no cloc
       (0, "prove postgresql-19.x major"))
 fixture(infra=[pr(1, "observability"), pr(3, "postgresql-19.x", "major")])
 check("  majors still last: the minor first", run("pick"), (0, "prove observability minor"))
-# steps (operator 2026-11-21: "some upgrades may need several steps like 17->19 majors"): one at a time, the lower first
+# steps (operator 2026-11-21: an upgrade can take several steps, a 17 -> 19 major among them): one at a time, the lower first
 fixture(infra=[pr(3, "postgresql-19.x", "major"), pr(4, "postgresql-18.x", "major")])
 check("two steps of one dependency (17 -> 18 -> 19): the lower first", run("pick"), (0, "prove postgresql-18.x major"))
 fixture(infra=[pr(3, "postgresql-19.x", "major"), pr(4, "postgresql-18.x", "major", "veto")])

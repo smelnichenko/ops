@@ -48,7 +48,7 @@ and of the clones, and tell it to read with Read, Grep and Glob alone - its Bash
   prune), restarts, PodDisruptionBudgets, HA, storage.
 - tests - the `test-quality-reviewer` agent, given the diff, reading only (you cannot revert and run here): whether the
   copy's proof covers what the unit moves.
-- compatibility - yourself (operator 2026-11-21: "just need to make sure versions are compatible"), for each version the
+- compatibility - yourself (operator 2026-11-21: the versions' compatibility is what to make sure of), for each version the
   unit moves, from the `<repo>.pr.md` files and what production runs NOW: `prod-inventory.txt` beside the clones (every
   chart and image at its running version, read this run) and `pi-versions.yml` (the Pis' services),
   Kubernetes', Cilium's and Istio's versions in ops' `deploy/ansible`, the operators' charts in infra's
@@ -65,7 +65,7 @@ and of the clones, and tell it to read with Read, Grep and Glob alone - its Bash
     versions, CNPG's PostgreSQL majors, Vault's storage on Consul);
   - breaking changes and migrations the release notes name (a value renamed or dropped, a CRD to upgrade first, a data
     format moved one way) - each handled in the unit, or a finding;
-  - one version everywhere (operator 2026-11-21: "we should not have different versions for different modules"): Grep
+  - one version everywhere (operator 2026-11-21: no dependency at different versions in different modules): Grep
     the clones and `context/` for each dependency the unit moves, left at another version. A straggler is a finding
     only where the fix agent can move it: in a repo the unit touches, in infra's `clusters/` or platform's
     `helm/*/values*.yaml`, pinned without a digest or checksum, within the same major, and not a one-way store's

@@ -2,8 +2,8 @@
 per repository, ONE line per dependency - every tag it has now (files that disagree listed together) -> the newest tag
 offered (any other noted) - and a rebuild of the same tag (a digest update: same tag, new image) said as such. A tag's
 flavours (25.0.4_7-jdk and -jre, one version) each paired with its own target on that line. Then every dependency
-pinned at more than one version across the repositories - its version without the flavour (operator 2026-11-21: "we
-should not have different versions for different modules") - whether or not an update is offered. Renovate's notes
+pinned at more than one version across the repositories - its version without the flavour (operator 2026-11-21: no
+dependency at different versions in different modules) - whether or not an update is offered. Renovate's notes
 once, at the end. Read by scripts/upgrade-renovate.sh --lookup (task upgrade:check, upgrade:apps:check). Exit 1 when
 the report is missing or not Renovate's."""
 import json

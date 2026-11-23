@@ -1,6 +1,6 @@
 # CNPG Postgres: from the bullseye image line to trixie (18.6 -> 18.7)
 
-Status: DONE 2026-11-22 (operator 2026-11-21: "switchover, by hand, separate plan later"): every step, below.
+Status: DONE 2026-11-22 (operator 2026-11-21: a switchover by hand, its own plan later): every step, below.
 
 ## Why
 
@@ -103,7 +103,7 @@ select count(*) from pg_attribute a join pg_class c on c.oid = a.attrelid join p
    in the 18.7 image by hand (every part restored).
 6. **After a day's soak:** `ALTER EXTENSION vector UPDATE` in masi's database (test, then production) - not before:
    pgvector has no downgrade script, so it is the step that closes the way back.
-   **Done 2026-11-22 16:0x, without the soak** (operator: "finish with CNPG now without soaking"): masi's database is
+   **Done 2026-11-22 16:0x, without the soak** (operator: CNPG finished now, without the soak): masi's database is
    the only one with pgvector (test, production); `ALTER EXTENSION vector UPDATE` took both from 0.8.6 to 0.8.7. On
    production, after it: 5206 face embeddings (vector(512), no HNSW/IVFFlat index), each norm 1, a nearest-neighbour
    search answering (itself at 0, then 0.710, 0.732, ...), masi without a vector or SQL error. The way back to 18.6 is

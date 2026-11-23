@@ -1,5 +1,5 @@
 #!/bin/bash
-# ops' own CI runs nothing as root (operator 2026-11-20: "CI run as a root?! you are kidding me"): every clone
+# ops' own CI runs nothing as root (operator 2026-11-20: no CI as root): every clone
 # and step in .woodpecker/*.yaml sets a security context that is non-root - runAsNonRoot and a uid other than 0 - but a
 # Kaniko image build, the one exception, which says so (uid 0, runAsNonRoot false); and run inside Woodpecker, this very
 # step is not uid 0.

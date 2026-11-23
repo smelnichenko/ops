@@ -3,7 +3,7 @@
 # for it - imported by setup-host-hardening.yml (its auto_upgrades_* vars). Until 2026-11-22 nothing upgraded them: ten
 # ran Debian 13.7 after 13.8 shipped, and the copy - built at the current point release - no longer matched production.
 #
-# Debian's defaults, three changes (operator 2026-11-22: "add automatic reboots without additional actions"):
+# Debian's defaults, three changes (operator 2026-11-22: the reboots automatic too, nothing left to do by hand):
 # - its own timers: the package lists twice a day, the upgrade between 06:00 and 07:00; its own origins (the release
 #   and its security archive). Docker's and Kubernetes' packages come from neither and stay held (setup-kubeadm.yml):
 #   containerd and the kubelet move with the upgrade cycle, never here

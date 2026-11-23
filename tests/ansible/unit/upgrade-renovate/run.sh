@@ -93,7 +93,7 @@ check "  a pin naming its line (mise's java = \"25\", resolved to 25.0.5+8) besi
 check "  the newest by its numbers, not as text (100.1.0 above 92.22.0)" "$(grep -c '^  kps: 91.8.2 -> 100.1.0 (major, also offered: 92.22.0)' "$W/out")" "1"
 check "  a rebuild of the same tag (a digest update) said as one - beside a new version, and alone - never as a version" \
   "$(grep -c '^  opensearch: 3.9.0 -> 3.10.0 (minor, also offered: 3.9.0 rebuilt)  \[apps/istiod.yaml\]$' "$W/out") $(grep -c '^  busybox: stable-musl - same tag, new image (digest abcdef1)  \[apps/istiod.yaml\]$' "$W/out")" "1 1"
-# the console (operator 2026-11-22: "make all this logging visible on the console where task runs"): Renovate's log as it
+# the console (operator 2026-11-22: all of the logging visible on the console the task runs in): Renovate's log as it
 # is written, before what follows it; the lookup's report (behind its marker) never printed raw
 check "  its log on the console, the whole of it right before 'Renovate done'; the raw report not printed" \
   "$([ "$(grep -B "$(wc -l <<< "$OK_LOG")" '^Renovate done$' "$W/out" | head -n -1)" = "$OK_LOG" ] && echo whole-log-first) $(grep -c 'renovate report\|"repositories"' "$W/out")" \
@@ -155,8 +155,8 @@ check "an unknown argument refused" "$(run RENOVATE_TOKEN=$TOKEN) $([ -e "$W/arg
 # upgrade:run - a prompt, the copy lock and the runner's gates first, Renovate, then the runner given the bot's token by the
 # environment; the old task's LOOKUP, RUNNER or SHADOW, at any value, refused (ignored, `upgrade:run SHADOW=true` was the
 # applying run); `task upgrade` itself gone (go-task refuses a task it does not have). The app repos' the same:
-# upgrade:apps:check their lookup alone, upgrade:apps:run writing - no prompt (operator 2026-11-20: "LOOKUP refusal is
-# enough"), LOOKUP at any value refused; renovate:apps gone. Their preconditions run as go-task
+# upgrade:apps:check their lookup alone, upgrade:apps:run writing - no prompt (operator 2026-11-20: the LOOKUP refusal
+# suffices), LOOKUP at any value refused; renovate:apps gone. Their preconditions run as go-task
 # runs them (sh -c, a {{.NAME}} rendered to its value or empty), their commands as rendered against scripts that record
 PY=python3
 "$PY" -c 'import yaml' 2> /dev/null || PY=deploy/ansible/venv/bin/python3
@@ -399,8 +399,8 @@ print(any(gw in r["matchPackageNames"] for r in istio), [(r["matchPackageNames"]
 PYGATEWAY
 )" "False [(['https://github.com/kubernetes-sigs/gateway-api'], 'gateway-api-{{{newMajor}}}.{{{newMinor}}}')]"
 # A pull request's body: the table of what changes (package, update, from -> to), Renovate's warnings, and the release
-# notes - what the review's compatibility pass reads (<repo>.pr.md, operator 2026-11-21: "just need to make sure versions
-# are compatible"); no header, configuration, controls, footer or the "no github.com credentials" note (operator
+# notes - what the review's compatibility pass reads (<repo>.pr.md, operator 2026-11-21: the versions' compatibility
+# is what to make sure of); no header, configuration, controls, footer or the "no github.com credentials" note (operator
 # 2026-11-20 - the release notes cut then, when the pull requests were mailed; the repos unwatched since). Renovate puts its
 # debug comment after the template whatever it holds (upgrade-units.py reads the unit's labels there)
 check "the preset: a pull request's body the table of what changes, Renovate's warnings and the release notes, nothing else" \
@@ -478,7 +478,7 @@ print([resolved(p, "major", preset=d, repo="schnappy/site").get("allowedVersions
       resolved("jsdom", "major", preset=d, repo="schnappy/radar").get("allowedVersions"))
 PYSITE
 )" "['<10', '<10', '<6.1', '<29', None] None None"
-# the six services' Dockerfile base images pinned by tag and digest (operator 2026-11-21, "do C"): the dockerfile manager
+# the six services' Dockerfile base images pinned by tag and digest (operator 2026-11-21: option C): the dockerfile manager
 # alone, those six repos alone (CI step images and the CI tool images stay plain tags), the digests one weekly group
 check "the apps preset: digests pinned for the six services' Dockerfiles alone - not the CI tool images, not CI steps; their digest moves one Monday group" \
   "$("$PY" - <<'PYPIN'

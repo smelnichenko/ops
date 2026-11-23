@@ -1,7 +1,7 @@
 # Plan 108 — radar at 100 radios
 
-**Status:** draft 2026-11-07, nothing built. Operator, 2026-11-07: "100 radios are real target"; "dropping single ring
-idea". Goes with plan 106 (the scheduler as a service, over MQTT) and plan 107 (a late decoder never drops samples).
+**Status:** draft 2026-11-07, nothing built. Operator, 2026-11-07: 100 radios is the real target, and the single ring
+is dropped. Goes with plan 106 (the scheduler as a service, over MQTT) and plan 107 (a late decoder never drops samples).
 
 ## Today
 
@@ -47,7 +47,7 @@ Radios come mostly from the network (operator, 2026-11-07), so:
 Also found by reading the code, not measured:
 - Valkey runs its commands on one thread: many captures spilling at once meet there.
 - The page lists rows one by one, and the calendar and row switches assume someone looks at each.
-- rsp_tcp boxes can wedge on repeated connects (operator's "no reconnects" rule). At 100 radios, wedged boxes are a
+- rsp_tcp boxes can wedge on repeated connects (the operator's rule: no reconnects). At 100 radios, wedged boxes are a
   normal event and need handling without a person.
 
 ## Decided
@@ -56,13 +56,12 @@ Also found by reading the code, not measured:
   every radio; writers would contend on one cursor; each consumer would step over every other radio's chunks. Each
   capture keeps its own queue, and a lock or ring on it has two threads however many radios there are.
 
-- **The Disruptor stays (operator, 2026-11-07):** "in any way disruptor will stay". One ring per capture. Measured so
+- **The Disruptor stays in any case (operator, 2026-11-07).** One ring per capture. Measured so
   far, no gain over the lock at hand-over, so its value here is in what step 2 measures next: reused buffers.
-- **radar is split into parts first; then some of them go into the cluster (operator, 2026-11-07):** "we will split
-  radar
-  into parts first, then some of them will go into cluster". Not the whole app as it is.
-- **A decoder is a microservice (operator, 2026-11-07):** "some machines may run subset of decoders, decoder should be a
-  microservice". Radios are on the network, so a decoder need not run where its radio is.
+- **radar is split into parts first; then some of them go into the cluster (operator, 2026-11-07).** Not the
+  whole app as it is.
+- **A decoder is a microservice (operator, 2026-11-07),** so a machine can run a subset of the decoders.
+  Radios are on the network, so a decoder need not run where its radio is.
 
 ## The split
 
@@ -373,7 +372,7 @@ each needs an answer in this step: stay in the service, or a stream out of it.
 
 ### 4. Budget, pinning, machines
 
-No fixed number of radios or hosts (operator, 2026-11-07: "numbers can grow, some hosts will have a few, some more"):
+No fixed number of radios or hosts (operator, 2026-11-07: the counts grow, and hosts carry different numbers of radios):
 
 - What a service may use comes from steps 1 and 3: never one size for all, and 100 is not a limit built into anything.
 - A capture past what its machine carries is refused and visible, rather than slowing every other capture.

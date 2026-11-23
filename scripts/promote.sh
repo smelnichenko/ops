@@ -2,7 +2,7 @@
 # promote.sh - the test environment's image tags to production's: each service's tag in infra's test values read against
 # production's, the plan printed; with --run, production's values rewritten, committed and pushed (Argo then syncs
 # production). task promote:check prints the plan, task promote:run writes it - two tasks, no mode variable (operator
-# 2026-11-20). The services named, or every one when none is (operator: "no SERVICES like SERVICES=all").
+# 2026-11-20). The services named, or every one when none is (operator: no SERVICES=all form).
 #
 # Usage: scripts/promote.sh [--run] [all | <service>...]   (services: monitor admin chat chess masi site game-scp; none: all)
 # Env:   INFRA (infra's checkout, default <ops>/../infra)

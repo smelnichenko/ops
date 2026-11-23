@@ -8,8 +8,8 @@ Plan 100's upgrade is done in production (all 62 steps, 00-61; Argo: 31 apps Syn
 Vagrant harness still builds the copy as production stood on 2026-10-02 and replays the steps on it, and production's
 own procedure (`deploy:upgrade:*`, the ledger on ten) still wants a step for every change. A Velero setting
 (skip ephemeral volumes, after VeleroDailyBackupMissing on 2026-11-13) could be tested only by framing it as step 62.
-Operator, 2026-11-13: "if the upgrade is complete, then why to run its tests?" — "update current vagrant test suites,
-so upgrade step is gone and like we start with prod versions" — "plan it and test in vagrant at the end".
+Operator, 2026-11-13: a finished upgrade needs no tests of its own - the Vagrant suites updated so the upgrade step
+is gone and the copy starts from production's versions; planned, and tested in Vagrant at the end.
 
 ## Decisions (operator, 2026-11-13)
 
@@ -155,7 +155,7 @@ Correctness, security, architecture, platform reliability, test-quality (~120 re
 - process-groups: a process that ignored the TERM when it came (forked by a deaf job) and catches it later is sent it
   once - it was counted sent and KILLed at the grace with its handler never run.
 
-## The copy beside the radar station (2026-11-13 night, operator: "yes" to a smaller copy with a guard)
+## The copy beside the radar station (2026-11-13 night, the operator agreed to a smaller copy with a guard)
 
 The third build's VMs held 25 GB of the workstation's 30 while another session's work ran: the host swapped 14 GB, the
 Argo settle timed out, and the radar station on the same host died (22:17, restarted 22:17:30). Now:
@@ -167,7 +167,7 @@ Argo settle timed out, and the radar station on the same host died (22:17, resta
   (CNPG's shared_buffers floor).
 - **`scripts/copy-host-guard.sh`**: the Vagrantfile hands every vagrant command's arguments to it - `up`/`reload`/
   `resume` refused unless the host has the starting VMs' memory (the Vagrantfile's sizes, those not running already)
-  plus 2 GB available since 2026-11-14 17:00 (operator: "lower vagrant copy requirements by little"; the trip at
+  plus 2 GB available since 2026-11-14 17:00 (operator: the copy's requirements a little lower; the trip at
   2 GB available unchanged - the kubeadm guest itself used 16.95 of its 17.99 GB, no VM shrinks); 2.5 GB before (3 GB at first: it refused every start once the desktop and the radar held ~4.5 GB - 25.4-25.6
   of 25.6 GB needed, 2026-11-14 08:27-09:00; fully resident the green builds ran at ~4 GB available); a detached watcher (also started by every copy task working on the VMs) powers off the biggest
   running VM when the host's available memory is under 2 GB on two polls 5 s apart - the run fails, said in
@@ -283,7 +283,7 @@ SonarQube (ops' red gate: three issues of argocd-repos.py on main's last analysi
 
 - process-groups' harness under all-core CPU load: one of its five failing cases is fixed (above); the other four
   (-n task scans, a session's check) to measure again under load once the Vagrant run is done.
-- ~~Velero mechanism~~: decided 2026-11-13 (operator, "ok, go"): pods left out of both schedules
+- ~~Velero mechanism~~: decided 2026-11-13 (the operator agreed): pods left out of both schedules
   (`excludedResources: [pods]`, `defaultVolumesToFsBackup: false`) instead of the resource policy - the volume backup
   runs only for a pod item, so none runs: no policy ConfigMap, no PV looked up per PVC (with a policy a PVC whose PV
   vanished mid-backup failed it); the weekly leaves `woodpecker` and `schnappy-pr-*` out too. Velero first on the copy
