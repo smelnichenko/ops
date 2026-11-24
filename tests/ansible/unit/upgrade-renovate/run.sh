@@ -171,19 +171,22 @@ def render(text, given):
     return out
 TB = os.path.join(W, "tb")
 os.makedirs(os.path.join(TB, "scripts"), exist_ok=True)
-for name in ("copy-lock.sh", "upgrade-cycle.sh", "upgrade-renovate.sh", "upgrade-apps-merge.py"):
+for name in ("copy-lock.sh", "upgrade-cycle.sh", "upgrade-renovate.sh", "upgrade-apps-merge.py", "upgrade-units.py"):
     path = os.path.join(TB, "scripts", name)
-    open(path, "w").write(f'#!/bin/sh\necho "{name} $* token=${{UPGRADE_FORGEJO_TOKEN:-none}}" >> "$REC"\n')
+    # upgrade-units.py answers as the case says (replenish: APPROVED, OPEN, NOTHING), the others say nothing
+    answer = '\necho "${REPLENISH:-NOTHING}"' if name == "upgrade-units.py" else ""
+    open(path, "w").write(f'#!/bin/sh\necho "{name} $* token=${{UPGRADE_FORGEJO_TOKEN:-none}}" >> "$REC"{answer}\n')
     os.chmod(path, 0o755)
 def admitted(t, given):
     return all(subprocess.run(["sh", "-c", render(p["sh"], given)], cwd=TB).returncode == 0 for p in t.get("preconditions", []))
-def ran(t):
+def ran(t, replenish="NOTHING"):
     rec = os.path.join(TB, "rec")
     if os.path.exists(rec):
         os.remove(rec)
     for c in t["cmds"]:
-        subprocess.run(["sh", "-c", render(c if isinstance(c, str) else c.get("cmd", ""), {})], cwd=TB,
-                       env={**os.environ, "REC": rec, "RENOVATE_TOKEN": "the-bots"})
+        # what a command prints is the task's console, not this report: the record is what was run
+        subprocess.run(["sh", "-c", render(c if isinstance(c, str) else c.get("cmd", ""), {})], cwd=TB, capture_output=True,
+                       env={**os.environ, "REC": rec, "RENOVATE_TOKEN": "the-bots", "REPLENISH": replenish})
     return open(rec).read().split("\n")[:-1] if os.path.exists(rec) else []
 check_t, run_t = tasks["upgrade:check"], tasks["upgrade:run"]
 OLD = [{n: v} for n in ("LOOKUP", "RUNNER", "SHADOW") for v in ("true", "false", "1", "yes")]
@@ -191,7 +194,7 @@ print("upgrade" in tasks, sorted(k for k in check_t if k != "desc"), ran(check_t
 print("PRODUCTION" in run_t.get("prompt", "") and "radar" in run_t.get("prompt", ""), run_t.get("deps"), run_t.get("vars"),
       any("ignore_error" in c for c in run_t["cmds"] if isinstance(c, dict)), admitted(run_t, {}),
       [g for g in OLD if admitted(run_t, g)], sep="|")
-print(ran(run_t))
+print(ran(run_t), ran(run_t, "APPROVED wave-patches infra,ops"), ran(run_t, "OPEN"), sep="|")
 ac, ar = tasks["upgrade:apps:check"], tasks["upgrade:apps:run"]
 print(any(k.startswith("renovate:apps") for k in tasks), sorted(k for k in ac if k != "desc"), ran(ac), sep="|")
 print("prompt" in ar, ar.get("deps"), ar.get("vars"), admitted(ar, {}),
@@ -205,8 +208,8 @@ check "task upgrade gone; upgrade:check: Renovate's lookup alone - no variable, 
   "$(sed -n 1p <<< "$got")" "False|['cmds']|['upgrade-renovate.sh --lookup token=none']"
 check "upgrade:run: a prompt naming production and the radar, the venv first, no variable, no step's failure ignored; admitted with nothing given, refused with LOOKUP, RUNNER or SHADOW at any value" \
   "$(sed -n 2p <<< "$got")" "True|['deploy:install']|None|False|True|[]"
-check "upgrade:run's commands as run: the lock, the gates, Renovate writing, the runner (no option) with the bot's token" \
-  "$(sed -n 3p <<< "$got")" "['copy-lock.sh  token=none', 'upgrade-cycle.sh --preflight token=none', 'upgrade-renovate.sh  token=none', 'upgrade-cycle.sh  token=the-bots']"
+check "upgrade:run's commands as run: the lock, the gates, Renovate writing, replenish with the bot's token, the runner (no option) with the bot's token - Renovate again only when replenish approved a unit" \
+  "$(sed -n 3p <<< "$got")" "['copy-lock.sh  token=none', 'upgrade-cycle.sh --preflight token=none', 'upgrade-renovate.sh  token=none', 'upgrade-units.py replenish token=the-bots', 'upgrade-cycle.sh  token=the-bots']|['copy-lock.sh  token=none', 'upgrade-cycle.sh --preflight token=none', 'upgrade-renovate.sh  token=none', 'upgrade-units.py replenish token=the-bots', 'upgrade-renovate.sh  token=none', 'upgrade-cycle.sh  token=the-bots']|['copy-lock.sh  token=none', 'upgrade-cycle.sh --preflight token=none', 'upgrade-renovate.sh  token=none', 'upgrade-units.py replenish token=the-bots', 'upgrade-cycle.sh  token=the-bots']"
 check "task renovate:apps (and :check, :run) gone; upgrade:apps:check: the app repos' lookup alone - no variable, prompt, precondition or dependency" \
   "$(sed -n 4p <<< "$got")" "False|['cmds']|['upgrade-renovate.sh --apps --lookup token=none']"
 check "upgrade:apps:run: no prompt, no variable; admitted with nothing given, refused with LOOKUP at any value; Renovate writing" \

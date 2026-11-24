@@ -700,7 +700,7 @@ tasks:
       - cmd: 'UPGRADE_FORGEJO_TOKEN="$RENOVATE_TOKEN" scripts/upgrade-cycle.sh'
 
   upgrade:run:
-    desc: "PRODUCTION. Renovate opens or updates PRs in infra, platform and ops; then one update is tested on the Vagrant copy, reviewed (compatibility with what production runs among its passes) and applied to production. Stop the radar first."
+    desc: "PRODUCTION. Renovate updates its open PRs in infra, platform and ops - and, when none is left to pick, the next unit approved on its dashboards and opened; then one update is tested on the Vagrant copy, reviewed (compatibility with what production runs among its passes) and applied to production. Stop the radar first."
     deps: [deploy:install]
     prompt: "Run the upgrade cycle against PRODUCTION? The radar must be stopped."
     preconditions:
@@ -712,6 +712,12 @@ tasks:
       - cmd: scripts/copy-lock.sh
       - cmd: scripts/upgrade-cycle.sh --preflight
       - cmd: scripts/upgrade-renovate.sh
+      # the dashboards hold every update for approval: when nothing open is left to pick, the next unit's box ticked
+      # (scripts/upgrade-units.py replenish) and Renovate run again to open its pull requests - one unit's at a time
+      - cmd: |
+          r=$(UPGRADE_FORGEJO_TOKEN="$RENOVATE_TOKEN" scripts/upgrade-units.py replenish) || { echo "$r"; exit 1; }
+          echo "replenish: $r"
+          case "$r" in APPROVED*) scripts/upgrade-renovate.sh ;; esac
       # the bot's token (ops/.env RENOVATE_TOKEN) the runner's, by the environment - never on a command line
       - cmd: 'UPGRADE_FORGEJO_TOKEN="$RENOVATE_TOKEN" scripts/upgrade-cycle.sh'
 

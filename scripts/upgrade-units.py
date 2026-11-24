@@ -31,6 +31,14 @@ grouped by branch (renovate/<unit> - the same name in each repo).
                  dashboard issue carries upgrades-paused (the kill switch) - and no dashboard issue open: not read (exit 1)
   bodies UNIT DIR  each of the unit's pull requests' body written to DIR/<repo>.pr.md (infra.pr.md, ...): Renovate's
                  table and release notes - what the review's compatibility pass reads
+  replenish      one unit's pull requests asked of Renovate when nothing open is left to pick - "PAUSED", "OPEN" (a
+                 unit to pick is open: nothing asked), "NOTHING" (none waits either), or "APPROVED <unit> <repos>": the
+                 dashboards hold every update for approval (dependencyDashboardApproval), and the unit the pick would
+                 take first among the ones waiting - the same order, steps and test twins - gets its box ticked on
+                 every dashboard that lists it, as the bot; Renovate's next run opens its pull requests. So only the
+                 unit being worked on exists as pull requests (operator 2026-11-24: dozens open were noise). The
+                 runner runs Renovate itself before and after (task upgrade:run); the body is written whole with the
+                 one box changed, and nothing else writes the dashboard while the run holds the copy lock
   held UNIT      what holds the unit now, one a line - veto (on any of its pull requests), paused (the
                  dashboard's upgrades-paused); nothing when nothing does: the runner asks again right before a merge
                  (a veto or the kill switch set during the proof and the review was not seen at the pick's time)
@@ -65,6 +73,8 @@ STEP = re.compile(r"(?P<base>[a-z0-9][a-z0-9.-]*?)-(?P<ver>\d+(?:\.\d+)*)(?:\.x)
 # renovate/upgrade-cycle.json's dependencyDashboardTitle - each repo's dashboard (all three extend the preset)
 DASHBOARD = "Upgrade cycle - Renovate's dashboard (label upgrades-paused: the cycle stops)"
 RENOVATE_LABELS = {"upgrade-cycle", "major", "one-way"}
+# the answers pick and replenish share
+PAUSED, NOTHING = "PAUSED", "NOTHING"
 # the runner's tries, one file a unit (scripts/upgrade-cycle.sh retry): a unit with one on record goes behind the units
 # with none - there is no blocked state (operator 2026-11-20), so one that keeps failing never holds the queue
 TRIES = os.environ.get("UPGRADE_TRIES",
@@ -73,6 +83,11 @@ TRIES = os.environ.get("UPGRADE_TRIES",
 
 class NotRead(Exception):
     pass
+
+
+# a box the dashboard holds for approval (Renovate's markdown: "- [ ] <!-- approve-branch=renovate/<unit> -->...")
+APPROVE = re.compile(r"^(?P<pre>[ \t]*- )\[ \](?P<post> <!-- approve-branch=renovate/(?P<unit>[a-z0-9][a-z0-9.-]*) -->)",
+                     re.M)
 
 
 def get(path, paged=True, **params):
@@ -95,6 +110,19 @@ def get(path, paged=True, **params):
         if len(data) < 50:
             return out
         page += 1
+
+
+def patch(path, payload):
+    """One PATCH as the bot, its answer read - or NotRead."""
+    req = urllib.request.Request(f"{API}{path}", data=json.dumps(payload).encode(), method="PATCH",
+                                 headers={"Content-Type": "application/json"})
+    if TOKEN:  # not kept across a redirect: the token never reaches another host
+        req.add_unredirected_header("Authorization", f"token {TOKEN}")
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return json.loads(r.read() or b"null")
+    except (OSError, ValueError) as e:
+        raise NotRead(f"{path}: {e}") from None
 
 
 def ours(repo, pr):
@@ -272,7 +300,7 @@ def tried(name, u):
 
 def pick():
     if paused():
-        return "PAUSED"
+        return PAUSED
     all_units = units()
     # unlabelled (Renovate's labels not on it): never picked - a major unlabelled read as a minor, applied with no notice
     # a manual- unit (renovate/manual-woodpecker, the preset's): what the copy cannot prove - applied by hand, never picked
@@ -294,7 +322,61 @@ def pick():
         return f"test {tests[0]} {open_units[tests[0]]['kind']}"
     for name in prod:
         return f"prove {name} {open_units[name]['kind']}"
-    return "NOTHING"
+    return NOTHING
+
+
+def dashboards():
+    """Each repo's dashboard issue (Renovate's: its title, the bot's), {repo: issue}."""
+    found = {}
+    for repo in REPOS:
+        for issue in get(f"/repos/{repo}/issues", state="open", type="issues"):
+            if issue.get("title") == DASHBOARD and (issue.get("user") or {}).get("login") == BOT:
+                found[repo] = issue
+    return found
+
+
+def pending_kind(name):
+    """A waiting unit's kind before its pull requests carry Renovate's labels, by its name: the waves, a major line
+    (hashicorp-vault-2.x), a minor else - for the order alone; the pick reads the labels once its pull requests open."""
+    name = twin(name)
+    if name == "wave-patches":
+        return "patch"
+    return "major" if name == "wave-majors" or re.fullmatch(r".*-\d+\.x", name) else "minor"
+
+
+def replenish():
+    if paused():
+        return PAUSED
+    if pick() != NOTHING:
+        return "OPEN"
+    boards = dashboards()
+    waiting = {}
+    for repo, issue in boards.items():
+        for m in APPROVE.finditer(issue.get("body") or ""):
+            waiting.setdefault(m["unit"], []).append(repo)
+    # a manual- unit is applied by hand, never asked for here; a step waits for a lower one waiting or open
+    shaped = {n: {"repos": dict.fromkeys(rs, 0), "labels": set(), "unlabelled": False, "bodies": {},
+                  "kind": pending_kind(n)} for n, rs in waiting.items() if not n.startswith("manual-")}
+    known = {**units(), **shaped}
+    ready = {n: u for n, u in shaped.items() if not lower_step_open(n, known)}
+    tests = sorted((n for n in ready if n.startswith("test-")), key=lambda n: order(n, ready[n]))
+    prod = sorted((n for n in ready if not n.startswith("test-") and f"test-{n}" not in known),
+                  key=lambda n: order(n, ready[n]))
+    chosen = (tests or prod or [None])[0]
+    if chosen is None:
+        return NOTHING
+    for repo in waiting[chosen]:
+        issue = boards[repo]
+        body = issue.get("body") or ""
+        box = next(m for m in APPROVE.finditer(body) if m["unit"] == chosen)
+        body = body[:box.start()] + box["pre"] + "[x]" + box["post"] + body[box.end():]
+        patch(f"/repos/{repo}/issues/{issue['number']}", {"body": body})
+    return f"APPROVED {chosen} {','.join(r.split('/')[1] for r in waiting[chosen])}"
+
+
+def show_replenish():
+    print(replenish())
+    return 0
 
 
 def show_list():
@@ -366,7 +448,7 @@ def show_notes(name):
 
 
 def main(argv):
-    commands = {("list",): show_list, ("pick",): show_pick}
+    commands = {("list",): show_list, ("pick",): show_pick, ("replenish",): show_replenish}
     try:
         if tuple(argv) in commands:
             return commands[tuple(argv)]()
@@ -379,7 +461,7 @@ def main(argv):
     except NotRead as e:
         print(f"NOT READ: Forgejo's answer - {e}")
         return 1
-    print("usage: upgrade-units.py list | pick | held UNIT | bodies UNIT DIR | notes UNIT")
+    print("usage: upgrade-units.py list | pick | replenish | held UNIT | bodies UNIT DIR | notes UNIT")
     return 2
 
 

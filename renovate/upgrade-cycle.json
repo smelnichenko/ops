@@ -9,6 +9,7 @@
     "pi-services); every major that can be undone on renovate/wave-majors (its newest only); a store's and a release line's major on a branch of its own (Renovate's own name). Label one-way: a change",
     "its store cannot undo - the runner backs the store up first (scripts/upgrade-stores.json), or blocks it, naming the part with none.",
     "A test environment's files: renovate/test-<unit>, merged before its production twin.",
+    "Every update waits on the dashboard for approval (operator 2026-11-24: dozens of open pull requests were noise): the runner ticks the one unit it would pick next (scripts/upgrade-units.py replenish) and runs Renovate again, so only the unit being worked on exists as pull requests. Pull requests opened before keep going until merged.",
     "Renovate rebases a branch only on a conflict (rebaseWhen conflicted): infra's main moves many times a day by CD, and a rebase of every branch at every run was a queue of CI builds ahead of the apps' deploys - the cycle brings the one unit it picks onto main itself (Forgejo's update). No cap on pull requests: a cap per repo split one unit across the repos."
   ],
   "extends": [
@@ -17,7 +18,7 @@
   ],
   "dependencyDashboardTitle": "Upgrade cycle - Renovate's dashboard (label upgrades-paused: the cycle stops)",
   "automerge": false,
-  "dependencyDashboardApproval": false,
+  "dependencyDashboardApproval": true,
   "minimumReleaseAge": "3 days",
   "minimumReleaseAgeBehaviour": "timestamp-optional",
   "internalChecksFilter": "strict",
