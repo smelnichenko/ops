@@ -302,7 +302,7 @@ check("first run: minted as the bot (basic auth), never as the admin",
       [str(["basic", BOT])])
 check("first run: Vault holds the bot's tokens and name, every other property kept as it was, one write with the "
       "version read (cas 3); the run says the versions (v3 -> v4) - v3 is what a rollback goes back to",
-      (dv(v), [w["cas"] for w in v["writes"]], "woodpecker-ci v3 -> v4" in flat(out)),
+      (dv(v), [w["cas"] for w in v["writes"]], "Vault versions v3 -> v4" in flat(out)),
       ({"data": vault_expect(toks), "version": 4}, [3], True))
 check("first run: the registry token proven on the registry itself - a bearer from /v2/token, an upload to "
       "schnappy/masi started and cancelled, none left open",
@@ -550,7 +550,7 @@ reset(kv={})
 rc, out = run()
 s6, v6 = fstate(), kv()
 check("Vault path missing (a first install): the four written create-only (cas 0)",
-      (rc, dv(v6)["data"], [w["cas"] for w in v6["writes"]], "woodpecker-ci v0 -> v1" in flat(out)),
+      (rc, dv(v6)["data"], [w["cas"] for w in v6["writes"]], "Vault versions v0 -> v1" in flat(out)),
       (0, vault_expect(bot_tokens(s6), rest={}), [0], True))
 
 # ── no preview ───────────────────────────────────────────────────────────────────────────────────────────────────

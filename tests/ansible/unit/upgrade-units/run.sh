@@ -2,9 +2,11 @@
 # scripts/upgrade-units.py - the upgrade cycle's pick of the night's Renovate unit - against a throwaway Forgejo API (a
 # local server, a process of its own, its answers from the case's fixture, paged as Forgejo pages): units grouped by
 # branch across infra, platform and ops, their kind (major by label, wave-patches a patch); the pick's order -
-# wave-patches, the family minors in order, other minors, majors; blocked and vetoed units left out; a major noticed,
-# applied only after its 24 h (an unvetoed one, exactly 24 h its end; the earliest notice its own), the waiting one before
-# a new notice (the one noticed first first); the kill switch on the dashboard issue (found by its title, on any page;
+# wave-patches, the family minors in order, other minors, majors - a unit with a try on record (the runner's) behind the
+# ones with none; vetoed units left out (an upgrade-blocked label holds nothing - no blocked state); every unit, a major,
+# a one-way one and one carrying the agent's fix alike, proven at once - no notice, no clock (operator 2026-11-21); STEPS:
+# a unit never goes while a lower step of its dependency is open (17 -> 18 -> 19: held, tried or unlabelled, the lower one
+# still holds the higher), test- steps their own path; bodies UNIT DIR - the pull requests' bodies; the kill switch on the dashboard issue (found by its title, on any page;
 # none open - not read, never "not paused"); more than one page of pull requests; Forgejo unreachable - not read, never
 # NOTHING.
 set -u
@@ -38,8 +40,9 @@ python3 "$W/server.py" "$W" & echo $! > "$W/pid"
 for _ in $(seq 50); do [ -e "$W/port" ] && break; sleep 0.1; done
 [ -e "$W/port" ] || { echo "upgrade-units: the local server did not start"; exit 1; }
 W=$W PORT=$(cat "$W/port") python3 - <<'PYCHECK'
-import json, os, subprocess, sys
+import json, os, shutil, subprocess, sys
 W, PORT = os.environ["W"], os.environ["PORT"]
+TRIES = os.path.join(W, "tries")  # the runner's tries: the case's own, never the checkout's
 fails = 0
 def check(name, got, want):
     global fails
@@ -74,11 +77,9 @@ def fixture(infra=(), platform=(), ops=(), comments=None, dashboard_labels=(), d
             p["head"]["repo"] = {"full_name": "someone/" + repo if p["head"]["repo"] == "FORK" else f"schnappy/{repo}"}
             fx.setdefault(f"/repos/schnappy/{repo}/issues/{p['number']}/comments", [])
     json.dump(fx, open(os.path.join(W, "fixture.json"), "w"))
-NOW = "2026-11-20T03:00:00Z"
-HEADS = "schnappy/infra@" + "a" * 40 + ",schnappy/ops@" + "c" * 40
 def run(*args, url=None):
     env = {**os.environ, "UPGRADE_FORGEJO_URL": url or f"http://127.0.0.1:{PORT}/api/v1", "UPGRADE_FORGEJO_TOKEN": "t",
-           "UPGRADE_NOW": NOW}
+           "UPGRADE_TRIES": TRIES}
     r = subprocess.run([sys.executable, "scripts/upgrade-units.py", *args], capture_output=True, text=True, env=env, timeout=60)
     return r.returncode, r.stdout.strip()
 fixture()
@@ -109,7 +110,7 @@ def recorded(p, *labels):  # Renovate's own record in the body: the labels it de
     return p
 fixture(infra=[recorded(pr(3, "kafka-5.x", renovate=False), "major"), recorded(pr(4, "istio", renovate=False), "upgrade-cycle")])
 check("labels Renovate decided and Forgejo dropped (its record in the body): read as its own - a major still a major, "
-      "noticed; the minor proven", (run("list")[1].split("\n"), run("pick")),
+      "proven after it; the minor first", (run("list")[1].split("\n"), run("pick")),
       (["istio minor schnappy/infra upgrade-cycle", "kafka-5.x major schnappy/infra major"], (0, "prove istio minor")))
 fixture(infra=[pr(1, "wave-patches"), pr(3, "sonarqube-26.x", renovate=False)], platform=[pr(7, "wave-patches", renovate=False)])
 check("a pull request without Renovate's labels (the repo had none to apply - a major would read as a minor): its unit "
@@ -142,97 +143,212 @@ check("a test environment's unit first, before wave-patches", run("pick"), (0, "
 fixture(infra=[pr(1, "test-observability"), pr(2, "test-wave-patches")])
 check("test units in their twins' order (wave-patches' first)", run("pick"), (0, "test test-wave-patches patch"))
 fixture(infra=[pr(1, "test-istio-1.32", "upgrade-blocked"), pr(2, "istio-1.32"), pr(3, "observability")])
-check("a production unit waits while its test unit is open - blocked too: the next unit instead", run("pick"),
+check("an upgrade-blocked label (left from before 2026-11-20) holds nothing: the test unit picked", run("pick"),
+      (0, "test test-istio-1.32 minor"))
+fixture(infra=[pr(1, "test-istio-1.32", "veto"), pr(2, "istio-1.32"), pr(3, "observability")])
+check("a production unit waits while its test unit is open - vetoed too: the next unit instead", run("pick"),
       (0, "prove observability minor"))
 fixture(infra=[pr(1, "test-grafana-k6-2.x", "major")])
-check("a major's test unit: merged as a test unit (the 24 h notice is its production twin's)", run("pick"),
+check("a major's test unit: merged as a test unit (its production twin proven after)", run("pick"),
       (0, "test test-grafana-k6-2.x major"))
 fixture(infra=[pr(1, "test-grafana-k6-2.x", "veto"), pr(2, "grafana-k6-2.x", "major")])
 check("a vetoed test unit holds its production twin too: nothing", run("pick"), (0, "NOTHING"))
-# a shadow run merges nothing: a test environment's unit there is a comment, no proof (no copy) - every shadow run would
-# stop at it; the shadow's pick leaves them out, the production units in their order (a twin still waits for its test unit)
-fixture(infra=[pr(1, "wave-patches"), pr(2, "observability")], platform=[pr(3, "test-observability")])
-check("--shadow: the test environment's units left out - the first production unit proven", run("pick", "--shadow"),
-      (0, "prove wave-patches patch"))
-fixture(infra=[pr(1, "test-observability"), pr(2, "observability")])
-check("  a production twin still waits while its test unit is open: nothing", run("pick", "--shadow"), (0, "NOTHING"))
-check("  pick takes --shadow, nothing else", run("pick", "--all")[0], 2)
+# no shadow mode (its pick, the test environment's units left out, gone 2026-11-20): pick takes no option
+check("pick takes no option - --shadow nor any other", (run("pick", "--shadow")[0], run("pick", "--all")[0]), (2, 2))
 fixture(infra=[pr(2, "istio-x.32"), pr(3, "istio")])
 check("a name that only looks versioned is not (istio-x.32 is no istio minor): the family's own unit first",
       run("pick"), (0, "prove istio minor"))
 fixture(infra=[pr(1, "wave-patches", "upgrade-blocked"), pr(2, "istio", "veto"), pr(3, "observability")])
-check("a blocked unit and a vetoed one left out", run("pick"), (0, "prove observability minor"))
+check("an upgrade-blocked label ignored (no blocked state), a vetoed unit left out", run("pick"), (0, "prove wave-patches patch"))
+# no blocked state (operator 2026-11-20): a unit with a try on record (the runner's) behind the units with none - its own
+# pull requests' tries alone (another unit of the name before had other pull requests), a key with no "#" the unit's
+def tries(unit, *keys):
+    os.makedirs(TRIES, exist_ok=True)
+    open(os.path.join(TRIES, unit), "w").write("".join(f"{k} 2026-11-20T10:00:00Z a try\n" for k in keys))
+fixture(infra=[pr(1, "wave-patches"), pr(2, "observability")], ops=[pr(9, "wave-patches")])
+tries("wave-patches", "schnappy/ops#9,schnappy/infra#1")
+check("a unit with a try on record (its pull requests', in any order) behind one with none", run("pick"), (0, "prove observability minor"))
+tries("wave-patches", "schnappy/infra#1,schnappy/ops#5")
+check("  a try of another unit of the name (other pull requests): not this one's - the order kept", run("pick"), (0, "prove wave-patches patch"))
+tries("wave-patches", "none")
+check("  a try with its pull requests not read (none): the unit's", run("pick"), (0, "prove observability minor"))
+tries("observability", "test-environment")
+check("  both with tries: their order again", run("pick"), (0, "prove wave-patches patch"))
+shutil.rmtree(TRIES)
+fixture(infra=[pr(1, "test-observability"), pr(2, "test-wave-patches")])
+tries("test-wave-patches", "schnappy/infra#2")
+check("  test units the same: the one with a try after", run("pick"), (0, "test test-observability minor"))
+shutil.rmtree(TRIES)
+fixture(infra=[pr(1, "alpha-2.x", "major"), pr(2, "beta-3.x", "major")])
+tries("alpha-2.x", "schnappy/infra#1")
+check("  majors the same: the one with no try first", run("pick"), (0, "prove beta-3.x major"))
+shutil.rmtree(TRIES)
 # a manual- unit (renovate/manual-woodpecker): what the copy cannot prove - applied by hand, never picked
 fixture(infra=[pr(1, "manual-woodpecker")])
-check("a manual- unit alone: nothing picked (applied by hand)", (run("pick"), run("pick", "--shadow")), ((0, "NOTHING"), (0, "NOTHING")))
+check("a manual- unit alone: nothing picked (applied by hand)", run("pick"), (0, "NOTHING"))
 fixture(infra=[pr(1, "manual-woodpecker"), pr(2, "observability")], platform=[pr(3, "manual-woodpecker")])
 check("  beside another unit: that one proven, the manual one left - and listed", (run("pick"), "manual-woodpecker" in run("list")[1]),
       ((0, "prove observability minor"), True))
 fixture(infra=[pr(1, "wave-patches")], dashboard_labels=["upgrades-paused"])
 check("the kill switch on the dashboard issue: paused, nothing picked", run("pick"), (0, "PAUSED"))
 fixture(infra=[pr(3, "postgresql-19.x", "major")])
-check("a major without its notice: proven, then noticed", run("pick"), (0, "notice postgresql-19.x major"))
-check("noticed: none yet", run("noticed", "postgresql-19.x"), (0, "NONE"))
-fixture(infra=[pr(3, "postgresql-19.x", "major")], comments={("infra", 3): ["looks fine", "UPGRADE NOTICE 2026-11-19T04:00:00Z - applies after"]})
-check("a major noticed 23 h ago: still in its 24 h - nothing", run("pick"), (0, "NOTHING"))
-check("noticed: the notice's time", run("noticed", "postgresql-19.x"), (0, "2026-11-19T04:00:00Z"))
-
-fixture(infra=[pr(3, "postgresql-19.x", "major")], comments={("infra", 3): [f"UPGRADE NOTICE 2026-11-19T02:59:00Z heads={HEADS} - x"]})
-check("a major noticed 24 h ago, unvetoed: applied (the runner judges whether its heads are the ones announced)", run("pick"),
-      (0, "apply postgresql-19.x major"))
-check("noticed: its time and the heads it announced", run("noticed", "postgresql-19.x"), (0, f"2026-11-19T02:59:00Z {HEADS}"))
-fixture(infra=[pr(3, "postgresql-19.x", "major")], comments={("infra", 3): [f"UPGRADE NOTICE 2026-11-19T03:00:00Z heads={HEADS}"]})
-check("a major noticed exactly 24 h ago: its 24 h over - applied", run("pick"), (0, "apply postgresql-19.x major"))
-fixture(infra=[pr(3, "postgresql-19.x", "major")],
-        comments={("infra", 3): [f"chatter {i}" for i in range(59)] + [f"UPGRADE NOTICE 2026-11-19T02:00:00Z heads={HEADS}"]})
-check("a pull request with 60 comments (Forgejo gives them all at once, no pages): its notice, the 60th, found - read once",
-      run("noticed", "postgresql-19.x"), (0, f"2026-11-19T02:00:00Z {HEADS}"))
-fixture(infra=[pr(3, "postgresql-19.x", "major")], ops=[pr(5, "postgresql-19.x", "major")],
-        comments={("infra", 3): ["UPGRADE NOTICE 2026-11-19T10:00:00Z", "UPGRADE NOTICE 2026-11-19T08:00:00Z"],
-                  ("ops", 5): ["UPGRADE NOTICE 2026-11-19T09:00:00Z"]})
-check("noticed more than once, on more than one pull request: the latest notice is the unit's (noticed again - its "
-      "agent's fix - its 24 h start again)", run("noticed", "postgresql-19.x"), (0, "2026-11-19T10:00:00Z"))
-fixture(infra=[pr(3, "postgresql-19.x", "major")],
-        comments={("infra", 3): ["UPGRADE NOTICE 2026-11-17T00:00:00Z", "UPGRADE NOTICE 2026-11-19T20:00:00Z"]})
-check("a major noticed days ago, then again 7 h ago (its fix): still in its 24 h - nothing", run("pick"), (0, "NOTHING"))
-# a one-way change (ScyllaDB's release lines are minors by number): a 24 h notice first, as a major (it applied in the
-# run that proved it, 2026-11-17's review)
-fixture(infra=[pr(1, "scylladb-2026.3", "one-way"), pr(2, "observability")])
-check("a one-way minor: waits for its notice - the next minor proven first", run("pick"), (0, "prove observability minor"))
-fixture(infra=[pr(1, "scylladb-2026.3", "one-way")])
-check("  alone: its notice (kind kept)", run("pick"), (0, "notice scylladb-2026.3 minor"))
-# the agent's fix in a unit (agent-fixed): a 24 h notice first, whatever its kind
-fixture(infra=[pr(1, "istio-1.32", "agent-fixed"), pr(2, "observability")])
-check("a minor carrying the agent's fix: waits for its notice - the next minor proven first", run("pick"),
+check("a major: proven and applied in its run like any unit - no notice, no clock (operator 2026-11-21)", run("pick"),
+      (0, "prove postgresql-19.x major"))
+fixture(infra=[pr(1, "observability"), pr(3, "postgresql-19.x", "major")])
+check("  majors still last: the minor first", run("pick"), (0, "prove observability minor"))
+# steps (operator 2026-11-21: an upgrade can take several steps, a 17 -> 19 major among them): one at a time, the lower first
+fixture(infra=[pr(3, "postgresql-19.x", "major"), pr(4, "postgresql-18.x", "major")])
+check("two steps of one dependency (17 -> 18 -> 19): the lower first", run("pick"), (0, "prove postgresql-18.x major"))
+fixture(infra=[pr(3, "postgresql-19.x", "major"), pr(4, "postgresql-18.x", "major", "veto")])
+check("  the lower vetoed: the higher still waits - nothing (a step never jumped)", run("pick"), (0, "NOTHING"))
+fixture(infra=[pr(3, "postgresql-19.x", "major"), pr(4, "postgresql-18.x", "major"), pr(5, "observability")])
+tries("postgresql-18.x", "schnappy/infra#4")
+check("  the lower with a try on record: another unit first - never the higher", run("pick"), (0, "prove observability minor"))
+fixture(infra=[pr(3, "postgresql-19.x", "major"), pr(4, "postgresql-18.x", "major")])
+check("  the lower with a try and nothing else open: the lower again, never the higher", run("pick"), (0, "prove postgresql-18.x major"))
+shutil.rmtree(TRIES)
+fixture(infra=[pr(3, "postgresql-19.x", "major"), pr(4, "postgresql-18.x", renovate=False)])
+check("  the lower unlabelled (never picked itself): the higher still waits", run("pick"), (0, "NOTHING"))
+fixture(infra=[pr(3, "postgresql-19.x", "major")], platform=[pr(4, "postgresql-18.x", "major")])
+check("  the lower open in another repository only: still the lower first", run("pick"), (0, "prove postgresql-18.x major"))
+fixture(infra=[pr(1, "kubernetes-1.37"), pr(2, "kubernetes-1.36"), pr(3, "gateway-api-1.7"), pr(4, "gateway-api-1.6")])
+check("minor steps the same (gateway-api 1.6 before 1.7, kubernetes 1.36 before 1.37)", run("pick"), (0, "prove gateway-api-1.6 minor"))
+fixture(infra=[pr(1, "kubernetes-1.37"), pr(2, "kubernetes-1.36")])
+tries("kubernetes-1.36", "schnappy/infra#2")
+check("  kubernetes 1.36 failing: 1.37 never taken past it", run("pick"), (0, "prove kubernetes-1.36 minor"))
+shutil.rmtree(TRIES)
+fixture(infra=[pr(1, "test-scylladb-2026.3"), pr(2, "test-scylladb-2026.2"), pr(3, "scylladb-2026.2"), pr(4, "scylladb-2026.3")])
+check("test steps their own path: test-scylladb-2026.2 before 2026.3", run("pick"), (0, "test test-scylladb-2026.2 minor"))
+fixture(infra=[pr(1, "kube-prometheus-stack-93.x", "major"), pr(2, "kube-prometheus-stack-92.x", "major")])
+check("  two majors of one chart: 92 before 93", run("pick"), (0, "prove kube-prometheus-stack-92.x major"))
+fixture(infra=[pr(1, "nginx-1.x"), pr(2, "nginx-2.x", "major"), pr(3, "postgresql-17-alpine")])
+check("  a minor line and a major of one image: the minor line first; a unit no step (a digest unit) none of this",
+      run("pick"), (0, "prove nginx-1.x minor"))
+# no clock for a one-way unit or one carrying the agent's fix either
+fixture(infra=[pr(1, "observability"), pr(3, "scylladb-2026.3", "one-way")])
+check("a one-way minor: proven in its order like any (its store backed up first - the runner's)", run("pick"),
       (0, "prove observability minor"))
-fixture(infra=[pr(1, "istio-1.32", "agent-fixed")])
-check("  alone: its notice (kind kept)", run("pick"), (0, "notice istio-1.32 minor"))
-fixture(infra=[pr(1, "istio-1.32", "agent-fixed")], comments={("infra", 1): [f"UPGRADE NOTICE 2026-11-19T02:00:00Z heads={HEADS}"]})
-check("  noticed 25 h ago, unvetoed, its diff the one announced: applied (kind kept)", run("pick"), (0, "apply istio-1.32 minor"))
-fixture(infra=[pr(1, "wave-patches", "agent-fixed")], comments={("infra", 1): ["UPGRADE NOTICE 2026-11-19T20:00:00Z"]})
-check("  a patch wave with the agent's fix in its 24 h: nothing", run("pick"), (0, "NOTHING"))
-fixture(infra=[pr(3, "aaa-5.x", "major"), pr(4, "zzz-2.x", "major")],
-        comments={("infra", 3): ["UPGRADE NOTICE 2026-11-18T02:00:00Z"], ("infra", 4): ["UPGRADE NOTICE 2026-11-17T02:00:00Z"]})
-check("two majors past their 24 h: the one noticed first applied first (not the first by name)", run("pick"),
-      (0, "apply zzz-2.x major"))
-fixture(infra=[pr(3, "postgresql-19.x", "major", "veto")], comments={("infra", 3): ["UPGRADE NOTICE 2026-11-18T00:00:00Z"]})
-check("a vetoed major: never applied", run("pick"), (0, "NOTHING"))
-fixture(infra=[pr(3, "postgresql-19.x", "major"), pr(4, "kafka-5.x", "major")],
-        comments={("infra", 3): ["UPGRADE NOTICE 2026-11-18T00:00:00Z"]})
-check("a waiting major applied before a new notice", run("pick"), (0, "apply postgresql-19.x major"))
-fixture(infra=[pr(3, "postgresql-19.x", "major"), pr(4, "kafka-5.x", "major")],
-        comments={("infra", 3): ["UPGRADE NOTICE 2026-11-19T20:00:00Z"]})
-check("one major in its 24 h, another without a notice: that one noticed", run("pick"), (0, "notice kafka-5.x major"))
+fixture(infra=[pr(3, "scylladb-2026.3", "one-way")])
+check("  alone: proven (kind kept)", run("pick"), (0, "prove scylladb-2026.3 minor"))
+fixture(infra=[pr(1, "istio-1.32", "agent-fixed"), pr(2, "observability")])
+check("a unit carrying the agent's fix: proven in its order like any - no notice", run("pick"), (0, "prove istio-1.32 minor"))
+fixture(infra=[pr(3, "postgresql-19.x", "major", "veto")])
+check("a vetoed major: never picked (the operator's hold)", run("pick"), (0, "NOTHING"))
+fixture(infra=[pr(3, "zzz-2.x", "major"), pr(4, "aaa-3.x", "major")])
+check("two majors of different dependencies: in their order", run("pick"), (0, "prove aaa-3.x major"))
 fixture(infra=[pr(i, f"other-{i:03d}") for i in range(60)] + [pr(99, "wave-patches")])
 check("more than one page of pull requests: the second page read (wave-patches on it)", run("pick"),
       (0, "prove wave-patches patch"))
 check("Forgejo unreachable: not read (exit 1), never NOTHING", run("pick", url="http://127.0.0.1:1/api/v1")[0], 1)
-check("noticed: a unit not open", run("noticed", "nope"), (1, "NO UNIT nope"))
-check("a command it does not take", run("apply")[0], 2)
+# steps by the packages in Renovate's table (a family's minors and its major are named apart): the major waits for the
+# lower minor whatever holds it; a patch row (the wave) never holds a step; a test unit waits for the production lower
+# step too; the year rolls over (2026.12 before 2027.1); a name that is no step (a digest unit) never waits
+def tabled(n, unit, rows, *labels):
+    p = pr(n, unit, *labels)
+    p["body"] = "This PR contains the following updates:\n\n| Package | Update | Change |\n|---|---|---|\n" + "".join(
+        f"| [{pkg}](https://hub.docker.com/r/{pkg}) ([source](https://github.com/{pkg})) | {up} | `{a}` → `{b}` |\n" for pkg, up, a, b in rows)
+    return p
+fixture(infra=[tabled(7, "scylladb-scylla-2027.x", [("scylladb/scylla", "major", "2026.2.3", "2027.1.0")], "major", "one-way"),
+               tabled(6, "scylladb-2026.3", [("scylladb/scylla", "minor", "2026.2.3", "2026.3.1")], "one-way")])
+tries("scylladb-2026.3", "schnappy/infra#6")
+check("steps by package: a major named apart (scylladb-scylla-2027.x) waits for the lower minor of its package "
+      "(scylladb-2026.3) - though that one has a try and the major none", run("pick"), (0, "prove scylladb-2026.3 minor"))
+shutil.rmtree(TRIES)
+fixture(infra=[tabled(7, "scylladb-scylla-2027.x", [("scylladb/scylla", "major", "2026.2.3", "2027.1.0")], "major", "one-way"),
+               tabled(1, "wave-patches", [("scylladb/scylla", "patch", "2026.2.3", "2026.2.4"), ("nginx", "patch", "1.31.8", "1.31.9")])])
+tries("wave-patches", "schnappy/infra#1")
+check("  a patch row (the wave's) never holds a step: the major goes, the wave with its try after", run("pick"),
+      (0, "prove scylladb-scylla-2027.x major"))
+shutil.rmtree(TRIES)
+fixture(infra=[pr(5, "test-scylladb-2026.4", "one-way"), pr(6, "scylladb-2026.3", "one-way")])
+check("  a test unit waits for the production unit of a lower step (the test environment one step ahead at most)",
+      run("pick"), (0, "prove scylladb-2026.3 minor"))
+fixture(infra=[pr(1, "scylladb-2027.1"), pr(2, "scylladb-2026.12")])
+check("  the year rolls over: 2026.12 before 2027.1 (each part a number, the major first)", run("pick"), (0, "prove scylladb-2026.12 minor"))
+fixture(infra=[pr(1, "postgresql-17-alpine"), pr(2, "postgresql-16.x", "major", "veto")])
+check("  a name that is no step (a digest unit, postgresql-17-alpine) never waits - beside a vetoed postgresql-16.x",
+      run("pick"), (0, "prove postgresql-17-alpine minor"))
+fixture(infra=[tabled(5, "test-k6-1.8", [("grafana/k6", "minor", "2.4.0", "2.5.0")]), tabled(6, "k6-1.8", [("grafana/k6", "minor", "1.7.1", "1.8.0")])])
+check("  a test unit moving a package higher than its production twin (k6: 2.x in test, 1.x in production): no deadlock - the "
+      "test unit first (the twin rule)", run("pick"), (0, "test test-k6-1.8 minor"))
+nb = tabled(7, "scylladb-scylla-2027.x", [("scylladb/scylla", "major", "2026.2.3", "2027.1.0")], "major", "one-way")
+nb["body"] += "\n---\n\n### Release Notes\n\n| Package | Update | Change |\n|---|---|---|\n| [golang](x) | minor | `1.20` → `1.21` |\n"  # lower than golang-1.x's: read as a step, it would hold golang-1.x
+fixture(infra=[nb, tabled(8, "golang-1.x", [("golang", "minor", "1.23", "1.24")])])
+check("  a table in the release notes (upstream's text) is no step: golang-1.x not held, the major not held by it",
+      run("pick"), (0, "prove golang-1.x minor"))
+fixture(infra=[tabled(7, "scylladb-scylla-2027.x", [("scylladb/scylla", "major", "2026.2.3", "2027.1.0")], "major", "one-way"),
+               tabled(6, "scylladb-2026.3", [("docker.io/scylladb/scylla", "minor", "2026.2.3", "2026.3.1")], "one-way")])
+tries("scylladb-2026.3", "schnappy/infra#6")
+check("  one package however it is written (with its registry's docker.io/ prefix): the major still waits (the minor has a try)",
+      run("pick"), (0, "prove scylladb-2026.3 minor"))
+shutil.rmtree(TRIES)
+def raw(n, unit, table, *labels):
+    p = pr(n, unit, *labels); p["body"] = "This PR contains the following updates:\n\n" + table; return p
+REAL_SHAPE = ("| Package | Type | Update | Change | Pending |\n|---|---|---|---|---|\n"
+              "| [grafana/agent](https://github.com/grafana/agent) | | major | `2.4.0` -> `3.0.0` | `3.0.1` |\n"
+              "| [grafana/agent](https://github.com/grafana/agent) | | digest | `abc1234` -> `def5678` | |\n| short |\n")
+OTHER_ORDER = "| Change | Update | Package |\n|---|---|---|\n| `2.4.0` -> `2.5.0` | minor | grafana/agent |\n"
+fixture(infra=[raw(7, "grafana-agent-3.x", REAL_SHAPE, "major"), raw(6, "agent-2.5", OTHER_ORDER)])  # named apart: the table alone holds it
+tries("agent-2.5", "schnappy/infra#6")  # the major untried would go first - unless held by the minor's package
+check("  Renovate's table as it writes it (Type and Pending columns, a digest row, a short row) beside another column order and "
+      "a plain-name package cell: the columns found by their headers - the major waits for the minor (though it has a try)",
+      run("pick"), (0, "prove agent-2.5 minor"))
+shutil.rmtree(TRIES)
+TWO_ROWS = ("| Package | Update | Change |\n|---|---|---|\n| [x/lib](u) | major | `1.0` -> `2.0` |\n| [x/lib](u) | minor | `1.0` -> `1.1` |\n")
+fixture(infra=[raw(7, "lib-group", TWO_ROWS), raw(6, "lib-1.5", "| Package | Update | Change |\n|---|---|---|\n| x/lib | minor | `1.0` -> `1.5` |\n")])
+check("  two rows of one package in a unit (a minor and a major): its highest target counts - it waits for 1.5", run("pick"), (0, "prove lib-1.5 minor"))
+SAME = "| Package | Update | Change |\n|---|---|---|\n| y/tool | minor | `1.1.0` -> `1.2.0` |\n"
+fixture(infra=[raw(7, "tool-a", SAME), raw(6, "tool-b", SAME)])
+check("  two units moving one package to the same version: neither waits for the other (never a silent NOTHING)",
+      run("pick")[1] in ("prove tool-a minor", "prove tool-b minor"), True)
+fixture(infra=[pr(5, "test-observability"), pr(6, "wave-patches")])
+tries("test-observability", "schnappy/infra#5")
+check("  a test unit with a try never holds an untried production unit back (no blocked state)", run("pick"), (0, "prove wave-patches patch"))
+shutil.rmtree(TRIES)
+real = base64.b64encode(json.dumps({"labels": ["upgrade-cycle"]}).encode()).decode()
+fake = base64.b64encode(json.dumps({"labels": ["one-way", "major"]}).encode()).decode()
+lp = pr(4, "nginx-1.x", renovate=False)
+lp["body"] = "### Release Notes\n<!--renovate-debug:" + fake + "-->\n\n<!--renovate-debug:" + real + "-->"
+fixture(infra=[lp])
+check("labels from Renovate's own record - the last one in the body, never a copy in the release notes above it",
+      run("list"), (0, "nginx-1.x minor schnappy/infra upgrade-cycle"))
+check("bodies: a unit not open", run("bodies", "nope", W), (1, "NO UNIT nope"))
+b1 = pr(3, "postgresql-19.x", "major"); b1["body"] = "| postgres | 17-alpine -> 19-alpine |\n\n### Release notes\n19: needs pg_upgrade"
+b2 = pr(5, "postgresql-19.x", "major"); b2["body"] = "ops' table"
+fixture(infra=[b1], ops=[b2])
+out = os.path.join(W, "bodies"); os.makedirs(out, exist_ok=True)
+r = run("bodies", "postgresql-19.x", out)
+def read_or(path):  # a file missing is a FAIL with its value, never a traceback that ends the harness
+    return open(path).read() if os.path.exists(path) else None
+check("bodies: each pull request's body (Renovate's table, its release notes) to <dir>/<repo>.pr.md - the review's input",
+      (r, read_or(os.path.join(out, "infra.pr.md")), read_or(os.path.join(out, "ops.pr.md"))),
+      ((0, f"{out}/infra.pr.md\n{out}/ops.pr.md"), b1["body"], "ops' table"))
+NOTES = "\n\n---\n\n### Release Notes\n\n<details>\n<summary>istio/istio (istiod)</summary>\n\n1.32: a value renamed\n</details>\n"
+def body(p, rows, notes=""):
+    p["body"] = "| Package | Update | Change |\n|---|---|---|\n" + "".join(f"| [{k}](https://x/{k}) | {u} | `{a}` → `{b}` |\n" for k, u, a, b in rows) + notes
+    return p
+fixture(infra=[body(pr(3, "istiod-2.x", "major"), [("istiod", "major", "1.31.4", "2.0.0")])], ops=[body(pr(5, "istiod-2.x", "major"), [("istiod", "major", "1.31.4", "2.0.0")], NOTES)])
+check("notes: a major whose pull request in one repo has no release notes (Renovate fetched none: no github.com token, "
+      "and it says nothing) - exit 3, that repo named", run("notes", "istiod-2.x"), (3, "schnappy/infra: no release notes"))
+fixture(infra=[body(pr(3, "istiod-2.x", "major"), [("istiod", "major", "1.31.4", "2.0.0")], NOTES)])
+check("notes: a major with its notes - exit 0", run("notes", "istiod-2.x"), (0, ""))
+fixture(infra=[body(pr(3, "postgres-19.x", "major"), [("postgres", "major", "17-alpine", "19-alpine")])])
+check("notes: a major of a package that publishes none (docker-library's postgres - review.md's path rule) - exit 0",
+      run("notes", "postgres-19.x"), (0, ""))
+fixture(infra=[body(pr(3, "nginx-1.x"), [("nginx", "minor", "1.30", "1.31")])])
+check("notes: a minor, no family's, not one-way - never asked: exit 0", run("notes", "nginx-1.x"), (0, ""))
+fixture(infra=[body(pr(3, "kubernetes-1.37"), [("kubernetes", "minor", "1.36.5", "1.37.0")])])
+check("notes: a family minor (one minor at a time: kubernetes, istio, gateway-api, cilium) with none - exit 3",
+      run("notes", "kubernetes-1.37"), (3, "schnappy/infra: no release notes"))
+fixture(infra=[body(pr(3, "scylladb-2026.3", "one-way"), [("scylladb/scylla", "minor", "2026.2.3", "2026.3.1")])])
+check("notes: a one-way minor with none - exit 3", run("notes", "scylladb-2026.3"), (3, "schnappy/infra: no release notes"))
+check("notes: a unit not open", run("notes", "nope"), (1, "NO UNIT nope"))
+check("a command it does not take - noticed and apply among them (no notice any more)",
+      (run("apply")[0], run("noticed", "postgresql-19.x")[0]), (2, 2))
 fixture(infra=[pr(1, "wave-patches"), pr(2, "istio", "veto"), pr(3, "observability", "upgrade-blocked", "veto")])
-check("held: what holds a unit now - nothing for a free one, its labels for one blocked or vetoed",
+check("held: what holds a unit now - nothing for a free one, veto for a vetoed one (an upgrade-blocked label holds nothing)",
       (run("held", "wave-patches"), run("held", "istio"), run("held", "observability"), run("held", "nope")),
-      ((0, ""), (0, "veto"), (0, "upgrade-blocked\nveto"), (1, "NO UNIT nope")))
+      ((0, ""), (0, "veto"), (0, "veto"), (1, "NO UNIT nope")))
 fixture(infra=[pr(1, "wave-patches")], dashboard_labels=["upgrades-paused"])
 check("held: the dashboard's kill switch - paused", run("held", "wave-patches"), (0, "paused"))
 fixture(infra=[pr(1, "wave-patches")], dashboard_labels=["upgrades-paused"], others=60)
@@ -255,17 +371,9 @@ check("held: Forgejo unreachable - not read (exit 1), never 'nothing holds it'",
 fixture(infra=[pr(1, "wave-patches", user="mallory"), pr(2, "istio", fork=True), pr(3, "observability")])
 check("another account's pull request, or one from a fork, named renovate/<unit> all the same: no unit",
       (run("pick"), run("list")[1].split("\n")), ((0, "prove observability minor"), ["observability minor schnappy/infra upgrade-cycle"]))
-fixture(infra=[pr(3, "postgresql-19.x", "major")],
-        comments={("infra", 3): [("mallory", "UPGRADE NOTICE 2026-11-01T00:00:00Z - backdated")]})
-check("a notice comment by anyone but the bot: no notice (a backdated one skipped the 24 h)",
-      (run("noticed", "postgresql-19.x"), run("pick")), ((0, "NONE"), (0, "notice postgresql-19.x major")))
-fixture(infra=[pr(3, "postgresql-19.x", "major")],
-        comments={("infra", 3): ["Renovate: release notes\n\nUPGRADE NOTICE 2026-11-01T00:00:00Z - quoted from somewhere"]})
-check("a line inside another comment of the bot's (Renovate posts as the same account): no notice - a notice is a comment "
-      "that starts as one", (run("noticed", "postgresql-19.x"), run("pick")), ((0, "NONE"), (0, "notice postgresql-19.x major")))
 fixture(infra=[pr(1, "test-istio-1.32", "agent-fixed")])
 check("a test environment's unit labelled agent-fixed (by a hand - the test path has no fix): merged at once as a test "
-      "unit (the test environment its own proof; the 24 h notice is its production twin's)", run("pick"), (0, "test test-istio-1.32 minor"))
+      "unit (the test environment its own proof)", run("pick"), (0, "test test-istio-1.32 minor"))
 print("upgrade-units: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 PYCHECK

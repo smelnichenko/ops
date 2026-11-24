@@ -27,6 +27,11 @@ def run(unit, labels, table=None):
 check("each store's real unit names: its own store's answer (missing, store) - none unknown",
       sorted({(s["store"], run(e, "one-way")[1]) for s in REAL["stores"] for e in s["examples"]}),
       sorted({(s["store"], "missing" if s["missing"] else "store") for s in REAL["stores"]}))
+# Postgres' store is the CNPG image alone (2026-11-21): the plain postgres image in infra and platform is the init-users
+# Job's psql client - its major, postgres-19.x, is an ordinary unit; the databases' image a store's as before
+check("postgres-19.x (the init-users Job's psql client) a unit of no store; the CNPG image's major Postgres' store",
+      (run("postgres-19.x", "major,upgrade-cycle")[:2], run("ghcr.io-cloudnative-pg-postgresql-19.x", "major,one-way,upgrade-cycle")[:2]),
+      ((0, "none"), (0, "store")))
 check("a unit of no store, unlabelled: none; labelled one-way: unknown (blocked - its store decided in the table)",
       (run("wave-patches", "upgrade-cycle")[:2], run("data-operators", "one-way,upgrade-cycle")[:2]), ((0, "none"), (0, "unknown")))
 store = {"store": "x", "units": "(^|-)x-[0-9]+\\.x$", "packages": ["x"], "backups": ["deploy:x"], "missing": [], "taken_by": [],

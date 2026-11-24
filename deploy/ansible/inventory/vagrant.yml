@@ -84,6 +84,9 @@ all:
     backup_root_user: "velero-admin"
     backup_root_password: "vagrant-minio-pw"
     nexus_admin_password: "vagrant-nexus-pw"
+    # Nexus on a 4 GB Pi VM beside the Pi stack (test:nexus; production's Pis have 8 GB and run setup-nexus.yml's 4g/2g)
+    nexus_heap_max: 1g
+    nexus_direct_memory_max: 512m
     keepalived_vrrp_password: "k33p4l1v"
     argocd_keycloak_client_secret: "vagrant-argocd-oidc-secret"
 
@@ -91,6 +94,11 @@ all:
     # vagrant test depends on it, and its helm install times out reliably
     # in resource-constrained VMs. Skip.
     install_scylla_manager: false
+
+    # setup-host-hardening.yml's unattended-upgrades: as on ten, but no reboot - a copy lives hours, and a kernel its
+    # morning run installs would reboot it at 07:30 in the middle of a run. Its reboot is proven by a run with
+    # -e auto_upgrades_reboot=true
+    auto_upgrades_reboot: false
 
   hosts:
     target:

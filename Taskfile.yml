@@ -287,46 +287,25 @@ tasks:
     cmds:
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-patroni.yml {{.CLI_ARGS}}
 
-  promote:prod:
-    desc: 'Promote test image tags -> prod. DRY-RUN by default; CONFIRM=1 commits+pushes. SERVICES="site monitor" limits scope (default all 7).'
+  # test -> production image tags (scripts/promote.sh): two tasks, no mode variable (operator 2026-11-20) - promote:check
+  # prints the plan, promote:run commits and pushes it. CONFIRM, the old task's switch, is refused by both, never ignored
+  # (ignored on promote:check, CONFIRM=1 would look like a promotion that never happened). SERVICES="monitor masi" limits
+  # either; without it, every service (operator: no SERVICES=all form)
+  promote:check:
+    desc: "Show which services' test image differs from production's. Read-only. SERVICES=\"monitor masi\" limits the list (default: all)."
+    preconditions:
+      - sh: '[ -z "{{.CONFIRM}}" ]'
+        msg: "REFUSED: CONFIRM is gone. promote:check only shows; promote:run writes."
     cmds:
-      - |
-        cd {{.SRC_DIR}}/infra
-        # CD writes a tag commit to this repo on every merge: read the tags from what is on the remote NOW, not from a
-        # checkout that may be hours old (a stale one promotes yesterday's image)
-        [ -z "$(git status --porcelain)" ] || { echo "infra has uncommitted changes: commit or discard them first"; exit 1; }
-        git pull -q --rebase
-        TEST=clusters/production/schnappy-test-apps/values.yaml
-        PROD=clusters/production/schnappy-production-apps/values.yaml
-        SERVICES="${SERVICES:-monitor admin chat chess masi site game-scp}"
-        PLAN=""; SVCS=""
-        for svc in $SERVICES; do
-          TAG=$(grep -E "#[[:space:]]*${svc}[[:space:]]*$" "$TEST" | grep -oP 'tag: "\K[^"]+' | head -1)
-          if [ -z "$TAG" ]; then echo "  ! ${svc}: not found in test values — skipping"; continue; fi
-          CUR=$(grep -E "#[[:space:]]*${svc}[[:space:]]*$" "$PROD" | grep -oP 'tag: "\K[^"]+' | head -1)
-          if [ "$TAG" = "$CUR" ]; then
-            echo "  = ${svc}: ${CUR} (up to date)"
-          else
-            echo "  + ${svc}: ${CUR:-<none>} -> ${TAG}"
-            PLAN="${PLAN} ${svc}=${TAG}"; SVCS="${SVCS} ${svc}"
-          fi
-        done
-        if [ -z "$PLAN" ]; then echo "Nothing to promote."; exit 0; fi
-        if [ "${CONFIRM:-0}" != "1" ]; then
-          echo; echo "DRY-RUN — re-run with CONFIRM=1 to commit + push (Argo then syncs prod)."
-          exit 0
-        fi
-        for entry in $PLAN; do
-          svc="${entry%=*}"; tag="${entry#*=}"
-          sed -i -E "s|(tag: \")[^\"]*(\"[[:space:]]*#[[:space:]]*${svc}[[:space:]]*)$|\1${tag}\2|" "$PROD"
-        done
-        git add "$PROD"
-        git commit -m "promote(prod):${SVCS} from test"
-        # a CD run may have pushed in the seconds since the pull above: the commit is made, so rebase it and push
-        # (2026-09-21: the push was rejected and the promotion sat unpushed until somebody noticed)
-        git pull -q --rebase
-        git push
-        echo "Promoted:${SVCS}. Argo will sync prod."
+      - cmd: scripts/promote.sh {{.SERVICES}}
+
+  promote:run:
+    desc: "PRODUCTION. Copy each differing test image tag to production and push infra; Argo deploys it. SERVICES=\"monitor masi\" limits it (default: all)."
+    preconditions:
+      - sh: '[ -z "{{.CONFIRM}}" ]'
+        msg: "REFUSED: CONFIRM is gone. promote:run writes; promote:check only shows."
+    cmds:
+      - cmd: scripts/promote.sh --run {{.SERVICES}}
 
   # ============== ONBOARDING ==============
   onboard:dev:
@@ -657,14 +636,6 @@ tasks:
     cmds:
       - cmd: scripts/copy-unit.sh '{{.UNIT}}' {{if eq .PLAN "true"}}--plan{{end}}
 
-  # the upgrade cycle by hand (the operator's decisions of 2026-11-15): Renovate and the runner work in tandem - one task,
-  # started by the operator, run locally; no timer, no CI cron. The runner applies what it proved; a major, or a unit
-  # carrying the agent's fix, waits out its 24 h notice (one run gives it, a later one applies it). The copy lock taken
-  # first and the runner's gates read before Renovate (a window near, a page open, ops not origin's main, the radar
-  # running, an apply today: refused before anything moved). RUNNER=false: Renovate's branches made, no runner - a first
-  # run's labels read before anything applies. SHADOW=true: the runner proves and reviews a unit, applies nothing (its
-  # result on the pull requests). Until the cycle's first clean shadow proof (.upgrade-cycle/shadow-proven, the runner's
-  # own record of it), the applying runner is refused - here and by the runner itself
   forgejo:package-cleanup:
     desc: "PRODUCTION: Forgejo's container packages pruned (scripts/package-cleanup.py) - the newest 10 of each image, 5 of each build cache, latest, and every tag infra/platform/ops name or the cluster runs kept; the rest deleted (in no backup: rebuilt from git when needed). A plan only unless APPLY=true. FORGEJO_PACKAGES_TOKEN in ops/.env: a token of the organisation's owner with write:package"
     dotenv: ['.env']
@@ -676,42 +647,73 @@ tasks:
     cmds:
       - cmd: scripts/package-cleanup.py {{if eq .APPLY "true"}}--apply{{end}}
 
-  renovate:apps:
-    desc: "monitor's and masi's Renovate, by hand on the workstation (scripts/upgrade-renovate.sh --apps): their dependency pull requests from each repo's renovate.json, as renovate-bot (ops/.env RENOVATE_TOKEN) - their weekly Woodpecker cron is gone. LOOKUP=true: read only"
-    dotenv: ['.env']
-    vars:
-      LOOKUP: '{{.LOOKUP | default "false"}}'
-    preconditions:
-      - sh: '[ "{{.LOOKUP}}" = true ] || [ "{{.LOOKUP}}" = false ]'
-        msg: "REFUSED: LOOKUP is true or false - not '{{.LOOKUP}}'"
+  # the app repos' Renovate by hand (operator 2026-11-16 - monitor's and masi's weekly Woodpecker cron gone with its
+  # token; every app repo and the CI tool images since 2026-11-21, the list in scripts/upgrade-renovate.sh). Two
+  # tasks and no mode variable, as the upgrade cycle's (operator 2026-11-20): upgrade:apps:check reads,
+  # upgrade:apps:run writes - LOOKUP given to it is refused, never ignored (ignored, it would write); no prompt, the
+  # refusal its guard (operator 2026-11-20: the LOOKUP refusal suffices)
+  upgrade:apps:check:
+    desc: "Show what Renovate would update in the app repos and the CI tool images (the list in scripts/upgrade-renovate.sh). Read-only."
     cmds:
-      - cmd: scripts/upgrade-renovate.sh --apps {{if eq .LOOKUP "true"}}--lookup{{end}}
+      - cmd: scripts/upgrade-renovate.sh --apps --lookup
 
-  upgrade:
-    desc: "PRODUCTION: the upgrade cycle - Renovate on the workstation (its branches and pull requests in infra, platform, ops), then one unit proven on the Vagrant copy and applied (scripts/upgrade-cycle.sh; a major after its 24 h notice). Stop the radar first: the copy needs its memory. LOOKUP=true: Renovate reads only; RUNNER=false: Renovate's branches, no runner; SHADOW=true: a unit proven and reviewed, nothing applied"
-    deps: [deploy:install]
-    vars:
-      LOOKUP: '{{.LOOKUP | default "false"}}'
-      RUNNER: '{{.RUNNER | default "true"}}'
-      SHADOW: '{{.SHADOW | default "false"}}'
-    prompt: "The upgrade cycle: Renovate's branches, then one unit proven on the copy and applied to PRODUCTION - the radar stopped?"
+  upgrade:apps:run:
+    desc: "Renovate opens dependency PRs in the app repos. Patch updates merge on green CI; a service's CD then deploys it to the test environment."
     preconditions:
-      # fail closed: a 1, yes or TRUE is neither - never read as a real run
-      - sh: '[ "{{.LOOKUP}}" = true ] || [ "{{.LOOKUP}}" = false ]'
-        msg: "REFUSED: LOOKUP is true or false - not '{{.LOOKUP}}'"
-      - sh: '[ "{{.RUNNER}}" = true ] || [ "{{.RUNNER}}" = false ]'
-        msg: "REFUSED: RUNNER is true or false - not '{{.RUNNER}}'"
-      - sh: '[ "{{.SHADOW}}" = true ] || [ "{{.SHADOW}}" = false ]'
-        msg: "REFUSED: SHADOW is true or false - not '{{.SHADOW}}'"
-      - sh: '[ "{{.LOOKUP}}" = true ] || [ "{{.RUNNER}}" = false ] || [ "{{.SHADOW}}" = true ] || [ -e .upgrade-cycle/shadow-proven ]'
-        msg: "REFUSED: the applying runner waits for the cycle's first clean shadow proof (.upgrade-cycle/shadow-proven) - SHADOW=true proves a unit without applying it; LOOKUP=true reads, RUNNER=false makes Renovate's branches"
+      - sh: '[ -z "{{.LOOKUP}}" ]'
+        msg: "REFUSED: LOOKUP is gone. upgrade:apps:check only reads; upgrade:apps:run writes."
+    cmds:
+      - cmd: scripts/upgrade-renovate.sh --apps
+
+  # the app repos' Renovate PRs driven to merged by the bot (the operator's decisions of 2026-11-20 and 2026-11-23: no
+  # PR left open for the operator, nothing left behind): green ones merged, behind ones updated onto main, conflicted ones
+  # re-made on main (scripts/renovate-restack.py), red ones reported - fixed on their branches; never between the upgrade
+  # run's review and its merge, masi's merges spaced. Until nothing is pending (one round: the script's --once)
+  upgrade:apps:merge:
+    desc: "Merge the app repos' green Renovate PRs as the bot - round after round until none is pending (red ones listed, to fix on their branches)."
+    cmds:
+      - cmd: scripts/upgrade-apps-merge.py
+
+  # the upgrade cycle by hand (the operator's decisions of 2026-11-15): Renovate and the runner work in tandem - started by
+  # the operator, run locally; no timer, no CI cron. Two tasks and no mode variable (operator 2026-11-20 - one typed in
+  # lower case or misspelt was read as unset, and unset was the applying run): upgrade:check reads, upgrade:run writes.
+  # upgrade:run: the copy lock taken first and the runner's gates read before Renovate (a window near, a page open, ops
+  # not origin's main, the radar running: refused before anything moved), Renovate's branches and pull
+  # requests, then the runner - it applies what it proved and reviewed, a major and a unit carrying the agent's fix
+  # too (no notice, no wait: operator 2026-11-21 - the review's compatibility pass judges the versions). No shadow mode (operator 2026-11-15; gone from the runner
+  # 2026-11-20): SHADOW=true, typed from habit, is refused below - ignored, it would have been the applying run
+  upgrade:check:
+    desc: "Show what Renovate would update in infra, platform and ops. Read-only: no branches, PRs or deploys."
+    cmds:
+      - cmd: scripts/upgrade-renovate.sh --lookup
+
+  # the runner alone - Renovate's PRs applied, Renovate not run (operator 2026-11-23: Renovate runs are the operator's;
+  # applying its PRs is the runner's): upgrade:run's lock, gates and runner, without its Renovate step
+  upgrade:apply:
+    desc: "PRODUCTION. Apply the next of Renovate's open units in infra, platform and ops - tested on the Vagrant copy, reviewed, applied - without running Renovate."
+    deps: [deploy:install]
+    prompt: "Apply the next upgrade unit to PRODUCTION (Renovate not run)?"
+    cmds:
+      - cmd: scripts/copy-lock.sh
+      - cmd: scripts/upgrade-cycle.sh --preflight
+      # the bot's token (ops/.env RENOVATE_TOKEN) the runner's, by the environment - never on a command line
+      - cmd: 'UPGRADE_FORGEJO_TOKEN="$RENOVATE_TOKEN" scripts/upgrade-cycle.sh'
+
+  upgrade:run:
+    desc: "PRODUCTION. Renovate opens or updates PRs in infra, platform and ops; then one update is tested on the Vagrant copy, reviewed (compatibility with what production runs among its passes) and applied to production. Stop the radar first."
+    deps: [deploy:install]
+    prompt: "Run the upgrade cycle against PRODUCTION? The radar must be stopped."
+    preconditions:
+      # the old task's mode variables refused, never ignored: upgrade:run LOOKUP=true would be the applying run
+      - sh: '[ -z "{{.LOOKUP}}{{.RUNNER}}{{.SHADOW}}" ]'
+        msg: "REFUSED: LOOKUP, RUNNER and SHADOW are gone. upgrade:check only reads; upgrade:run writes and applies."
     cmds:
       # one copy run at a time (scripts/copy-lock.sh): the run's own nested copy tasks share it
-      - cmd: '[ "{{.LOOKUP}}" = true ] || [ "{{.RUNNER}}" = false ] || scripts/copy-lock.sh'
-      - cmd: '[ "{{.LOOKUP}}" = true ] || [ "{{.RUNNER}}" = false ] || scripts/upgrade-cycle.sh --preflight'
-      - cmd: scripts/upgrade-renovate.sh {{if eq .LOOKUP "true"}}--lookup{{end}}
+      - cmd: scripts/copy-lock.sh
+      - cmd: scripts/upgrade-cycle.sh --preflight
+      - cmd: scripts/upgrade-renovate.sh
       # the bot's token (ops/.env RENOVATE_TOKEN) the runner's, by the environment - never on a command line
-      - cmd: '[ "{{.LOOKUP}}" = true ] || [ "{{.RUNNER}}" = false ] || UPGRADE_FORGEJO_TOKEN="$RENOVATE_TOKEN" scripts/upgrade-cycle.sh {{if eq .SHADOW "true"}}--shadow{{end}}'
+      - cmd: 'UPGRADE_FORGEJO_TOKEN="$RENOVATE_TOKEN" scripts/upgrade-cycle.sh'
 
   # the backup before a one-way Kubernetes change: a snapshot now, from the hourly etcd-backup CronJob's own template (to
   # the Pi backup store, off the node) - the upgrade cycle takes it before the merge
@@ -720,6 +722,20 @@ tasks:
     prompt: "Take an etcd snapshot on PRODUCTION now?"
     cmds:
       - cmd: scripts/etcd-backup-now.sh
+
+  # the copy proof's step for a new Renovate image (scripts/upgrade-renovate.sh's pin - the copy runs no Renovate): it
+  # starts, and its config validator reads both presets (the wave-patches review, 2026-11-23: it rode a wave unproven).
+  # The presets read-only; the container as the operator's user (a bind mount)
+  test:copy:renovate-image:
+    desc: "The copy proof's step for a new Renovate image: renovate --version, and its config validator on renovate/upgrade-cycle.json and renovate/apps.json"
+    requires:
+      vars: [IMAGE]
+    preconditions:
+      - sh: '[[ "{{.IMAGE}}" =~ ^renovate/renovate:[0-9]+\.[0-9]+\.[0-9]+@sha256:[0-9a-f]{64}$ ]]'
+        msg: "REFUSED: IMAGE must be one renovate/renovate:x.y.z@sha256 pin"
+    cmds:
+      - cmd: docker run --rm --user "$(id -u):$(id -g)" --entrypoint renovate '{{.IMAGE}}' --version
+      - cmd: docker run --rm --user "$(id -u):$(id -g)" -v "$PWD/renovate:/presets:ro" --entrypoint renovate-config-validator '{{.IMAGE}}' /presets/upgrade-cycle.json /presets/apps.json
 
   test:copy:check:
     desc: "Every check on the built copy: Argo settled; data, survival, storage, metrics, k6 smoke, production's data paths and isolation at once (scripts/copy-checks.sh); a barman base backup; every certificate renewed; Postgres recovered and a Velero volume restored (restore-check); a Velero backup from production's daily schedule; a Scylla Manager backup; ScyllaDB's and ClickHouse's backups restored; the PR-env sweeper; the inventory against production's (after a change: its own differences printed, any it did not make judged). Run on its own it checks the refs the copy runs (.copy/copy-refs)"
@@ -755,6 +771,10 @@ tasks:
       # Postgres recovered from a fresh backup and its WAL (a marker written after it must come back) into a side
       # cluster, and a Velero file-system backup of a test namespace restored with its volume's data
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/restore-check.yml
+      # an etcd snapshot by production's etcd-backup CronJob, run now and read to its upload's OK line (scripts/etcd-backup-now.sh
+      # on the copy's kubeadm VM): its images - rclone's chmod and upload among them - run for real, never left to the
+      # hourly schedule a check may miss (the wave-patches review, 2026-11-23: rclone 1.76.0 there unproven)
+      - cmd: vagrant ssh-config > .copy/etcd-backup-ssh-config && ETCD_BACKUP_HOST=kubeadm ETCD_BACKUP_SSH_CONFIG=.copy/etcd-backup-ssh-config scripts/etcd-backup-now.sh
       # a Velero backup from production's daily schedule into the Pi backup store, its volumes as the schedule decides
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/backup-check.yml
       # and from the weekly one (cluster-wide, its manifests): its template proven before its Sunday run
@@ -1079,7 +1099,10 @@ tasks:
           set -euo pipefail
           left=$(vagrant status --machine-readable | awk -F, '$3 == "state" && $4 != "not_created" {print $2 "=" $4}')
           [ -z "$left" ] || { echo "VMs not destroyed: $left"; exit 1; }
-      - cmd: vagrant up
+      # the Pis run Nexus beside their stack here (~1.3 GB, the copy's measure, and Nexus's 1 GB heap and 512 MB direct
+      # memory - the Vagrant inventory's): 4 GB each; ten is Gluster's arbiter alone, no cluster: 2 GB. The copy's 2 GB
+      # Pis left Nexus no room (its tarball filled a 1 GB /tmp, 2026-11-20); the host guard reads the same variables
+      - cmd: VAGRANT_PI_MEMORY=4096 VAGRANT_TEN_MEMORY=2048 vagrant up
       - defer: vagrant halt
       # Full Pi data-plane stack (consul → pi-services → patroni → vault-pi)
       # needed because setup-gluster runs after consul, and keepalived's
@@ -1354,6 +1377,13 @@ tasks:
     cmds:
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/postgres-base-backup.yml {{.CLI_ARGS}}
 
+  # the hourly report's facts, read-only (was a session-scratch helper - operator 2026-11-23: tools live
+  # in the repo, never the scratchpad): alerts (active, pending), readiness (pods, Argo), the open pull requests
+  check:production:report:
+    desc: "Production's alerts, its readiness (pods, Argo applications) and the org's open pull requests - read-only; a part not read: NOT READ, exit 1"
+    cmds:
+      - cmd: scripts/production-report.py
+
   check:production:data:
     desc: "PRODUCTION, read only: the data paths move - scrape targets up, Mimir fresh, logs in ClickHouse, datasources, CNPG, Kafka, ScyllaDB, no critical alert (production-data-check.yml)"
     dir: deploy/ansible
@@ -1379,6 +1409,24 @@ tasks:
     prompt: "Restore ScyllaDB tables on PRODUCTION?"
     cmds:
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/scylla-restore.yml {{.CLI_ARGS}}
+
+  deploy:scylla:way-back:
+    desc: "PRODUCTION: the way back from a ScyllaDB release line (a version cannot be downgraded) - after the unit is reverted in infra and Argo synced it: the cluster's data volumes and ScyllaCluster thrown away, Argo rebuilds it at git's version (the chart's schema Job its schema), chat's rows restored from the snapshot taken before the upgrade (-- -e confirm=schnappy-production-scylla -e version=<old> -e snapshot=sm_<UTC>; --check: every check before the deletion). Rehearsed on the copy: test:copy:scylla-way-back"
+    dir: deploy/ansible
+    deps: [deploy:install]
+    dotenv: ['../../.env']
+    prompt: "Throw away and rebuild PRODUCTION's ScyllaDB cluster from its backup?"
+    cmds:
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/scylla-way-back.yml {{.CLI_ARGS}}
+
+  test:copy:scylla-way-back:
+    desc: "Vagrant: ScyllaDB's way back from a release line with production's tasks - markers written into chat, backed up by Scylla Manager, the cluster thrown away and rebuilt by Argo, chat restored from the replaced cluster's snapshot, every marker back (scylla-way-back-check.yml). Rebuilds the copy's production cluster: a readied copy, alone"
+    dir: deploy/ansible
+    deps: [deploy:install]
+    cmds:
+      # the copy's VMs used: one run at a time (scripts/copy-lock.sh - a nested task shares its caller's lock)
+      - cmd: ../../scripts/copy-lock.sh
+      - venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/scylla-way-back-check.yml
 
   test:copy:scylla-restore:
     desc: "Vagrant: ScyllaDB's backups restore - a marker keyspace backed up by Scylla Manager, truncated, restored with production's restore tasks (sctool restore --restore-tables), its token back (scylla-restore-check.yml)"
@@ -1581,7 +1629,7 @@ tasks:
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/configure-node.yml {{.CLI_ARGS}}
 
   deploy:host-hardening:
-    desc: Host kernel hardening on ten (efi_pstore + systemd hardware watchdog)
+    desc: Host hardening on ten (efi_pstore, systemd hardware watchdog, node_exporter, unattended-upgrades and its 07:30 reboot)
     dir: deploy/ansible
     deps: [deploy:install]
     cmds:

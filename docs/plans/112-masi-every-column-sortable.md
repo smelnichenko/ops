@@ -1,7 +1,7 @@
 # Plan 112 — masi lists: every column sortable, the same way everywhere
 
-**Status:** asked for 2026-11-08 by the operator: "essentially, all fields should be sortable" and "use same best
-practice for sorting everywhere".
+**Status:** asked for 2026-11-08 by the operator: every field sortable, by one sorting
+practice everywhere.
 
 ## Why
 

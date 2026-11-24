@@ -32,7 +32,7 @@ esac
 STUB
 chmod +x "$W/bin/ssh"
 W=$W python3 - <<'PYCHECK'
-import json, os, subprocess, sys
+import json, os, re, subprocess, sys
 W = os.environ["W"]
 fails = 0
 def check(name, got, want):
@@ -115,6 +115,15 @@ check("a critical alert during the hold (one look in a row enough): not quiet, n
       (rc, "NOT QUIET" in out, "critical alert PostgresDown" in out), (1, True, True))
 rc, out = run(OK_APPS, OK_PODS, alerts=CRIT, alert_after=1, streak="3", hold="15")
 check("one still firing 3 looks in a row (the streak): not quiet", (rc, "NOT QUIET during the hold (3 looks in a row)" in out), (1, True))
+check("  each look of the streak said as it came - its time first, the count in a row, what fired",
+      [re.sub(r"^\d\d:\d\d:\d\d ", "", l) for l in out.splitlines() if re.match(r"\d\d:\d\d:\d\d not quiet", l)],
+      [f"not quiet ({n} of 3 looks in a row): critical alert PostgresDown" for n in (1, 2, 3)])
+rc, out = run(OK_APPS, OK_PODS, hold="25")
+lines = out.strip().splitlines()
+held = [re.fullmatch(r"\d\d:\d\d:\d\d quiet - (\d+) of 25 min held", l) for l in lines]
+check("a quiet hold of 25 min: its start said with its time, then one line every 10 minutes - how far, never past the hold",
+      (rc, bool(re.fullmatch(r"SETTLED at \d\d:\d\d:\d\d - the hold: 25 min", lines[0])), [int(m.group(1)) for m in held if m],
+       lines[-1], len(lines)), (0, True, [12, 21], "SETTLED AND QUIET for 25 min", 4))
 rc, out = run(OK_APPS, OK_PODS, alerts=CRIT, alert_after=1, alert_until=3, streak="3", hold="15")
 check("one firing 2 looks, then gone (a rollout's minutes): quiet", (rc, out.strip().splitlines()[-1]), (0, "SETTLED AND QUIET for 15 min"))
 rc, out = run(OK_APPS, OK_PODS, alerts=CRIT, alert_looks=(1, 2, 4, 5), streak="3", hold="15")
@@ -126,6 +135,8 @@ check("firing 2 looks, a look with something else wrong alone, firing again: not
 rc, out = run(OK_APPS, OK_PODS, alerts=CRIT, alert_after=0, hold="0")
 check("hold 0 (the gate's look), a critical alert firing: not settled, named - never applied on top of it",
       (rc, "critical alert PostgresDown" in out), (1, True))
+check("  the gate's one look (settle 0): no progress line - the verdict alone",
+      [l for l in out.splitlines() if re.match(r"\d\d:\d\d:\d\d ", l)], [])
 rc, out = run(OK_APPS, OK_PODS, hold="0")
 check("hold 0, nothing firing: settled and quiet in one look", (rc, out.strip()), (0, "SETTLED AND QUIET (1 look)"))
 rc, out = run(OK_APPS, OK_PODS, hold="0", settle="5")
@@ -133,7 +144,14 @@ check("hold 0 while waiting for Argo (settle > 0): two clean looks in a row (a l
       "settle)", (rc, out.strip(), int(open(os.path.join(W, "looks")).read())), (0, "SETTLED AND QUIET (2 looks in a row)", 2))
 rc, out = run(OK_APPS, OK_PODS, hold="0", settle="15", bad_app_looks=(1,))
 check("  clean, then not, then clean twice: the count starts again - three clean looks of four, settled on the last two",
-      (rc, out.strip(), int(open(os.path.join(W, "looks")).read())), (0, "SETTLED AND QUIET (2 looks in a row)", 4))
+      (rc, out.strip().splitlines()[-1], int(open(os.path.join(W, "looks")).read())), (0, "SETTLED AND QUIET (2 looks in a row)", 4))
+# the console's progress (operator 2026-11-22: a silent hour read as a hang): each look not settled said as it came, on one
+# line, its time first (the runner's test_only skips such lines - never a complaint)
+check("  the look not settled said as it came: one line, its time first, what it found",
+      [bool(re.fullmatch(r"\d\d:\d\d:\d\d not settled yet: app x Synced Progressing Succeeded", l)) for l in out.strip().splitlines()[:-1]], [True])
+rc, out = run(OK_APPS, OK_PODS, hold="0", settle="15", bad_app_looks=(0, 1), bad_apps=[app("x", health="Progressing"), app("y", sync="OutOfSync")])
+check("  a look finding two things: both on its one line", [l[9:] for l in out.strip().splitlines()[:-1]],
+      ["not settled yet: app x Synced Progressing Succeeded; app y OutOfSync Healthy Succeeded"] * 2)
 rc, out = run(OK_APPS + [app("pr-42-monitor", health="Degraded", labels={"preview-env": "true"})], OK_PODS)
 check("a preview environment's app broken (a pull request's): no part of production - settled", rc, 0)
 rc, out = run(OK_APPS, OK_PODS, alerts=[{"labels": {"alertname": "Watchdog", "severity": "critical"}}], alert_after=0, streak="1")

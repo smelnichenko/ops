@@ -20,6 +20,9 @@ image docker.io/library/postgres 18.3-alpine
 argo-chart woodpecker *
 image docker.io/woodpeckerci/woodpecker-agent *
 image docker.io/woodpeckerci/woodpecker-server *
+# the CI cache's one-off owner Job (Woodpecker's, left out): production has its finished pod until the Job is retired
+# (its manifest out of infra since 2026-11-20 - step two of its retirement)
+? image busybox stable-musl
 image sonarqube *
 # SonarQube's setup Job (SonarQube is left out)
 image curlimages/curl 8.12.1

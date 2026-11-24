@@ -7,8 +7,8 @@ annual reports, and **turnover**, **employees** and **taxes paid** by quarter fr
 come from two official open datasets masi reads on a schedule, never from scraping a company's site or a commercial
 aggregator. Nothing about a person is read or kept: these are legal persons' filed figures.
 
-Operator, 2026-09-25: *"also would be nice to have number of employees and turnover/etc financial figures as charts"*
-(with *"add address to the company with a link to google map"*, masi #61 / site #29).
+Operator, 2026-09-25: the number of employees, turnover and other financial figures, as charts
+(with the company's address linked to Google Maps, masi #61 / site #29).
 
 ## Why
 

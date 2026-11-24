@@ -22,6 +22,8 @@ cat > "$LOG" <<'L'
 2026-11-20 20:00:01 PICK prove wave-patches patch
 some tool chatter that is not a step
 2026-11-20 20:00:02 RUN task test:copy:build
+2026-11-20 20:00:03 ONE-WAY wave-patches: store postgres 15 - backed up before the merge
+2026-11-20 21:05:00 REVIEW NOTE: platform/x.yaml - curl at 8.10.1, the unit moves it to 8.23.0
 2026-11-20 21:10:00 RUN scripts/upgrade-label.py wave-patches --merge TOKEN=abc123
 2026-11-20 22:30:00 APPLIED wave-patches
 L
@@ -31,13 +33,15 @@ out=$(cd "$R" && UPGRADE_RECORD_NO_PUSH=1 bash scripts/upgrade-record.sh wave-pa
 day=$(date -u +%Y-%m-%d)
 rec="$R/docs/upgrades/$day-wave-patches.md"
 check "recorded, committed" "$rc $(head -c 8 <<< "$out")" "0 RECORDED"
-check "the run's steps alone, the secret masked" "$(sed -n '/^```$/,/^```$/p' "$rec" | sed -n 2,5p)" \
+check "the run's steps alone - its one-way backups and the review's notes among them - the secret masked" "$(sed -n '/^```$/,/^```$/p' "$rec" | sed -n 2,7p)" \
 "2026-11-20 20:00:01 PICK prove wave-patches patch
 2026-11-20 20:00:02 RUN task test:copy:build
+2026-11-20 20:00:03 ONE-WAY wave-patches: store postgres 15 - backed up before the merge
+2026-11-20 21:05:00 REVIEW NOTE: platform/x.yaml - curl at 8.10.1, the unit moves it to 8.23.0
 2026-11-20 21:10:00 RUN scripts/upgrade-label.py wave-patches --merge TOKEN=***
 2026-11-20 22:30:00 APPLIED wave-patches"
 check "a production unit's record: proven on the copy, reviewed" "$(sed -n 3p "$rec")" \
-  "The upgrade cycle's run (task upgrade): proven on the Vagrant copy, reviewed, applied, verified."
+  "The upgrade cycle's run (task upgrade:run): proven on the Vagrant copy, reviewed, applied, verified."
 check "production's inventory diff in it" "$(sed -n '/^```diff$/,/^```$/p' "$rec" | grep -E '^[-+]' | tr '\n' ' ')" "-image a 1 +image a 2 "
 check "committed as the renovate-bot, CI not skipped (ops' merge commit skips it: this commit, merge and inventory together, is the one ops' CI judges), with the inventory - nothing else staged (only its paths)" \
   "$(git -C "$R" log -1 --format='%an <%ae>|%s' ) $(git -C "$R" show --name-only --format= HEAD | sort | tr '\n' ' ')" \
@@ -62,6 +66,6 @@ printf '2026-11-20 20:00:01 PICK test test-observability minor\n2026-11-20 21:00
 (cd "$R" && UPGRADE_RECORD_NO_PUSH=1 bash scripts/upgrade-record.sh test-observability "$TLOG" > /dev/null 2>&1)
 check "a test environment's unit's record: merged and verified there - no copy, no review (it said proven and reviewed, 2026-11-17)" \
   "$(sed -n 3p "$R/docs/upgrades/$day-test-observability.md")" \
-  "The upgrade cycle's run (task upgrade): the test environment's unit - merged, the test environment verified; no copy, no review."
+  "The upgrade cycle's run (task upgrade:run): the test environment's unit - merged, the test environment verified; no copy, no review."
 echo "upgrade-record: $([ $fails -eq 0 ] && echo ALL-PASS || echo "$fails FAILED")"
 [ $fails -eq 0 ]

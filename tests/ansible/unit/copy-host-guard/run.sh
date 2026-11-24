@@ -169,6 +169,17 @@ printf 'config.vm.define "a" do |a|\n  # v.memory = 99999\n  v.memory = 1024\nen
 COPY_VAGRANTFILE="$W/odd/Vagrantfile" guard vagrant up; rc=$?
 check "a commented v.memory not read" "$rc $(grep -c '(a 1024 MB) + 0 MB the running ones may still take + 2048 MB kept' <<< "$out")" "0 1"
 stop_watcher
+# the memory a variable sets (VAGRANT_PI_MEMORY, test:nexus's 4 GB Pis): read as the Vagrantfile reads it - its default
+# unset, the variable set; a value that is no number of MB no v.memory (refused, as Vagrant itself would fail)
+printf 'config.vm.define "a" do |a|\n  v.memory = Integer(ENV.fetch("VAGRANT_A_MEMORY", "1024"))\nend\n' > "$W/odd/Vagrantfile"
+COPY_VAGRANTFILE="$W/odd/Vagrantfile" guard vagrant up; rc=$?
+check "a v.memory from a variable: its default when it is unset" "$rc $(grep -c '(a 1024 MB) + 0 MB the running ones may still take' <<< "$out")" "0 1"
+stop_watcher
+VAGRANT_A_MEMORY=3072 COPY_VAGRANTFILE="$W/odd/Vagrantfile" guard vagrant up; rc=$?
+check "  the variable set: its value (a test's bigger VM sized as it starts)" "$rc $(grep -c '(a 3072 MB) + 0 MB the running ones may still take' <<< "$out")" "0 1"
+stop_watcher
+VAGRANT_A_MEMORY=lots COPY_VAGRANTFILE="$W/odd/Vagrantfile" guard vagrant up; rc=$?
+check "  the variable no number: refused (no v.memory to size)" "$rc $(grep -c 'without a v.memory' <<< "$out")" "1 1"
 printf 'config.vm.define "a" do |a|\n  v.memory = 1024\nend\nconfig.vm.define "b" do |b|\nend\n' > "$W/odd/Vagrantfile"
 COPY_VAGRANTFILE="$W/odd/Vagrantfile" guard vagrant up; rc=$?
 check "a VM without a v.memory: refused (it could not be counted nor powered off)" "$rc $(grep -c 'without a v.memory' <<< "$out")" "1 1"

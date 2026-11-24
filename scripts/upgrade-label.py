@@ -3,7 +3,6 @@
 and ops), as the renovate-bot:
 
   UNIT LABEL          the label on each of the unit's pull requests (made in the repo where missing)
-  UNIT --comment TEXT the comment on each (the veto notice: "UPGRADE NOTICE <iso> ...")
   UNIT --heads        each pull request's head and its base branch's commit, "<repo> <number> <head> <base>" a line -
                       what the runner proves
   UNIT --green [SECONDS]
@@ -116,12 +115,6 @@ def label(unit, name):
         print(f"LABELLED {repo}#{pr['number']} {name}")
 
 
-def comment(unit, text):
-    for repo, pr in prs(unit):
-        call("POST", f"/repos/{repo}/issues/{pr['number']}/comments", {"body": text})
-        print(f"COMMENTED {repo}#{pr['number']}")
-
-
 def base_of(repo, pr):
     """The commit the pull request's base branch is at now."""
     ref = (pr.get("base") or {}).get("ref") or "main"
@@ -152,9 +145,19 @@ class NoCI(Exception):
     """A head with no CI status at all at the wait's end: no pipeline was started for it (a webhook lost)."""
 
 
+def waiting(states, said):
+    """Still waiting: the heads' states said when they changed since the last said - the console's progress through an
+    hour's wait (operator 2026-11-22: a silent hour reads as a hang), flushed (the runner's log is a file, never a
+    terminal). What is said now returned."""
+    if states != said:
+        print(f"{time.strftime('%H:%M:%S')} waiting for CI: {', '.join(f'{n} {st}' for n, st in states)}", flush=True)
+    return states
+
+
 def green(unit, wait=0):
     """Every head's CI success - a running one waited for (up to wait seconds), a red one at once."""
     deadline = time.monotonic() + wait
+    said = None
     while True:
         states = [(f"{repo}#{pr['number']}", state(repo, pr["head"]["sha"]) or "none") for repo, pr in prs(unit)]
         red = [n for n, st in states if st in ("failure", "error")]
@@ -170,6 +173,7 @@ def green(unit, wait=0):
             if none:  # no CI ever reported on it: Forgejo's state "" (no statuses), or another status alone
                 raise NoCI(f"no CI on: {', '.join(none)}")
             raise Refused(f"not green yet: {', '.join(n for n, st in states if st != 'success')}")
+        said = waiting(states, said)
         time.sleep(float(os.environ.get("UPGRADE_GREEN_POLL", "60")))
 
 
@@ -343,7 +347,7 @@ def pause(text):
     print(f"PAUSED schnappy/ops#{number}")
 
 
-USAGE = ("usage: upgrade-label.py UNIT LABEL | UNIT --comment TEXT | UNIT --heads | UNIT --green [SECONDS] | "
+USAGE = ("usage: upgrade-label.py UNIT LABEL | UNIT --heads | UNIT --green [SECONDS] | "
          "UNIT --update | UNIT --merge --expect FILE | --pause TEXT")
 
 
@@ -357,8 +361,6 @@ def unit_action(unit, args):
         return lambda: update(unit)
     if len(args) == 3 and args[:2] == ["--merge", "--expect"]:
         return lambda: merge(unit, read_expected(args[2]))
-    if len(args) == 2 and args[0] == "--comment" and args[1]:
-        return lambda: comment(unit, args[1])
     if len(args) == 1 and re.fullmatch(r"[a-z0-9][a-z0-9-]*", args[0]):
         return lambda: label(unit, args[0])
     return None

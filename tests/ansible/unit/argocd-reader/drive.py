@@ -202,6 +202,12 @@ def flat(out):
     return " ".join(out.split())
 
 
+def shows(text, out):
+    """text in the run's output - or as ansible-core 2.22 shows it: every value vault_kv2_write's no_log data held (the
+    reader's name among them) masked wherever it appears, a token's name argocd-reader-<stamp> as $REDACTED$-<stamp>"""
+    return text in flat(out) or text.replace(BOT, "$REDACTED$") in flat(out)
+
+
 def tail(out):
     return "\n".join(x for x in out.splitlines() if "REFUSED" in x or "fatal" in x or "msg" in x)[-600:]
 
@@ -458,7 +464,8 @@ check("first run: the admin's tokens untouched; ten read alone (get), kagent's c
       (ADMIN_ALL, ["get applications -n argocd", "get externalsecret -n argocd", "get secret -n argocd",
                    "get secret -n kagent"], ["kubectl.kubernetes.io/last-applied-configuration"]))
 check("first run: Argo CD's credentials for the Forgejo host on ten said, by username - the admin's not yet the reader's",
-      "Argo CD's Forgejo credentials on ten: forgejo-repo-creds forgejo_admin (not argocd-reader" in flat(out), True)
+      "Argo CD's Forgejo credentials on ten: forgejo-repo-creds forgejo_admin (not the reader - retire refuses" in flat(out),
+      True)
 first_ids = {t["name"]: t["id"] for t in s["state"]["teams"].values()}
 
 time.sleep(1.1)
@@ -482,9 +489,9 @@ young = {"id": st["seq"], "user": BOT, "name": "argocd-reader-" + stamp(2.5), "s
          "scopes": ["read:repository"]}
 young["token_last_eight"] = young["sha1"][-8:]
 st["tokens"][str(young["id"])] = young
-for label, k8s, want_left, said in (
+for label, k8s, want_left, words in (
         ("ten not holding it (one under 3 h kept)", {}, [toks2[-1]["id"], young["id"]],
-         "reader tokens deleted: argocd-reader-"),
+         "reader tokens deleted: " + st["tokens"][str(toks[0]["id"])]["name"]),
         ("ten's forgejo-repo-creds still holding it", {"creds": {"forgejo-repo-creds": (BOT, toks[0]["sha1"])}},
          [toks[0]["id"], toks2[-1]["id"], young["id"]], "reader tokens deleted: none"),
         ("ten not read", {"down": True}, [toks[0]["id"], toks2[-1]["id"], young["id"]],
@@ -495,7 +502,7 @@ for label, k8s, want_left, said in (
     ten(**k8s)
     rc, out = run()
     check(f"a run over 3 h later, {label}: the run passes; {len(want_left)} older token(s) left, said",
-          (rc, [t["id"] for t in bot_tokens(fstate())][:len(want_left)], said in flat(out)), (0, want_left, True))
+          (rc, [t["id"] for t in bot_tokens(fstate())][:len(want_left)], shows(words, out)), (0, want_left, True))
 
 # Vault's token alone keeps a token: another property ending as an old token's (a note, a copy) keeps nothing
 reset(copy.deepcopy(st), {PATH_V: {"data": dict(dv(v2)["data"], note="was " + toks[0]["sha1"]),

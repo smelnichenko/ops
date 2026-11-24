@@ -2,8 +2,8 @@
 # ScyllaDB's backups restore, rehearsed on the copy: a marker keyspace (as chat's is: SimpleStrategy, RF 1, no tablets)
 # holds a random marker; Scylla Manager backs that keyspace up (a task of its own, its snapshot removed after); the table
 # is truncated; production's restore (deploy/ansible/playbooks/tasks/scylla-restore.yml - sctool restore
-# --restore-tables) brings the marker back. Until now nothing had ever restored one of these backups. Not yet rehearsed:
-# the whole way back from a release line (a new cluster at the old version, its schema restored, then its tables).
+# --restore-tables) brings the marker back. Until now nothing had ever restored one of these backups. The whole way back
+# from a release line (the cluster rebuilt, then these tasks) has its own rehearsal: scylla-way-back-check.yml.
 #
 # Usage: ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/scylla-restore-check.yml
 - name: Vagrant VMs only

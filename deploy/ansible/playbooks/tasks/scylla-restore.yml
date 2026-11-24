@@ -5,14 +5,25 @@
 # playbooks/scylla-restore.yml (production, by hand) and the copy's rehearsal (tests/ansible/copy/scylla-restore-check.yml).
 #
 # Needs: restore_cluster (Scylla Manager's id or name), restore_location (s3:<bucket>), restore_snapshot (sm_<UTC>),
-#        restore_keyspaces (sctool's glob list), manager (the sctool command prefix)
+#        restore_keyspaces (sctool's glob list), manager (the sctool command prefix); restore_source_cluster (optional:
+#        the Scylla Manager id whose backup holds the snapshot - the cluster a way back replaced, tasks/scylla-way-back.yml;
+#        unset: the target's own backups, never another cluster's)
 # Sets:  restore_task (restore/<id>)
-- name: The snapshot is one Scylla Manager holds for the cluster
-  ansible.builtin.command: "{{ manager }} sctool backup list -c {{ restore_cluster }} -L {{ restore_location }}"
+- name: The snapshot is one Scylla Manager holds for the cluster (or for the source cluster named)
+  ansible.builtin.command: >-
+    {{ manager }} sctool backup list -c {{ restore_cluster }} -L {{ restore_location }}{{ ' --all-clusters'
+    if restore_source_cluster | default('') | length > 0 else '' }}
   register: _restore_list
   changed_when: false
   check_mode: false
-  failed_when: _restore_list.rc != 0 or restore_snapshot not in _restore_list.stdout
+
+- name: The snapshot listed - under the source cluster's own heading when one is named
+  ansible.builtin.assert:
+    that: >-
+      restore_snapshot in ((_restore_list.stdout.split('Cluster: ' ~ restore_source_cluster, 1) + [''])[1].split('Cluster: ')[0]
+      if restore_source_cluster | default('') | length > 0 else _restore_list.stdout)
+    fail_msg: "{{ restore_snapshot }} not among {{ restore_source_cluster | default(restore_cluster, true) }}'s backups in {{ restore_location }}"
+    quiet: true
 
 - name: The restore - what it would do (a dry run)
   ansible.builtin.command: >-

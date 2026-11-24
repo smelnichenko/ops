@@ -5,7 +5,9 @@ for its duration — nothing fails over. This is the procedure for a clean, plan
 reboot (for an unplanned/forced reboot, it is still crash-safe — skip to §3).
 
 The off-cluster Pi services (Vault, MinIO, Patroni Postgres, Forgejo, Keycloak,
-Nexus, keepalived VIP) are **not** affected by rebooting `ten`.
+Nexus, keepalived VIP) are **not** affected by rebooting `ten` — **while both Pis are healthy**:
+`ten` is Consul's third voter and the arbiter brick of every Gluster volume, so with a Pi down
+or still healing, rebooting `ten` loses both quorums (Vault and Patroni stop with Consul).
 
 ## 1. TL;DR
 
@@ -17,6 +19,9 @@ A plain `systemctl reboot` is safe:
 - etcd is snapshotted **hourly to Pi MinIO** (`etcd-backup` CronJob → bucket
   `etcd-backups`), so an off-node copy always exists.
 - The stack **self-recovers** with no manual steps; app pods are back ~9–10 min later.
+- **ten reboots itself at 07:30** (local time) when an update has left `/run/reboot-required`:
+  unattended-upgrades installs Debian's updates between 06:00 and 07:00 and schedules this same
+  plain reboot (`shutdown -r 07:30`) when one asks for it — see §6.
 
 Do **not** drain (single node — nowhere to evict to; it only blocks scheduling).
 
@@ -86,8 +91,14 @@ any pre-reboot live hotfix will get reverted, by design).
 - **Pods stuck `1/2`** → istiod not serving XDS yet; `holdApplicationUntilProxyStarts`
   holds the app. Waits out. A pod labelled `cni.istio.io/uninitialized` is fixed in
   place by istio-cni repair — **don't delete**.
-- **`schnappy-production-realtime`/centrifugo restarting** → expected Kafka
-  `REBALANCE_IN_PROGRESS` churn after the single broker restarts; settles on its own.
+- **Kafka brokers `Completed`, no broker running** → the graceful shutdown left both
+  brokers' pods in phase `Succeeded`; the kubelet never restarts a terminal pod and the
+  StrimziPodSet does not replace it — Strimzi's KafkaRoller does, at its 5-minute operation
+  timeout (2026-11-22: brokers back 5 min after the operator started). **Don't delete them**;
+  wait it out.
+- **`schnappy-production-realtime`/centrifugo restarting** → expected while the single
+  broker is away (`broker closed the connection ... is TLS missing?` means no broker, not
+  TLS) or rebalancing after it restarts; settles on its own.
 - **ESO `Ready=False`** → almost always apiserver not yet serving (the Pi Vault calls
   *back* into ten's apiserver for TokenReview). Self-heals once apiserver is up. If
   `vault status` shows `sealed:true`, the Pis rebooted too — see `VaultSealed.md`.
@@ -107,5 +118,18 @@ any pre-reboot live hotfix will get reverted, by design).
   running). NOT via `task deploy:kubeadm`: that one-shot bootstrap is not re-runnable
   (it fails at `kubeadm init` preflight). Until applied, the live cap is 60s/15s →
   45s for normal pods, so do the §2.3 flushes for a fully clean reboot.
-- **No node-reboot automation** (no kured, no reboot timer): reboots are deliberate
-  and manual.
+- **Automatic upgrades and reboots** (`setup-host-hardening.yml`, `tasks/auto-upgrades.yml`,
+  `task deploy:host-hardening`): Debian's unattended-upgrades as Debian ships it — its own
+  timers (lists twice a day, the upgrade between 06:00 and 07:00) and origins (trixie and
+  trixie-security; Docker's and Kubernetes' packages come from neither, are held, and stay the
+  upgrade cycle's). nftables is never upgraded unattended (its restart flushes every rule on
+  ten). When an update left `/run/reboot-required` (every kernel does, a manual `apt
+  upgrade`'s too) it schedules `shutdown -r 07:30` — no check of the cluster or the Pis first.
+  07:30 sits after the night's backups, load test and pitest and before the 08:00 sweeper.
+  The package's own logind drop-in (30 s) is masked: the kubelet's 180 s stays in effect.
+  - see it coming: `cat /run/reboot-required.pkgs` (what asked) and
+    `busctl get-property org.freedesktop.login1 /org/freedesktop/login1 org.freedesktop.login1.Manager ScheduledShutdown`
+  - hold it back for a day: `sudo shutdown -c` (the next morning's run schedules it again)
+  - what ran: `/var/log/unattended-upgrades/unattended-upgrades.log`, `journalctl -u apt-daily-upgrade`
+  - alerts: **NodeAutoUpgradesFailing** (no successful lists update or upgrade for 26 h) and
+    **NodeRebootPending** (a reboot owed for 26 h — the 07:30 reboot did not happen).

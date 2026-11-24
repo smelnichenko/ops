@@ -1,7 +1,7 @@
 # Plan 104 — masi: the review's sources, and the fields they need
 
 **Status:** approved 2026-10-19. The operator reviewed "masi data collection & relocation review"
-(https://claude.ai/artifact/L3qNC2DSPrHLaeW3NTzcwX) and said "do it" and "everything approved!". Treated as an
+(https://claude.ai/artifact/L3qNC2DSPrHLaeW3NTzcwX) and approved all of it. Treated as an
 academic project; see the memory note on that.
 
 Masi gets one PR at a time. Each PR follows the usual routine: a failing test first, revert checks, the clean check, a
@@ -54,7 +54,7 @@ model that block searching from abroad.
 10. **Research-only sources at stated risk** (approved): Duunitori, cvbankas, JustJoin.it, The Hub, No Fluff Jobs,
     Landing.jobs, Remotive. Each records its terms and robots facts in `docs/sources.md`.
 
-11. **People: a profile link and the operator's own photo** (operator 2026-10-19, "do both", after being advised
+11. **People: a profile link and the operator's own photo** (operator 2026-10-19 chose both, after being advised
     against collecting faces automatically). No automatic photo collection: LinkedIn sits behind a login, a Gravatar
     lookup by e-mail would be enrichment, and a team-page face matched to a name is guesswork. Systematically scraping
     faces also very likely falls outside GDPR's household exemption.

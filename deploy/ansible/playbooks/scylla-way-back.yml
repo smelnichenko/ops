@@ -1,0 +1,42 @@
+---
+# The way back from a ScyllaDB release line - production, by hand (tasks/scylla-way-back.yml; its rehearsal on the copy:
+# tests/ansible/copy/scylla-way-back-check.yml, task test:copy:scylla-way-back). A release line cannot be downgraded:
+# the cluster at the newer version is thrown away - its data volumes and the ScyllaCluster -, Argo recreates it at the
+# version git asks for (selfHeal) and the chart's schema Job creates its keyspaces and tables, then Scylla Manager
+# restores the tables' rows from the snapshot taken before the upgrade (the upgrade cycle takes it before the merge:
+# check:production:scylla-backup). Writes after that snapshot are lost.
+#
+# First: revert the release line's unit in infra (its merge commit) and let Argo sync it - the ScyllaCluster then asks
+# for the old version, and this refuses anything else. Nothing is deleted until every check passed.
+#
+# Usage: task deploy:scylla:way-back -- -e confirm=schnappy-production-scylla -e version=<the old version>
+#          -e snapshot=sm_<UTC> [-e keyspaces=chat] [-e scylla_namespace=schnappy-production]
+#        (--check: every check before the deletion, and the restore's dry run against the cluster as it stands)
+- name: The way back from a ScyllaDB release line
+  hosts: target
+  become: true
+  gather_facts: false
+  vars:
+    kubeconfig: /etc/kubernetes/admin.conf
+    kubectl: "kubectl --kubeconfig {{ kubeconfig }}"
+    manager: "{{ kubectl }} -n scylla-manager exec deploy/scylla-manager -c scylla-manager --"
+    # another environment's: -e scylla_namespace=<its namespace> (its cluster <namespace>-scylla, its app <namespace>-data)
+    scylla_namespace: schnappy-production
+    scylla_cluster: "{{ scylla_namespace }}-scylla"
+    argo_app: "{{ scylla_namespace }}-data"
+    restore_location: "{{ location | default('s3:scylla-backups') }}"
+    way_back_version: "{{ version | default('') }}"
+    way_back_snapshot: "{{ snapshot | default('') }}"
+    # the chart's keyspaces (helm/schnappy-data/files/scylla-schema.cql): what its schema Job creates
+    way_back_keyspaces: "{{ keyspaces | default('chat') }}"
+    way_back_confirm: "{{ confirm | default('') }}"
+  tasks:
+    - name: The way back
+      ansible.builtin.import_tasks: tasks/scylla-way-back.yml
+
+    - name: Back
+      ansible.builtin.debug:
+        msg: >-
+          {{ 'PREVIEW: every check passed - would rebuild' if ansible_check_mode else 'WAY BACK DONE:' }} {{ scylla_cluster }}
+          at {{ way_back_version }}, {{ way_back_keyspaces }} restored from {{ way_back_snapshot }}
+          {{- '' if ansible_check_mode else ' (' ~ restore_task ~ '; Scylla Manager ' ~ way_back_old_id[0] ~ ' -> ' ~ way_back_new_id ~ ')' }}

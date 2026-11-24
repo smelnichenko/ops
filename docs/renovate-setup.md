@@ -2,15 +2,19 @@
 
 Two Renovates use the `renovate-bot` account:
 
-- **The upgrade cycle's** - infra, platform and ops (docs/plans/120-automated-upgrade-cycle.md): `task upgrade`, started
+- **The upgrade cycle's** - infra, platform and ops (docs/plans/120-automated-upgrade-cycle.md): `task upgrade:run`, started
   by hand on the workstation (operator 2026-11-15: Renovate and the runner one task, run locally, no CI cron) -
   `scripts/upgrade-renovate.sh` runs the pinned `renovate/renovate` image in docker with the bot's token
   (`.env` `RENOVATE_TOKEN`, by name) and the shared preset `renovate/upgrade-cycle.json` (each repo's `renovate.json`
-  extends it), then `scripts/upgrade-cycle.sh` proves one unit on the Vagrant copy and applies it. `task upgrade
-  LOOKUP=true` reads only. Its Woodpecker pipeline (`.woodpecker/renovate.yaml` in ops) is gone.
-- **monitor's and masi's** - `task renovate:apps`, by hand on the workstation (operator 2026-11-16):
-  `scripts/upgrade-renovate.sh --apps` - the same image and bot (`.env` `RENOVATE_TOKEN`), each repo's own
-  `renovate.json`, dependency PRs on `schnappy/monitor` and `schnappy/masi`; `LOOKUP=true` reads only. Their weekly
+  extends it), then `scripts/upgrade-cycle.sh` proves one unit on the Vagrant copy and applies it. `task
+  upgrade:check` reads only. Its Woodpecker pipeline (`.woodpecker/renovate.yaml` in ops) is gone.
+- **The app repos'** - `task upgrade:apps:run`, by hand on the workstation (operator 2026-11-16):
+  `scripts/upgrade-renovate.sh --apps` - the same image and bot (`.env` `RENOVATE_TOKEN`), each repo's `renovate.json`
+  extending the shared preset `renovate/apps.json`, dependency PRs on admin, chat, chess, masi, monitor, radar,
+  radio-scheduler, site and target-scorer, and the CI tool images ci-tools, ansible-lint, sonar-scanner and hyperfoil (the
+  first two since 2026-11-16, the rest since 2026-11-21 - the bot has write on each, it pushes `renovate/*` branches; the
+  tool images but ci-tools have no PR CI, so their PRs never merge themselves - each built and tried by hand, ansible-lint's
+  against ops's whole unit suite); `task upgrade:apps:check` reads only. monitor's and masi's weekly
   Woodpecker cron and pipeline (`.woodpecker/renovate.yaml`) are gone, and with them the token `woodpecker-ci-secrets`
   carried (`renovate_token`, `renovate_github_token`): it was renovate-bot's, which can push to infra, platform and ops,
   and every pipeline can mount that secret. No second bot.
@@ -55,14 +59,14 @@ always go through Vault + the ExternalSecret.
   shows the status check; confirm **automerge** fires for a patch/digest PR once
   green.
 - Confirm `git.pmon.dev/schnappy/*` images are **not** proposed (first-party
-  images are promoted via `task promote:prod`, never Renovate — see the
+  images are promoted via `task promote:run`, never Renovate — see the
   `packageRules` `enabled:false` in `renovate.json`).
 - Tune `prConcurrentLimit` / schedule from the first run's PR volume.
 
 ## Fan-out (after monitor is proven) - superseded
 
 Superseded by the upgrade cycle (top): infra, platform and ops extend `local>schnappy/ops//renovate/upgrade-cycle`, run
-by `task upgrade`. The plan below is kept as it was.
+by `task upgrade:run`. The plan below is kept as it was.
 
 - Add the same `.woodpecker/renovate.yaml` is **not** needed per-repo. Instead
   switch to ONE central runner: a single `renovate.yaml` cron (in `ops` or a
@@ -82,7 +86,7 @@ by `task upgrade`. The plan below is kept as it was.
 
 ## Files
 
-- [scripts/upgrade-renovate.sh](../scripts/upgrade-renovate.sh) and `task upgrade` - the upgrade cycle's Renovate.
+- [scripts/upgrade-renovate.sh](../scripts/upgrade-renovate.sh) and `task upgrade:check` / `upgrade:run` - the upgrade cycle's Renovate.
 - [renovate/upgrade-cycle.json](../renovate/upgrade-cycle.json) - its shared preset (infra, platform, ops extend it).
 - [monitor/renovate.json](../../monitor/renovate.json) — repo policy (self-contained for the first rollout; later `extends` the shared preset).
 - [monitor/.woodpecker/renovate.yaml](../../monitor/.woodpecker/renovate.yaml) — the cron runner.
