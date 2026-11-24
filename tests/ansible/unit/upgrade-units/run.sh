@@ -31,6 +31,19 @@ class H(http.server.BaseHTTPRequestHandler):
             data = data[(page - 1) * limit:page * limit]
         body = json.dumps(data).encode()
         self.send_response(200); self.end_headers(); self.wfile.write(body)
+    def do_PATCH(self):  # an issue's edit, as replenish ticks a dashboard: recorded, and the fixture answers with it after
+        path = urllib.parse.urlparse(self.path).path.removeprefix("/api/v1")
+        payload = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
+        fx = json.load(open(os.path.join(W, "fixture.json")))
+        repo_issues, _, number = path.rpartition("/")
+        issue = next((i for i in fx.get(repo_issues, []) if str(i.get("number")) == number), None)
+        if issue is None or fx.get("patch_fails"):
+            self.send_response(500); self.end_headers(); self.wfile.write(b'{"message":"no"}'); return
+        issue.update(payload)
+        json.dump(fx, open(os.path.join(W, "fixture.json"), "w"))
+        with open(os.path.join(W, "patches.jsonl"), "a") as f:
+            f.write(json.dumps({"path": path, **payload}) + "\n")
+        self.send_response(200); self.end_headers(); self.wfile.write(json.dumps(issue).encode())
     def log_message(self, *a): pass
 s = http.server.HTTPServer(("127.0.0.1", 0), H)
 open(os.path.join(W, "port.tmp"), "w").write(str(s.server_port)); os.rename(os.path.join(W, "port.tmp"), os.path.join(W, "port"))
@@ -55,18 +68,31 @@ def pr(number, unit, *labels, user="renovate-bot", fork=False, renovate=True):
     return {"number": number, "head": {"ref": f"renovate/{unit}", "repo": "FORK" if fork else None},
             "user": {"login": user}, "labels": [{"name": x} for x in labels]}
 DASH_TITLE = json.load(open("renovate/upgrade-cycle.json"))["dependencyDashboardTitle"]
+DASH_NUMBER = {"infra": 44, "platform": 33, "ops": 56}
+def board(units, ticked=()):  # a dashboard's body: Renovate's pending-approval boxes for these units, one ticked or not
+    lines = ["This issue lists Renovate updates.", "", "## Pending Approval", "",
+             "These branches will be created by Renovate only once you click their checkbox below.", ""]
+    lines += [f" - [{'x' if u in ticked else ' '}] <!-- approve-branch=renovate/{u} -->Update {u}" for u in units]
+    return "\n".join(lines + ["", "## Detected Dependencies", ""])
 def fixture(infra=(), platform=(), ops=(), comments=None, dashboard_labels=(), dashboard=True, others=1, infra_dash=(),
-            dash_user="renovate-bot", dash_title=None, platform_dash=()):
+            dash_user="renovate-bot", dash_title=None, platform_dash=(), boxes=None, patch_fails=False):
     # the dashboard behind other open issues (one labelled upgrades-paused itself: the title, not the first issue, decides)
     issues = [{"title": f"an issue {i}", "labels": [{"name": "upgrades-paused"}], "user": {"login": "renovate-bot"}} for i in range(others)]
+    boxes = boxes or {}
     if dashboard:
-        issues.append({"title": dash_title or DASH_TITLE, "user": {"login": dash_user}, "labels": [{"name": x} for x in dashboard_labels]})
+        issues.append({"title": dash_title or DASH_TITLE, "user": {"login": dash_user}, "number": DASH_NUMBER["ops"],
+                       "body": board(boxes.get("ops", ())), "labels": [{"name": x} for x in dashboard_labels]})
     fx = {"/repos/schnappy/infra/pulls": list(infra), "/repos/schnappy/platform/pulls": list(platform),
           "/repos/schnappy/ops/pulls": list(ops), "/repos/schnappy/ops/issues": issues,
           "/repos/schnappy/platform/issues": [{"title": DASH_TITLE, "user": {"login": "renovate-bot"},
+                                               "number": DASH_NUMBER["platform"], "body": board(boxes.get("platform", ())),
                                                "labels": [{"name": x} for x in platform_dash]}],
           "/repos/schnappy/infra/issues": [{"title": DASH_TITLE, "user": {"login": "renovate-bot"},
-                                            "labels": [{"name": x} for x in infra_dash]}]}
+                                            "number": DASH_NUMBER["infra"], "body": board(boxes.get("infra", ())),
+                                            "labels": [{"name": x} for x in infra_dash]}],
+          "patch_fails": patch_fails}
+    if os.path.exists(os.path.join(W, "patches.jsonl")):
+        os.remove(os.path.join(W, "patches.jsonl"))
     # a comment: its body (the bot's), or (author, body)
     for (repo, n), bodies in (comments or {}).items():
         fx[f"/repos/schnappy/{repo}/issues/{n}/comments"] = [
@@ -374,6 +400,48 @@ check("another account's pull request, or one from a fork, named renovate/<unit>
 fixture(infra=[pr(1, "test-istio-1.32", "agent-fixed")])
 check("a test environment's unit labelled agent-fixed (by a hand - the test path has no fix): merged at once as a test "
       "unit (the test environment its own proof)", run("pick"), (0, "test test-istio-1.32 minor"))
+# replenish: the dashboards hold every update for approval; one unit's box ticked when nothing open is left to pick
+check("the preset holds every update on the dashboard for approval (replenish's premise)",
+      json.load(open("renovate/upgrade-cycle.json")).get("dependencyDashboardApproval"), True)
+def patches():
+    try:
+        return [json.loads(x) for x in open(os.path.join(W, "patches.jsonl")).read().splitlines()]
+    except OSError:
+        return []
+def ticked(repo):  # the units whose box is ticked on that repo's dashboard now
+    fx = json.load(open(os.path.join(W, "fixture.json")))
+    body = next(i for i in fx[f"/repos/schnappy/{repo}/issues"] if i.get("title") == DASH_TITLE)["body"]
+    return sorted(m.split("approve-branch=renovate/")[1].split(" ")[0] for m in body.splitlines() if "- [x] <!--" in m)
+PENDING = {"infra": ("wave-patches", "istio-1.33", "kubernetes-1.37", "kubernetes-1.36", "manual-woodpecker"),
+           "platform": ("kubernetes-1.36", "kubernetes-1.37"), "ops": ("istio-1.33", "wave-patches")}
+fixture(infra=[pr(1, "observability")], boxes=PENDING)
+check("replenish: a unit to pick is open - nothing asked of Renovate", (run("replenish"), patches()), ((0, "OPEN"), []))
+fixture(boxes=PENDING)
+check("replenish: nothing open - the pick's first among the waiting (wave-patches) ticked on every dashboard listing it, "
+      "as the bot, and nothing else", (run("replenish"), ticked("infra"), ticked("ops"), ticked("platform"),
+                                        sorted(p["path"] for p in patches())),
+      ((0, "APPROVED wave-patches infra,ops"), ["wave-patches"], ["wave-patches"], [],
+       ["/repos/schnappy/infra/issues/44", "/repos/schnappy/ops/issues/56"]))
+before = board(PENDING["infra"])
+check("replenish: the body written whole, only the one box changed",
+      json.load(open(os.path.join(W, "fixture.json")))["/repos/schnappy/infra/issues"][0]["body"],
+      before.replace("- [ ] <!-- approve-branch=renovate/wave-patches -->", "- [x] <!-- approve-branch=renovate/wave-patches -->"))
+fixture(boxes={"infra": ("kubernetes-1.37", "kubernetes-1.36", "manual-woodpecker"), "platform": ("kubernetes-1.37", "kubernetes-1.36")})
+check("replenish: a step waits for the lower one waiting - kubernetes-1.36 asked, never 1.37 first; a manual- unit never",
+      (run("replenish"), ticked("infra"), ticked("platform")), ((0, "APPROVED kubernetes-1.36 infra,platform"),
+                                                               ["kubernetes-1.36"], ["kubernetes-1.36"]))
+fixture(infra=[pr(2, "kubernetes-1.36", "veto")], boxes={"infra": ("kubernetes-1.37", "observability")})
+check("replenish: a lower step open but held (veto) still holds the higher - the next unit asked instead",
+      run("replenish"), (0, "APPROVED observability infra"))
+fixture(boxes={"infra": ("scylladb-2026.2", "test-scylladb-2026.2", "wave-patches")})
+check("replenish: a test environment's unit before its twin, before the wave", run("replenish"),
+      (0, "APPROVED test-scylladb-2026.2 infra"))
+fixture(boxes={"infra": ("manual-woodpecker",)})
+check("replenish: nothing to ask (a manual- unit alone) - nothing ticked", (run("replenish"), patches()), ((0, "NOTHING"), []))
+fixture(boxes=PENDING, dashboard_labels=("upgrades-paused",))
+check("replenish: the kill switch - nothing asked", (run("replenish"), patches()), ((0, "PAUSED"), []))
+fixture(boxes=PENDING, patch_fails=True)
+check("replenish: the dashboard's edit refused - not read (exit 1), never 'approved'", run("replenish")[0], 1)
 print("upgrade-units: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 PYCHECK
