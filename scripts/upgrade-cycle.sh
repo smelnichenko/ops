@@ -733,7 +733,14 @@ fix_unit() {  # fix_unit <what it fixes> <the file the agent reads> <its name th
   run scripts/copy-snapshot.sh forget "the proof after a fix builds its base fresh" || say "THE SNAPSHOT NOT FORGOTTEN - the proof may revert it"
   build
 }
-prove() { run task test:copy:unit UNIT="$unit"; }
+# what the unit moves ("<package> <from> <to>", its Renovate tables): the copy's inventory after the change must show
+# production's lines of it at the new version (scripts/copy-change-inventory.sh, test:copy:check's last step)
+prove() {
+  local moves="$ops/.copy/unit-moves-$unit.txt"
+  [ -n "$dry" ] || scripts/upgrade-units.py moves "$unit" > "$moves" 2>> "$log" \
+    || { stopped "what the unit moves not read - nothing proven" "$log"; exit 1; }
+  COPY_UNIT_MOVES="$moves" run task test:copy:unit UNIT="$unit"
+}
 # what was proven is what is reviewed and merged: the heads after each proof the ones read before it
 proven_heads() {
   read_heads "$heads.after" || { stopped "its pull requests not read after its proof - nothing applied" "$log"; exit 1; }
@@ -852,6 +859,12 @@ for c in "${one_way_taken[@]}"; do  # a store whose backup its own command takes
     || { stopped "a one-way change whose backup its command takes ($c) - not in its plan; nothing merged" "$log"; exit 1; }
 done
 APPLY_SPAN=$((APPLY_SPAN + one_way_minutes))  # the backups' bound: the apply's window holds them too
+# what production runs only as an Argo hook - k6, schnappy-production-apps' PostSync smoke test: Argo leaves hooks out of
+# its diff, so the apply alone never runs the new version (production met it at the next unrelated sync, a failure
+# failing that deploy - the observability review, 2026-11-25). Its app synced after the apply, the hook to succeed
+if grep -q '^grafana/k6 ' "$ops/.copy/unit-moves-$unit.txt" 2> /dev/null; then
+  cmds+=("deploy:argo:sync -- -e argo_app=schnappy-production-apps")
+fi
 
 # 6. the apply - the gates again (hours since the start), the backups a one-way change needs, still free, a journal
 gates "$APPLY_SPAN" merge || { stopped "proven and reviewed, not applied: a gate refused it now (see the log) - the next run proves it again" "$log"; exit 1; }

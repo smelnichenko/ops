@@ -254,6 +254,23 @@ check("L07 a rule not healthy: failed, named with its error",
 check("L07 the Prometheus selecting by labels (not every object): refused, said",
       (lambda r: (r[0] != 0, "SELECTORS" in r[1]))(rules_check(prom_spec={"ruleSelector": {"matchLabels": {"a": "b"}}})), (True, True))
 check("L07 a group loaded that no object defines (an old file): no failure", rules_check(extra=True)[0], 0)
+# K02: argo-sync-app.yml - the application named, and its own sync's end read: the operation started at or after the
+# patch, Succeeded (an older operation's result, or a sync Failed, is no success)
+asy = "deploy/ansible/playbooks/argo-sync-app.yml"
+nm = task(asy, "The application named")["ansible.builtin.assert"]["that"]
+check("K02 an application's name: on; one with a space or an option: refused",
+      (condition(nm, app="schnappy-production-apps"), condition(nm, app="a b"), condition(nm, app="--all"), condition(nm, app="")),
+      (True, False, False, False))
+end = task(asy, "Its sync ended Succeeded")
+T0 = "2026-11-25T16:30:00Z"
+def synced(out):
+    v = dict(_st={"rc": 0, "stdout": out}, _t0={"stdout": T0})
+    return condition(end["until"], **v), condition(end["failed_when"], **v)
+check("K02 its sync Succeeded after the patch: done, passed; Failed after it: done, failed",
+      (synced("Succeeded|2026-11-25T16:30:05Z|successfully synced"), synced("Failed|2026-11-25T16:31:00Z|hook k6 failed")),
+      ((True, False), (True, True)))
+check("K02 an older operation's Succeeded (before the patch), or one still Running: not done",
+      (synced("Succeeded|2026-11-25T16:00:00Z|old")[0], synced("Running|2026-11-25T16:30:05Z|")[0]), (False, False))
 print("guard-conditions: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 PY_GUARD_CONDITIONS

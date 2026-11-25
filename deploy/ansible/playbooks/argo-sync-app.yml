@@ -1,0 +1,77 @@
+---
+# An Argo CD application synced now, and its sync - its hooks with it - required to succeed: the upgrade cycle's command
+# after a unit that moves what production runs only as a hook. k6, schnappy-production-apps' PostSync smoke test: Argo
+# leaves hooks out of its diff, so the apply alone never runs the new version - production met it at the next unrelated
+# sync, a failure failing that deploy (the observability review, 2026-11-25).
+#
+# The sync started as a manual one is (the application's operation set: no prune, the app's own sync options), never
+# on top of an operation running; then its own operation - started after the patch - read until it ends: Succeeded, or
+# the run fails with Argo's phase and message.
+#
+# Usage: task deploy:argo:sync -- -e argo_app=<application>   (production; the copy runs the hook in its smoke test)
+- name: Sync an Argo CD application, its hooks required to succeed
+  hosts: target
+  become: true
+  gather_facts: false
+  vars:
+    kubectl: "kubectl --kubeconfig /etc/kubernetes/admin.conf -n argocd"
+    app: "{{ argo_app | default('') }}"
+  tasks:
+    - name: The application named (a Kubernetes name)
+      ansible.builtin.assert:
+        that: app is match('^[a-z0-9]([-a-z0-9]*[a-z0-9])?$')
+        fail_msg: "-e argo_app=<application>: '{{ app }}' is no application name"
+        quiet: true
+
+    - name: No operation running on it now (a sync is never started on top of one)
+      ansible.builtin.command: "{{ kubectl }} get application {{ app }} -o jsonpath={.operation}"
+      register: _op
+      changed_when: false
+      retries: 20
+      delay: 15
+      until: _op.rc == 0 and _op.stdout == ''
+
+    - name: Its own sync options (a manual sync takes the app's)
+      ansible.builtin.command: "{{ kubectl }} get application {{ app }} -o jsonpath={.spec.syncPolicy.syncOptions}"
+      register: _opts
+      changed_when: false
+
+    - name: The time the sync starts (its operation's startedAt is read against it)
+      ansible.builtin.command: date -u +%Y-%m-%dT%H:%M:%SZ
+      register: _t0
+      changed_when: false
+
+    - name: Its sync started
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - --kubeconfig
+          - /etc/kubernetes/admin.conf
+          - -n
+          - argocd
+          - patch
+          - application
+          - "{{ app }}"
+          - --type
+          - merge
+          - -p
+          - "{{ {'operation': {'initiatedBy': {'username': 'upgrade-cycle'},
+                               'info': [{'name': 'Reason', 'value': 'the upgrade cycle: run its hooks at the version applied'}],
+                               'sync': {'prune': false, 'syncOptions': (_opts.stdout | from_json if _opts.stdout else [])}}} | to_json }}"
+      changed_when: true
+
+    # phase|startedAt|message - the operation started at or after the patch (an older one's result is not this sync's)
+    - name: Its sync ended Succeeded, its hooks with it
+      ansible.builtin.command:
+        argv: [kubectl, --kubeconfig, /etc/kubernetes/admin.conf, -n, argocd, get, application, "{{ app }}", -o,
+               "jsonpath={.status.operationState.phase}|{.status.operationState.startedAt}|{.status.operationState.message}"]
+      register: _st
+      changed_when: false
+      retries: 60
+      delay: 15
+      until: >-
+        _st.rc == 0 and (_st.stdout.split('|') | length) >= 2 and _st.stdout.split('|')[1] >= _t0.stdout
+        and _st.stdout.split('|')[0] in ['Succeeded', 'Failed', 'Error']
+      failed_when: >-
+        _st.rc != 0 or (_st.stdout.split('|') | length) < 2 or _st.stdout.split('|')[1] < _t0.stdout
+        or _st.stdout.split('|')[0] != 'Succeeded'
