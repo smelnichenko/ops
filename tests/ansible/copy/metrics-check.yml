@@ -1,6 +1,6 @@
 ---
-# Monitoring still works on the copy, and after a change: Prometheus reconciled by its operator and available, every
-# scrape target up (bar the ones that cannot be up in a VM, listed below with the reason), Mimir holding samples
+# Monitoring still works on the copy, and after a change: Prometheus reconciled by its operator and available (at its
+# generation), every rule group its PrometheusRules define loaded and healthy, every scrape target up (bar the ones that cannot be up in a VM, listed below with the reason), Mimir holding samples
 # Prometheus remote-wrote less than two minutes ago, and container logs reaching ClickHouse (Fluent Bit, ClickHouse).
 #
 # Why: an operator or Prometheus upgrade, or a CNI/runtime one, can leave every pod ready while
@@ -46,16 +46,23 @@
     - name: Vagrant VMs only (fails closed on any other host)
       ansible.builtin.import_tasks: ../vagrant-only.yml
 
+    # at the object's generation: a condition the old operator left (its observedGeneration behind) said True for a spec
+    # the new one had not reconciled yet (the observability review, 2026-11-25) - generation/Reconciled/its
+    # generation/Available/its generation
     - name: Prometheus is reconciled by the operator and available
       # shell, quoted: the command module's word splitting strips the quotes inside the jsonpath filter
       ansible.builtin.shell: >-
         kubectl --kubeconfig {{ kubeconfig }} -n schnappy-infra get prometheus schnappy-prometheus
-        -o jsonpath='{.status.conditions[?(@.type=="Reconciled")].status}/{.status.conditions[?(@.type=="Available")].status}'
+        -o jsonpath='{.metadata.generation}/{.status.conditions[?(@.type=="Reconciled")].status}/{.status.conditions[?(@.type=="Reconciled")].observedGeneration}/{.status.conditions[?(@.type=="Available")].status}/{.status.conditions[?(@.type=="Available")].observedGeneration}'
       register: _prom
       changed_when: false
       retries: 20
       delay: 15
-      until: _prom.stdout == 'True/True'
+      until: >-
+        (_prom.stdout.split('/') | length) == 5
+        and _prom.stdout.split('/')[1] == 'True' and _prom.stdout.split('/')[3] == 'True'
+        and _prom.stdout.split('/')[2] == _prom.stdout.split('/')[0]
+        and _prom.stdout.split('/')[4] == _prom.stdout.split('/')[0]
 
     # every active target up now - waited for: a target a change replaced (a new pod's sidecar, a not-ready address)
     # comes up after the settle; the moment they all are is where the next check's window starts (one fixed before it
@@ -200,6 +207,51 @@
       delegate_to: localhost
       become: false
       when: record_scrape_pools | bool
+
+    # every rule group the PrometheusRule objects define loaded, as many rules, each healthy: only the targets were read,
+    # and with the operator's admission webhooks off (infra's prometheus values) a group a new operator or chart drops or
+    # breaks went unseen (the observability review, 2026-11-25). The objects are the record - no baseline: the
+    # Prometheus selects every one (its rule selectors empty, checked; any other refused). A rule not evaluated yet
+    # after a reload reads unknown - waited for
+    - name: Every rule group the PrometheusRules define loaded, each rule healthy
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          k() { kubectl --kubeconfig {{ kubeconfig }} "$@"; }
+          python3 -c '
+          import json, os, sys
+          spec = json.load(open("/dev/fd/3"))["spec"]
+          if (spec.get("ruleSelector") or {}) != {} or (spec.get("ruleNamespaceSelector") or {}) != {}:
+              print("  SELECTORS NOT EMPTY: %s / %s - this check reads every PrometheusRule" % (spec.get("ruleSelector"), spec.get("ruleNamespaceSelector")))
+              sys.exit(2)
+          have = {(os.path.basename(g["file"]), g["name"]): g["rules"] for g in json.load(open("/dev/fd/5"))["data"]["groups"]}
+          bad, want = [], 0
+          for r in json.load(open("/dev/fd/4"))["items"]:
+              m = r["metadata"]
+              src = "%s/%s" % (m["namespace"], m["name"])
+              f = "%s-%s-%s.yaml" % (m["namespace"], m["name"], m["uid"])
+              for g in r["spec"].get("groups", []):
+                  want += 1
+                  n, got = len(g.get("rules", [])), have.get((f, g["name"]))
+                  if got is None:
+                      bad.append("  NOT LOADED %s %s (%d rules)" % (src, g["name"], n))
+                      continue
+                  if len(got) < n:
+                      bad.append("  FEWER %s %s: %d of %d" % (src, g["name"], len(got), n))
+                  bad += [("  UNHEALTHY %s %s %s: %s %s" % (src, g["name"], x.get("name"), x.get("health"), x.get("lastError", "")))[:300]
+                          for x in got if x.get("health") != "ok"]
+          print("\n".join(bad + ["%d groups defined, %d loaded" % (want, len(have))]))
+          sys.exit(1 if bad or not want else 0)' \
+            3< <(k -n schnappy-infra get prometheus schnappy-prometheus -o json) \
+            4< <(k get prometheusrules -A -o json) \
+            5< <(k get --raw '{{ proxy }}/schnappy-prometheus:9090/proxy/api/v1/rules')
+      register: _rules
+      changed_when: false
+      retries: 12
+      delay: 15
+      until: _rules.rc == 0 or 'SELECTORS NOT EMPTY' in _rules.stdout
+      failed_when: _rules.rc != 0
 
     - name: Mimir holds samples remote-written in the last two minutes
       ansible.builtin.shell: |

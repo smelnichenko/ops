@@ -194,6 +194,66 @@ for path in ("tests/ansible/copy/survival-check.yml", "deploy/ansible/playbooks/
           (condition(rd["failed_when"], _ds_provisioned={"rc": 0, "stdout": CM}),
            condition(rd["failed_when"], _ds_provisioned={"rc": 0, "stdout": "apiVersion: 1\ndatasources: []\n"}),
            condition(rd["failed_when"], _ds_provisioned={"rc": 1, "stdout": CM})), (False, True, True))
+# L06: the copy's Prometheus reconciled and available AT ITS GENERATION - a condition the old operator left (its
+# observedGeneration behind the object's) satisfied the check (the observability review, 2026-11-25)
+mc = "tests/ansible/copy/metrics-check.yml"
+pr = task(mc, "Prometheus is reconciled by the operator and available")
+check("L06 Reconciled and Available at the object's generation: done; either behind it, or either not True: not done",
+      tuple(condition(pr["until"], _prom={"stdout": o}) for o in
+            ("7/True/7/True/7", "8/True/7/True/8", "8/True/8/True/7", "7/False/7/True/7", "7/True/7/False/7", "True/True")),
+      (True, False, False, False, False, False))
+# L07: every rule group the PrometheusRule objects define loaded, as many rules, each healthy - the copy read only its
+# targets, and with the operator's admission webhooks off a group a new operator or chart drops or breaks went unseen
+# (the same review). The task's script run as Ansible renders it, kubectl a stub
+PRULES = {"items": [
+    {"metadata": {"namespace": "schnappy-infra", "name": "schnappy-alerts", "uid": "11111111-2222-3333-4444-555555555555"},
+     "spec": {"groups": [{"name": "infra-a", "rules": [{"alert": "A1"}, {"alert": "A2"}]}, {"name": "infra-b", "rules": [{"alert": "B1"}]}]}},
+    {"metadata": {"namespace": "kagent", "name": "kagent-alerts", "uid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"},
+     "spec": {"groups": [{"name": "kagent", "rules": [{"alert": "K1"}]}]}}]}
+def loaded(drop=(), fewer=(), unhealthy=(), extra=False):
+    groups = []
+    for r in PRULES["items"]:
+        f = "/etc/prometheus/rules/x/%s-%s-%s.yaml" % (r["metadata"]["namespace"], r["metadata"]["name"], r["metadata"]["uid"])
+        for g in r["spec"]["groups"]:
+            if g["name"] in drop:
+                continue
+            rules = [{"name": x["alert"], "health": "err" if x["alert"] in unhealthy else "ok", "lastError": "boom"} for x in g["rules"]]
+            groups.append({"name": g["name"], "file": f, "rules": rules[:-1] if g["name"] in fewer else rules})
+    if extra:
+        groups.append({"name": "stray", "file": "/etc/prometheus/rules/x/old-0.yaml", "rules": [{"name": "S", "health": "ok"}]})
+    return {"data": {"groups": groups}}
+import json as _json
+def rules_check(prom_spec=None, **kw):
+    t = task(mc, "Every rule group the PrometheusRules define loaded")
+    d = tempfile.mkdtemp()
+    for n, v in (("prom.json", {"spec": prom_spec if prom_spec is not None else {"ruleSelector": {}, "ruleNamespaceSelector": {}}}),
+                 ("prules.json", PRULES), ("rules.json", loaded(**kw))):
+        open(os.path.join(d, n), "w").write(_json.dumps(v))
+    stub = os.path.join(d, "kubectl")
+    open(stub, "w").write("""#!/bin/bash
+case " $* " in
+  *" get prometheus schnappy-prometheus "*) cat "%s/prom.json" ;;
+  *" get prometheusrules "*) cat "%s/prules.json" ;;
+  *"/api/v1/rules"*) cat "%s/rules.json" ;;
+  *) echo "unexpected: $*" >&2; exit 9 ;;
+esac
+""" % (d, d, d))
+    os.chmod(stub, 0o755)
+    env = dict(os.environ, PATH=d + ":" + os.environ["PATH"])
+    r = subprocess.run(["bash", "-c", render(t["ansible.builtin.shell"]["cmd"], kubeconfig="/x", proxy="/p")],
+                       capture_output=True, text=True, env=env, timeout=60)
+    return r.returncode, r.stdout
+rc, out = rules_check()
+check("L07 every group defined loaded, as many rules, all healthy: rc 0, the counts said", (rc, "3 groups defined, 3 loaded" in out), (0, True))
+check("L07 a group the objects define not loaded: failed, named",
+      (lambda r: (r[0] != 0, "NOT LOADED schnappy-infra/schnappy-alerts infra-b" in r[1]))(rules_check(drop=("infra-b",))), (True, True))
+check("L07 a group loaded with fewer rules: failed, named",
+      (lambda r: (r[0] != 0, "FEWER schnappy-infra/schnappy-alerts infra-a: 1 of 2" in r[1]))(rules_check(fewer=("infra-a",))), (True, True))
+check("L07 a rule not healthy: failed, named with its error",
+      (lambda r: (r[0] != 0, "UNHEALTHY kagent/kagent-alerts kagent K1: err boom" in r[1]))(rules_check(unhealthy=("K1",))), (True, True))
+check("L07 the Prometheus selecting by labels (not every object): refused, said",
+      (lambda r: (r[0] != 0, "SELECTORS" in r[1]))(rules_check(prom_spec={"ruleSelector": {"matchLabels": {"a": "b"}}})), (True, True))
+check("L07 a group loaded that no object defines (an old file): no failure", rules_check(extra=True)[0], 0)
 print("guard-conditions: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 PY_GUARD_CONDITIONS
