@@ -361,6 +361,14 @@ check("notes: a major with its notes - exit 0", run("notes", "istiod-2.x"), (0, 
 fixture(infra=[body(pr(3, "postgres-19.x", "major"), [("postgres", "major", "17-alpine", "19-alpine")])])
 check("notes: a major of a package that publishes none (docker-library's postgres - review.md's path rule) - exit 0",
       run("notes", "postgres-19.x"), (0, ""))
+fixture(infra=[body(pr(37, "kubernetes-1.36"), [("alpine/k8s", "minor", "1.35.10", "1.36.6")])],
+        platform=[body(pr(40, "kubernetes-1.36"), [("alpine/k8s", "minor", "1.35.10", "1.36.6")])])
+check("notes: a family minor of alpine/k8s alone (Docker Hub's kubectl image, no notes to fetch - stopped 2026-11-25 for "
+      "none) - exit 0", run("notes", "kubernetes-1.36"), (0, ""))
+fixture(infra=[body(pr(3, "kubernetes-1.37"), [("registry.k8s.io/kube-apiserver", "minor", "1.36.6", "1.37.2"),
+                                               ("alpine/k8s", "minor", "1.36.6", "1.37.2")])])
+check("  beside a package that publishes them (kube-apiserver), none: still exit 3", run("notes", "kubernetes-1.37"),
+      (3, "schnappy/infra: no release notes"))
 fixture(infra=[body(pr(3, "nginx-1.x"), [("nginx", "minor", "1.30", "1.31")])])
 check("notes: a minor, no family's, not one-way - never asked: exit 0", run("notes", "nginx-1.x"), (0, ""))
 fixture(infra=[body(pr(3, "kubernetes-1.37"), [("kubernetes", "minor", "1.36.5", "1.37.0")])])
