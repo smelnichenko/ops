@@ -59,7 +59,6 @@ case "$1" in
     elif [ -e "$ST/list" ]; then cat "$ST/list"; else read -r _ u k < "$ST/pick"; echo "$u $k schnappy/infra upgrade-cycle"; fi ;;
   held) [ ! -e "$ST/held.fail" ] || exit 1; cat "$ST/held" 2>/dev/null; exit 0 ;;
   bodies) [ ! -e "$ST/bodies.rc" ] || exit "$(cat "$ST/bodies.rc")"; echo "| x | 1 -> 2 |" > "$3/infra.pr.md"; echo "$3/infra.pr.md" ;;
-  notes) [ ! -e "$ST/notes.rc" ] || { echo "schnappy/infra: release notes skipped"; exit "$(cat "$ST/notes.rc")"; } ;;
   *) cat "$ST/pick"; exit "$(cat "$ST/pick.rc" 2>/dev/null || echo 0)" ;;
 esac''')
 stub(os.path.join(OPS, "scripts/upgrade-label.py"), LOG + '''
@@ -835,16 +834,11 @@ rc, calls = night("prove centrifugo-7.x major", files=MAJOR,
 check("  a NOTE (a straggler the fix agent cannot reach): said on the terminal, never a finding - CLEAN goes on, merged",
       (rc, merged(calls, "centrifugo-7.x"), any("REVIEW NOTE: platform/.woodpecker/ci.yaml:12" in l for l in run_log().splitlines())),
       (0, True, True))
-rc, calls = night("prove centrifugo-7.x major", files={**MAJOR, "notes.rc": "3"})
-check("  its release notes skipped by Renovate (no github.com token): nothing built, no agent, a try naming the token",
-      (rc, has(calls, "task"), [c for c in calls if c.startswith("claude")], tries_now("centrifugo-7.x"),
-       "RENOVATE_GITHUB_TOKEN" in " ".join(stopped_lines())), (1, [], [], 1, True))
-rc, calls = night("prove centrifugo-7.x major", files={**MAJOR, "notes.rc": "1"})
-check("  its release notes not read (Forgejo's answer): nothing built, said, no try", (rc, has(calls, "task"), tries_now("centrifugo-7.x"),
-      "release notes not read" in " ".join(stopped_lines())), (1, [], 0, True))
-rc, calls = night("prove istio minor")
-check("the runner asks each unit's notes (upgrade-units.py says which need them) - a unit needing none goes on, merged",
-      (rc, merged(calls, "istio"), [words(c, 3) for c in has(calls, "upgrade-units.py notes")]), (0, True, ["upgrade-units.py notes istio"]))
+rc, calls = night("prove centrifugo-7.x major", files=MAJOR)
+check("  its pull requests carrying no release notes (the stub's body is Renovate's table alone): never a reason to stop - "
+      "built, reviewed, merged; the runner asks for no notes (operator 2026-11-25: none is no reason to leave a unit out)",
+      (rc, bool(has(calls, "task")), merged(calls, "centrifugo-7.x"), has(calls, "upgrade-units.py notes"), tries_now("centrifugo-7.x")),
+      (0, True, True, [], 0))
 many = "".join(f"NOTE: f{i}.yaml - x at 1, the unit moves it to 2\n" for i in range(60))
 rc, calls = night("prove centrifugo-7.x major", files=MAJOR,
                   verdict="NOTE: a.yaml - \x1b[2J\x1b]0;owned\x07 cleared " + "y" * 400 + "\n  NOTE: mid-line, never a note\n" + many + CLEAN)
@@ -920,9 +914,6 @@ try:
     check("a one-way unit whose store is backed up whole (a table where ScyllaDB is): proven, its backup run, then merged",
           (rc, [words(c, 3) for c in seq], has(calls, "upgrade-label.py scylladb-2026.3 upgrade-blocked")),
           (0, ["task --yes check:production:scylla-backup", "upgrade-label.py scylladb-2026.3 --merge"], []))
-    rc, calls = night("prove scylladb-2026.3 minor", files={"list": "scylladb-2026.3 minor schnappy/infra one-way,upgrade-cycle\n", "notes.rc": "3"})
-    check("  a one-way minor (its store backed up whole), its release notes skipped: nothing built, a try - one-way is judged by its notes",
-          (rc, has(calls, "task"), merged(calls, "scylladb-2026.3"), tries_now("scylladb-2026.3")), (1, [], False, 1))
     rc, calls = night("prove scylladb-2026.3 minor", files={"list": "scylladb-2026.3 minor schnappy/infra one-way,upgrade-cycle\n",
                                                             "task.check_production_scylla-backup.rc": "1"})
     check("  its backup failing: nothing merged, blocked (said)", (rc, merged(calls, "scylladb-2026.3"), notices(calls)),

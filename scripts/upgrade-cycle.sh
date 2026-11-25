@@ -529,25 +529,11 @@ if [ "$action" = test ]; then
   exit 0
 fi
 
-# a major, a one-way unit and a family minor are judged by their release notes (the review's compatibility pass - no
-# notice since 2026-11-21): scripts/upgrade-units.py notes says whether the unit needs them and has them - Renovate
-# fetches them only with a github.com token, and says nothing in the body when it did not. None: refused before anything
-# is built, a try; the token is ops/.env's RENOVATE_GITHUB_TOKEN (a read-only GitHub token, no scopes)
-notes_or_end() {
-  local out rc
-  [ -z "$dry" ] || { say "RUN upgrade-units.py notes $unit (its release notes, before the build)"; return 0; }
-  out=$(scripts/upgrade-units.py notes "$unit" 2>> "$log"); rc=$?
-  case $rc in
-    0) return 0 ;;
-    3) retry "no release notes in its pull requests ($(echo $out | tr -d '\r')) - a ${kind}, one-way or family unit is judged by them: RENOVATE_GITHUB_TOKEN in ops/.env (a read-only GitHub token) - nothing built" ;;
-  esac
-  stopped "its release notes not read (exit $rc) - nothing built" "$log"
-  exit 1
-}
-
+# release notes are no gate (operator 2026-11-25: a unit without them is never left out): Renovate fetches them where
+# it can, and the review's compatibility pass judges each version moved by what it has - its notes, else the version
+# rules and what the clones hold (review.md)
 memory || exit 1
 stop_if_one_way
-notes_or_end
 
 # clones of the unit's proven commits - the agents' working directory, outside every checkout (a commit there never
 # lands in the operator's tree)

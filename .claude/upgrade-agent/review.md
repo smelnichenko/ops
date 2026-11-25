@@ -75,9 +75,10 @@ and of the clones, and tell it to read with Read, Grep and Glob alone - its Bash
     the unit on what the fix agent cannot reach): `NOTE: <file:line> - <dependency> at <version>, the unit moves it to
     <version>` - the runner prints it, and it is aligned in ops by hand.
   Say for each version moved what you judged it from (its notes, the inventory's line, the rules above). Release notes
-  missing (a `.pr.md` holding the table alone): judge from the rules above and what the clones hold (a chart's
-  `kubeVersion`, an operator's supported versions in its chart or values) - never from memory of the project, and say
-  so. A compatibility you cannot establish from what is here is a finding, never a pass.
+  missing (a `.pr.md` holding the table alone - many images publish none Renovate can fetch) are never a finding by
+  themselves (operator 2026-11-25: no notes is no reason to leave a unit out): judge from the rules above and what the
+  clones hold (a chart's `kubeVersion`, an operator's supported versions in its chart or values) - never from memory of
+  the project, and say so. A concrete incompatibility you find there is a finding; the absence of notes is not.
 
 A pass you could not run is no pass: leave it off the PASSES line and give `VERDICT: INCOMPLETE <the pass that did not
 run>` - never CLEAN on fewer passes (the runner reviews the unit again on its next run).

@@ -417,38 +417,6 @@ def show_bodies(name, out_dir):
     return 0
 
 
-# Renovate's release notes section (its changelogs template) - in a body only when it fetched them (a github.com token)
-NOTES = "### Release Notes"
-# packages that publish none - review.md spells out their path: docker-library's postgres; alpine/k8s, Docker Hub's
-# kubectl image (no source Renovate can fetch notes from - its kubernetes-1.36 unit stopped for none, 2026-11-25), its
-# version the cluster's, judged by kubectl's skew to the API server
-NO_NOTES = {"postgres", "alpine/k8s"}
-# the families taken one minor at a time - a minor of theirs carries breaking changes as a major does
-NOTES_FAMILIES = ("istio", "gateway-api", "kubernetes", "cilium")
-
-
-def show_notes(name):
-    """What the review's compatibility pass judges a major, a one-way unit or a family minor by: Renovate's release
-    notes in its pull requests (it fetches them with a github.com token, and says nothing when it did not - a positive
-    check, its skip note never in the body). Exit 3 naming the repos when such a unit has none (a unit all of whose
-    packages publish none - NO_NOTES - aside); 0 when it has them or needs none; 1 with no such unit."""
-    u = units().get(name)
-    if u is None:
-        print(f"NO UNIT {name}")
-        return 1
-    family = any(twin(name) == f or twin(name).startswith(f + "-") for f in NOTES_FAMILIES)
-    needs = u["kind"] == "major" or "one-way" in u["labels"] or family
-    if not needs:
-        return 0
-    rows = set(table_steps(u))
-    if rows and rows <= NO_NOTES:
-        return 0
-    missing = [repo for repo, body in sorted(u["bodies"].items()) if NOTES not in body]
-    for repo in missing:
-        print(f"{repo}: no release notes")
-    return 3 if missing else 0
-
-
 def main(argv):
     commands = {("list",): show_list, ("pick",): show_pick, ("replenish",): show_replenish}
     try:
@@ -458,12 +426,10 @@ def main(argv):
             return show_held(argv[1])
         if len(argv) == 3 and argv[0] == "bodies":
             return show_bodies(argv[1], argv[2])
-        if len(argv) == 2 and argv[0] == "notes":
-            return show_notes(argv[1])
     except NotRead as e:
         print(f"NOT READ: Forgejo's answer - {e}")
         return 1
-    print("usage: upgrade-units.py list | pick | replenish | held UNIT | bodies UNIT DIR | notes UNIT")
+    print("usage: upgrade-units.py list | pick | replenish | held UNIT | bodies UNIT DIR")
     return 2
 
 

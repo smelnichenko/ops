@@ -349,36 +349,9 @@ def read_or(path):  # a file missing is a FAIL with its value, never a traceback
 check("bodies: each pull request's body (Renovate's table, its release notes) to <dir>/<repo>.pr.md - the review's input",
       (r, read_or(os.path.join(out, "infra.pr.md")), read_or(os.path.join(out, "ops.pr.md"))),
       ((0, f"{out}/infra.pr.md\n{out}/ops.pr.md"), b1["body"], "ops' table"))
-NOTES = "\n\n---\n\n### Release Notes\n\n<details>\n<summary>istio/istio (istiod)</summary>\n\n1.32: a value renamed\n</details>\n"
-def body(p, rows, notes=""):
-    p["body"] = "| Package | Update | Change |\n|---|---|---|\n" + "".join(f"| [{k}](https://x/{k}) | {u} | `{a}` → `{b}` |\n" for k, u, a, b in rows) + notes
-    return p
-fixture(infra=[body(pr(3, "istiod-2.x", "major"), [("istiod", "major", "1.31.4", "2.0.0")])], ops=[body(pr(5, "istiod-2.x", "major"), [("istiod", "major", "1.31.4", "2.0.0")], NOTES)])
-check("notes: a major whose pull request in one repo has no release notes (Renovate fetched none: no github.com token, "
-      "and it says nothing) - exit 3, that repo named", run("notes", "istiod-2.x"), (3, "schnappy/infra: no release notes"))
-fixture(infra=[body(pr(3, "istiod-2.x", "major"), [("istiod", "major", "1.31.4", "2.0.0")], NOTES)])
-check("notes: a major with its notes - exit 0", run("notes", "istiod-2.x"), (0, ""))
-fixture(infra=[body(pr(3, "postgres-19.x", "major"), [("postgres", "major", "17-alpine", "19-alpine")])])
-check("notes: a major of a package that publishes none (docker-library's postgres - review.md's path rule) - exit 0",
-      run("notes", "postgres-19.x"), (0, ""))
-fixture(infra=[body(pr(37, "kubernetes-1.36"), [("alpine/k8s", "minor", "1.35.10", "1.36.6")])],
-        platform=[body(pr(40, "kubernetes-1.36"), [("alpine/k8s", "minor", "1.35.10", "1.36.6")])])
-check("notes: a family minor of alpine/k8s alone (Docker Hub's kubectl image, no notes to fetch - stopped 2026-11-25 for "
-      "none) - exit 0", run("notes", "kubernetes-1.36"), (0, ""))
-fixture(infra=[body(pr(3, "kubernetes-1.37"), [("registry.k8s.io/kube-apiserver", "minor", "1.36.6", "1.37.2"),
-                                               ("alpine/k8s", "minor", "1.36.6", "1.37.2")])])
-check("  beside a package that publishes them (kube-apiserver), none: still exit 3", run("notes", "kubernetes-1.37"),
-      (3, "schnappy/infra: no release notes"))
-fixture(infra=[body(pr(3, "nginx-1.x"), [("nginx", "minor", "1.30", "1.31")])])
-check("notes: a minor, no family's, not one-way - never asked: exit 0", run("notes", "nginx-1.x"), (0, ""))
-fixture(infra=[body(pr(3, "kubernetes-1.37"), [("kubernetes", "minor", "1.36.5", "1.37.0")])])
-check("notes: a family minor (one minor at a time: kubernetes, istio, gateway-api, cilium) with none - exit 3",
-      run("notes", "kubernetes-1.37"), (3, "schnappy/infra: no release notes"))
-fixture(infra=[body(pr(3, "scylladb-2026.3", "one-way"), [("scylladb/scylla", "minor", "2026.2.3", "2026.3.1")])])
-check("notes: a one-way minor with none - exit 3", run("notes", "scylladb-2026.3"), (3, "schnappy/infra: no release notes"))
-check("notes: a unit not open", run("notes", "nope"), (1, "NO UNIT nope"))
-check("a command it does not take - noticed and apply among them (no notice any more)",
-      (run("apply")[0], run("noticed", "postgresql-19.x")[0]), (2, 2))
+check("a command it does not take - noticed, apply and notes among them (no notice any more; missing release notes never "
+      "stop a unit, operator 2026-11-25)", (run("apply")[0], run("noticed", "postgresql-19.x")[0], run("notes", "istiod-2.x")[0]),
+      (2, 2, 2))
 fixture(infra=[pr(1, "wave-patches"), pr(2, "istio", "veto"), pr(3, "observability", "upgrade-blocked", "veto")])
 check("held: what holds a unit now - nothing for a free one, veto for a vetoed one (an upgrade-blocked label holds nothing)",
       (run("held", "wave-patches"), run("held", "istio"), run("held", "observability"), run("held", "nope")),

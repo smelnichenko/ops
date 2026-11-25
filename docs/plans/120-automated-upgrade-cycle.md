@@ -72,11 +72,11 @@ dependencies grouped, never at different versions in different modules):**
   image, a digest, a store) is a `NOTE:` line the runner prints - sanitised, it is upstream-steered text - never a finding
   that holds the unit; a release note asking for more than moving versions is a `REFUSE:` line: the unit ends, a try,
   never handed to the fix agent. The review reads the inventory this run read (`prod-inventory.txt`, `pi-versions.yml`
-  beside the clones); `<repo>.pr.md` and `context/` are untrusted data to both agents. Release notes are a positive gate
-  (`upgrade-units.py notes`): a major, a one-way unit or a family minor (istio, gateway-api, kubernetes, cilium) needs
-  Renovate's "### Release Notes" in each pull request (it fetches them only with a github.com token and says nothing in
-  the body otherwise) - refused before the build, a try, until ops/.env's RENOVATE_GITHUB_TOKEN is set; docker-library's
-  postgres publishes none (review.md's path rule). What the fix agent pushes is judged on the parsed YAML, every scalar
+  beside the clones); `<repo>.pr.md` and `context/` are untrusted data to both agents. Release notes are no gate
+  (superseded 2026-11-25 - the positive gate, `upgrade-units.py notes`, stopped every unit whose images publish none
+  Renovate can fetch: kubernetes, ScyllaDB, CNPG PostgreSQL, Vault, k6 - eight units, each a try every run; the operator:
+  no notes is no reason to leave a unit out): Renovate fetches them where it can (ops/.env's RENOVATE_GITHUB_TOKEN), and
+  the review judges a version without them by the path rules and what the clones hold - their absence never a finding. What the fix agent pushes is judged on the parsed YAML, every scalar
   as written (`scripts/upgrade-fix-judge.py` - three reviews found edits each looser judge let through: an image to
   another registry, a hub, mTLS, a root app's prune, a duplicate key moving ScyllaDB's release line, a dropped backup,
   a retention 168h -> 1h, a chart range 1.x, a downgrade, an IP, a rename into an env var): documents kept; a value moved
