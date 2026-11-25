@@ -7,6 +7,10 @@
 # infra's chart, and production's inventory is read again after its apply - so there a default differing from production
 # passes when the pull request itself moved it from its target's (origin/<target>, the clone step's fetch) and the
 # target's still equals production (the copy proves it against infra's half). Its target not in the clone: refused.
+# A branch's push (ops' CI runs on pushes, not pull requests, since 2026-11-24) holds no target - the clone step fetches
+# one for a pull request only, and the CI's read token cannot read ops - so there a default differing from production
+# passes, said: main's push judges it against production after the apply. Comparing with main would fail only when main
+# already differs from production, which main's own push fails anyway. Main's push and a run without CI: equal, or fail.
 set -u
 cd "$(dirname "$0")/../../../.." || exit 1
 exec python3 - <<'PY_DFP'
@@ -15,13 +19,14 @@ sys.path.insert(0, "tests/ansible/unit")
 import renovate_preset
 P = "deploy/ansible/playbooks/"
 EVENT, TARGET = os.environ.get("CI_PIPELINE_EVENT"), os.environ.get("CI_COMMIT_TARGET_BRANCH")
+BRANCH = os.environ.get("CI_COMMIT_BRANCH") if EVENT == "push" and os.environ.get("CI_COMMIT_BRANCH") != "main" else None
 # each default: its playbook, its play var, production's version in the inventory, and how the preset's Renovate must
 # read it - (datasource, depName) as production's own dependency is named (infra's Argo app's chart: Renovate's argocd
 # manager names a chart by its name, an OCI one by registry/path; else the registry or tag the version comes from), so the
 # default moves in that dependency's unit (a typo, depName=cnpg, is another dependency or none) - or why it is left by
-# hand. Read by no manager, a default stays behind when Renovate moves infra's chart: the unit's pull request passes here
-# (its target equals production), ops' main fails once production's inventory is read after the apply (the data
-# operators' charts, 2026-11-17's review)
+# hand. Read by no manager, a default stays behind when Renovate moves infra's chart: the unit's branch passes here
+# (a branch's push passes a default differing from production), ops' main fails once production's inventory is read
+# after the apply (the data operators' charts, 2026-11-17's review)
 MAP = [
     (P + "setup-kubeadm.yml", "cert_manager_version", r"argo-chart cert-manager cert-manager@(\S+)", ("helm", "cert-manager")),
     (P + "setup-kubeadm.yml", "external_secrets_chart_version", r"argo-chart external-secrets external-secrets@(\S+)",
@@ -82,7 +87,10 @@ for path, key, pat, reading in MAP:
     live = sorted({m.group(1) for m in (re.fullmatch(pat, l) for l in have) if m})
     ok = len(live) == 1 and same(d, live[0])
     why = ""
-    if not ok and len(live) == 1 and d is not None:
+    if not ok and len(live) == 1 and d is not None and BRANCH:
+        ok = True
+        why = f" (branch {BRANCH}'s push: passes here - main's push judges it against production after the apply)"
+    elif not ok and len(live) == 1 and d is not None:
         t = target_text(path)
         if t is not None:
             td = value(locate(t, key))
