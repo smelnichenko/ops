@@ -2,8 +2,8 @@
 
 ## Context
 
-Operator, 2026-10-18 10:35: "each language should have own active cv" — "i.e. we can translate cv and then make it
-active". Today a user has ONE active CV version (any language; `uq_cv_version_active` on `user_uuid`). Other languages
+Operator, 2026-10-18 10:35: an active CV per language - a translation can be made the active one.
+Today a user has ONE active CV version (any language; `uq_cv_version_active` on `user_uuid`). Other languages
 exist only as reviewed translations of that one master, which the tuner borrows for postings in their language
 (`MasterTranslationService.currentOf`), and a translation can never be activated (`ck_cv_version_translation_inactive`).
 Packages and scores are keyed to the one active master.

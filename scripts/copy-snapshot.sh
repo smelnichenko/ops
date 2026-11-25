@@ -66,17 +66,36 @@ inv_id() {  # the inventory lines the base holds, and the Pis' versions
   [ -n "$lines" ] || return 1
   { printf '%s\n' "$lines"; cat tests/ansible/copy/pi-versions.yml; } | sha256sum | cut -d' ' -f1
 }
-tree_id() {  # what builds the base: its files (the working tree's, untracked too) and the Taskfile's base steps
-  local files steps
-  files=$(git ls-files -z --cached --others --exclude-standard -- Vagrantfile deploy/ansible tests/ansible/copy/pi-apt-versions.yml \
+base_files() {  # the files that build the base, each its hash and path (the working tree's, untracked too)
+  git ls-files -z --cached --others --exclude-standard -- Vagrantfile deploy/ansible tests/ansible/copy/pi-apt-versions.yml \
     scripts/pi-apt-pin.sh tests/ansible/vagrant-only.yml tests/ansible/vagrant-only-play.yml tests/ansible/isolate-pis.yml \
-    scripts/copy-host-guard.sh | sort -zu | xargs -0 sha256sum) || return 1
-  steps=$(python3 -c 'import sys, yaml, json
+    scripts/copy-host-guard.sh | sort -zu | xargs -0 sha256sum
+}
+base_steps() {  # the Taskfile's base steps, as JSON
+  python3 -c 'import sys, yaml, json
 t = yaml.safe_load(open("Taskfile.yml"))["tasks"]
-print(json.dumps({k: v for k, v in t.items() if k in ("_copy:base", "test:copy:build") or k.startswith("_vagrant:pi")}, sort_keys=True))') \
-    || return 1
+print(json.dumps({k: v for k, v in t.items() if k in ("_copy:base", "test:copy:build") or k.startswith("_vagrant:pi")}, sort_keys=True))'
+}
+tree_id() {  # what builds the base: its files and the Taskfile's base steps, one hash (as every saved record holds it)
+  local files steps
+  files=$(base_files) || return 1
+  steps=$(base_steps) || return 1
   [ -n "$files" ] && [ -n "$steps" ] || return 1
   printf '%s\n%s\n' "$files" "$steps" | sha256sum | cut -d' ' -f1
+}
+tree_list() {  # the same, a line each: every file's hash and path, and the base steps' hash as "Taskfile.yml:base-steps" -
+  # kept beside the record, so a stale verdict names what changed
+  local files steps
+  files=$(base_files) || return 1
+  steps=$(base_steps) || return 1
+  [ -n "$files" ] && [ -n "$steps" ] || return 1
+  printf '%s\n%s  Taskfile.yml:base-steps\n' "$files" "$(printf '%s\n' "$steps" | sha256sum | cut -d' ' -f1)"
+}
+tree_changed() {  # the files that build the base and differ from the record's list ($1: the list's file) - at most five
+  local changed n
+  changed=$(diff <(sort "$1") <(tree_list | sort) | awk '/^[<>]/ {print $3}' | sort -u)
+  n=$(printf '%s\n' "$changed" | grep -c .)
+  printf '%s%s' "$(printf '%s\n' "$changed" | head -5 | paste -sd ',' | sed 's/,/, /g')" "$([ "$n" -gt 5 ] && echo " (and $((n - 5)) more)")"
 }
 pool_path() {
   [ -z "${COPY_POOL_PATH:-}" ] || { echo "$COPY_POOL_PATH"; return 0; }
@@ -107,7 +126,11 @@ stale() {  # why the snapshot cannot be reused, one a line; nothing: fresh; exit
   [ -n "$created" ] && [ $(($(date +%s) - created)) -le "$MAX_AGE" ] || echo "older than $MAX_AGE s"
   if now_inv=$(inv_id); then [ "$inv" = "$now_inv" ] || echo "production's inventory or the Pis' versions moved since it was built"
   else echo "production's inventory not hashed"; fi
-  if now_tree=$(tree_id); then [ "$tree" = "$now_tree" ] || echo "the files that build the base changed since"
+  if now_tree=$(tree_id); then
+    if [ "$tree" != "$now_tree" ]; then
+      if [ -f "$D/tree.list" ]; then echo "the files that build the base changed since: $(tree_changed "$D/tree.list")"
+      else echo "the files that build the base changed since"; fi
+    fi
   else echo "the files that build the base not hashed"; fi
   for m in "${MACHINES[@]}"; do
     u=$(uuid "$m") || { echo "$m not created"; continue; }
@@ -133,6 +156,7 @@ case "${1:-}" in
     inv=$(inv_id) || { say "production's inventory not hashed - this base will not be saved"; exit 0; }
     tree=$(tree_id) || { say "the files that build the base not hashed - this base will not be saved"; exit 0; }
     printf 'inventory %s\ntree %s\n' "$inv" "$tree" > "$D/pending"
+    tree_list > "$D/pending.tree" || rm -f "$D/pending.tree"
     say "begun: what builds this base hashed" ;;
   based)
     [ -f "$D/pending" ] || { say "no pending base (its begin did not hash it) - it will not be saved"; exit 0; }
@@ -158,7 +182,7 @@ case "${1:-}" in
       st=$(v domstate "$u" --reason) || fail "no domain for $m"
       [ "$st" = "shut off (shutdown)" ] || fail "$m is '$st' - only a domain shut down by itself is snapshotted (a forced power-off is a crash)"
     done
-    rm -f "$D/meta" "$D/meta.unproven" "$D/meta.tmp"
+    rm -f "$D/meta" "$D/meta.unproven" "$D/meta.tmp" "$D/tree.list" "$D/tree.unproven"
     for m in "${MACHINES[@]}"; do
       u=$(uuid "$m")
       s=$(snap_state "$u")
@@ -172,11 +196,13 @@ case "${1:-}" in
     # reused (proven, at the build's end, makes it the record)
     printf 'created %s\ninventory %s\ntree %s\n' "$(date +%s)" "$inv" "$tree" >> "$D/meta.tmp"
     mv "$D/meta.tmp" "$D/meta.unproven"
+    [ ! -f "$D/pending.tree" ] || mv "$D/pending.tree" "$D/tree.unproven"
     rm -f "$D/pending"
     say "saved $(date -u +%FT%TZ): the base of ${MACHINES[*]} - unproven until this build's Argo layer is up" ;;
   proven)
     [ -f "$D/meta.unproven" ] || { say "no unproven snapshot (none saved by this build) - nothing to prove"; exit 0; }
     mv "$D/meta.unproven" "$D/meta"
+    [ ! -f "$D/tree.unproven" ] || mv "$D/tree.unproven" "$D/tree.list"
     say "proven: the base booted cold and the Argo layer built on it - reused for $MAX_AGE s" ;;
   status)
     why=$(stale)

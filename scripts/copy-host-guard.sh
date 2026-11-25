@@ -4,7 +4,8 @@
 # radar's SDR reader got no samples and the radar died (2026-11-13 22:17). Two guards, for every Vagrant VM here:
 #   vagrant <args>  the Vagrantfile passes every vagrant command's arguments here (and holds one start at a time);
 #                   `up`, `reload` and `resume` start only when the host has, available, the memory of the VMs they
-#                   start (the Vagrantfile's v.memory) plus the part of the running VMs' memory they have not touched
+#                   start (the Vagrantfile's v.memory, a VAGRANT_*_MEMORY it reads as the guard does) plus the part of
+#                   the running VMs' memory they have not touched
 #                   yet (promised, still counted as available) plus a reserve for the radar station and the desktop -
 #                   refused, the numbers named, otherwise. Then the watcher (below). Any other command: nothing.
 #   watch           a detached watcher, one at a time (it holds .copy/host-guard.alive for its life): while a VM runs,
@@ -48,10 +49,15 @@ prefix="$(basename "$(dirname "$vagrantfile")")_"
 virsh_bin=${COPY_HOST_VIRSH:-virsh}
 virsh_() { timeout 30 "$virsh_bin" -c qemu:///system "$@"; }  # a hung libvirt never stalls the guard
 
-machines() {  # "<machine> <MB>" for each VM the Vagrantfile defines: its define's name, the v.memory inside it
+machines() {  # "<machine> <MB>" for each VM the Vagrantfile defines: its define's name, the v.memory inside it - as
+  # written, or `Integer(ENV.fetch("VAR", "<MB>"))`: the variable as this process has it (vagrant's own environment:
+  # the Vagrantfile reads the same), else its default; a value that is no number of MB is no v.memory (refused below)
   awk '/^[[:space:]]*#/ { next }
        match($0, /config\.vm\.define "[^"]+"/) { split(substr($0, RSTART, RLENGTH), q, "\""); m = q[2] }
-       m != "" && match($0, /v\.memory = [0-9]+/) { split(substr($0, RSTART, RLENGTH), w, " = "); print m, w[2]; m = "" }' \
+       m != "" && match($0, /v\.memory = [0-9]+/) { split(substr($0, RSTART, RLENGTH), w, " = "); print m, w[2]; m = ""; next }
+       m != "" && match($0, /v\.memory = Integer\(ENV\.fetch\("[A-Z_]+", "[0-9]+"\)\)/) {
+         split(substr($0, RSTART, RLENGTH), q, "\""); v = (q[2] in ENVIRON) ? ENVIRON[q[2]] : q[4]
+         if (v ~ /^[0-9]+$/) print m, v; m = "" }' \
     "$vagrantfile"
 }
 defines() { grep -cE '^[^#]*config\.vm\.define "' "$vagrantfile" || true; }

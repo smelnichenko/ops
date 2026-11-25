@@ -92,15 +92,25 @@
           PY
           )
           if [ "$new" = "$cf" ]; then echo unchanged; exit 0; fi
+          # what changed - a copy reverted to its snapshot finds its own blocks there already, so a change after a
+          # revert says what differs (2026-11-19: one changed, then CoreDNS did not roll out in 180 s)
+          diff <(echo "$cf") <(echo "$new") | sed 's/^/corefile: /' || true
           {{ kubectl }} -n kube-system create cm coredns --from-literal=Corefile="$new" --dry-run=client -o yaml \
             | {{ kubectl }} apply -f - > /dev/null
           {{ kubectl }} -n kube-system rollout restart deployment coredns > /dev/null
-          {{ kubectl }} -n kube-system rollout status deployment coredns --timeout=180s > /dev/null
+          if ! {{ kubectl }} -n kube-system rollout status deployment coredns --timeout=180s > /dev/null; then
+            # why, while the copy is still up: its pods, their events, the nodes
+            echo "CoreDNS not rolled out 180 s after its restart:"
+            {{ kubectl }} -n kube-system get pods -l k8s-app=kube-dns -o wide || true
+            {{ kubectl }} -n kube-system describe pods -l k8s-app=kube-dns | sed -n '/^Events:/,/^Name:/p' | tail -40 || true
+            {{ kubectl }} get nodes -o wide || true
+            exit 1
+          fi
           echo changed
       vars:
         vagrant_gateway: "{{ ansible_host }}"
       register: _dns
-      changed_when: "'changed' in _dns.stdout"
+      changed_when: (_dns.stdout_lines | last | default('')) == 'changed'
 
     # the rewrite is proven by what the cluster's DNS answers, not by the ConfigMap: a Pi-served name -> the Vagrant
     # Pi VIP, any other pmon.dev name and the apex -> this node, never a production address

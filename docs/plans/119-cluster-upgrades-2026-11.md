@@ -1,7 +1,7 @@
 # Plan 119 — cluster and Pi upgrades, November 2026
 
-Status: **WAVE 1 PROVEN ON THE COPY, REVIEWED; ITS FIXES BEING PROVEN, THEN PRODUCTION** (operator 2026-11-13: "check if
-we can upgrade our cluster parts like we did recently" → report → "yes, please"). Plan 117's Vagrant proof and its
+Status: **WAVE 1 PROVEN ON THE COPY, REVIEWED; ITS FIXES BEING PROVEN, THEN PRODUCTION** (operator 2026-11-13: whether the
+cluster's parts can be upgraded as they were recently → report → agreed). Plan 117's Vagrant proof and its
 Velero change are green and live (2026-11-14).
 
 ## Context
@@ -17,7 +17,7 @@ gets it - an infra/platform branch with `task test:copy:change INFRA_REF= PLATFO
 `task test:copy:playbook PLAYBOOK= ARGS=` - every check green, then production. Each item's release notes read before
 its branch: breaking changes, order between components, the one-way ones named.
 
-## Delivery (operator 2026-11-13: "upgrade with argocd, tested in vagrant, hopefully in less than 62 branches")
+## Delivery (operator 2026-11-13: upgrades through Argo CD, proven in Vagrant, in far fewer than 62 branches)
 
 - **One wave = one infra branch + one platform branch** carrying every Argo-managed bump of the wave, proven together by
   one `task test:copy:change INFRA_REF=upgrade/wave-N PLATFORM_REF=upgrade/wave-N` (every check green), merged - Argo
@@ -188,7 +188,7 @@ Never two of these at once; no Pi turn while an infra merge moves pods that use 
   the hook Jobs (postgres-init-users, scylla-schema) succeeded, every certificate Ready, only Watchdog firing,
   ClickHouse 26.8.34.13 taking pod logs (thousands of rows a minute). The Failed pods listed are October's node-shutdown
   leftovers and restore-check-age's known failures.
-- Step 3 done ~15:14 UTC (operator: "upgrade kubernetes yourself"): etcd snapshot etcd-20261114-151124.db right before
+- Step 3 done ~15:14 UTC (the operator left the Kubernetes upgrade to me): etcd snapshot etcd-20261114-151124.db right before
   (verified, uploaded), `deploy:kubeadm:upgrade -- -e k8s_upgrade_to=1.36.6` - no failure; the node Ready on kubelet
   v1.36.6, the server v1.36.6, kubeadm/kubelet/kubectl 1.36.6-1.1 held, no kube-proxy, the control-plane pods new and
   ready, no running pod unready, every app settled, only Watchdog. cilium-operator restarted once during it (its leader
@@ -224,7 +224,7 @@ Never two of these at once; no Pi turn while an infra merge moves pods that use 
   the VIP, Patroni's leader and Vault's active node on pi2, pi1 streaming with no lag, git.pmon.dev 200.
   Found while checking: plan 120's upgrade-verify.sh could never pass on production (its pod list through the
   environment: "Argument list too long") - fixed 67ce7788, production then SETTLED AND QUIET.
-- Step 6 (operator: "continue with patroni, vault and forgejo after pi1"): `deploy:patroni:upgrade` 19:13 UTC - 4.1.5
+- Step 6 (operator: Patroni, Vault and Forgejo next, after pi1): `deploy:patroni:upgrade` 19:13 UTC - 4.1.5
   on both, paused and resumed, no failover (pi2 leading on timeline 18, pi1 streaming, no lag). `deploy:vault:upgrade`
   19:14 UTC - a Consul snapshot, then each to 1.21.4, unsealed; the one failover: pi1 active, pi2 standby; ESO's store
   validated, every ExternalSecret Ready. `deploy:forgejo:upgrade` 19:28 UTC (no pipeline running) - dump
@@ -250,7 +250,7 @@ Vault: 1.21 gets no more free fixes - Vault 2.x moves up in wave 3.
 
 | Component | From → to | Note |
 |---|---|---|
-| Istio + Gateway API | 1.31.1 → 1.32.0; 1.5.1 → 1.7.0 | together (Istio 1.32's supported Gateway API); sidecars restart (`deploy:mesh:restart`) |
+| Istio, then Gateway API | 1.31.1 → 1.32.0; 1.5.1 → 1.7.0 | the Gateway API a unit of its own after Istio (operator 2026-11-16); sidecars restart (`deploy:mesh:restart` - the cycle's apply since 2026-11-20) |
 | Argo CD | 3.5.4 (chart 10.9.7) → 3.6.1 (chart 10.18.0) | alone; ops `setup-argocd.yml` default + `argocd_image_pins` (argocd-versions harness) |
 | External Secrets | 2.12.0 → 2.15.0 | CRDs |
 | kube-prometheus-stack | 91.8.2 → 93.3.0 | two chart majors: CRDs, Prometheus 3.15 → 3.16, Alertmanager 0.34 → 0.35 |
@@ -260,7 +260,7 @@ Vault: 1.21 gets no more free fixes - Vault 2.x moves up in wave 3.
 | Keycloak / versitygw / Caddy / Nexus (Pis) | 26.5.7 → 26.8.2 / 1.8.0 → 1.11.0 / 2.10.0 → 2.11.9 / 3.90.1 → 3.98.1 | Pi playbooks |
 | SonarQube | 26.9 → 26.11 | not in the copy (left out): its own care |
 
-### ten's Debian packages (operator 2026-11-14: "119")
+### ten's Debian packages (operator 2026-11-14: in this plan)
 
 Nothing upgrades ten's own system: the Pis' playbook covers the Pis, and wave 1 moved ten's Kubernetes and Cilium
 only. ten is the single control-plane node, Consul's third voter (its raft leader since the Pis' turns moved the

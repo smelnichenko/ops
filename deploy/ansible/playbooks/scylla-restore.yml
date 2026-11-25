@@ -2,9 +2,8 @@
 # Restore ScyllaDB tables from Scylla Manager's backup - production, by hand: the keyspaces given, from the snapshot given,
 # into the cluster as it stands (tasks/scylla-restore.yml - its rehearsal on the copy: tests/ansible/copy/
 # scylla-restore-check.yml). A table's rows are added back, nothing dropped: truncate first what must hold the backup's
-# alone. The way back from a ScyllaDB release line (a version cannot be downgraded): a new cluster at the old version,
-# its schema restored (sctool restore --restore-schema, then a rolling restart), then this - that whole path is not yet
-# rehearsed (scripts/upgrade-stores.json keeps ScyllaDB's units blocked until it is).
+# alone. The way back from a ScyllaDB release line (a version cannot be downgraded) is playbooks/scylla-way-back.yml
+# (task deploy:scylla:way-back - the cluster rebuilt, then these tasks restore it; rehearsed: test:copy:scylla-way-back).
 #
 # Usage: task deploy:scylla:restore -- -e snapshot=sm_<UTC> -e keyspaces=chat [-e cluster=<name>] [-e location=s3:<bucket>]
 #        (--check: the snapshot found and the restore's dry run, nothing started)

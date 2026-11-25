@@ -1,0 +1,217 @@
+---
+# ten's Debian packages upgraded every morning by Debian's own unattended-upgrades, and ten rebooted when an update asks
+# for it - imported by setup-host-hardening.yml (its auto_upgrades_* vars). Until 2026-11-22 nothing upgraded them: ten
+# ran Debian 13.7 after 13.8 shipped, and the copy - built at the current point release - no longer matched production.
+#
+# Debian's defaults, three changes (operator 2026-11-22: the reboots automatic too, nothing left to do by hand):
+# - its own timers: the package lists twice a day, the upgrade between 06:00 and 07:00; its own origins (the release
+#   and its security archive). Docker's and Kubernetes' packages come from neither and stay held (setup-kubeadm.yml):
+#   containerd and the kubelet move with the upgrade cycle, never here
+# - the reboot: when an update leaves /run/reboot-required (the package's kernel hook writes it for every kernel, a
+#   manual apt upgrade's too), unattended-upgrades runs `shutdown -r auto_upgrades_reboot_time` after its run - no check
+#   of the cluster or the Pis first. The kubelet's graceful shutdown stops the pods (docs/NodeReboot.md)
+# - nftables never upgraded unattended: its upgrade restarts nftables.service, whose stop is `nft flush ruleset` -
+#   Cilium's, the kubelet's and Docker's iptables-nft rules gone with ten's own (2026-11-22)
+# The package's own logind drop-in (InhibitDelayMaxSec=30) is masked: it sorts after the kubelet's 99-kubelet.conf
+# (180 s) and wins, and the kubelet's graceful shutdown would get 30 s on every reboot.
+# Watched: when the lists last updated and the upgrade last succeeded - the stamps apt.systemd.daily touches only on
+# success (unattended-upgrades' own stamp is written by a failed run too; a failed lists update counts as failed here,
+# APT::Update::Error-Mode) - and whether a reboot is owed, for Prometheus through node_exporter's textfile collector:
+# NodeAutoUpgradesFailing, NodeRebootPending (schnappy-observability).
+
+# before the package: its drop-in never in effect, not for a moment (a file of the same name in /etc replaces /usr/lib's)
+- name: Mask unattended-upgrades' logind drop-in - the kubelet's 180 s shutdown delay stays in effect
+  ansible.builtin.file:
+    src: /dev/null
+    dest: /etc/systemd/logind.conf.d/unattended-upgrades-logind-maxdelay.conf
+    state: link
+    force: true
+
+- name: The package keeps apt's daily units on (its 20auto-upgrades as it ships it)
+  ansible.builtin.debconf:
+    name: unattended-upgrades
+    question: unattended-upgrades/enable_auto_updates
+    value: "true"
+    vtype: boolean
+
+- name: Install unattended-upgrades
+  ansible.builtin.apt:
+    name: unattended-upgrades
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+# read after the package's 20auto-upgrades and 50unattended-upgrades (what is set here holds; its blacklist, a list,
+# gains ours)
+- name: Nftables never upgraded unattended, the reboot at its time, a failed lists update a failure
+  ansible.builtin.copy:
+    dest: /etc/apt/apt.conf.d/52schnappy-auto-upgrades
+    owner: root
+    group: root
+    mode: '0644'
+    content: |
+      // setup-host-hardening.yml (tasks/auto-upgrades.yml)
+      APT::Periodic::Update-Package-Lists "1";
+      APT::Periodic::Unattended-Upgrade "1";
+      // a lists update that fails (mirror or DNS down) exits non-zero, so its stamp is not touched and
+      // NodeAutoUpgradesFailing sees it - by default apt-get update exits 0 and the upgrade "succeeds" on old lists
+      APT::Update::Error-Mode "any";
+      // its upgrade restarts nftables.service, whose stop flushes every rule on ten - Cilium's and the kubelet's too
+      Unattended-Upgrade::Package-Blacklist {
+              "^nftables$";
+      };
+      Unattended-Upgrade::Automatic-Reboot "{{ auto_upgrades_reboot | bool | lower }}";
+      // a session left open (ssh, tmux) never holds the reboot back
+      Unattended-Upgrade::Automatic-Reboot-WithUsers "true";
+      Unattended-Upgrade::Automatic-Reboot-Time "{{ auto_upgrades_reboot_time }}";
+
+- name: Write the script that reports apt's daily units to Prometheus
+  ansible.builtin.copy:
+    dest: /usr/local/sbin/apt-upgrades-metrics
+    owner: root
+    group: root
+    mode: '0755'
+    content: |
+      #!/bin/bash
+      # apt-upgrades-metrics (setup-host-hardening.yml, tasks/auto-upgrades.yml): apt's daily units for Prometheus,
+      # through node_exporter's textfile collector - when the package lists last updated and unattended-upgrades last
+      # succeeded (the stamps apt.systemd.daily touches only on success), and whether an update left a reboot owed.
+      # Before a first success the time this was set up stands in (its configuration file's): NodeAutoUpgradesFailing
+      # fires 26 h after set-up when none came, not at set-up. Every 5 minutes and at boot (its timer).
+      set -euo pipefail
+      periodic=/var/lib/apt/periodic
+      setup=/etc/apt/apt.conf.d/52schnappy-auto-upgrades
+      reboot_required=/run/reboot-required
+      out={{ node_exporter_textfile_dir }}/apt_upgrades.prom
+      # written beside it and renamed over it: the collector reads *.prom only, and never half a file
+      tmp=$(mktemp "$out.XXXXXX")
+      trap 'rm -f "$tmp"' EXIT
+      gauge() {  # name, help, value
+        printf '# HELP %s %s\n# TYPE %s gauge\n%s %s\n' "$1" "$2" "$1" "$1" "$3"
+      }
+      success() {  # a stamp's time, the set-up's before the first
+        if [ -e "$1" ]; then stat -c %Y "$1"; else stat -c %Y "$setup"; fi
+      }
+      # read into variables first: a failed $(...) in an argument passes set -e by and writes an empty value, which
+      # the collector refuses for the whole file - an assignment fails the script instead
+      lists=$(success "$periodic/update-stamp")
+      upgrade=$(success "$periodic/upgrade-stamp")
+      owed=0
+      [ ! -e "$reboot_required" ] || owed=1
+      {
+        gauge apt_update_last_success_timestamp_seconds \
+          "When apt's daily unit last updated the package lists (before the first: when this was set up)." "$lists"
+        gauge apt_unattended_upgrade_last_success_timestamp_seconds \
+          "When unattended-upgrades last ran without an error (before the first: when this was set up)." "$upgrade"
+        gauge node_reboot_required "1 while an update has left /run/reboot-required." "$owed"
+      } > "$tmp"
+      chmod 0644 "$tmp"
+      mv "$tmp" "$out"
+      trap - EXIT
+
+- name: Write the units that run it (a 5-minute timer, the first run a minute after boot)
+  ansible.builtin.copy:
+    dest: "/etc/systemd/system/{{ item.name }}"
+    owner: root
+    group: root
+    mode: '0644'
+    content: "{{ item.content }}"
+  loop:
+    - name: apt-upgrades-metrics.service
+      content: |
+        [Unit]
+        Description=Apt's daily units reported to Prometheus (node_exporter's textfile collector)
+
+        [Service]
+        Type=oneshot
+        ExecStart=/usr/local/sbin/apt-upgrades-metrics
+        NoNewPrivileges=true
+        ProtectSystem=strict
+        ReadWritePaths={{ node_exporter_textfile_dir }}
+        ProtectHome=true
+        PrivateTmp=true
+    - name: apt-upgrades-metrics.timer
+      content: |
+        [Unit]
+        Description=Apt's daily units reported to Prometheus, every 5 minutes
+
+        [Timer]
+        OnBootSec=1min
+        OnUnitActiveSec=5min
+
+        [Install]
+        WantedBy=timers.target
+  loop_control:
+    label: "{{ item.name }}"
+
+# in check mode the units are not written: nothing to enable yet
+- name: Enable + start the metrics timer
+  ansible.builtin.systemd:
+    name: apt-upgrades-metrics.timer
+    enabled: true
+    state: started
+    daemon_reload: true
+  when: not ansible_check_mode
+
+# ── checks: what apt and logind read, and what node_exporter serves ──
+- name: Read what apt makes of the configuration
+  ansible.builtin.command: apt-config dump Unattended-Upgrade APT::Periodic APT::Update::Error-Mode
+  register: _auto_upgrades_config
+  changed_when: false
+  check_mode: false
+  when: not ansible_check_mode
+
+- name: Check apt reads nftables blacklisted, the reboot at its time, the daily units on
+  ansible.builtin.assert:
+    that:
+      - "'Unattended-Upgrade::Package-Blacklist:: \"^nftables$\";' in _auto_upgrades_config.stdout_lines"
+      - "'Unattended-Upgrade::Automatic-Reboot \"' ~ (auto_upgrades_reboot | bool | lower) ~ '\";' in _auto_upgrades_config.stdout_lines"
+      - "'Unattended-Upgrade::Automatic-Reboot-WithUsers \"true\";' in _auto_upgrades_config.stdout_lines"
+      - "'Unattended-Upgrade::Automatic-Reboot-Time \"' ~ auto_upgrades_reboot_time ~ '\";' in _auto_upgrades_config.stdout_lines"
+      - "'APT::Periodic::Update-Package-Lists \"1\";' in _auto_upgrades_config.stdout_lines"
+      - "'APT::Periodic::Unattended-Upgrade \"1\";' in _auto_upgrades_config.stdout_lines"
+      - "'APT::Update::Error-Mode \"any\";' in _auto_upgrades_config.stdout_lines"
+    fail_msg: "apt reads: {{ _auto_upgrades_config.stdout }}"
+  when: not ansible_check_mode
+
+# the files logind reads, in the order it reads them - the last InhibitDelayMaxSec is the one in effect
+- name: Read logind's configuration as it is merged
+  ansible.builtin.command: systemd-analyze cat-config systemd/logind.conf
+  register: _auto_upgrades_logind
+  changed_when: false
+  check_mode: false
+  when: not ansible_check_mode
+
+- name: Check the kubelet's shutdown delay is the one in effect, not the package's 30 s
+  ansible.builtin.assert:
+    that:
+      - _delays | length > 0
+      - _delays[-1] | int >= 180
+    fail_msg: "logind's InhibitDelayMaxSec, in order: {{ _delays }} - the last one holds"
+  vars:
+    _delays: >-
+      {{ _auto_upgrades_logind.stdout_lines | select('match', '^InhibitDelayMaxSec=') | map('regex_replace', '^InhibitDelayMaxSec=', '')
+         | list }}
+  when: not ansible_check_mode
+
+- name: Report apt's daily units to Prometheus now
+  ansible.builtin.systemd:
+    name: apt-upgrades-metrics.service
+    state: started
+  changed_when: false
+  when: not ansible_check_mode
+
+- name: Check node_exporter serves them - the lists, the upgrade and the reboot owed
+  ansible.builtin.uri:
+    url: "http://{{ node_exporter_bind }}:{{ node_exporter_port }}/metrics"
+    return_content: true
+  register: _auto_upgrades_metrics
+  retries: 5
+  delay: 2
+  until: >-
+    _auto_upgrades_metrics.status == 200
+    and _auto_upgrades_metrics.content is search('(?m)^apt_update_last_success_timestamp_seconds [0-9]')
+    and _auto_upgrades_metrics.content is search('(?m)^apt_unattended_upgrade_last_success_timestamp_seconds [0-9]')
+    and _auto_upgrades_metrics.content is search('(?m)^node_reboot_required [01]$')
+  check_mode: false
+  when: not ansible_check_mode

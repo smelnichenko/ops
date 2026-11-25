@@ -7,7 +7,10 @@
 # later; the stub records whether it was ready when the Deployment restarted. An owner it cannot restart still fails.
 # And the sidecar's mode: istiod's ENABLE_NATIVE_SIDECARS flipped (or unset - native, Istio's default since 1.27), every
 # pod of the other mode is restarted though its version is the target's; a pod's own nativeSidecar annotation decides
-# for it; pods already in their mode are left alone.
+# for it; pods already in their mode are left alone. Each condition of "back" alone holds the apps (a StatefulSet's
+# pods updated and its revisions one, a CNPG cluster's phase and its every instance, a Strimzi pod set of pods); the
+# data loop's bound, its set -e (the pod list unreadable mid-loop), the 600 s rollout wait, the last wait, the cni wait
+# and a Pending pod each a case that fails without it (test-quality audit, 2026-11-19 - each reverted and run).
 set -u
 cd "$(dirname "$0")/../../../.." || exit 1
 AP=$(command -v ansible-playbook || echo deploy/ansible/venv/bin/ansible-playbook)
@@ -32,7 +35,8 @@ after() { [ "$1" = "${SLOW:-}" ] && echo 6 || echo "${READY_AFTER:-3}"; }
 ready() { [ -e "$S/$1" ] && [ "$(cat "$S/polls.$1" 2>/dev/null || echo 0)" -ge "$(after "$1")" ]; }
 poll() { [ -e "$S/$1" ] && echo $(( $(cat "$S/polls.$1" 2>/dev/null || echo 0) + 1 )) > "$S/polls.$1"; }
 # TARGET: the version restarted onto (1.27.9; 1.26.9 - before native was Istio's default); the old one before it
-v() { [ -e "$S/$1" ] || [ -n "${SAME_VERSION:-}" ] && echo "${TARGET:-1.27.9}" || echo 1.26.8; }
+v() { { [ "$1" = web ] && [ -n "${WEB_STALE:-}" ]; } && { echo 1.26.8; return; }
+  [ -e "$S/$1" ] || [ -n "${SAME_VERSION:-}" ] && echo "${TARGET:-1.27.9}" || echo 1.26.8; }
 # the sidecar's mode: OLD_MODE before its owner restarts it, NEW_MODE after (classic | native)
 m() { [ -e "$S/$1" ] && echo "${NEW_MODE:-classic}" || echo "${OLD_MODE:-classic}"; }
 # a data workload restarted: were the ones restarted before it ready again (one at a time)?
@@ -46,9 +50,14 @@ case "$a" in
     printf '%s' "${NATIVE_ENV-false}" ;;
   *" get deployment istiod "*ENABLE_NATIVE*) exit 0 ;;
   *" get deployment istiod "*) echo "docker.io/istio/pilot:${TARGET:-1.27.9}" ;;
-  *" get daemonset istio-cni-node "*) echo "docker.io/istio/install-cni:${TARGET:-1.27.9}" ;;
+  # CNI_OLD: the istio-cni DaemonSet still on the version before the target
+  *" get daemonset istio-cni-node "*) [ -n "${CNI_OLD:-}" ] && echo "docker.io/istio/install-cni:1.26.8" \
+      || echo "docker.io/istio/install-cni:${TARGET:-1.27.9}" ;;
   *" get pods,replicasets -A -o json "*)
-    pod() {  # pod <ns> <name> <owner kind> <owner> <version> [<mode> [<its nativeSidecar annotation> [<labels json>]]]
+    echo x >> "$S/podreads"
+    [ -n "${PODS_FAIL_AFTER:-}" ] && [ "$(wc -l < "$S/podreads")" -gt "$PODS_FAIL_AFTER" ] \
+      && { echo "error: the server is currently unable to handle the request" >&2; exit 1; }
+    pod() {  # pod <ns> <name> <owner kind> <owner> <version> [<mode> [<its nativeSidecar annotation> [<labels json> [<phase>]]]]
       # mode: classic, native, or init (an istio-proxy init container without restartPolicy Always - no native sidecar)
       local proxy="{\"name\": \"istio-proxy\", \"image\": \"istio/proxyv2:$5\"" ann="" lab=""
       [ -z "${7:-}" ] || ann=", \"annotations\": {\"sidecar.istio.io/nativeSidecar\": \"$7\"}"
@@ -59,9 +68,9 @@ case "$a" in
         *) spec="\"containers\": [$proxy}]" ;;
       esac
       echo "{\"kind\": \"Pod\", \"metadata\": {\"namespace\": \"$1\", \"name\": \"$2\", \"ownerReferences\": [{\"kind\": \"$3\", \"name\": \"$4\"}]$ann$lab},
-      \"status\": {\"phase\": \"Running\"}, \"spec\": {$spec}}"; }
+      \"status\": {\"phase\": \"${9:-Running}\"}, \"spec\": {$spec}}"; }
     echo "{\"items\": [$(pod d db-0 StatefulSet db "$(v db)" "$(m db)"), $(pod d pg-1 Cluster pg "$(v pg)" "$(m pg)"),
-      $(pod d kafka-0 StrimziPodSet kafka "$(v kafka)" "$(m kafka)"), $(pod a web-x ReplicaSet web-rs "$(v web)" "$( [ -e "$S/web" ] && m web || echo "${WEB_MODE:-$(m web)}")" "${WEB_ANN:-}"),
+      $(pod d kafka-0 StrimziPodSet kafka "$(v kafka)" "$(m kafka)"), $(pod a web-x ReplicaSet web-rs "$(v web)" "$( [ -e "$S/web" ] && m web || echo "${WEB_MODE:-$(m web)}")" "${WEB_ANN:-}" "" "${WEB_PHASE:-Running}"),
       $(pod g gw-x ReplicaSet gw-rs "$(v gw)" classic "" '{"sidecar.istio.io/inject": "false"}'),
       {\"kind\": \"ReplicaSet\", \"metadata\": {\"namespace\": \"g\", \"name\": \"gw-rs\", \"ownerReferences\": [{\"kind\": \"Deployment\", \"name\": \"gw\"}]}},
       $(pod g gw2-x ReplicaSet gw2-rs "$(v gw2)" classic "" '{"gateway.networking.k8s.io/gateway-name": "gw2"}'),
@@ -80,12 +89,15 @@ case "$a" in
   *" rollout restart deployment/web "*)
     touch "$S/web"
     { ready db && ready pg && ready kafka && echo "web restarted: data tier ready" || echo "web restarted: data tier NOT ready"; } >> "$W/order" ;;
-  *" get statefulset db "*) poll db; r=0; ready db && r=1
-    echo "{\"spec\": {\"replicas\": 1}, \"status\": {\"readyReplicas\": $r, \"updatedReplicas\": 1, \"currentRevision\": \"b\", \"updateRevision\": \"b\"}}" ;;
+  *" get statefulset db "*) poll db; r=0 u=1 cur=b; ready db && r=1
+    case ${READY_SHAPE:-} in sts-updated) u=0 ;; sts-revision) cur=a ;; esac
+    echo "{\"spec\": {\"replicas\": 1}, \"status\": {\"readyReplicas\": $r, \"updatedReplicas\": $u, \"currentRevision\": \"$cur\", \"updateRevision\": \"b\"}}" ;;
   *" get clusters.postgresql.cnpg.io pg "*) poll pg; ph="Upgrading cluster"; r=1; ready pg && { ph="Cluster in healthy state"; r=2; }
+    case ${READY_SHAPE:-} in cnpg-instances) r=1 ;; cnpg-phase) ph="Upgrading cluster" ;; esac
     echo "{\"spec\": {\"instances\": 2}, \"status\": {\"phase\": \"$ph\", \"readyInstances\": $r}}" ;;
-  *" get strimzipodsets.core.strimzi.io kafka "*) poll kafka; r=0; ready kafka && r=1
-    echo "{\"status\": {\"pods\": 1, \"readyPods\": $r}}" ;;
+  *" get strimzipodsets.core.strimzi.io kafka "*) poll kafka; p=1 r=0; ready kafka && r=1
+    [ "${READY_SHAPE:-}" = strimzi-nopods ] && { p=0; r=0; }
+    echo "{\"status\": {\"pods\": $p, \"readyPods\": $r}}" ;;
   *) echo "unexpected: $*" >&2; exit 9 ;;
 esac
 STUB
@@ -110,7 +122,7 @@ run() {  # run <env...>: rc - TARGET=<version> among them the version restarted 
   local t=1.27.9 a m=()
   for a in "$@"; do case "$a" in TARGET=*) t=${a#TARGET=} ;; SIDECAR_MODE=*) m=(-e "sidecar_mode=${a#SIDECAR_MODE=}") ;; esac; done
   rm -f "$W"/s/* "$W/calls" "$W/order" "$W/data-order"
-  env "$@" PATH="$W/bin:$PATH" W="$W" ANSIBLE_NOCOLOR=1 "$AP" -i "$W/hosts.yml" "$W/play.yml" -e kubeconfig=/x \
+  timeout 120 env "$@" PATH="$W/bin:$PATH" W="$W" ANSIBLE_NOCOLOR=1 "$AP" -i "$W/hosts.yml" "$W/play.yml" -e kubeconfig=/x \
     -e istio_version="$t" "${m[@]}" > "$W/out" 2>&1
   echo "rc=$?"
 }
@@ -132,6 +144,26 @@ check "an owner it cannot restart: refused before any restart" \
   "$(run ODD=1) $(grep -c -E ' rollout restart | annotate ' "$W/calls")" "rc=2 0"
 check "a data workload never ready: the apps not restarted" "$(run READY_AFTER=999 | cut -c1-4) $(grep -c 'deployment/web' "$W/calls")" \
   "rc=2 0"
+check "  its bound: Postgres (the first) read data_tries (60) times, then refused by name - never polled for ever" \
+  "$(grep -c ' get clusters.postgresql.cnpg.io pg ' "$W/calls") $(grep -c 'Cluster d/pg not back after 60 reads - the apps not restarted' "$W/out")" "60 1"
+# each condition of "back" alone: the workload ready by every other one, that one false - never back, the apps waited
+for shape in "sts-updated:a StatefulSet's pods ready, not updated" "sts-revision:a StatefulSet's revisions apart (mid-roll)" \
+  "cnpg-instances:a CNPG cluster healthy by its phase, one instance of two not ready" \
+  "cnpg-phase:a CNPG cluster's instances ready, its phase not healthy" "strimzi-nopods:a Strimzi pod set of no pods (0 of 0 ready)"; do
+  check "${shape#*:}: not back - refused, the apps not restarted" \
+    "$(run READY_SHAPE="${shape%%:*}" | cut -c1-4) $(grep -c 'not back after 60 reads' "$W/out") $(grep -c 'deployment/web' "$W/calls")" "rc=2 1 0"
+done
+check "the pod list unreadable mid-loop (the API server away): the run stops there (set -e), never takes the workload for back" \
+  "$(run PODS_FAIL_AFTER=1 | cut -c1-4) $(grep -c -E '(Cluster|StrimziPodSet|StatefulSet) d/[a-z]+ back ' "$W/out") $(grep -c 'deployment/web' "$W/calls")" "rc=2 0 0"
+check "every restarted Deployment's rollout (web, the three gateways) waited for 600 s - no shorter (a Recreate pod: an image pull, an init)" \
+  "$(run X=1 | cut -c1-4) $(grep -c -E ' rollout status (deployment|daemonset)/' "$W/calls") $(grep -E ' rollout status (deployment|daemonset)/' "$W/calls" | grep -vc -- ' --timeout=600s$')" \
+  "rc=0 4 0"
+check "a restarted Deployment's pods never on the new sidecar (the data tier fine): the last wait refuses - never SIDECARS AT" \
+  "$(run WEB_STALE=1 | cut -c1-4) $(grep -c 'rollout restart deployment/web' "$W/calls") $(grep -c 'SIDECARS AT' "$W/out")" "rc=2 1 0"
+check "istio-cni not on the target: refused before any restart" \
+  "$(run CNI_OLD=1 | cut -c1-4) $(grep -c -E ' rollout restart | annotate ' "$W/calls")" "rc=2 0"
+check "a Pending pod with the old sidecar (not yet scheduled, an image pulling): restarted too" \
+  "$(run WEB_PHASE=Pending) $(grep -c 'rollout restart deployment/web' "$W/calls")" "rc=0 1"
 # the mode: every sidecar on the target version already
 restarted() { grep -c -E ' rollout restart | annotate ' "$W/calls"; }
 check "native sidecars switched on (istiod's ENABLE_NATIVE_SIDECARS true), every pod classic: all four restarted, the data tier first, green" \

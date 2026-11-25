@@ -1,7 +1,7 @@
 # Plan 118: masi - paging only, so no search or list can take the system down
 
-The operator, 2026-11-13: "make sure we have paging only api everywhere, so the system cannot be fucked up by
-search/list/etc" (after 2026-11-11: "make sure we use paging everywhere and never get like millions in result lists").
+The operator, 2026-11-13: a paging-only API everywhere, so no search or list can break the system (after 2026-11-11:
+paging everywhere, never a result list of millions).
 
 ## What was found (audit of masi 6bb77f3, 2026-11-13)
 

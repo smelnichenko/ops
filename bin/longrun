@@ -5,7 +5,7 @@
 # `for i in $(seq 1 115); do pgrep -f GradleWorkerMain >/dev/null || break; sleep 5; done`.
 # A 16-minute `clean check` behind that loop hits the 600 s foreground timeout, gets moved to the
 # background anyway, and then gets re-run — three waiters and two timeouts for one build, all of it
-# noise the operator had to watch. Operator: "fix your waiting immediately".
+# noise the operator had to watch, and the operator asked for the waiting to be fixed at once.
 #
 # The contract: invoke this ONCE with run_in_background, never poll it. The full log is kept so the
 # detail is one `grep` away when the verdict says FAIL.

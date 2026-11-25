@@ -124,6 +124,7 @@
    "cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/barman-check.yml",
    "cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/cert-check.yml",
    "cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/restore-check.yml",
+   "vagrant ssh-config > .copy/etcd-backup-ssh-config && ETCD_BACKUP_HOST=kubeadm ETCD_BACKUP_SSH_CONFIG=.copy/etcd-backup-ssh-config scripts/etcd-backup-now.sh",
    "cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/backup-check.yml",
    "cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/backup-check.yml -e schedule=velero-full-weekly",
    "cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/scylla-backup-check.yml",

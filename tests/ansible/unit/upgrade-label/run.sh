@@ -1,7 +1,7 @@
 #!/bin/bash
 # scripts/upgrade-label.py - the upgrade cycle's hands on a unit's pull requests - against a throwaway Forgejo API (a
 # local server, a process of its own, recording every write): a label on each pull request (made in a repo where
-# missing), a comment on each, the merge - infra, platform, then ops - only when every one is green and mergeable (one
+# missing), the merge - infra, platform, then ops - only when every one is green and mergeable (one
 # red, or not mergeable: none merged), its base moved only by CD's app promotions its files untouched (else refused); a
 # lost answer read again, unknown is PARTIAL; --green; pause on the dashboard (made under Renovate's title where none is
 # open); refused: no pull request for the unit, Forgejo unreachable, a usage it lacks.
@@ -58,7 +58,7 @@ python3 "$W/server.py" "$W" & echo $! > "$W/pid"
 for _ in $(seq 50); do [ -e "$W/port" ] && break; sleep 0.1; done
 [ -e "$W/port" ] || { echo "upgrade-label: the local server did not start"; exit 1; }
 W=$W PORT=$(cat "$W/port") python3 - <<'PYCHECK'
-import json, os, subprocess, sys, time
+import json, os, re, subprocess, sys, time
 W, PORT = os.environ["W"], os.environ["PORT"]
 fails = 0
 def check(name, got, want):
@@ -85,6 +85,15 @@ def write_fixture(fx):
     os.replace(tmp, os.path.join(W, "fixture.json"))
 
 
+def status(st):
+    """Forgejo's combined status: Renovate's stability-days beside Woodpecker's context; "" - nothing reported;
+    "stability-only" - Renovate's status alone (its state success), as for a head whose pipeline never started."""
+    days = {"context": "renovate/stability-days", "status": "success"}
+    if st == "":
+        return {"state": "", "statuses": []}
+    if st == "stability-only":
+        return {"state": "success", "statuses": [days]}
+    return {"state": st, "statuses": [days, {"context": "ci/woodpecker/pr/ci", "status": st}]}
 def fixture(prs, states, labels=None, base=None, fail_post=(), merged=None, issues=None, drop_post=(), extra=None, fail_code=409):
     fx = {"fail_post": list(fail_post), "drop_post": list(drop_post), "fail_code": fail_code}
     for repo in ("infra", "platform", "ops"):
@@ -102,7 +111,7 @@ def fixture(prs, states, labels=None, base=None, fail_post=(), merged=None, issu
         fx[f"/repos/schnappy/{repo}/labels"] = (labels or {}).get(repo, [])
     for sha, st in states.items():
         for repo in ("infra", "platform", "ops"):
-            fx[f"/repos/schnappy/{repo}/commits/{SHA.get(sha, sha)}/status"] = {"state": st}
+            fx[f"/repos/schnappy/{repo}/commits/{SHA.get(sha, sha)}/status"] = status(st)
     fx.update(extra or {})
     write_fixture(fx)
     for f in ("writes", "auth", "reads"):
@@ -119,19 +128,15 @@ def run(*args, url=None):
 UNIT = {"infra": [pr(1, "wave-patches", "a1"), pr(2, "istio", "a2")], "platform": [pr(5, "wave-patches", "b1")],
         "ops": [pr(8, "wave-patches", "c1")]}
 fixture(UNIT, {"a1": "success", "b1": "success", "c1": "success"},
-        labels={"infra": [{"name": "upgrade-blocked", "id": 3}], "platform": [], "ops": []})
-rc, out = run("wave-patches", "upgrade-blocked")
+        labels={"infra": [{"name": "stop-updating", "id": 3}], "platform": [], "ops": []})
+rc, out = run("wave-patches", "stop-updating")
 w = writes()
 check("label: on each of the unit's pull requests (not istio's), the repo's own id; made where missing",
       (rc, [x[0] for x in w], [x[1] for x in w]),
       (0, ["/repos/schnappy/infra/issues/1/labels", "/repos/schnappy/platform/labels", "/repos/schnappy/platform/issues/5/labels",
            "/repos/schnappy/ops/labels", "/repos/schnappy/ops/issues/8/labels"],
-       [{"labels": [3]}, {"name": "upgrade-blocked", "color": "#d93f0b"}, {"labels": [77]},
-        {"name": "upgrade-blocked", "color": "#d93f0b"}, {"labels": [77]}]))
-fixture(UNIT, {})
-rc, out = run("wave-patches", "--comment", "UPGRADE NOTICE 2026-11-20T03:00:00Z - applies after 24 h")
-check("comment: on each, the text whole", (rc, [(x[0], x[1]["body"][:14]) for x in writes()]),
-      (0, [(f"/repos/schnappy/{r}/issues/{n}/comments", "UPGRADE NOTICE") for r, n in (("infra", 1), ("platform", 5), ("ops", 8))]))
+       [{"labels": [3]}, {"name": "stop-updating", "color": "#d93f0b"}, {"labels": [77]},
+        {"name": "stop-updating", "color": "#d93f0b"}, {"labels": [77]}]))
 fixture(UNIT, {})
 rc, heads_out = run("wave-patches", "--heads")
 check("heads: each of the unit's pull requests, its number, its head and its base branch's commit - nothing written; "
@@ -184,7 +189,7 @@ fixture({"infra": [pr(1, "wave-patches", "a1", user="mallory")], "platform": [pr
          "ops": [pr(8, "wave-patches", "c1")]}, {"a1": "success", "b1": "success", "c1": "success"})
 rc, out = run("wave-patches", "--heads")
 check("another account's pull request, or a fork's, named renovate/<unit>: none of the unit's (heads, labels)",
-      (rc, out.split("\n"), run("wave-patches", "upgrade-blocked")[0], [x[0] for x in writes()][-1]),
+      (rc, out.split("\n"), run("wave-patches", "stop-updating")[0], [x[0] for x in writes()][-1]),
       (0, [f"schnappy/ops 8 {SHA['c1']} {BASE}"], 0, "/repos/schnappy/ops/issues/8/labels"))
 fixture(UNIT, {"a1": "success", "b1": "success", "c1": "success"}, base={"platform": "f" * 40})
 proven()
@@ -290,7 +295,7 @@ fixture(UNIT, {"a1": "success", "b1": "pending", "c1": "success"})
 def flip():
     time.sleep(0.6)
     fx = json.load(open(os.path.join(W, "fixture.json")))
-    fx[f"/repos/schnappy/platform/commits/{SHA['b1']}/status"] = {"state": "success"}
+    fx[f"/repos/schnappy/platform/commits/{SHA['b1']}/status"] = status("success")
     write_fixture(fx)
 t = threading.Thread(target=flip); t.start()
 env = {**os.environ, "UPGRADE_FORGEJO_URL": f"http://127.0.0.1:{PORT}/api/v1", "UPGRADE_FORGEJO_TOKEN": "t", "UPGRADE_GREEN_POLL": "0.1"}
@@ -298,6 +303,12 @@ r = subprocess.run([sys.executable, "scripts/upgrade-label.py", "wave-patches", 
 t.join()
 check("green with a wait: the running one waited for until it is green - exit 0", (r.returncode, r.stdout.strip().split("\n")[-1]),
       (0, "schnappy/ops#8 success"))
+# the console's progress through the wait (operator 2026-11-22: a silent hour read as a hang): the heads' states said when
+# they change - once while the same, its time first; the verdict as before
+waited = [l for l in r.stdout.splitlines() if " waiting for CI: " in l]
+check("  while it waits: one line (the states unchanged), its time first, every head's state",
+      [re.sub(r"^\d\d:\d\d:\d\d ", "", l) for l in waited],
+      ["waiting for CI: schnappy/infra#1 success, schnappy/platform#5 pending, schnappy/ops#8 success"])
 fixture(UNIT, {"a1": "success", "b1": "pending", "c1": "success"})
 r = subprocess.run([sys.executable, "scripts/upgrade-label.py", "wave-patches", "--green", "1"], capture_output=True, text=True,
                    env={**env, "UPGRADE_GREEN_POLL": "0.2"}, timeout=60)
@@ -308,6 +319,15 @@ fixture(UNIT, {"a1": "success", "b1": "", "c1": "pending"})
 rc, out = run("wave-patches", "--green")
 check("green: a head no CI ever reported on (Forgejo's state \"\") at the wait's end: no CI (exit 5 - no pipeline started), named "
       "- never 'running'", (rc, out.split("\n")[-1]), (5, "NO CI: no CI on: schnappy/platform#5"))
+fixture(UNIT, {"a1": "success", "b1": "stability-only", "c1": "success"})
+rc, out = run("wave-patches", "--green")
+check("green: a head \"success\" by Renovate's stability-days alone - its pipeline never started (2026-11-19) - no CI "
+      "(exit 5), named: never green", (rc, out.split("\n")[-1]), (5, "NO CI: no CI on: schnappy/platform#5"))
+fixture(UNIT, {"a1": "success", "b1": "stability-only", "c1": "success"})
+proven()
+rc, out = run("wave-patches", "--merge", "--expect", PROVEN)
+check("merge: a head \"success\" by stability-days alone - not green, none merged, named",
+      (rc, writes(), "platform#5 not green (its CI: none)" in out), (1, [], True))
 fixture(UNIT, {})
 rc, out = run("wave-patches", "--update")
 check("update: a pull request whose compare is not read: refused (exit 1), nothing updated", (rc, writes()), (1, []))
@@ -342,8 +362,8 @@ fixture(UNIT, {})
 rc, out = run("nope", "--heads")
 check("no pull request for the unit: refused", (rc, out.startswith("REFUSED"), writes()), (1, True, []))
 check("Forgejo unreachable: refused", run("wave-patches", "veto", url="http://127.0.0.1:1/api/v1")[0], 1)
-for args in (("wave-patches",), ("Bad/Unit", "x"), ("wave-patches", "--comment", ""), ("wave-patches", "Bad Label")):
-    check(f"usage refused: {args}", run(*args)[0], 2)
+for args in (("wave-patches",), ("Bad/Unit", "x"), ("wave-patches", "--comment", "x"), ("wave-patches", "Bad Label")):
+    check(f"usage refused: {args}", (run(*args)[0], writes()), (2, []))  # --comment: the veto notice's, gone 2026-11-21
 print("upgrade-label: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 PYCHECK

@@ -27,7 +27,7 @@
 #   Vault   {{ vault_prefix }}/woodpecker-ci: infra_repo_token, registry_user, registry_token, clone_token, pull_token - read,
 #           merged, written back with the version read (cas: a write between them fails this one): every other
 #           property of the path kept (seed-vault-secrets.yml keeps these four in turn). The run says
-#           "woodpecker-ci v<read> -> v<written>". ROLLBACK: on the Pi holding the VIP, VAULT_TOKEN from
+#           "Vault versions v<read> -> v<written>". ROLLBACK: on the Pi holding the VIP, VAULT_TOKEN from
 #           /etc/vault-unseal/root-token (never on a command line), `vault kv rollback -version=<read>
 #           secret/schnappy/woodpecker-ci` (a new version with the old data), then force External Secrets:
 #           kubectl annotate externalsecret woodpecker-ci-secrets-es -n woodpecker force-sync=$(date +%s) --overwrite
@@ -1036,8 +1036,8 @@
       ansible.builtin.debug:
         msg: >-
           {{ ci_bot_user }} (no admin) in {{ _ci_teams | map(attribute='name') | map('regex_replace', '^', ci_bot_org ~ '/')
-          | join(', ') }}; its tokens ci-*-{{ _ci_stamp }} and registry_user in Vault {{ vault_prefix }}/woodpecker-ci:
-          woodpecker-ci v{{ (_ci_vault_before.metadata | default({})).version | default(0) }}
+          | join(', ') }}; its tokens ci-*-{{ _ci_stamp }} and registry_user in Vault {{ vault_prefix }}/woodpecker-ci,
+          Vault versions v{{ (_ci_vault_before.metadata | default({})).version | default(0) }}
           -> v{{ _ci_vault_written_read.metadata.version | default('?') }} (rollback: the playbook's header).
           The cluster's woodpecker-ci-secrets takes them at External Secrets' next refresh (1 h) - at once: kubectl
           annotate externalsecret woodpecker-ci-secrets-es -n woodpecker force-sync=$(date +%s) --overwrite.

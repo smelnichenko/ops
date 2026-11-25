@@ -1,1 +1,1 @@
-["^python3 -I scripts/renovate-checksums\\.py --changed$"]
+["^python3 -I scripts/renovate-checksums\\.py --changed$", "^sh -c 'set -eu; s=\\$\\(curl -fsSL --proto =https \"https://services\\.gradle\\.org/distributions/gradle-\\$1-bin\\.zip\\.sha256\"\\); printf %s \"\\$s\" \\| grep -qxE \"\\[0-9a-f\\]\\{64\\}\"; sed -i \"s/\\^distributionSha256Sum=\\.\\*/distributionSha256Sum=\\$s/\" gradle/wrapper/gradle-wrapper\\.properties' gradle-sum [0-9]+(\\.[0-9]+){1,2}$"]

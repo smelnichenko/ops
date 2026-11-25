@@ -153,6 +153,47 @@ check("L03 moved: the canary still there (the old database read), or another das
 check("L03 seeded on Postgres (a copy built after the move), still there: every UID and the canary: on",
       grafana("verify", UIDS, C, "postgres", seed_db="postgres"), False)
 check("L03 the database not said (two lines): failed", grafana("verify", UIDS, C, ""), True)
+# L04/L05: Grafana's datasources - each the chart provisions there and healthy, in the copy's check and production's (the
+# observability review, 2026-11-25: a check of only what Grafana listed passed one a new version failed to register).
+# The task's script run as Ansible renders it, kubectl a stub answering Grafana's API
+import subprocess, tempfile
+STUB = """#!/bin/bash
+cat > /dev/null
+q="${@: -1}"
+case $q in
+  /api/datasources) python3 -c 'import json, os; print(json.dumps([{"uid": u} for u in os.environ["LISTED"].split()]))' ;;
+  */health) u=${q#/api/datasources/uid/}; u=${u%/health}
+    case " $BAD " in *" $u "*) echo '{"status": "ERROR"}' ;; *) echo '{"status": "OK"}' ;; esac ;;
+esac
+"""
+CM = "apiVersion: 1\ndeleteDatasources:\n  - name: Prometheus\ndatasources:\n  - name: Mimir\n    uid: prometheus\n  - name: ClickHouse-Logs\n    uid: clickhouse-logs\n  - name: Tempo\n    uid: tempo\n"
+def datasources(path, listed, bad=()):
+    t = task(path, "Grafana - every datasource healthy")
+    d = tempfile.mkdtemp()
+    stub = os.path.join(d, "kubectl")
+    open(stub, "w").write(STUB)
+    os.chmod(stub, 0o755)
+    prov = (t.get("environment") or {}).get("PROVISIONED")
+    provisioned = render(prov, _ds_provisioned={"stdout": CM}) if prov else ""
+    env = dict(os.environ, LISTED=" ".join(listed), BAD=" ".join(bad), PROVISIONED=provisioned)
+    r = subprocess.run(["bash", "-c", render(t["ansible.builtin.shell"]["cmd"], kubectl=stub)], capture_output=True, text=True,
+                       env=env, timeout=60)
+    lines = r.stdout.splitlines()
+    return lines, condition(t["until"], _datasources={"rc": r.returncode, "stdout_lines": lines})
+ALL = ["prometheus", "clickhouse-logs", "tempo"]
+for path in ("tests/ansible/copy/survival-check.yml", "deploy/ansible/playbooks/production-data-check.yml"):
+    name = path.split("/")[-1]
+    check(f"L04 {name}: every datasource provisioned listed and healthy: done", datasources(path, ALL),
+          (["prometheus OK", "clickhouse-logs OK", "tempo OK"], True))
+    check(f"L04 {name}: one provisioned that Grafana does not list: MISSING, not done", datasources(path, ["prometheus", "tempo"]),
+          (["prometheus OK", "clickhouse-logs MISSING", "tempo OK"], False))
+    check(f"L04 {name}: one listed and unhealthy: not done", datasources(path, ALL, bad=["tempo"])[1], False)
+    check(f"L04 {name}: one listed and not provisioned: checked too", datasources(path, ALL + ["extra"])[0][-1], "extra OK")
+    rd = task(path, "Grafana - the datasources provisioned")
+    check(f"L05 {name}: the provisioned ones read from the ConfigMap; none there, or rc != 0: failed",
+          (condition(rd["failed_when"], _ds_provisioned={"rc": 0, "stdout": CM}),
+           condition(rd["failed_when"], _ds_provisioned={"rc": 0, "stdout": "apiVersion: 1\ndatasources: []\n"}),
+           condition(rd["failed_when"], _ds_provisioned={"rc": 1, "stdout": CM})), (False, True, True))
 print("guard-conditions: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 PY_GUARD_CONDITIONS

@@ -98,7 +98,7 @@ Scylla `masi_history.response_body`: `PRIMARY KEY (body_sha256, chunk)`, split a
 
 ### The chain
 
-The operator's "like blockchain" is a **hash chain**: tamper evidence, no consensus, one writer per source.
+The blockchain-like record the operator asked for is a **hash chain**: tamper evidence, no consensus, one writer per source.
 
 - `hash = sha256(prev_hash ‖ canonical fields ‖ body_sha256)`. The URL is in the chain as a **salted commitment**, because
   URLs can carry a person (a GitHub login, a name search).

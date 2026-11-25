@@ -1,9 +1,9 @@
 # Plan 125 - the Vagrant copy built once, reverted per run; proof matched to risk
 
-**Status:** decided 2026-11-18 (operator: "maybe it's time to make rules more flexible?" - "both, do it"); built,
+**Status:** decided 2026-11-18 (operator: the rules made more flexible, both parts); built,
 reviewed twice (the second: architecture and reliability, two Criticals - the policy's text, a base reused before it was
-proven - answered below), test-quality answered; on ops main 2026-11-18 (operator: "make it sooner", "no need to wait
-whole hours"): copy run 8 its fresh build, the next run its revert and the proof.
+proven - answered below), test-quality answered; on ops main 2026-11-18 (operator: sooner, without waiting
+whole hours): copy run 8 its fresh build, the next run its revert and the proof.
 
 ## Decisions (operator, 2026-11-18)
 
@@ -108,7 +108,7 @@ stale: the revert would build):
 1. `COPY_FINGERPRINT=fresh task test:copy:build` (copy run 8, 2026-11-18): it builds, saves (unproven), proves at its
    end; the base's fingerprint at the cold boot in `.copy/base-fingerprint-fresh.txt`; every check green; at its end
    halted and marked used, never destroyed.
-2. The next run (copy run 7, the same night - operator: "no need to wait whole hours"):
+2. The next run (copy run 7, the same night - operator: no waiting whole hours):
    `COPY_FINGERPRINT=revert task test:copy:ready`: it reverts ("reverted:" in its log, never a build), the fingerprint
    in `.copy/base-fingerprint-revert.txt`; every check green. A reverted base's age up to MAX_AGE (24 h) is accepted
    unproven by a revert that old: what moves in a day is read as stale (the inventory, the base's files) or refreshed

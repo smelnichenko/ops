@@ -7,11 +7,13 @@
 #
 # Usage: scripts/etcd-backup-now.sh        exit 0 taken (its name said), 1 not (why said)
 # Env:   ETCD_BACKUP_HOST (ten), ETCD_BACKUP_POLL (10 s), ETCD_BACKUP_TRIES (90 - 15 min at 10 s),
-#        ETCD_BACKUP_READ_FAILS (6 - reads of the Job failing in a row before it is given up: ten's ssh may drop once)
+#        ETCD_BACKUP_READ_FAILS (6 - reads of the Job failing in a row before it is given up: ten's ssh may drop once),
+#        ETCD_BACKUP_SSH_CONFIG (an ssh config file - the Vagrant copy's: test:copy:check runs the Job on its kubeadm VM)
 set -uo pipefail
 host=${ETCD_BACKUP_HOST:-ten}
 poll=${ETCD_BACKUP_POLL:-10}; tries=${ETCD_BACKUP_TRIES:-90}; read_fails=${ETCD_BACKUP_READ_FAILS:-6}
-on() { ssh -o BatchMode=yes -o ConnectTimeout=15 -o ServerAliveInterval=10 -o ServerAliveCountMax=3 "$host" "$@" < /dev/null; }
+on() { ssh ${ETCD_BACKUP_SSH_CONFIG:+-F "$ETCD_BACKUP_SSH_CONFIG"} -o BatchMode=yes -o ConnectTimeout=15 -o ServerAliveInterval=10 \
+  -o ServerAliveCountMax=3 "$host" "$@" < /dev/null; }
 job=etcd-backup-now-$(date -u +%Y%m%d%H%M%S)
 on "kubectl -n kube-system create job --from=cronjob/etcd-backup $job" || { echo "ETCD SNAPSHOT: its Job not made"; exit 1; }
 failed_reads=0

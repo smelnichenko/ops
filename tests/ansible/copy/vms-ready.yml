@@ -1,6 +1,6 @@
 ---
 # Wait until the Vagrant copy is usable after its VMs (re)start: the Pis isolated from production, Vault ACTIVE on the
-# Pi VIP and the kubeadm node Ready.
+# Pi VIP, the kubeadm node Ready and each Cilium agent's Hubble serving.
 # After a cold start of both Pis, Vault is unsealed but takes ~45 s to elect an active node (Consul lock); in between
 # every request bounces between standbys (health 474, "Exceeded 30 redirects") and the Vault seeding refuses to run
 # (seen 2026-10-02).
@@ -86,3 +86,7 @@
 
     - name: The node is Ready (the API server may still be starting)
       ansible.builtin.import_tasks: tasks/node-ready.yml
+
+    # an agent booted with Hubble's port still held never serves Hubble, and hubble-relay is never ready (2026-11-20)
+    - name: Each Cilium agent's Hubble serving
+      ansible.builtin.import_tasks: tasks/cilium-hubble.yml

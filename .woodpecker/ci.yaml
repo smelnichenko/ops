@@ -1,28 +1,25 @@
 # CI: Lint and analyze on push
 
-# ONE run per change: the pull request's. With `push` listed too, every push to a branch that has an
-# open PR fired BOTH pipelines - two identical runs of the same sha, racing for the same agent.
-# Nothing lands here without a PR, so the PR run is the gate; deployment stays on cd.yaml's push.
+# Every PUSH runs it, a branch's and main's; no pull request does (2026-11-24). A change is built on its
+# branch (a change of ours on its way, a Renovate unit) and its pull request opened to merge a head already
+# green - one run per push, never two on the same sha (pull_request beside push ran both). A red branch
+# shows on its commit and pages nobody: WoodpeckerBuildFailed counts failed pipelines on main alone, and a
+# branch push's pipeline carries its own branch (a pull request's carried main, so every red PR paged).
+# The merge commit on main runs it again: two branches each green apart can still break main together.
 # A change of docs alone runs nothing: the suite reads no doc (the upgrade steps' table, the one it read, went with its
 # harness). Nine plan-doc pushes in an hour (2026-11-11) held masi's deploy 35 min behind ~15 min runs each
 # in the one slot.
 when:
-  - event: pull_request
+  - event: push
     # documents alone run nothing - but an upgrade's record (docs/upgrades/, with production's inventory or alone) does:
     # it is the commit ops' CI judges after a unit (its merge commit skips; a record of docs alone skipped too would leave
     # main unjudged)
-    path: &docs_only
+    path:
       exclude:
         - 'docs/*.md'
         - 'docs/plans/**'
         - 'docs/research/**'
         - 'docs/runbooks/**'
-  # AND the merge commit on main. Not a duplicate: the pull_request run tests the PR's own head, and two
-  # PRs that were each green apart can still break main together. This repo has no other gate - Argo
-  # applies main to the live cluster - so the tree that actually lands is checked here.
-  - event: push
-    branch: main
-    path: *docs_only
 
 clone:
   - name: git
@@ -30,9 +27,15 @@ clone:
     settings:
       partial: false
       depth: 100
+      # non-root: its credentials file in a HOME it can write
+      home: /tmp
       # a pull request's target too (origin/main): scripts/ci-build-hashes.sh's base, fetched with the clone's
       # credentials - a step's own git has none
       fetch_target_branch: true
+    backend_options:
+      kubernetes:
+        # non-root: uid 1000 clones, so the steps after it (uid 1000) own the workspace
+        securityContext: &nonroot { runAsNonRoot: true, runAsUser: 1000, runAsGroup: 1000 }
 
 steps:
   - name: ansible-lint
@@ -41,6 +44,7 @@ steps:
       - ansible-lint deploy/ansible/playbooks/*.yml --exclude deploy/ansible/roles/
     backend_options:
       kubernetes:
+        securityContext: *nonroot
         resources:
           requests: { memory: 256Mi }
           limits: { memory: 512Mi }
@@ -51,6 +55,7 @@ steps:
       - bash tests/ansible/unit/run.sh
     backend_options:
       kubernetes:
+        securityContext: *nonroot
         resources:
           requests: { memory: 256Mi }
           limits: { memory: 1Gi }
@@ -63,6 +68,7 @@ steps:
       - promtool test rules tests/promql/*.test.yml
     backend_options:
       kubernetes:
+        securityContext: { runAsNonRoot: true, runAsUser: 65534, runAsGroup: 65534 }  # the image's own nobody
         resources:
           requests: { memory: 64Mi }
           limits: { memory: 256Mi }
@@ -75,6 +81,7 @@ steps:
       - bash scripts/ci-build-hashes.sh
     backend_options:
       kubernetes:
+        securityContext: *nonroot
         resources:
           requests: { memory: 128Mi }
           limits: { memory: 512Mi }
@@ -85,6 +92,7 @@ steps:
       - python3 .claude/skills/check-skills.py
     backend_options:
       kubernetes:
+        securityContext: *nonroot
         resources:
           requests: { memory: 128Mi }
           limits: { memory: 256Mi }
@@ -92,14 +100,14 @@ steps:
   - name: sonar
     image: git.pmon.dev/schnappy/sonar-scanner:latest
     commands:
-      # A pull request analyses into its OWN project (schnappy-ops-pr): SonarQube CE has no branch analysis, and one
-      # project for both judged a pull request by main's new code (one issue on main failed every PR - Renovate's units
+      # A branch analyses into its OWN project (schnappy-ops-pr): SonarQube CE has no branch analysis, and one
+      # project for both judged a change by main's new code (one issue on main failed every PR - Renovate's units
       # too) and showed whoever pushed last (2026-11-16, as masi since 2026-09-20). Main waits for its gate too (it
       # never did: a new issue on main went unseen) - a push stays pushed, its pipeline turns red.
       # A missing token fails the gate: one that skips itself green is a gate nobody enforces.
       - '[ -n "$SONAR_TOKEN" ] && [ -n "$SONAR_HOST_URL" ] || { echo "SONAR_TOKEN or SONAR_HOST_URL is missing: the quality gate cannot be checked"; exit 1; }'
       - |
-        if [ "$CI_PIPELINE_EVENT" = pull_request ]; then
+        if [ "${CI_COMMIT_BRANCH:-}" != main ]; then
           sonar-scanner -Dsonar.projectKey=schnappy-ops-pr -Dsonar.projectName='Schnappy Ops (pull requests)' -Dsonar.qualitygate.wait=true
         else
           sonar-scanner -Dsonar.qualitygate.wait=true
@@ -107,6 +115,7 @@ steps:
     depends_on: [ansible-lint, ansible-unit, promql, skills]
     backend_options:
       kubernetes:
+        securityContext: *nonroot  # the node image's own user (uid 1000): the scanner's cache in its home
         secrets:
           - name: woodpecker-ci-secrets
             key: sonar_token

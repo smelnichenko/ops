@@ -1,0 +1,136 @@
+---
+# The way back from a ScyllaDB release line, rehearsed on the copy with production's tasks (deploy/ansible/playbooks/
+# tasks/scylla-way-back.yml - what task deploy:scylla:way-back runs on production): marker rows of this run written into
+# one of chat's tables (the chart's keyspace - its schema the chart's schema Job creates, as on a fresh environment);
+# Scylla Manager backs chat up (a task of its own); then the cluster is thrown away - its data volumes and the
+# ScyllaCluster -, Argo recreates it at the version git asks for, the schema Job runs again, and Scylla Manager restores
+# chat's rows from that snapshot into the new cluster (a new registration: the snapshot is the replaced cluster's). The
+# markers must come back, every one, and the cluster's clients (restarted by the way back) reach it with no driver
+# error. The copy's own version stands for "the old one" (the steps are the same at any
+# version: git's version rebuilt, the replaced cluster's snapshot restored).
+#
+# The copy's production cluster is rebuilt by it: what else lived in ScyllaDB and is not chat's (data-check's seeded
+# upgrade_check keyspace) is gone after it - run it on a readied copy, alone (task test:copy:scylla-way-back).
+#
+# Usage: ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/scylla-way-back-check.yml
+- name: Vagrant VMs only
+  ansible.builtin.import_playbook: ../vagrant-only-play.yml
+
+- name: ScyllaDB's way back from a release line
+  hosts: target
+  become: true
+  gather_facts: false
+  vars:
+    kubeconfig: /etc/kubernetes/admin.conf
+    kubectl: "kubectl --kubeconfig {{ kubeconfig }}"
+    manager: "{{ kubectl }} -n scylla-manager exec deploy/scylla-manager -c scylla-manager --"
+    scylla_namespace: schnappy-production
+    scylla_cluster: schnappy-production-scylla
+    argo_app: schnappy-production-data
+    restore_location: s3:scylla-backups
+    way_back_keyspaces: chat
+    way_back_confirm: schnappy-production-scylla
+    markers: 100
+    # channel ids far above any real one: the markers never meet a channel of the copy's own
+    first_id: 9100000000
+  tasks:
+    - name: Its names are the fixed ones - what it throws away cannot be redirected with -e
+      ansible.builtin.assert:
+        that:
+          - scylla_namespace == 'schnappy-production'
+          - scylla_cluster == 'schnappy-production-scylla'
+          - way_back_keyspaces == 'chat'
+        fail_msg: "REFUSED: namespace={{ scylla_namespace }} cluster={{ scylla_cluster }} keyspaces={{ way_back_keyspaces }}"
+        quiet: true
+
+    - name: The copy's version - the one rebuilt at
+      ansible.builtin.command: >-
+        {{ kubectl }} -n {{ scylla_namespace }} get scyllaclusters.scylla.scylladb.com {{ scylla_cluster }} -o jsonpath={.spec.version}
+      register: _version
+      changed_when: false
+
+    - name: A ScyllaDB pod to run cqlsh in, and this run's marker (a random value, no secret)
+      ansible.builtin.command: >-
+        {{ kubectl }} -n {{ scylla_namespace }} get pods -l scylla/cluster={{ scylla_cluster }} -o jsonpath={.items[0].metadata.name}
+      register: _pod
+      changed_when: false
+      failed_when: _pod.rc != 0 or _pod.stdout | length == 0
+
+    - name: The facts
+      ansible.builtin.set_fact:
+        way_back_version: "{{ _version.stdout }}"
+        cqlsh: "{{ kubectl }} -n {{ scylla_namespace }} exec {{ _pod.stdout }} -c scylla -- cqlsh"
+        marker: "wb-{{ lookup('ansible.builtin.password', '/dev/null', chars=['ascii_lowercase', 'digits'], length=16) }}"
+
+    - name: The markers written into chat.chain_heads
+      ansible.builtin.command:
+        argv: [sh, -c, '{{ cqlsh }} -e "$1"', _,
+               "BEGIN UNLOGGED BATCH {% for k in range(markers) %}INSERT INTO chat.chain_heads (channel_id, hash, message_id)
+                VALUES ({{ first_id + k }}, '{{ marker }}-{{ k }}', now()); {% endfor %}APPLY BATCH;"]
+      changed_when: true
+
+    - name: Scylla Manager backs chat up - a task of its own
+      ansible.builtin.command: "{{ manager }} sctool backup -c {{ scylla_namespace }}/{{ scylla_cluster }} -L {{ restore_location }} -K chat --retention 1"
+      register: _backup
+      changed_when: true
+      failed_when: _backup.rc != 0 or _backup.stdout is not search('backup/[0-9a-f-]+')
+
+    - name: Its backup DONE
+      ansible.builtin.command: >-
+        {{ manager }} sctool progress -c {{ scylla_namespace }}/{{ scylla_cluster }} {{ _backup.stdout | regex_search('backup/[0-9a-f-]+') }}
+      register: _bprogress
+      changed_when: false
+      retries: 60
+      delay: 10
+      until: _bprogress.stdout is search('Status:\s+(DONE|ERROR|ABORTED)')
+      failed_when: _bprogress.stdout is not search('Status:\s+DONE') or _bprogress.stdout is not search('sm_[0-9]{14}UTC')
+
+    - name: The snapshot it took
+      ansible.builtin.set_fact:
+        way_back_snapshot: "{{ _bprogress.stdout | regex_findall('sm_[0-9]{14}UTC') | first }}"
+
+    - name: Production's way back - the cluster thrown away, rebuilt by Argo at git's version, chat restored
+      ansible.builtin.include_tasks: ../../../deploy/ansible/playbooks/tasks/scylla-way-back.yml
+
+    - name: The rebuilt cluster's pod
+      ansible.builtin.command: >-
+        {{ kubectl }} -n {{ scylla_namespace }} get pods -l scylla/cluster={{ scylla_cluster }} -o jsonpath={.items[0].metadata.name}
+      register: _pod_after
+      changed_when: false
+
+    - name: The markers back - every one
+      ansible.builtin.shell: |
+        set -euo pipefail
+        {{ kubectl }} -n {{ scylla_namespace }} exec {{ _pod_after.stdout }} -c scylla -- \
+          cqlsh -e "SELECT hash FROM chat.chain_heads;" | grep -c -- '{{ marker }}-' || true
+      args:
+        executable: /bin/bash
+      register: _back
+      changed_when: false
+      failed_when: _back.stdout | trim != markers | string
+
+    - name: The cluster's clients back on it - each restarted deployment's new pod with no driver error (before the restart
+        chat retried the replaced cluster's address every minute)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        {{ kubectl }} -n {{ scylla_namespace }} logs deployment/{{ item }} --all-containers | grep -c 'Error while opening new channel' || true
+      args:
+        executable: /bin/bash
+      loop: "{{ way_back_clients }}"
+      register: _client_errors
+      changed_when: false
+      failed_when: _client_errors.stdout | trim != '0' or way_back_clients | length == 0
+
+    - name: The markers removed (chat's rows as they were)
+      ansible.builtin.command:
+        argv: [sh, -c, '{{ kubectl }} -n {{ scylla_namespace }} exec {{ _pod_after.stdout }} -c scylla -- cqlsh -e "$1"', _,
+               "DELETE FROM chat.chain_heads WHERE channel_id IN ({{ range(first_id, first_id + markers) | join(', ') }});"]
+      changed_when: true
+
+    - name: Back
+      ansible.builtin.debug:
+        msg: >-
+          SCYLLA WAY BACK OK: {{ scylla_cluster }} thrown away and rebuilt at {{ way_back_version }} (Scylla Manager
+          {{ way_back_old_id[0] }} -> {{ way_back_new_id }}), the schema Job run again, chat restored from
+          {{ way_back_snapshot }} ({{ restore_task }}) - {{ markers }} markers back; {{ way_back_clients | join(', ') }} restarted,
+          no driver error

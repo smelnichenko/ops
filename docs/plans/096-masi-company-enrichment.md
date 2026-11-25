@@ -18,9 +18,9 @@ else; the collectors keep the strict allow-list (masi #17).
 - **Fill empty fields only**, with conditional updates: register, collector, partner and operator values are
   never overwritten, and a long visit never saves over what changed meanwhile.
 
-Operator, 2026-09-25, choosing between Claude's web search, register data only, and an open fetcher:
-*"Open allow-list for enrichment."* And, on the first draft's count of companies "without a website":
-*"companies don't lack websites, you just did not find them."* On posting-analysis batching the operator asked
+Operator, 2026-09-25, choosing between Claude's web search, register data only, and an open fetcher: an open
+allow-list for enrichment. And, on the first draft's count of companies "without a website": the companies have
+websites, the draft had not found them. On posting-analysis batching the operator asked
 what re-analysis is for; there is almost none (a posting is analysed once; again only when a closed job is
 reposted with new text), and batching would save about 0.60 USD a week in test at the price of hours of delay —
 not planned.
@@ -319,7 +319,7 @@ the name is no common start), employer form, the board's form; never a held or r
 holds; platform pages give no website domain. Its review found brand→subsidiary fusion (alias pull), stray contacts,
 and a domain written into a second company — all fixed; 31 revert checks. Measured once the register read fills the
 index. The site's `DOMAIN` label is a follow-up.
-**Operator, 2026-09-25: "never use eesti.ee for emails", "cleanup from eesti.ee" → masi #58** (merged): one rule,
+**Operator, 2026-09-25: no eesti.ee address used for mail, the stored ones cleaned up → masi #58** (merged): one rule,
 `Normalizer.refusal`, refuses a no-reply mailbox or a resident's state inbox (`@eesti.ee`, read as the registrable
 domain) on every path that stores, derives or mails an address — capture, identity, the operator's and the partner's
 edits (400), the inbox (no contact), the digest (never mailed), the mail and inbox settings (no start); the startup
@@ -448,7 +448,7 @@ fixed; 18 revert checks of my own, all red; the full suite in CI's shape (one Po
 `company.website_accepted_at`) ran. Review (1 critical, 8 warnings, 7 suggestions) and test audit (59 reverts, 19
 uncaught, two defects — a site taken away back through a redirect or a merge) all fixed; 19 revert checks, all red.
 Next: 4b-4 (the identity key's one rule), then the site's card.
-**The lane ON in test 2026-09-27 08:57 Tallinn** (operator: "enable and continue"; infra 50064ed). The first tick
+**The lane ON in test 2026-09-27 08:57 Tallinn** (enabled on the operator's word; infra 50064ed). The first tick
 (09:03): Cybernetica KNOWN_SITE — careers page found, its Teamdash board attached; Bolt UNCONFIRMED (bolt.eu is Bolt
 Services EE OÜ's row: a merge for the operator); Wise UNCONFIRMED (wise.com prints 16267372, a guess ties nothing);
 Luminor Group UNCONFIRMED (no code on luminor.ee); PlayTech UNCONFIRMED (the guess redirected to domainseller.site).

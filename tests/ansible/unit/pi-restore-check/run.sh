@@ -439,7 +439,11 @@ red "postgres: a database missing: red" POSTGRES DBS="postgres monitor admin cha
 red "postgres: no table in any database: red" POSTGRES TABLES=0
 # one database restored empty, the rest with tables: red, naming it (masi's was let be empty until it ran in production)
 red "postgres: one database restored with no table (masi), the rest with tables: red" POSTGRES EMPTY_DB=masi
-check "  the empty one named, every count said" "$(report | grep -oE 'no table in [a-z]+ \([^)]*\)')" \
+# not there: the report's POSTGRES line shown instead (CI pipeline 1058, 2026-11-20, read it empty once - 40 parallel runs
+# in CI's image did not repeat it)
+# on a miss, the Postgres part's whole report - its header AND the line under it that says why (2026-11-25: under load it
+# read "POSTGRES FAILED:" alone, once, its cause not shown; three reruns and six side by side passed)
+check "  the empty one named, every count said" "$(report | grep -oE 'no table in [a-z]+ \([^)]*\)' || report | grep -A1 -E '^POSTGRES')" \
   "no table in masi (monitor:7 admin:7 chat:7 chess:7 masi:0)"
 red "postgres: a database not read back whole: red" POSTGRES DUMP_FAIL=1
 store

@@ -3,7 +3,7 @@
 
 The first version was "tested" by echoing four payloads at it, all of which it happened to handle.
 Then, in the session it was meant to police, a loop written `until [ -f x ]; do sleep 2; done`
-sailed through and hung for two minutes. The operator: "your waiting hook test was crap".
+sailed through and hung for two minutes. The operator judged that test worthless.
 
 So these are the cases that version got WRONG, plus the ones it got right, plus the ones it must
 never fire on. Run: python3 use-longrun-test.py

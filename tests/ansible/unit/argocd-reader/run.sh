@@ -29,4 +29,11 @@ unset ANSIBLE_CONFIG
 W=$(mktemp -d)
 trap 'rm -rf "$W"' EXIT
 cd "$ROOT" || exit 1
-PYTHONDONTWRITEBYTECODE=1 timeout 1200 "$PY" -B "$H/drive.py" "$AP" "$W"
+# The bound is for a hang, never for the work: ~70 playbook runs take 400 s alone on 4 CPUs (the CI image, 2026-11-24),
+# ~15 min beside three other harnesses in CI's suite, and past 20 when ten runs two builds at once (each ~30% slower) -
+# 1200 s killed it on two Renovate pull requests that evening, silently, after its last PASS line.
+LIMIT=2700
+PYTHONDONTWRITEBYTECODE=1 timeout "$LIMIT" "$PY" -B "$H/drive.py" "$AP" "$W"
+rc=$?
+[ "$rc" -ne 124 ] || echo "argocd-reader: TIMED OUT after $LIMIT s - a hang, or the cases outgrew the bound"
+exit "$rc"

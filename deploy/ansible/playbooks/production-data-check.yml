@@ -87,6 +87,18 @@
       delay: 15
       until: _logs.rc == 0 and (_logs.stdout | trim | int) > 0
 
+    # the datasources the chart provisions (its ConfigMap) - each must be there and healthy: Grafana listing one less (a
+    # new version failing to register it) passed a check of only what it listed (the observability review, 2026-11-25).
+    # Parsed on the controller (from_yaml): a ConfigMap that does not parse, or lists none, fails here
+    - name: Grafana - the datasources provisioned (its ConfigMap)
+      check_mode: false
+      ansible.builtin.command: "{{ kubectl }} -n schnappy-infra get configmap schnappy-grafana-datasources -o jsonpath={.data.datasources\\.yml}"
+      register: _ds_provisioned
+      changed_when: false
+      failed_when: >-
+        _ds_provisioned.rc != 0
+        or (_ds_provisioned.stdout | from_yaml).datasources | default([]) | map(attribute='uid') | select | list | length == 0
+
     - name: Grafana - every datasource healthy
       check_mode: false
       ansible.builtin.shell:
@@ -101,9 +113,16 @@
             | curl -sf -K- --connect-timeout 10 --max-time 30 "http://localhost:3000$1"
           POD
           }
-          for uid in $(g /api/datasources | python3 -c 'import json, sys; print(" ".join(d["uid"] for d in json.load(sys.stdin)))'); do
-            echo "$uid $(g "/api/datasources/uid/$uid/health" | python3 -c 'import json, sys; print(json.load(sys.stdin).get("status"))')"
+          # every datasource provisioned or listed: one provisioned and not listed is MISSING
+          listed=" $(g /api/datasources | python3 -c 'import json, sys; print(" ".join(d["uid"] for d in json.load(sys.stdin)))') "
+          for uid in $(printf '%s\n' $PROVISIONED $listed | awk 'NF && !seen[$0]++'); do
+            case $listed in
+              *" $uid "*) echo "$uid $(g "/api/datasources/uid/$uid/health" | python3 -c 'import json, sys; print(json.load(sys.stdin).get("status"))')" ;;
+              *) echo "$uid MISSING" ;;
+            esac
           done
+      environment:
+        PROVISIONED: "{{ (_ds_provisioned.stdout | from_yaml).datasources | map(attribute='uid') | join(' ') }}"
       register: _datasources
       changed_when: false
       retries: 10

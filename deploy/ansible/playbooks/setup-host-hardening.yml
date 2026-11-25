@@ -38,6 +38,9 @@
 # the next reboot. Kept the removal task so converging an existing
 # tenʼs grub config is idempotent.
 #
+# Plus Debian's own packages kept current (tasks/auto-upgrades.yml): unattended-upgrades every
+# morning from Debian's archives only, and a reboot at a fixed time when an update asks for one.
+#
 # Not included:
 # - kdump / kexec — heavier (reserves a crash kernel at boot); pstore
 #   captures enough to debug a recurring same-bug crash.
@@ -77,6 +80,12 @@
     # with the pods, on the disk / already reports
     node_exporter_mount_points_exclude: >-
       ^/(dev|proc|sys|run/credentials/.+|run/containerd/.+|run/netns/.+|var/lib/kubelet/.+|var/lib/containerd/.+)($|/)
+    # unattended-upgrades (tasks/auto-upgrades.yml): it reboots ten when an update asks for it (the Vagrant copy's
+    # inventory turns that off - see there), at ten's local 07:30 (operator, 2026-11-22) - after Debian's upgrade timer
+    # (06:00-07:00) and the night's backups, load test and pitest (UTC jobs - in summer pitest ends about 07:15), before
+    # the 08:00 sweeper
+    auto_upgrades_reboot: true
+    auto_upgrades_reboot_time: "07:30"
 
   tasks:
     - name: Detect EFI firmware (efi_pstore is a no-op without it)
@@ -669,6 +678,11 @@
         and 'mountpoint="/"' in _node_exporter_check.content
       check_mode: false
       when: not ansible_check_mode
+
+    # Debian's packages upgraded every morning, ten rebooted when an update asks for it - its results in node_exporter's
+    # textfile directory, made above
+    - name: Automatic Debian upgrades
+      ansible.builtin.import_tasks: tasks/auto-upgrades.yml
 
   handlers:
     - name: Re-exec systemd
