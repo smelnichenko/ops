@@ -320,6 +320,41 @@
       ]
     },
     {
+      "description": "Grafana's minors (a store, scripts/upgrade-stores.json: it migrates its database one way on every new version from 13 on, platform's grafana-deployment.yaml) - renovate/grafana-<X.Y>, labelled one-way: the runner backs its CNPG cluster up first. They rode in renovate/observability, labelled upgrade-cycle alone - nothing backed up (the observability review, 2026-11-25); Grafana's k6, no store, stays there",
+      "matchUpdateTypes": [
+        "minor"
+      ],
+      "matchPackageNames": [
+        "grafana",
+        "grafana/grafana"
+      ],
+      "groupName": "grafana",
+      "groupSlug": "grafana",
+      "group": {
+        "branchTopic": "grafana-{{{newMajor}}}.{{{newMinor}}}"
+      },
+      "addLabels": [
+        "one-way"
+      ]
+    },
+    {
+      "description": "ClickHouse's minors (its LTS lines; a store, scripts/upgrade-stores.json) - renovate/clickhouse-<X.Y>, labelled one-way: a store's version moves only in its own unit, its backup first. They rode in renovate/observability (the observability review, 2026-11-25)",
+      "matchUpdateTypes": [
+        "minor"
+      ],
+      "matchPackageNames": [
+        "/clickhouse-server$/"
+      ],
+      "groupName": "clickhouse",
+      "groupSlug": "clickhouse",
+      "group": {
+        "branchTopic": "clickhouse-{{{newMajor}}}.{{{newMinor}}}"
+      },
+      "addLabels": [
+        "one-way"
+      ]
+    },
+    {
       "description": "Argo CD alone",
       "matchUpdateTypes": [
         "minor"

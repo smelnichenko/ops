@@ -851,6 +851,10 @@ rc, calls = night("prove centrifugo-7.x major", files=MAJOR, verdict="REFUSE: th
 check("  a REFUSE line (an upstream request beyond moving versions): a try, said - never handed to the fix agent, nothing merged",
       (rc, merged(calls, "centrifugo-7.x"), [c for c in calls if c.startswith("claude") and "upgrade-cycle fix" in c],
        tries_now("centrifugo-7.x"), any("its review refused it: the 7.0 notes ask" in l for l in stopped_lines())), (1, False, [], 1, True))
+for nothing in ("REFUSE: none", "REFUSE: None.", "REFUSE: n/a"):
+    rc, calls = night("prove centrifugo-7.x major", files=MAJOR, verdict=nothing + "\n" + CLEAN)
+    check(f"  '{nothing}' (the review refusing nothing, said as a line - the observability review, 2026-11-25): no refusal - merged",
+          (rc, merged(calls, "centrifugo-7.x"), tries_now("centrifugo-7.x")), (0, True, 0))
 rc, calls = night("prove centrifugo-7.x major", files=MAJOR, args=("--dry",))
 check("  --dry: its notes never asked of Forgejo", has(calls, "upgrade-units.py notes"), [])
 for retired in ("notice centrifugo-7.x major", "apply centrifugo-7.x major"):
