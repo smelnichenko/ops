@@ -35,6 +35,7 @@ spec:
   template:
     spec:
       volumes: [{name: script, configMap: {name: schnappy-k6-smoke}}]
+      containers: [{name: k6, command: [k6, run, --no-usage-report, --tag, source=k6, /scripts/smoke-test.js]}]
 Y
 picked=$(python3 "$W/pick.py" "$W/rendered.yaml" vagrant-k6-smoke-ab12 | python3 -c '
 import sys, yaml
@@ -43,6 +44,16 @@ print(" ".join([x["metadata"]["name"] for x in d if x] + [d[1]["spec"]["template
                + [x["metadata"].get("labels", {}).get("app.kubernetes.io/name", "-") for x in d if x]))')
 check "the render: the ConfigMap, the Job and its mount named for the run, both labelled as a smoke run's" "$picked" \
   "vagrant-k6-smoke-ab12 vagrant-k6-smoke-ab12 vagrant-k6-smoke-ab12 vagrant-k6-smoke vagrant-k6-smoke"
+# its metrics told apart from the PostSync hook's own k6 (the same namespace and source tags): the run's testid on them
+cmd=$(python3 "$W/pick.py" "$W/rendered.yaml" vagrant-k6-smoke-ab12 | python3 -c '
+import sys, yaml
+d = [x for x in yaml.safe_load_all(sys.stdin) if x]
+print(" ".join(d[1]["spec"]["template"]["spec"]["containers"][0]["command"]))')
+check "the render: the k6 command tags every sample with the run's testid, right after 'k6 run'" "$cmd" \
+  "k6 run --tag testid=vagrant-k6-smoke-ab12 --no-usage-report --tag source=k6 /scripts/smoke-test.js"
+sed 's/command: \[k6, run,/command: [k6, version,/' "$W/rendered.yaml" > "$W/norun.yaml"
+check "  a Job whose k6 container no longer runs 'k6 run': refused" \
+  "$(python3 "$W/pick.py" "$W/norun.yaml" x > /dev/null 2>&1; echo $?)" 1
 # kubectl: every call recorded; ENDED: the Job's condition (none: still running)
 cat > "$W/kubectl" <<'STUB'
 #!/bin/bash
@@ -52,6 +63,11 @@ case "$*" in
     # FAKE_CLOCK: the VM's uptime 1000 s on at each poll
     [ -z "${FAKE_CLOCK:-}" ] || { read -r u _ < "$W/uptime"; echo "$(( ${u%.*} + 1000 )).00 0.00" > "$W/uptime"; } ;;
   *jsonpath*succeeded*) [ "${ENDED:-}" = Complete ] && echo 1 ;;
+  # Mimir: the run's own k6_checks_rate - K6_SERIES=none, no sample (k6's remote write failing); asked for another
+  # testid than the run's, none either
+  *"k6_checks_rate%7Btestid%3D%22vagrant-k6-smoke-ab12%22%7D"*)
+    if [ "${K6_SERIES:-}" = none ]; then echo '{"data": {"result": []}}'; else echo '{"data": {"result": [{"value": [0, "1"]}]}}'; fi ;;
+  *k6_checks_rate*) echo '{"data": {"result": []}}' ;;
   *" logs "*) echo "✓ status is 200" ;;
   # the smoke objects by label: LEFTOVER - an earlier run's, an hour old; CONCURRENT - another run's, a minute old;
   # SLOW_GET - each poll's read takes a second (the deadline is the clock's, not a count of polls)
@@ -78,6 +94,13 @@ objects=$(grep -oE '(job|job/|configmap) ?[a-z0-9-]*k6-smoke[a-z0-9-]*' "$W/call
 check "a passing run: passed, every Job and ConfigMap it names the run's own" \
   "$rc $(grep -c '^SMOKE PASSED$' <<< "$out") $objects" "0 1 vagrant-k6-smoke-ab12 "
 check "a passing run: its Job and ConfigMap deleted" "$(deleted)" 2
+# k6 exits 0 with its remote write failing (the observability review, 2026-11-25): a passing Job passes only when the run's
+# own metrics reached Mimir - k6_checks_rate, which production's K6Smoke rules read, under the run's testid
+out=$(remote ENDED=Complete | tr -d '\r'; echo "exit ${PIPESTATUS[0]}"); rc=${out##*exit }
+check "a passing run, its metrics in Mimir under its testid: passed" "$rc $(grep -c '^SMOKE PASSED$' <<< "$out")" "0 1"
+out=$(POLL=0 remote ENDED=Complete K6_SERIES=none | tr -d '\r'; echo "exit ${PIPESTATUS[0]}"); rc=${out##*exit }
+check "  none of its metrics in Mimir (its remote write failing): failed, said so, its Job and ConfigMap deleted" \
+  "$rc $(grep -c '^SMOKE PASSED$' <<< "$out") $(grep -c 'its metrics never reached Mimir' <<< "$out") $(deleted)" "1 0 1 2"
 out=$(remote ENDED=Failed | tr -d '\r'; echo "exit ${PIPESTATUS[0]}"); rc=${out##*exit }
 check "a failed Job: failed, said so, its Job and ConfigMap deleted" \
   "$rc $(grep -c '^SMOKE FAILED (Failed)$' <<< "$out") $(deleted)" "1 1 2"
@@ -148,6 +171,7 @@ spec:
   template:
     spec:
       volumes: [{name: script, configMap: {name: schnappy-k6-smoke}}]
+      containers: [{name: k6, command: [k6, run, --no-usage-report, --tag, source=k6, /scripts/smoke-test.js]}]
 Y
 STUB
 # the VM: the yaml copied; the remote shell's smoke failing

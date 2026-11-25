@@ -417,6 +417,25 @@ def show_bodies(name, out_dir):
     return 0
 
 
+def show_moves(name):
+    """What the unit moves, from its pull requests' tables: '<package> <from> <to>' a line, each once (patch, minor and
+    major rows) - the copy's inventory after the change must show production's lines of it at the new version
+    (scripts/copy-change-inventory.sh)."""
+    u = units().get(name)
+    if u is None:
+        print(f"NO UNIT {name}")
+        return 1
+    seen = []
+    for body in u.get("bodies", {}).values():
+        for row in table_rows(body):
+            values = re.findall(r"`([^`]+)`", row.get("Change", ""))
+            line = f"{package(row['Package'])} {values[0]} {values[-1]}" if len(values) >= 2 else ""
+            if row.get("Update", "") in ("major", "minor", "patch") and line and line not in seen:
+                seen.append(line)
+    print("\n".join(seen))
+    return 0
+
+
 def main(argv):
     commands = {("list",): show_list, ("pick",): show_pick, ("replenish",): show_replenish}
     try:
@@ -426,10 +445,12 @@ def main(argv):
             return show_held(argv[1])
         if len(argv) == 3 and argv[0] == "bodies":
             return show_bodies(argv[1], argv[2])
+        if len(argv) == 2 and argv[0] == "moves":
+            return show_moves(argv[1])
     except NotRead as e:
         print(f"NOT READ: Forgejo's answer - {e}")
         return 1
-    print("usage: upgrade-units.py list | pick | replenish | held UNIT | bodies UNIT DIR")
+    print("usage: upgrade-units.py list | pick | replenish | held UNIT | bodies UNIT DIR | moves UNIT")
     return 2
 
 

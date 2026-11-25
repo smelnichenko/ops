@@ -59,6 +59,7 @@ case "$1" in
     elif [ -e "$ST/list" ]; then cat "$ST/list"; else read -r _ u k < "$ST/pick"; echo "$u $k schnappy/infra upgrade-cycle"; fi ;;
   held) [ ! -e "$ST/held.fail" ] || exit 1; cat "$ST/held" 2>/dev/null; exit 0 ;;
   bodies) [ ! -e "$ST/bodies.rc" ] || exit "$(cat "$ST/bodies.rc")"; echo "| x | 1 -> 2 |" > "$3/infra.pr.md"; echo "$3/infra.pr.md" ;;
+  moves) [ ! -e "$ST/moves.rc" ] || exit "$(cat "$ST/moves.rc")"; cat "$ST/moves" 2> /dev/null || echo "x 1 2" ;;
   *) cat "$ST/pick"; exit "$(cat "$ST/pick.rc" 2>/dev/null || echo 0)" ;;
 esac''')
 stub(os.path.join(OPS, "scripts/upgrade-label.py"), LOG + '''
@@ -855,6 +856,13 @@ for nothing in ("REFUSE: none", "REFUSE: None.", "REFUSE: n/a"):
     rc, calls = night("prove centrifugo-7.x major", files=MAJOR, verdict=nothing + "\n" + CLEAN)
     check(f"  '{nothing}' (the review refusing nothing, said as a line - the observability review, 2026-11-25): no refusal - merged",
           (rc, merged(calls, "centrifugo-7.x"), tries_now("centrifugo-7.x")), (0, True, 0))
+rc, calls = night("prove observability minor", files={"moves": "grafana/grafana 13.2.6 13.3.2\ngrafana/k6 1.7.1 1.8.3\n"})
+syncs = [words(c, 6) for c in has(calls, "task --yes deploy:argo:sync")]
+check("a unit moving k6 (run only as the apps' PostSync hook, out of Argo's diff): their app synced after the merge, "
+      "its hook to succeed (the observability review, 2026-11-25)",
+      (rc, merged(calls, "observability"), syncs), (0, True, ["task --yes deploy:argo:sync -- -e argo_app=schnappy-production-apps"]))
+rc, calls = night("prove istio minor")
+check("  a unit that moves no hook's image: no sync", has(calls, "deploy:argo:sync"), [])
 rc, calls = night("prove centrifugo-7.x major", files=MAJOR, args=("--dry",))
 check("  --dry: its notes never asked of Forgejo", has(calls, "upgrade-units.py notes"), [])
 for retired in ("notice centrifugo-7.x major", "apply centrifugo-7.x major"):

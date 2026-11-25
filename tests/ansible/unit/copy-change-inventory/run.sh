@@ -58,5 +58,28 @@ for i in 1 2 3 4; do
 done
 run "$W/prod" "$W/build" "$W/changed"; rc=$?
 check "fewer than four inventories: usage (exit 2)" "$rc" 2
+# the unit's moves (a sixth argument, upgrade-units.py moves): every production line of a package at its old version on
+# the copy at the new one after the change - "moved nothing" passed a unit whose version never reached the copy (the
+# observability review, 2026-11-25)
+printf '%s\n' 'a/velero v1.18.4 v1.19.0' 'velero 12.2.0 13.0.0' 'ci/tool 1.0 2.0' > "$W/moves"
+run "$W/prod" "$W/build" "$W/changed" "$W/changed" "$W/allowed" "$W/moves"; rc=$?
+check "the unit's moves on the copy after the change (image and chart; a CI tool production does not run): passed" \
+  "$rc $(grep -c 'NOT MOVED' <<< "$out")" "0 0"
+run "$W/prod" "$W/build" "$W/build" "$W/build" "$W/allowed" "$W/moves"; rc=$?
+check "  the change moved nothing of them: failed, each line named" \
+  "$rc $(grep -c "^  NOT MOVED a/velero v1.18.4 -> v1.19.0: the copy lacks 'image a/velero v1.19.0'$" <<< "$out") $(grep -c "NOT MOVED velero 12.2.0 -> 13.0.0: the copy lacks 'argo-chart velero velero@13.0.0'" <<< "$out") $(grep -c 'did not move what its unit moves' <<< "$out")" \
+  "1 1 1 1"
+printf '%s\n' 'c/left-out v1 v2' > "$W/moves-left"
+run "$W/prod" "$W/build" "$W/build" "$W/build" "$W/allowed" "$W/moves-left"; rc=$?
+check "  a line the allow-list lets the copy lack (by version too): not required" "$rc" 0
+printf '%s\n' 'image b/redis 8.1' 'image c/left-out *' > "$W/allowed-any"
+run "$W/prod" "$W/build" "$W/build" "$W/build" "$W/allowed-any" "$W/moves-left"; rc=$?
+check "  allowed by ' *' (any version): not required" "$rc" 0
+printf '%s\n' 'velero 2.0 3.0' > "$W/moves-part"
+run "$W/prod" "$W/build" "$W/build" "$W/build" "$W/allowed" "$W/moves-part"; rc=$?
+check "  a version inside a longer one (2.0 in 12.2.0) never matched" "$rc" 0
+run "$W/prod" "$W/build" "$W/changed" "$W/changed" "$W/allowed" "$W/none"; rc=$?
+check "  the moves file not readable: refused" "$rc $(grep -c 'not readable' <<< "$out")" "1 1"
+
 echo "copy-change-inventory: $([ $fails = 0 ] && echo ALL-PASS || echo "$fails FAILED")"
 [ $fails = 0 ]
