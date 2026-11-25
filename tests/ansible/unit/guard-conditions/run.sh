@@ -166,7 +166,12 @@ case $q in
     case " $BAD " in *" $u "*) echo '{"status": "ERROR"}' ;; *) echo '{"status": "OK"}' ;; esac ;;
 esac
 """
-CM = "apiVersion: 1\ndeleteDatasources:\n  - name: Prometheus\ndatasources:\n  - name: Mimir\n    uid: prometheus\n  - name: ClickHouse-Logs\n    uid: clickhouse-logs\n  - name: Tempo\n    uid: tempo\n"
+CM_YAML = "apiVersion: 1\ndeleteDatasources:\n  - name: Prometheus\ndatasources:\n  - name: Mimir\n    uid: prometheus\n  - name: ClickHouse-Logs\n    uid: clickhouse-logs\n  - name: Tempo\n    uid: tempo\n"
+import json, shlex
+def configmap(datasources_yml):
+    """The ConfigMap as `kubectl get configmap -o json` prints it: the provisioning file under its dotted key."""
+    return json.dumps({"kind": "ConfigMap", "data": {"datasources.yml": datasources_yml}})
+CM = configmap(CM_YAML)
 def datasources(path, listed, bad=()):
     t = task(path, "Grafana - every datasource healthy")
     d = tempfile.mkdtemp()
@@ -192,8 +197,15 @@ for path in ("tests/ansible/copy/survival-check.yml", "deploy/ansible/playbooks/
     rd = task(path, "Grafana - the datasources provisioned")
     check(f"L05 {name}: the provisioned ones read from the ConfigMap; none there, or rc != 0: failed",
           (condition(rd["failed_when"], _ds_provisioned={"rc": 0, "stdout": CM}),
-           condition(rd["failed_when"], _ds_provisioned={"rc": 0, "stdout": "apiVersion: 1\ndatasources: []\n"}),
+           condition(rd["failed_when"], _ds_provisioned={"rc": 0, "stdout": configmap("apiVersion: 1\ndatasources: []\n")}),
            condition(rd["failed_when"], _ds_provisioned={"rc": 1, "stdout": CM})), (False, True, True))
+    check(f"L05 {name}: a ConfigMap without the provisioning key: failed",
+          condition(rd["failed_when"], _ds_provisioned={"rc": 0, "stdout": json.dumps({"data": {}})}), True)
+    # split as the command module splits it: a backslash outside quotes is consumed there, which turned the old
+    # jsonpath's escaped dot into a nested path that reads nothing (the copy run of 2026-11-25)
+    argv = shlex.split(render(rd["ansible.builtin.command"], kubectl="kubectl"))
+    check(f"L05 {name}: the ConfigMap read whole, as kubectl receives it", argv[-5:],
+          ["get", "configmap", "schnappy-grafana-datasources", "-o", "json"])
 # L06: the copy's Prometheus reconciled and available AT ITS GENERATION - a condition the old operator left (its
 # observedGeneration behind the object's) satisfied the check (the observability review, 2026-11-25)
 mc = "tests/ansible/copy/metrics-check.yml"

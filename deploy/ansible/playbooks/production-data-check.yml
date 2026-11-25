@@ -89,15 +89,18 @@
 
     # the datasources the chart provisions (its ConfigMap) - each must be there and healthy: Grafana listing one less (a
     # new version failing to register it) passed a check of only what it listed (the observability review, 2026-11-25).
-    # Parsed on the controller (from_yaml): a ConfigMap that does not parse, or lists none, fails here
+    # Read whole (-o json) and parsed on the controller: a ConfigMap that does not parse, or lists none, fails here. Never a
+    # jsonpath on the key: its dot needs a backslash, which the command module's split took off - kubectl then read a key
+    # that is not there, answered nothing with rc 0, and the copy run of 2026-11-25 stopped "COPY NOT READY" on it
     - name: Grafana - the datasources provisioned (its ConfigMap)
       check_mode: false
-      ansible.builtin.command: "{{ kubectl }} -n schnappy-infra get configmap schnappy-grafana-datasources -o jsonpath={.data.datasources\\.yml}"
+      ansible.builtin.command: "{{ kubectl }} -n schnappy-infra get configmap schnappy-grafana-datasources -o json"
       register: _ds_provisioned
       changed_when: false
       failed_when: >-
         _ds_provisioned.rc != 0
-        or (_ds_provisioned.stdout | from_yaml).datasources | default([]) | map(attribute='uid') | select | list | length == 0
+        or ((_ds_provisioned.stdout | from_json).data['datasources.yml'] | default('') | from_yaml).datasources | default([])
+           | map(attribute='uid') | select | list | length == 0
 
     - name: Grafana - every datasource healthy
       check_mode: false
@@ -122,7 +125,7 @@
             esac
           done
       environment:
-        PROVISIONED: "{{ (_ds_provisioned.stdout | from_yaml).datasources | map(attribute='uid') | join(' ') }}"
+        PROVISIONED: "{{ ((_ds_provisioned.stdout | from_json).data['datasources.yml'] | from_yaml).datasources | map(attribute='uid') | join(' ') }}"
       register: _datasources
       changed_when: false
       retries: 10
