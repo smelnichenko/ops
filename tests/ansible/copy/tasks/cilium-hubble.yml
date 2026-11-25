@@ -1,0 +1,56 @@
+---
+# Each Cilium agent's Hubble server serving after the copy's VMs boot. The agent binds Hubble's port (4244) once, at its
+# start, and never tries again: the copy's build booted cold with the port still held (2026-11-20, its first run of the
+# day: "Hubble: Warning failed to initialize hubble server: ... listen tcp :4244: bind: address already in use") - the
+# agent Running and Ready all the same, hubble-relay refused by the hubble-peer service and never ready, and the settle
+# failed on it after 40 minutes. Asked until every agent reports Hubble Ok, within one deadline on the boot clock
+# (cilium_hubble_seconds, 600), each read bounded. An agent whose Hubble failed to start is restarted once - its pod
+# deleted, the DaemonSet makes it again, when the port is long free; a second failure fails the run, saying so. Any
+# other state is waited on (an agent still starting has no Hubble line yet).
+# Tested: tests/ansible/unit/cilium-hubble.
+- name: Each Cilium agent's Hubble serving (an agent whose Hubble failed to start restarted once)
+  ansible.builtin.shell: |
+    set -euo pipefail
+    k() { kubectl --kubeconfig /etc/kubernetes/admin.conf --request-timeout=20s "$@"; }
+    now() { local u; read -r u _ < /proc/uptime; echo "${u%.*}"; }
+    end=$(( $(now) + {{ cilium_hubble_seconds | default(600) }} ))
+    restarted=""
+    last="nothing read yet"
+    while (( $(now) < end )); do
+      if ! pods=$(k -n kube-system get pods -l k8s-app=cilium -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>&1); then
+        last="the agents not read: $pods"
+        sleep {{ cilium_hubble_delay | default(5) }}
+        continue
+      fi
+      waiting=""
+      for pod in $pods; do
+        line=$(k -n kube-system exec "$pod" -c cilium-agent -- cilium-dbg status 2> /dev/null | grep -m1 '^Hubble:' || true)
+        if [ "$(awk '{print $2}' <<< "$line")" = Ok ]; then
+          continue
+        fi
+        if grep -q 'failed to initialize hubble server' <<< "$line"; then
+          if [ -n "$restarted" ]; then
+            echo "Hubble failed to start again after the agent's restart ($restarted): $pod: $line"
+            exit 1
+          fi
+          echo "restarting $pod: $line"
+          k -n kube-system delete pod "$pod" --wait=true
+          restarted=$pod
+          waiting+=" $pod: restarted"
+          continue
+        fi
+        waiting+=" $pod: ${line:-no Hubble line yet}"
+      done
+      if [ -n "$pods" ] && [ -z "$waiting" ]; then
+        echo "Hubble Ok on every agent${restarted:+ (restarted once: $restarted)}"
+        exit 0
+      fi
+      last="not yet:${waiting:- no agent}"
+      sleep {{ cilium_hubble_delay | default(5) }}
+    done
+    echo "Hubble not serving on every Cilium agent within {{ cilium_hubble_seconds | default(600) }} s: $last"
+    exit 1
+  args:
+    executable: /bin/bash
+  register: _hubble
+  changed_when: "'restarting ' in _hubble.stdout"

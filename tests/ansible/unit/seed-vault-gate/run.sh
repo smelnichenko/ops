@@ -50,5 +50,22 @@ if "$PY" -c 'import hvac' 2>/dev/null; then
 else
   echo "ORACLE      SKIPPED here: no hvac in $(dirname "$AP") — the CI image runs it"
 fi
+# --tags generatable: the VIP holder, the root token, the generatable read / resolve / write (their aborts, rescue tasks,
+# take the block's tag; --list-tasks does not list a rescue) - no
+# env-sourced write (an empty .env value would overwrite a live secret) and no retired path deleted
+want="The Pi holding the VIP|The Pi holding the VIP is in this run|The other Pis end here|Ensure python3-hvac is installed (required by community.hashi_vault.*)|Read Vault root token|Set token fact|Read existing generatable secrets (404 OK on first run)|Index existing generatable secrets by path|Resolve generatable secret values (existing or fresh, one lookup per field)|Write generatable secrets|"
+got=$("$AP" --list-tasks --tags generatable -i localhost, "$PB" 2> /dev/null | sed -n 's/^      \(.*\)\tTAGS: .*/\1/p' | tr '\n' '|')
+if [ "$got" = "$want" ]; then echo "TAGS        PASS --tags generatable runs the generatable part alone"
+else echo "TAGS        FAIL --tags generatable: got $got"; rc_all=1; fi
+# clickhouse's generatable entry, as the play holds it (parsed: a comment or another entry's field is no answer), carries
+# the key platform's chart reads for Grafana's own ClickHouse user (external-secrets.yaml: property grafana_password)
+if "$PY" - "$PB" <<'PYGRAFANACH'
+import sys, yaml
+play = yaml.safe_load(open(sys.argv[1]))[0]
+entry = [e for e in play["vars"]["generatable_secrets"] if e["path"] == "clickhouse"]
+sys.exit(0 if len(entry) == 1 and "grafana_password" in entry[0]["secrets"] and "password" in entry[0]["secrets"] else 1)
+PYGRAFANACH
+then echo "GRAFANA-CH  PASS clickhouse carries grafana_password (platform's clickhouse.grafanaUser)"
+else echo "GRAFANA-CH  FAIL clickhouse has no grafana_password"; rc_all=1; fi
 echo "seed-vault-gate: $([ $rc_all -eq 0 ] && echo ALL-PASS || echo SOME-FAILED)"
 exit $rc_all

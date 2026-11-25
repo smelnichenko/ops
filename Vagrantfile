@@ -109,8 +109,8 @@ OS_UPGRADE_SCRIPT = <<-'OSSCRIPT'
   # failed in grub-install on first boot (2026-10-02, 2 of 3 VMs, error hidden by its postinst) and aborted
   # provisioning: keep it at the box's version. The kernel still upgrades and its hook still adds the boot entry.
   apt-mark hold grub-pc grub-pc-bin > /dev/null
-  # production's hosts run no unattended upgrade (ten and the Pis: not installed, read 2026-11-14) - the box's would take
-  # the security updates production has not, between a copy's checks, and undo the Pis' pinned versions
+  # the box's unattended-upgrades gone: the Pis run none (it would undo their pinned versions), and ten's comes from
+  # setup-host-hardening.yml with production's configuration (2026-11-22; on the copy without its reboot)
   apt-get -o DPkg::Lock::Timeout=600 purge -y -qq unattended-upgrades > /dev/null
   apt-get -o DPkg::Lock::Timeout=600 update -qq
   apt-get -o DPkg::Lock::Timeout=600 full-upgrade -y -qq > /tmp/os-upgrade.log 2>&1 \
@@ -169,6 +169,10 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
   # production runs Debian 13 (trixie) on ten and on both Pis
   config.vm.box = "debian/trixie64"
   config.vm.synced_folder ".", "/vagrant", disabled: true
+  # a halt waits for each VM's own shutdown up to 5 min (Vagrant's default 60 s then powered it off - the node's kubelet
+  # takes up to 180 s to drain, the Pis' Patroni and Gluster their own): the build's cold boot starts from a clean
+  # shutdown, and the base snapshot taken at it is one (scripts/copy-snapshot.sh refuses a forced power-off)
+  config.vm.graceful_halt_timeout = 300
 
   # ── Pi 1 ─────────────────────────────────────────────────────────────
   config.vm.define "pi1" do |pi1|
@@ -178,8 +182,10 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
       # the Pi stack uses ~1.3 GB (measured 2026-10-06); 4 GB left qemu holding idle guest memory the host swapped -
       # three VMs at 28 GB on the 30 GB workstation kept it in swap through every step. 2 GB since 2026-11-13: the
       # workstation runs the radar station too, which the copy's 25 GB starved (it died 22:17) - the three VMs 22 GB,
-      # started only with the host's room for them and a reserve, watched while they run (scripts/copy-host-guard.sh)
-      v.memory = 2048
+      # started only with the host's room for them and a reserve, watched while they run (scripts/copy-host-guard.sh).
+      # VAGRANT_PI_MEMORY for a test that runs more on the Pis than the copy does (test:nexus: Nexus beside the stack);
+      # the host guard reads the same variable
+      v.memory = Integer(ENV.fetch("VAGRANT_PI_MEMORY", "2048"))
       v.cpus = 2
     end
     pi1.vm.provision "shell", inline: OS_UPGRADE_SCRIPT, reboot: true
@@ -195,8 +201,10 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
       # the Pi stack uses ~1.3 GB (measured 2026-10-06); 4 GB left qemu holding idle guest memory the host swapped -
       # three VMs at 28 GB on the 30 GB workstation kept it in swap through every step. 2 GB since 2026-11-13: the
       # workstation runs the radar station too, which the copy's 25 GB starved (it died 22:17) - the three VMs 22 GB,
-      # started only with the host's room for them and a reserve, watched while they run (scripts/copy-host-guard.sh)
-      v.memory = 2048
+      # started only with the host's room for them and a reserve, watched while they run (scripts/copy-host-guard.sh).
+      # VAGRANT_PI_MEMORY for a test that runs more on the Pis than the copy does (test:nexus: Nexus beside the stack);
+      # the host guard reads the same variable
+      v.memory = Integer(ENV.fetch("VAGRANT_PI_MEMORY", "2048"))
       v.cpus = 2
     end
     pi2.vm.provision "shell", inline: OS_UPGRADE_SCRIPT, reboot: true
@@ -211,7 +219,8 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
     k.vm.provider "libvirt" do |v|
       # 18 GB (2026-11-13; was 20): the workstation's radar station needs its room (pi1's comment) - the copy's requests
       # and the JVMs' heaps sized to it (tests/ansible/copy/vagrant-overlay, ~14.8 GiB of ~17.4 allocatable)
-      v.memory = 18432
+      # VAGRANT_TEN_MEMORY for a test that runs no cluster on it (test:nexus: Gluster's arbiter alone); the guard reads it
+      v.memory = Integer(ENV.fetch("VAGRANT_TEN_MEMORY", "18432"))
       # production's pods request ~8 CPUs (ten: 20, 44% requested). With 8 the copy sat at 98% and a new pod - the
       # k6 smoke, a rollout's surge pod - could not be scheduled (2026-10-03). vCPUs cost the host no memory.
       v.cpus = 14

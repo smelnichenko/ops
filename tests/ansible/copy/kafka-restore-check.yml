@@ -1,0 +1,323 @@
+---
+# Kafka's dump restored, on the copy: a marker topic (3 partitions, not a KafkaTopic - Strimzi's operator leaves it be)
+# holds keyed messages with headers, without headers, a header with commas and colons, beside another marker of one
+# message; production's backup takes both (tasks/kafka-backup.yml); the marker deleted and made again empty;
+# production's restore (tasks/kafka-restore.yml, that topic alone) brings its messages back - each key's in its order,
+# headers as they were; its source pinned, the BASELINE written for that topic alone; the lock refuses a dump. The guard:
+# the other marker deleted (never restored) - the next dump refused naming it alone (the restored one, made again, a new
+# TopicId, excused); its baseline merged with the restore's (no dump between them); a dump passes; the restored marker
+# deleted - a dump refused (judged against that dump, made since the BASELINE); its baseline; a dump passes. The source
+# unpinned by production's task. Re-runnable on the same copy: a lock or markers a failed run left are cleared first
+# (the copy alone - production's lock is never removed but by the run that made it).
+#
+# Usage: ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/kafka-restore-check.yml
+- name: Vagrant VMs only
+  ansible.builtin.import_playbook: ../vagrant-only-play.yml
+
+- name: Kafka's topics restore from their dump
+  hosts: target
+  become: true
+  gather_facts: false
+  vars:
+    kubeconfig: /etc/kubernetes/admin.conf
+    kubectl: "kubectl --kubeconfig {{ kubeconfig }}"
+    kafka_namespace: schnappy-production
+    topic: upgrade-restore-check
+    other: upgrade-restore-check-other
+    # the broker's own tools, inside its pod (localhost:9092)
+    kbin: "{{ kubectl }} -n schnappy-production exec -i schnappy-production-kafka-0 -c kafka -- /opt/kafka/bin"
+    # what goes in: headers (0x1e between them), key, value - tab-separated, NO_HEADERS for none
+    markers:
+      - "__TypeId__:x.Y\x1espring_json_header_types:{\"a\":\"b\",\"c\":\"d\"}\tk1\t{\"n\":1,\"t\":\"one, two: three\"}"
+      - "NO_HEADERS\tk1\t{\"n\":2}"
+      - "h:v\tk2\t{\"n\":3}"
+      - "NO_HEADERS\tk1\t{\"n\":4}"
+      - "NO_HEADERS\tk3\t{\"n\":5}"
+  tasks:
+    - name: Its names are the fixed ones - what it drops cannot be redirected with -e
+      ansible.builtin.assert:
+        that:
+          - topic == 'upgrade-restore-check'
+          - other == 'upgrade-restore-check-other'
+          - kafka_namespace == 'schnappy-production'
+        fail_msg: "REFUSED: topic={{ topic }} other={{ other }} namespace={{ kafka_namespace }}"
+        quiet: true
+
+    # a run that failed half way leaves the restore's lock (a failed restore keeps it: every dump refuses) and the
+    # store's newest dump holding a marker topic the next run makes again (a new TopicId: the guard refuses the dump)
+    - name: What a failed run left - the restore's lock removed (the copy alone)
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          k="{{ kubectl }} -n {{ kafka_namespace }}"
+          vols='{.spec.jobTemplate.spec.template.spec.volumes[?(@.name=="restoring")].configMap.name}'
+          lock=$($k get cronjob {{ kafka_namespace }}-kafka-backup -o jsonpath="$vols")
+          [ -n "$lock" ] || { echo "the CronJob mounts no lock"; exit 1; }
+          if $k get configmap "$lock" -o name > /dev/null 2>&1; then
+            $k delete configmap "$lock" > /dev/null; echo "removed a lock left: $lock"
+          else
+            echo "no lock left"
+          fi
+      register: _kc_lock_left
+      changed_when: _kc_lock_left.stdout is search('removed')
+
+    - name: What a failed run left - the marker topics under the store's BASELINE (a dump holding them before)
+      ansible.builtin.include_tasks: ../../../deploy/ansible/playbooks/tasks/kafka-baseline.yml
+      vars:
+        kafka_baseline_why: "the copy's restore check makes its marker topics again"
+        kafka_baseline_topics: "{{ topic }} {{ other }}"
+
+    - name: The marker topic made again from nothing, its messages produced (headers parsed, and not, run by run)
+      ansible.builtin.shell:
+        executable: /bin/bash
+        stdin: "{{ markers | join('\n') }}"
+        cmd: |
+          set -euo pipefail
+          # the markers first: every kubectl exec -i below reads stdin - the first took them (copy run 5, 2026-11-18)
+          in=$(cat)
+          [ -n "$in" ] || { echo "no markers on stdin"; exit 1; }
+          K="{{ kbin }}"
+          # --if-exists: an absent topic is no error - a failure here is (a broken exec, no broker), said
+          $K/kafka-topics.sh --bootstrap-server localhost:9092 --delete --if-exists --topic {{ topic }} < /dev/null > /dev/null
+          made=""
+          for _ in $(seq 30); do
+            $K/kafka-topics.sh --bootstrap-server localhost:9092 --create --topic {{ topic }} --partitions 3 < /dev/null > /dev/null 2>&1 && { made=1; break; }
+            sleep 2
+          done
+          [ -n "$made" ] || { echo "the marker topic not made"; exit 1; }
+          TAB=$'\t'
+          # the restore's own way of producing: the dump's format is what it reads
+          while IFS= read -r l; do
+            case "$l" in
+              NO_HEADERS*) printf '%s\n' "${l#NO_HEADERS$TAB}" | $K/kafka-console-producer.sh --bootstrap-server localhost:9092 \
+                --topic {{ topic }} --reader-property parse.key=true --reader-property key.separator=$'\t' --reader-property parse.headers=false ;;
+              *) printf '%s\n' "$l" | $K/kafka-console-producer.sh --bootstrap-server localhost:9092 --topic {{ topic }} \
+                --reader-property parse.key=true --reader-property key.separator=$'\t' --reader-property parse.headers=true \
+                --reader-property headers.delimiter=$'\t' --reader-property headers.separator=$'\x1e' --reader-property headers.key.separator=: ;;
+            esac
+          done <<< "$in"
+      changed_when: true
+
+    - name: The other marker made again from nothing - one message (never restored)
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          K="{{ kbin }}"
+          $K/kafka-topics.sh --bootstrap-server localhost:9092 --delete --if-exists --topic {{ other }} < /dev/null > /dev/null
+          made=""
+          for _ in $(seq 30); do
+            $K/kafka-topics.sh --bootstrap-server localhost:9092 --create --topic {{ other }} --partitions 1 < /dev/null > /dev/null 2>&1 && { made=1; break; }
+            sleep 2
+          done
+          [ -n "$made" ] || { echo "the other marker topic not made"; exit 1; }
+          printf 'k\t{"other":1}\n' | $K/kafka-console-producer.sh --bootstrap-server localhost:9092 --topic {{ other }} \
+            --reader-property parse.key=true --reader-property key.separator=$'\t'
+      changed_when: true
+
+    - name: Production's backup takes them
+      ansible.builtin.include_tasks: ../../../deploy/ansible/playbooks/tasks/kafka-backup.yml
+
+    - name: The restore's source - this dump (later dumps move kafka_backup_name)
+      ansible.builtin.set_fact:
+        _kc_source: "{{ kafka_backup_name }}"
+
+    - name: The topic deleted and made again - empty
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          K="{{ kbin }}"
+          $K/kafka-topics.sh --bootstrap-server localhost:9092 --delete --topic {{ topic }} > /dev/null
+          made=""
+          for _ in $(seq 30); do
+            $K/kafka-topics.sh --bootstrap-server localhost:9092 --create --topic {{ topic }} --partitions 3 > /dev/null 2>&1 && { made=1; break; }
+            sleep 2
+          done
+          [ -n "$made" ] || { echo "the marker topic not made again"; exit 1; }
+          # its 3 partitions, all empty: "<partitions> <messages>"
+          $K/kafka-get-offsets.sh --bootstrap-server localhost:9092 --topic {{ topic }} | awk -F: '{ n++; s += $3 } END { print n + 0, s + 0 }'
+      register: _emptied
+      changed_when: true
+      failed_when: _emptied.rc != 0 or (_emptied.stdout_lines | last) != '3 0'
+
+    - name: Production's restore brings it back (that topic alone, from this run's dump)
+      ansible.builtin.include_tasks: ../../../deploy/ansible/playbooks/tasks/kafka-restore.yml
+      vars:
+        kafka_dump: "{{ _kc_source }}"
+        kafka_topics: "{{ topic }}"
+
+    - name: Exactly the markers' count in it - a restore produced twice would hold more
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -o pipefail
+          {{ kbin }}/kafka-get-offsets.sh --bootstrap-server localhost:9092 --topic {{ topic }} | awk -F: '{ s += $3 } END { print s + 0 }'
+      register: _count
+      changed_when: false
+      failed_when: (_count.stdout | trim | int) != (markers | length)
+
+    - name: Its messages read back - as written, each key's in order
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          K="{{ kbin }}"
+          $K/kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic {{ topic }} --from-beginning \
+            --max-messages {{ markers | length }} --timeout-ms 60000 --formatter-property print.headers=true \
+            --formatter-property print.key=true --formatter-property key.separator=$'\t' \
+            --formatter-property headers.separator=$'\x1e' --formatter-property null.literal=__NULL__ 2> /dev/null
+      register: _back
+      changed_when: false
+
+    - name: The same messages, each key's in its order
+      vars:
+        # split at newlines alone: stdout_lines is Python's splitlines, which also splits at \x1e - the headers'
+        # separator (copy run 6b, 2026-11-19: a two-header message read back as two lines)
+        _got: "{{ _back.stdout.split('\n') | reject('equalto', '') | list }}"
+      ansible.builtin.assert:
+        that:
+          - _got | sort == markers | sort
+          - _got | select('search', '\tk1\t') | list == markers | select('search', '\tk1\t') | list
+        fail_msg: "restored {{ _got }}, wrote {{ markers }}"
+        quiet: true
+
+    # what the restore left behind: its source dump pinned in the store, the BASELINE moved to it
+    - name: The restore's source pinned and the baseline written - read in the store
+      ansible.builtin.include_tasks: ../../../deploy/ansible/playbooks/tasks/kafka-store.yml
+      vars:
+        kafka_store_what: read
+        kafka_store_cmd: |
+          files=$(rclone lsf --files-only --max-depth 1 "$STORE/{{ _kc_source }}/")
+          printf '%s\n' "$files" | grep -qxF PINNED || { echo "not pinned"; exit 1; }
+          pin=$(rclone cat "$STORE/{{ _kc_source }}/PINNED")
+          printf '%s\n' "$pin" | grep -qxF 'unpin task deploy:kafka-backup-unpin -- -e kafka_dump={{ _kc_source }}' \
+            || { echo "its PINNED says no unpin: $pin"; exit 1; }
+          b=$(rclone cat "$STORE/BASELINE")
+          covers=$(printf '%s\n' "$b" | sed -n 's/^topic //p; /^all$/p' | tr '\n' ' ' | sed 's/ $//')
+          echo "pinned {{ _kc_source }}, baseline $(printf '%s\n' "$b" | head -1) $covers"
+
+    - name: Pinned (its unpin said), a baseline there - for the restored topic alone
+      ansible.builtin.assert:
+        that: kafka_store_said is match('^pinned ' ~ _kc_source ~ ', baseline [0-9]{8}T[0-9]{6}Z ' ~ topic ~ '$')
+        fail_msg: "the store after the restore: {{ kafka_store_said }}"
+        quiet: true
+
+    # the lock: with the restore's ConfigMap there (named as the CronJob mounts it), the CronJob's dump refuses
+    - name: A dump while the restore's lock is there - refused, said
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          k="{{ kubectl }} -n schnappy-production"
+          vols='{.spec.jobTemplate.spec.template.spec.volumes[?(@.name=="restoring")].configMap.name}'
+          lock=$($k get cronjob schnappy-production-kafka-backup -o jsonpath="$vols")
+          [ -n "$lock" ] || { echo "the CronJob mounts no lock"; exit 1; }
+          j=kafka-lock-check-$(date +%s)
+          # each removed by the trap once this run made it - one there before is not this run's
+          $k create configmap "$lock" --from-literal=since=20261118T000000Z > /dev/null
+          trap '$k delete configmap "$lock" --ignore-not-found > /dev/null' EXIT
+          $k create job --from=cronjob/schnappy-production-kafka-backup "$j" > /dev/null
+          trap '$k delete configmap "$lock" --ignore-not-found > /dev/null; $k delete job "$j" --ignore-not-found --wait=false > /dev/null' EXIT
+          end=$(( $(cut -d. -f1 /proc/uptime) + 600 )); s=""
+          while [ "$(cut -d. -f1 /proc/uptime)" -lt "$end" ]; do
+            s=$($k get job "$j" -o jsonpath='{.status.succeeded}/{.status.failed}')
+            case "$s" in 1/*|*/1) break ;; esac
+            sleep 5
+          done
+          echo "job $s"
+          $k logs "job/$j" -c dump --tail=5 2> /dev/null | tail -1
+      register: _lockcheck
+      changed_when: true
+      failed_when: >-
+        _lockcheck.rc != 0 or (_lockcheck.stdout_lines | first | default('')) != 'job /1'
+        or 'a restore running since 20261118T000000Z' not in _lockcheck.stdout
+
+    # the guard: another topic's loss refused while the restored one is excused, the merge, a judged topic's loss refused,
+    # the baselines letting the next dumps by. A failure after a marker went still writes its baseline (the copy's next
+    # dumps would refuse)
+    - name: The guard - another topic's loss refused, the restored one excused; the baselines let the next dumps by
+      block:
+        - name: The other marker removed - never restored
+          ansible.builtin.command: "{{ kbin }}/kafka-topics.sh --bootstrap-server localhost:9092 --delete --topic {{ other }}"
+          register: _kc_other_removed
+          changed_when: true
+
+        - name: A dump refused for the other marker alone (the restored one, made again, excused by the restore's BASELINE)
+          ansible.builtin.include_tasks: tasks/kafka-guard-refused.yml
+          vars:
+            kafka_guard_gone: ["{{ other }}"]
+            kafka_guard_excused: ["{{ topic }}"]
+
+        - name: The other marker's baseline, as production's task for a topic removed on purpose - no dump since the restore's
+          ansible.builtin.include_tasks: ../../../deploy/ansible/playbooks/tasks/kafka-baseline.yml
+          vars:
+            kafka_baseline_why: "the copy's restore check removed its other marker topic"
+            kafka_baseline_topics: "{{ other }}"
+
+        - name: Both covered - the restore's topic kept beside the other's (merged)
+          ansible.builtin.assert:
+            that: "kafka_store_said is match('^baseline [0-9]{8}T[0-9]{6}Z: ' ~ topic ~ ' ' ~ other ~ '$')"
+            fail_msg: "the BASELINE after the other's: {{ kafka_store_said }}"
+            quiet: true
+
+        - name: The other's baseline written
+          ansible.builtin.set_fact:
+            _kc_other_baselined: true
+
+        - name: A dump now passes the guard
+          ansible.builtin.include_tasks: ../../../deploy/ansible/playbooks/tasks/kafka-backup.yml
+
+        - name: The restored marker removed
+          ansible.builtin.command: "{{ kbin }}/kafka-topics.sh --bootstrap-server localhost:9092 --delete --topic {{ topic }}"
+          register: _kc_removed
+          changed_when: true
+
+        - name: A dump refused for it - judged against the dump made since the BASELINE
+          ansible.builtin.include_tasks: tasks/kafka-guard-refused.yml
+          vars:
+            kafka_guard_gone: ["{{ topic }}"]
+            kafka_guard_excused: []
+
+        - name: Its baseline, as production's task for a topic removed on purpose
+          ansible.builtin.include_tasks: ../../../deploy/ansible/playbooks/tasks/kafka-baseline.yml
+          vars:
+            kafka_baseline_why: "the copy's restore check removed its marker topic"
+            kafka_baseline_topics: "{{ topic }}"
+
+        - name: The baseline written
+          ansible.builtin.set_fact:
+            _kc_baselined: "{{ kafka_store_said }}"
+
+        - name: A dump now passes the guard
+          ansible.builtin.include_tasks: ../../../deploy/ansible/playbooks/tasks/kafka-backup.yml
+
+        - name: The restore's source unpinned, by production's task
+          ansible.builtin.include_tasks: ../../../deploy/ansible/playbooks/tasks/kafka-unpin.yml
+          vars:
+            kafka_dump: "{{ _kc_source }}"
+
+        - name: Unpinned
+          ansible.builtin.assert:
+            that: kafka_store_said is match('^' ~ _kc_source ~ ' unpinned ')
+            fail_msg: "the unpin: {{ kafka_store_said }}"
+            quiet: true
+
+      always:
+        - name: The baseline for each marker gone, the check failed before its own (the copy's next dumps would refuse)
+          ansible.builtin.include_tasks: ../../../deploy/ansible/playbooks/tasks/kafka-baseline.yml
+          when: _kc_left | length > 0
+          vars:
+            _kc_left: >-
+              {{ ([other] if (_kc_other_removed is defined and _kc_other_removed is succeeded and _kc_other_baselined is not defined) else [])
+                 + ([topic] if (_kc_removed is defined and _kc_removed is succeeded and _kc_baselined is not defined) else []) }}
+            kafka_baseline_why: "the copy's restore check failed after it removed its marker topics"
+            kafka_baseline_topics: "{{ _kc_left | join(' ') }}"
+
+    - name: Restored
+      ansible.builtin.debug:
+        msg: >-
+          KAFKA RESTORE OK: {{ topic }} dumped ({{ _kc_source }}), emptied, restored - {{ kafka_restored }}; pinned, the lock
+          refused a dump; the guard refused one for {{ other }} alone ({{ topic }} excused), the merged baseline let the next
+          by, refused one for {{ topic }}, its baseline ({{ _kc_baselined }}) let the next by; the source unpinned

@@ -8,8 +8,8 @@ per-physical-radio so rows on different radios run at the same time.
 
 ## Why
 
-Operator, 2026-08-19: *"what the fuck have you created with these radios overlays and
-experiments? radio source should be configured per band"*. The complaint is correct and the
+Operator, 2026-08-19: the radio overlays and experiments were a mess, and the radio source is
+configured per band. The complaint is correct and the
 model is the bug.
 
 `observation`, `overlay` and `experiment` are INTERNAL concepts — how the code groups rows —

@@ -7,16 +7,16 @@ first, to deeper investigation".
 - More readers and aggregators are wanted beyond PRs 5 and 6.
 - Slug guessing is investigated more deeply before PR 1 starts; see "Slug guessing, the deeper look".
 
-- **What counts** (the operator, 2026-11-08): "the company may not be a registered EE firm, it only matters if they
-  have job posts that are connected to estonia". A board is wanted for its postings connected to Estonia, whoever owns
+- **What counts** (the operator, 2026-11-08): a company need not be registered in Estonia - what matters
+  is postings connected to Estonia. A board is wanted for its postings connected to Estonia, whoever owns
   it. No company match is needed to make its row, and the row's location filter keeps the postings connected to
   Estonia only.
-- **Connected to Estonia** (the operator, 2026-11-08, "widen it"): a posting located in Estonia, or a remote one open to
+- **Connected to Estonia** (the operator, 2026-11-08, widened it): a posting located in Estonia, or a remote one open to
   Estonia. That means remote for the EU, EEA, Europe or EMEA, or anywhere, worldwide or global. Until now every row's
   `locationRegex` kept only postings naming Estonia, Tallinn or Tartu. PR 1d widens it, and the census judges boards by
   the same rule.
-- **Any form and any workplace** (the operator, 2026-11-08): "B2B is also ok, hybrid or remote or onsite - does not
-  matter". Contract, B2B and freelance postings count as employment does; on-site, hybrid and remote all count. The
+- **Any form and any workplace** (the operator, 2026-11-08): B2B counts, and on-site, hybrid or remote all
+  do. Contract, B2B and freelance postings count as employment does; on-site, hybrid and remote all count. The
   only test is the connection to Estonia. Checked 2026-11-08: no reader drops a posting by its form or workplace;
   MeetFrank's remote type only labels a remote role's allowed places. PR 1d keeps it that way and adds a test that says
   so.

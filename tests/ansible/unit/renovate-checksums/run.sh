@@ -62,8 +62,11 @@ sub_pinned = keys_dir("keys-sub", [VENDOR], [VENDOR_SUB])           # the subkey
 old_keys = keys_dir("keys-old", [VENDOR, OLD], [VENDOR, OLD])       # a key expired since it signed, pinned
 
 # ── the mirror: each vendor's files where the script reads them ─────────────
-V = {"vault": "1.22.0", "forgejo": "15.0.12", "helm": "v3.21.0", "node_exporter": "1.13.0", "nexus": "3.91.0-02",
-     "versitygw": "1.9.0", "consul": "1.21.0", "keycloak": "26.6.0", "gateway_api": "v1.6.0"}
+# a version no vendor publishes (its last part in the 900s): a real one is the next update's - Forgejo's 15.0.12 here was
+# the wave's own (2026-11-23), the harness's bump of the file a no-op, its assert a crash and the unit's CI red
+V = {"vault": "1.22.900", "forgejo": "15.0.900", "helm": "v3.21.900", "node_exporter": "1.13.900", "nexus": "3.91.900-02",
+     "versitygw": "1.9.900", "consul": "1.21.900", "keycloak": "26.6.900", "gateway_api": "v1.6.900",
+     "insightface_buffalo_l": "0.908"}
 M = os.path.join(W, "mirror")
 def put(url, data):
     p = os.path.join(M, url.split("://", 1)[1] + ("index.html" if url.endswith("/") else ""))
@@ -100,6 +103,9 @@ expect["keycloak"] = {"noarch": h(f"keycloak {v} tarball")}
 v = V["gateway_api"]
 put(f"https://github.com/kubernetes-sigs/gateway-api/releases/download/{v}/standard-install.yaml", f"gateway api {v} crds")
 expect["gateway_api"] = {"noarch": h(f"gateway api {v} crds")}
+v = V["insightface_buffalo_l"]
+put(f"https://github.com/deepinsight/insightface/releases/download/v{v}/buffalo_l.zip", f"buffalo_l {v} zip")
+expect["insightface_buffalo_l"] = {"noarch": h(f"buffalo_l {v} zip")}
 v = V["forgejo"]
 fj = {a: f"https://code.forgejo.org/forgejo/forgejo/releases/download/v{v}/forgejo-{v}-linux-{a}" for a in ("arm64", "amd64")}
 binaries = {a: f"forgejo {v} {a} binary".encode() for a in fj}
@@ -195,18 +201,20 @@ bump(*PIN)
 code, out = run("--changed")
 check("every pin moved: each rewritten from its vendor's signed material (or TLS, said); 0",
       (code, pins_now() == expect, out.count("rewritten"), "signed: HashiCorp" in out, "signed: Forgejo" in out,
-       "signed: Helm" in out, "signed: Keycloak" in out, "TLS alone" in out), (0, True, 10, True, True, True, True, True))
+       "signed: Helm" in out, "signed: Keycloak" in out, "TLS alone" in out), (0, True, 11, True, True, True, True, True))
 changed = diff_lines()
 check("  nothing else in the files changed: each moved version and each pin's hash, the rest as it was (the nexus "
-      "map's sha256: prefix and quotes kept); versitygw's new version an entry of its own, as the ones before it",
-      (all(re.search(r"_version:|^\+\s+\"1\.9\.0\":$|^[-+]\s+(-\s+)?\S+:\s*\"?(sha256:)?[0-9a-f]{64}", l) for l in changed),
+      "map's sha256: prefix and quotes kept); versitygw's new version an entry of its own, as the ones before it; "
+      "buffalo_l's version and hash, top-level keys of their vars file",
+      (all(re.search(r"_version:|^\+\s+\"" + re.escape(V["versitygw"]) + r"\":$|^[-+]\s*(-\s+)?\S+:\s*\"?(sha256:)?[0-9a-f]{64}", l)
+           for l in changed),
        len([l for l in changed if l.startswith("+")]), any('"sha256:' + expect["nexus"]["x86_64"] + '"' in l for l in changed),
        len([l for l in changed if l.startswith("-") and "_version:" not in l])),
-      (True, 9 + 8 + 4 + 3 + 2, True, 8 + 4 + 2))
+      (True, 9 + 8 + 4 + 3 + 2 + 2, True, 8 + 4 + 2 + 1))
 vg_text = open(os.path.join(R, PIN["versitygw"]["file"])).read()
-check("  versitygw's new entry after the ones before it", re.findall(r'^\s+"(\d+\.\d+\.\d+)":$', vg_text, re.M)[-1:], ["1.9.0"])
+check("  versitygw's new entry after the ones before it", re.findall(r'^\s+"(\d+\.\d+\.\d+)":$', vg_text, re.M)[-1:], [V["versitygw"]])
 code, out = run("--check")
-check("  --check after it: every pin ok; 0", (code, out.count("STALE"), out.count(" ok")), (0, 0, 16))
+check("  --check after it: every pin ok; 0", (code, out.count("STALE"), out.count(" ok")), (0, 0, 17))
 
 # --check: a stale pin, a missing versitygw entry - said, nothing written
 p = os.path.join(R, PIN["vault"]["file"])
@@ -238,7 +246,7 @@ code, out = run("--changed")
 check("a committed bump with --changed alone (against HEAD): nothing read, said - never a silent pass",
       (code, "no pin's version or hash moved since HEAD" in out), (0, True))
 code, out = run("--changed", "--base", "main")
-check("  with --base main: vault read and rewritten, its stale pins the vendor's now", (code, "vault 1.22.0" in out,
+check("  with --base main: vault read and rewritten, its stale pins the vendor's now", (code, f"vault {V['vault']}" in out,
       "rewritten" in out, pins_now("vault")["vault"] == expect["vault"]), (0, True, True, True))
 # --ref: the branch's pins read from git, the working tree on main untouched
 sh("checkout", "-q", "--", ".")
@@ -259,7 +267,7 @@ shutil.rmtree(M)
 shutil.copytree(os.path.join(pristine, "releases.hashicorp.com"), os.path.join(M, "releases.hashicorp.com"))
 code, out = run("--changed", "--only", "vault")
 check("--only vault: vault alone read and rewritten (forgejo's bump left), 0",
-      (code, "vault 1.22.0" in out, "forgejo" in out, pins_now("vault")["vault"] == expect["vault"]), (0, True, False, True))
+      (code, f"vault {V['vault']}" in out, "forgejo" in out, pins_now("vault")["vault"] == expect["vault"]), (0, True, False, True))
 reset_mirror()
 
 def refused(case, setup, keys=None, pin="vault", other="node_exporter"):
@@ -298,7 +306,7 @@ def no_arm64():
     open(sums_path, "w").write("".join(kept_lines))
     sign(sums_path)
 out = refused("an artifact missing from the signed list", no_arm64)
-check("  said: not in the signed SHA256SUMS", "vault_1.22.0_linux_arm64.zip: not in" in out, True)
+check("  said: not in the signed SHA256SUMS", f"vault_{V['vault']}_linux_arm64.zip: not in" in out, True)
 fa = fj["amd64"]
 fname = fa.rsplit("/", 1)[1]
 out = refused("Forgejo's own .sha256 disagreeing with its signed .xz", lambda: put(fa + ".sha256", f"{h(b'other')}  {fname}\n"),
@@ -379,6 +387,7 @@ DOWNLOADS = {  # pin -> the playbooks' download lines (their file, a marker on t
     "node_exporter": [("setup-host-hardening.yml", "node_exporter_archive_name:")],
     "nexus": [("setup-nexus.yml", "url: \"https://download.sonatype.com/")],
     "versitygw": [("tasks/versitygw.yml", "url: \"https://github.com/versity/")],
+    "insightface_buffalo_l": [("../vars/nexus-models.yml", "url: \"https://github.com/deepinsight/")],
 }
 def artifact(pin, v, a):
     vd = rc.VENDORS[pin["vendor"]]
@@ -425,11 +434,12 @@ check("the preset: one post-upgrade task, the script's --changed, once a branch,
       (1, ["schnappy/ops"], [CMD], "branch", []))
 allowed = json.load(open("renovate/allowed-commands.json"))
 launcher = open("scripts/upgrade-renovate.sh").read()
-check("the allowed commands: that one, nothing chained to it; task upgrade's Renovate (scripts/upgrade-renovate.sh) "
+check("the allowed commands: this one matched by exactly one (the app repos' gradle-wrapper checksum has its own, tested in "
+      "upgrade-renovate), nothing chained to it allowed by any; task upgrade:run's Renovate (scripts/upgrade-renovate.sh) "
       "reads them from renovate/allowed-commands.json",
-      ([bool(re.match(rx, CMD)) for rx in allowed], [bool(re.match(rx, CMD + "; rm -rf /")) for rx in allowed],
+      (sum(bool(re.match(rx, CMD)) for rx in allowed), any(re.match(rx, CMD + "; rm -rf /") for rx in allowed),
        'RENOVATE_ALLOWED_COMMANDS=$(cat "$ops/renovate/allowed-commands.json")' in launcher),
-      ([True], [False], True))
+      (1, False, True))
 annotated = {p["name"]: bool(re.search(rf"#\s*renovate:.*\n\s*{p['version']}:", open(p["file"]).read()))
              for p in rc.PINS if "version" in p}
 check("each pin Renovate moves is annotated where its version is; each it does not move is not, and says why",

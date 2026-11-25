@@ -130,10 +130,13 @@
         nexus_version_file is failed or
         (nexus_version_file.content | default('') | b64decode | trim) != nexus_version
       block:
-        # a private directory: a tarball or tree planted at a fixed /tmp name was installed
+        # a private directory: a tarball or tree planted at a fixed /tmp name was installed. Beside the install directory,
+        # on its disk - not /tmp, a RAM disk: the tarball and its tree (the JDK in it) filled a 2 GB Pi VM's 1 GB /tmp
+        # (2026-11-20), and the move into the install directory is a rename on one filesystem
         - name: A private directory for the Nexus download
           ansible.builtin.tempfile:
             state: directory
+            path: "{{ nexus_install_dir | dirname }}"
             suffix: .nexus
           check_mode: false
           register: _nexus_tmp
@@ -313,6 +316,9 @@
   hosts: pi1
   become: true
   gather_facts: false
+  # the files the models repository holds (tasks/nexus-models.yml)
+  vars_files:
+    - ../vars/nexus-models.yml
 
   vars:
     nexus_data_dir: /mnt/data/nexus
@@ -783,6 +789,9 @@
     - name: Converge the pytorch-cpu repository
       ansible.builtin.include_tasks: tasks/nexus-pytorch-cpu.yml
 
+    - name: Converge the models repository
+      ansible.builtin.include_tasks: tasks/nexus-models.yml
+
     - name: Show repository status
       ansible.builtin.uri:
         follow_redirects: none
@@ -828,6 +837,9 @@
   become: true
   gather_facts: false
   tags: [converge]  # task deploy:nexus -- --tags converge: this play alone
+  # the files the models repository holds (tasks/nexus-models.yml)
+  vars_files:
+    - ../vars/nexus-models.yml
 
   vars:
     vip: "{{ keepalived_vip }}"
@@ -874,5 +886,11 @@
     - name: Converge the pytorch-cpu repository
       ansible.builtin.include_tasks:
         file: tasks/nexus-pytorch-cpu.yml
+        apply:
+          tags: [converge]
+
+    - name: Converge the models repository
+      ansible.builtin.include_tasks:
+        file: tasks/nexus-models.yml
         apply:
           tags: [converge]

@@ -77,11 +77,14 @@ check("E01 the pinned version: on", condition(nd["ansible.builtin.assert"]["that
 cd = next(t for t in tasks("deploy/ansible/playbooks/upgrade-containerd.yml") if t.get("register") == "_config_diff")
 check("E04 the live config differing: failed; the same: on",
       (condition(cd["failed_when"], _config_diff={"rc": 1}), condition(cd["failed_when"], _config_diff={"rc": 0})), (True, False))
-# E06: the data tier's sidecars waited for until none is left
-dl = next(t for t in tasks("deploy/ansible/playbooks/restart-mesh-workloads.yml") if t.get("register") == "_data_left")
-check("E06 a data-tier workload left on the old sidecar: still waiting; none left: done",
-      (condition(dl["until"], _data_left={"rc": 0, "stdout": "StatefulSet ns kafka"}),
-       condition(dl["until"], _data_left={"rc": 0, "stdout": ""})), (False, True))
+# E06: the data tier waited for one workload at a time - each restarted, then off the old sidecar AND ready, in a
+# bounded loop that stops the run before the apps (its behaviour: restart-mesh-order's one-at-a-time, slow and
+# never-ready cases - the wait gone there, 10 checks red)
+dl = next(t for t in tasks("deploy/ansible/playbooks/restart-mesh-workloads.yml") if t.get("register") == "_data")
+cmd = dl["ansible.builtin.shell"]["cmd"]
+check("E06 the data tier's loop: off the old sidecar and ready before the next, bounded, failing before the apps",
+      [x for x in ('grep -qx "$kind $ns $name" <<< "$left"', '[ "$(ready "$kind" "$ns" "$name")" = True ]',
+                   '[ "$n" -lt {{ data_tries }} ]', 'the apps not restarted"; exit 1') if x not in cmd], [])
 # K01: acme-check's certificate not Ready: the task fails (its script run against a kubectl stub)
 import subprocess, tempfile
 ac = task("deploy/ansible/playbooks/acme-check.yml", "The certificate, Ready")
@@ -126,6 +129,30 @@ good = ["50 def", "compat= 24.8.14", "users=default,schnappy", "formats="]
 check("L02 the canary as seeded: on; another count, checksum or user list: failed",
       (survival(good), survival(["49 def"] + good[1:]), survival(["50 deg"] + good[1:]),
        survival(good[:2] + ["users=default"] + good[3:])), (False, True, True, True))
+# L03: Grafana's dashboards as seeded - or, its database moved since the seed, the canary gone and the rest there again
+gf = next(t for t in tasks("tests/ansible/copy/survival-check.yml") if t.get("register") == "_grafana")
+UIDS = ["infrastructure", "masi", "upgrade-check"]
+def grafana(mode, uids, canary, db, seed_db="sqlite3"):
+    import json
+    v = dict(mode=mode, dashboard_uid="upgrade-check", dashboard_text="upgrade survival canary",
+             _seed={"grafana_uids": UIDS, "grafana_db": seed_db},
+             _grafana={"rc": 0, "stdout_lines": [json.dumps(uids), canary, db][:3 if db else 2]})
+    # the task's vars as Ansible holds them: trusted templates, rendered only when read (lazily - the length clause
+    # first, so two lines never reach the third)
+    v.update(as_loaded(gf.get("vars") or {}))
+    return condition(gf["failed_when"], **v)
+C = "upgrade survival canary"
+check("L03 the seed, its canary read: on; the same database after a change, every UID and the canary: on",
+      (grafana("seed", UIDS, C, "sqlite3"), grafana("verify", UIDS, C, "sqlite3")), (False, False))
+check("L03 the same database: the canary gone, or another dashboard gone: failed",
+      (grafana("verify", UIDS[:2], "-", "sqlite3"), grafana("verify", UIDS[1:], C, "sqlite3")), (True, True))
+check("L03 moved to another database: the canary gone, every other dashboard there again: on",
+      grafana("verify", UIDS[:2], "-", "postgres"), False)
+check("L03 moved: the canary still there (the old database read), or another dashboard lost with the old one: failed",
+      (grafana("verify", UIDS, C, "postgres"), grafana("verify", ["masi"], "-", "postgres")), (True, True))
+check("L03 seeded on Postgres (a copy built after the move), still there: every UID and the canary: on",
+      grafana("verify", UIDS, C, "postgres", seed_db="postgres"), False)
+check("L03 the database not said (two lines): failed", grafana("verify", UIDS, C, ""), True)
 print("guard-conditions: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 PY_GUARD_CONDITIONS

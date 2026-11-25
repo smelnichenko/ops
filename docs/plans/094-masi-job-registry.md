@@ -25,10 +25,9 @@ holder of `JOBS` could never read the first one's CV or letters.
 
 ## Why
 
-Operator, 2026-09-16: *"robot that creates and maintains a registry of IT job offerings in
-Estonia, tunes my CV for each new position … essentially, we need a registry of IT companies as
-well … overview and stats/reports, like weekly … headless browser is a must have, also plan cost
-monitoring."* And on the CV itself: the one-CV-for-fifty-postings model is dead; a title says
+Operator, 2026-09-16: a robot that builds and keeps a registry of IT job offerings in Estonia and
+tunes the operator's CV for each new position, with a registry of IT companies too, an overview and
+weekly stats and reports, a headless browser as a must, and cost monitoring planned. And on the CV itself: the one-CV-for-fifty-postings model is dead; a title says
 nothing, results beat duties, the employer only sees what the CV shows, and a CV must answer
 "why does my experience fit *this* job", not "where have I worked".
 
@@ -823,8 +822,8 @@ for Java and `npm run test` green for site.
     `masi` loaded; `MasiReportsStale` rule rendered with its promtool test. Left open by design:
     masi's Sonar gate (red since 2026-09-18, 273 issues, enforced by nothing) is the next PR.
     **Between PR10 and PR11 — the strict host allow-list and Sonar part 1 (masi #17, main 93b8725,
-    platform 8b4b210/e10ff16/e670d1d, 2026-09-20).** Operator rule, verbatim: "if host is not on allow
-    list - it cannot be contacted. period", "empty list - no hosts can be contacted".
+    platform 8b4b210/e10ff16/e670d1d, 2026-09-20).** The operator's rule: a host not on
+    the allow-list is never contacted, and an empty list means no host is.
     `masi.http.allowed-hosts` (env `MASI_HTTP_ALLOWED_HOSTS`, chart `masiService.http.allowedHosts`,
     25 names) is exact-name, no wildcard, empty = nobody, checked FIRST (before DNS and the SSRF check)
     in the fetcher on every hop and in the browser's route guard and redirect observer; the test
@@ -947,7 +946,7 @@ for Java and `npm run test` green for site.
     **Live state 2026-09-21:** AI is enabled in schnappy-test on the shared key (`MASI_ANTHROPIC_API_KEY` = `ANTHROPIC_API_KEY`
     in ops/.env, Vault `test/ai-masi` seeded), and EVERY call is refused: the account has no credit. Nothing can be analysed,
     scored or tuned until it is topped up; no redeploy is needed afterwards. Production `ai-masi` is not seeded.
-    **2026-10-18:** production enabled (operator: "Deploy masi to prod"); its `ai-masi` holds the same key as test, and
+    **2026-10-18:** production enabled (the operator's decision); its `ai-masi` holds the same key as test, and
     the seed now requires `MASI_ANTHROPIC_API_KEY`.
     **CI:** every distinct `@SpringBootTest` configuration is a cached context with a Hikari pool; at 10 connections held for
     ever the newest context could not connect to CI's one Postgres ("too many clients already"). The test profile now holds
@@ -989,7 +988,7 @@ for Java and `npm run test` green for site.
     and failed CD on main once; the deterministic half of the test stays.
 
     **No unattended mail; "mail me this report" (masi #26, main 90fd880; site #16, main 54db45e; platform 8b71293; infra
-    cda7b8b) — operator, 2026-09-21: "automated email sending should be disabled".** `masi.mail.weekly-auto` (default
+    cda7b8b) — operator, 2026-09-21: no automated email sending.** `masi.mail.weekly-auto` (default
     FALSE) gates the scheduled pass: off, it sends nothing and takes no attempt. A digest leaves when somebody asks:
     `POST /reports/{id}/digest` (202; 409 with the reason when mail is off, the report is not weekly, no address is known or
     the mail did not leave), nothing recorded, no CV master needed; the site has the button on weekly reports.
@@ -1081,7 +1080,7 @@ for Java and `npm run test` green for site.
     spent analysis attempts surviving a rewrite, two losers of one sweep reordering between reads — all fixed, with
     tests red on revert. No time window on the closed twin: the exact-fingerprint path never had one and the registry
     is a day old; revisit when a twin closed months earlier gets reposted.
-    **Every source enabled and verified one by one, 2026-09-22 (operator: "enable sources 1 by 1 and verify each").**
+    **Every source enabled and verified one by one, 2026-09-22 (operator: one source at a time, each verified).**
     All 33 seeded sources run once each, watched per run (status, complete, fetched/parsed/new, error, a sample of what
     came in). Found and fixed the same day: Töötukassa took an assembly worker and an electrician and gave postings a
     sentence for a title — `\b` in java.util.regex is ASCII-only, so "it" was a word inside "Montaažitööline"; `(?U)` on
@@ -1089,15 +1088,15 @@ for Java and `npm run test` green for site.
     Twilio's Greenhouse board with content is over the 2 MB cap → content per new job; Milrem's placeless posting (masi
     #34 — it turned out to be in the Netherlands, correctly out); the TeamDash job pages of Cybernetica, Bigbank and
     TEHIK sit on their own teamdash.com hosts (platform ffbbd1f) and the collector now names a refused host instead of
-    "markup changed"; Wise read 68 postings and the text of 20 → the operator's "pagination should not stop from making
-    complete list before reaching AI": no per-run page or detail cap unless the source's config sets one, changeset 027
+    "markup changed"; Wise read 68 postings and the text of 20 → the operator's rule that paging reads
+    the complete list before any AI step: no per-run page or detail cap unless the source's config sets one, changeset 027
     strips the seeds' caps, and the runner waits one in-flight call past the deadline (the audit found a collector
     stopping at its deadline was always cancelled mid-call — masi #35). Three auto-detected feeds answer 404 (IBKR,
     Breakwater, Sisu Tech: disabled); Bondora's EU board works through the central API. `docs/sources.md` carries every
     first run (masi #36). The daily AI budget is 2 EUR (2.30 USD) since 17:16.
 
 Later: ~~match scoring (`SCORE`)~~ (done, above, site included), ~~company enrichment (`ENRICH`)~~ (done by plan 096, by rule rather than a model; coverage measured, item 6), ~~weekly-report notification~~
-(done, above: by mail), ~~T2 collectors~~ (the verified three, above), ~~Admin-API cost reconciliation~~ (PARKED 2026-09-30 by the operator: the Admin API needs an Anthropic organization, which the account is not to become for now; masi shares the one API key with monitor and admin — `MASI_ANTHROPIC_API_KEY` holds the same value — so the key isolation under Cost monitoring does not hold, by the operator's choice, and masi's own budgets are its only spend limit), ~~PR preview envs for masi~~ (DROPPED 2026-09-30 by the operator: "test is actually a preview environment" — every merge deploys to the test namespace, where each change is verified live).
+(done, above: by mail), ~~T2 collectors~~ (the verified three, above), ~~Admin-API cost reconciliation~~ (PARKED 2026-09-30 by the operator: the Admin API needs an Anthropic organization, which the account is not to become for now; masi shares the one API key with monitor and admin — `MASI_ANTHROPIC_API_KEY` holds the same value — so the key isolation under Cost monitoring does not hold, by the operator's choice, and masi's own budgets are its only spend limit), ~~PR preview envs for masi~~ (DROPPED 2026-09-30 by the operator: the test environment already is the preview — every merge deploys to the test namespace, where each change is verified live).
 
 ### Verification
 
@@ -1201,7 +1200,8 @@ is seeded (enabled 2026-10-18, see below); PR10 done 2026-09-20; masi #17 (stric
 Process since 2026-09-17: platform, infra and ops changes go straight to main (no PRs); the app
 repos keep PRs with PR-only CI.
 
-**2026-09-30 — the operator: "masi is not production grade yet; no production deploy until I say"; "fix everything".** The
+**2026-09-30 — the operator: masi not production grade yet, no production deploy until the operator decides it, every
+finding fixed.** The
 Later list is closed (reconciliation parked by the operator: no organization, so no Admin key, and masi shares the one API
 key; PR preview envs dropped: the test namespace is masi's preview). Production-grade list, from the week's runs in test:
 1. Package 1's two 400s (09-21): the account had no credit, before masi told NO_CREDIT apart (86fefc3, the same
@@ -1227,9 +1227,9 @@ key; PR preview envs dropped: the test namespace is masi's preview). Production-
    record), fixed. masi #86: a catch-up that finds nothing missed says so (after #84's deploy the pod logged no catch-up
    line, which read the same as one that never ran).
 
-**2026-10-18 — production.** The operator: "Deploy masi to prod" (infra 3a1a8c2, one replica until plan 099 lands;
+**2026-10-18 — production.** Deployed on the operator's decision (infra 3a1a8c2, one replica until plan 099 lands;
 the same Anthropic key as test, `schnappy/ai-masi`). The partner API is off by default (`masi.partner.enabled`, masi
-#114; operator: "disabled until further notice"). Review fixes the same day: the gateway serves no actuator but health
+#114; the operator: off until the operator says otherwise). Review fixes the same day: the gateway serves no actuator but health
 (platform bf8532a), the alerted counters are scraped from 0 (masi #115), masi is admitted to Postgres by name
 (platform e4a48cf), the JVM memory alerts fire under ZGC (platform 0e99a00); the Pi restore check wants masi's tables
 (ops). Production's sources start disabled; switching them on is the operator's.

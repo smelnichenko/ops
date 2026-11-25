@@ -51,6 +51,8 @@ ch_users() {  # ch_users <compat or empty> <replace attribute> <user...>
     "${c:+<compatibility>$c</compatibility>}" "$r" "$(printf '<%s/>' "$@")"
 }
 ch_users 25.8 ' replace="replace"' schnappy > "$T/platform/helm/schnappy-observability/files/clickhouse-users.xml"
+# the backup job's user, mounted when infra's values turn backups on
+printf '<clickhouse><users><backup/></users></clickhouse>\n' > "$T/platform/helm/schnappy-observability/files/clickhouse-backup-user.xml"
 git -C "$T/platform" init -q -b p && git -C "$T/platform" add -A \
   && git -C "$T/platform" -c user.name=t -c user.email=t@t commit -q -m p
 git -C "$T/platform" checkout -q -b q
@@ -61,6 +63,15 @@ git -C "$T/platform" checkout -q -b r
 ch_users "{{lookup('pipe','id')}}" '' grafana > "$T/platform/helm/schnappy-observability/files/clickhouse-users.xml"
 git -C "$T/platform" -c user.name=t -c user.email=t@t commit -q -am r
 export COPY_PLATFORM_DIR="$T/platform"
+# the infra ref (the script's first argument): branch i, ClickHouse's backups off; branch b, on (its backup user expected)
+mkdir -p "$T/infra/clusters/production/schnappy-observability"
+printf 'clickhouse:\n  enabled: true\n' > "$T/infra/clusters/production/schnappy-observability/values.yaml"
+git -C "$T/infra" init -q -b i && git -C "$T/infra" add -A && git -C "$T/infra" -c user.name=t -c user.email=t@t commit -q -m i
+git -C "$T/infra" checkout -q -b b
+printf 'clickhouse:\n  enabled: true\n  backup:\n    enabled: true\n' > "$T/infra/clusters/production/schnappy-observability/values.yaml"
+git -C "$T/infra" -c user.name=t -c user.email=t@t commit -q -am b
+git -C "$T/infra" checkout -q i
+export COPY_INFRA_DIR="$T/infra"
 t0=$(date +%s)
 out=$(echo "THE CALLER'S INPUT" | PATH="$T/bin:$PATH" timeout -k 5 60 bash "$T/scripts/copy-checks.sh" i p 2>&1)
 rc=$?
@@ -86,21 +97,27 @@ check "no check read the caller's stdin" "$(grep -c "THE CALLER'S INPUT" <<< "$o
 check "every check's ssh: vagrant's own config, then keepalives 15 s x4 and a 30 s connect bound - a stalled VM ends its check" \
   "$(grep -c '^sshcfg: ServerAliveInterval 15,ServerAliveCountMax 4,ConnectTimeout 30 after: Host kubeadm$' <<< "$out")" 1
 # each check's own command, exactly (the stubs echo their arguments): the data check VERIFIES (a seed there re-seeds
-# and passes), the isolation's proof alone, none in check mode, the smoke on the refs in their order
+# and passes), the isolation's proof alone, none in check mode, the smoke on the refs in their order, Kafka's dump by
+# production's backup check (its guard against the build's dump)
 for want in "check -i inventory/vagrant.yml ../../tests/ansible/copy/data-check.yml -e mode=verify read stdin: []" \
     "check -i inventory/vagrant.yml ../../tests/ansible/copy/storage-check.yml read stdin: []" \
     "check -i inventory/vagrant.yml playbooks/production-data-check.yml read stdin: []" \
     "check -i inventory/vagrant.yml ../../tests/ansible/copy/isolate-cluster.yml --tags proof read stdin: []" \
+    "check -i inventory/vagrant.yml playbooks/kafka-backup-check.yml -e kafka_backup_expect_judged=true read stdin: []" \
     "smoke i p read stdin: []"; do
   check "the exact command: ${want% read stdin*}" "$(grep -cxF -- "$want" <<< "$out")" 1
 done
 check "the survival check is given ClickHouse's compatibility and users as the platform ref sets them" \
   "$(grep -c 'survival-check.yml -e mode=verify -e clickhouse_compat=25.8 -e clickhouse_users=schnappy read' <<< "$out")" 1
-check "seven checks judged" "$(grep -c '^===== check ' <<< "$out")" 7
+check "eight checks judged" "$(grep -c '^===== check ' <<< "$out")" 8
 check "the failing one named, the run failed" "$rc $(grep -o 'COPY CHECKS FAILED: metrics' <<< "$out")" \
   "1 COPY CHECKS FAILED: metrics"
 check "it ends once its checks have: the bound's watchdog not waited out" "$([ "$took" -lt 15 ] && echo prompt || echo "$took s")" \
   prompt
+# infra's values turning ClickHouse's backups on: the backup job's user expected beside schnappy
+out=$(ALL_PASS=1 PATH="$T/bin:$PATH" timeout -k 5 60 bash "$T/scripts/copy-checks.sh" b p < /dev/null 2>&1); rc=$?
+check "ClickHouse's backups on in infra's values: the backup user expected too" \
+  "$rc $(grep -c 'survival-check.yml -e mode=verify -e clickhouse_compat=25.8 -e clickhouse_users=backup,schnappy read' <<< "$out")" "0 1"
 # a platform ref with no pin and no replaced list: no compatibility, the image's default user beside the file's
 out=$(ALL_PASS=1 PATH="$T/bin:$PATH" timeout -k 5 60 bash "$T/scripts/copy-checks.sh" i q < /dev/null 2>&1); rc=$?
 check "no pin: compatibility empty; no replace: the image's default user kept" \

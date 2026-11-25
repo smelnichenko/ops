@@ -1,7 +1,7 @@
 # Plan 110 — masi: nothing without a tie to Estonia, and no hidden settings
 
-**Status:** asked for 2026-11-08 by the operator: "this fuckup with no estonia ties and random organisations in config
-should not happen again. plan".
+**Status:** asked for 2026-11-08 by the operator: a plan so that sources with no tie to Estonia and unrelated
+organisations never get into the configuration again.
 
 Masi gets one PR at a time. Each PR follows the usual routine: a failing test first, revert checks, the clean check, a
 PR, CI, merge, a smoke test on test, a promote, and a check in production.

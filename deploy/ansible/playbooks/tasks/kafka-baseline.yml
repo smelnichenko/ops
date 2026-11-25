@@ -1,0 +1,53 @@
+---
+# The Kafka backups' BASELINE written now (tasks/kafka-store.yml): the backup's guard (platform's kafka-backup-guard.sh)
+# compares the topics it covers with the store's dumps from now on only - every other topic still with the dump before.
+# Its lines: the UTC time, "why <text>" (cut to plain characters before it reaches the shell's text: no quote, no $, no
+# backtick), then "topic <name>" a line, or "all". A BASELINE there already that no complete dump followed keeps its
+# topics covered too (a restore, then a topic removed the same day: the next dump compares neither with the dump before
+# them); one a dump followed is spent - that dump is the reference now.
+#
+# Expects: kubectl; kafka_namespace (default schnappy-production); kafka_baseline_why; kafka_baseline_topics (Kafka topic
+# names, space-separated, or all).
+- name: The topics it covers - Kafka topic names, or all alone
+  ansible.builtin.assert:
+    that:
+      - kafka_baseline_topics | mandatory | trim is match('^[A-Za-z0-9._-]+( +[A-Za-z0-9._-]+)*$')
+      - kafka_baseline_topics | trim == 'all' or 'all' not in (kafka_baseline_topics | trim).split()
+    fail_msg: "kafka_baseline_topics: Kafka topic names, space-separated, or all alone - got '{{ kafka_baseline_topics | default('') }}'"
+    quiet: true
+
+- name: The BASELINE written
+  ansible.builtin.include_tasks: kafka-store.yml
+  vars:
+    _kb_topics: "{{ (kafka_baseline_topics | trim).split() }}"
+    kafka_store_what: baseline
+    kafka_store_cmd: |
+      b=$(date -u +%Y%m%dT%H%M%SZ)
+      cover='{{ "all" if _kb_topics == ["all"] else ("topic " ~ (_kb_topics | join("\ntopic "))) }}'
+      why='why {{ kafka_baseline_why | mandatory | regex_replace("[^A-Za-z0-9 ._,:/()-]", "_") }}'
+      rclone mkdir "$STORE"  # a fresh store: no bucket until the first upload makes it
+      top=$(rclone lsf --files-only --max-depth 1 "$STORE/")
+      if printf '%s\n' "$top" | grep -qxF BASELINE; then
+        old=$(rclone cat "$STORE/BASELINE")
+        ob=$(printf '%s\n' "$old" | head -1)
+        if printf '%s\n' "$ob" | grep -qE '^[0-9]{8}T[0-9]{6}Z$'; then
+          dirs=$(rclone lsf --dirs-only "$STORE/")
+          spent=""
+          for n in $(printf '%s\n' "$dirs" | sed 's#/$##' | grep -E '^[0-9]{8}T[0-9]{6}Z$' | sort -r); do
+            [ "$(echo "$n" | tr -d TZ)" -gt "$(echo "$ob" | tr -d TZ)" ] || break
+            files=$(rclone lsf --files-only --max-depth 1 "$STORE/$n/")
+            if printf '%s\n' "$files" | grep -qxF DONE; then spent=$n; break; fi
+          done
+          if [ -z "$spent" ]; then
+            oc=$(printf '%s\n' "$old" | sed -n '/^topic /p')
+            if printf '%s\n' "$old" | grep -qx all || [ -z "$oc" ]; then cover=all
+            elif [ "$cover" != all ]; then cover=$(printf '%s\n%s\n' "$cover" "$oc" | sort -u); fi
+            why=$(printf '%s\n%s\n' "$why" "$(printf '%s\n' "$old" | sed -n '/^why /p')")
+            echo "the BASELINE of $ob not followed by a dump: its topics kept covered"
+          fi
+        else
+          echo "the BASELINE there holds no timestamp ('$ob'): replaced"
+        fi
+      fi
+      printf '%s\n%s\n%s\n' "$b" "$why" "$cover" | rclone rcat "$STORE/BASELINE"
+      echo "baseline $b: $(printf '%s\n' "$cover" | sed 's/^topic //' | tr '\n' ' ' | sed 's/ $//')"

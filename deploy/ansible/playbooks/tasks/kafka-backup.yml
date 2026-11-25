@@ -1,0 +1,55 @@
+---
+# Kafka's topics dumped to the Pi store now, as its CronJob does each night (platform's schnappy-data kafka-backup.yaml):
+# a Job made from the CronJob - the dump (every partition from its earliest offset, its count checked), the upload (DONE
+# last), the prune - waited for by the clock; its upload's log must name the dump. The Job removed once it succeeded (a
+# failed one stays for its logs - KubeJobFailed says so). Sets kafka_backup_name (the dump's UTC timestamp) and
+# kafka_backup_guard (the guard's verdict: the topics it judged against which dump, or none to compare with).
+#
+# Expects: kubectl (the admin kubeconfig on the target); kafka_namespace (default schnappy-production) - its CronJob is
+# <namespace>-kafka-backup (the release's name).
+- name: The Kafka backup Job's name (fixed once - a lookup in vars is re-run on every use)
+  ansible.builtin.set_fact:
+    _kb_job: "kafka-backup-check-{{ lookup('ansible.builtin.pipe', 'date +%s') }}"
+    _kb_ns: "{{ kafka_namespace | default('schnappy-production') }}"
+
+- name: The backup made from its CronJob, then waited for - the upload naming its dump
+  ansible.builtin.shell:
+    executable: /bin/bash
+    cmd: |
+      set -euo pipefail
+      k="{{ kubectl }} -n {{ _kb_ns }}"
+      j={{ _kb_job }}
+      $k create job --from=cronjob/{{ _kb_ns }}-kafka-backup "$j" > /dev/null
+      # complete or failed - by the clock, not the tries (each kubectl can hang): /proc/uptime, which nothing sets back;
+      # 3700 s, past the Job's own hour
+      end=$(( $(cut -d. -f1 /proc/uptime) + 3700 ))
+      s=""
+      for _ in $(seq 370); do
+        # a read that fails is tried again till the deadline - the Job runs on without it
+        s=$($k get "job/$j" -o jsonpath='{.status.succeeded}/{.status.failed}') || s=""
+        case "$s" in
+          1/*) break ;;
+          */1) $k logs "job/$j" -c dump --tail=20 || echo "(the dump's log not read)"
+               $k logs "job/$j" -c upload --tail=20 || echo "(the upload's log not read)"
+               echo "the backup Job $j failed"; exit 1 ;;
+        esac
+        [ "$(cut -d. -f1 /proc/uptime)" -lt "$end" ] || break
+        sleep 10
+      done
+      case "$s" in 1/*) ;; *) echo "the backup Job $j not done 3700 s after its start"; exit 1 ;; esac
+      log=$($k logs "job/$j" -c upload)
+      echo "$log" | tail -3
+      # the guard's own verdict (what it judged, against which dump) before the dump's name, the last line
+      # (none said by a backup without its guard - platform's chart before the guard: no line, never a failed pipeline)
+      { echo "$log" | grep -E '^Kafka holds everything its dumps held:|^no complete dump before this one' || true; } \
+        | tail -1 | sed 's/^/guard: /'
+      echo "$log" | grep -oE 'kafka backup [0-9]{8}T[0-9]{6}Z: uploaded' | awk '{print $3}' | tr -d : | tail -1
+      $k delete job "$j" --wait=false > /dev/null
+  register: _kb_backup
+  changed_when: true
+  failed_when: _kb_backup.rc != 0 or (_kb_backup.stdout_lines | last | default('')) is not match('^[0-9]{8}T[0-9]{6}Z$')
+
+- name: The dump's name, and the guard's verdict
+  ansible.builtin.set_fact:
+    kafka_backup_name: "{{ _kb_backup.stdout_lines | last }}"
+    kafka_backup_guard: "{{ (_kb_backup.stdout_lines | select('match', '^guard: ') | last | default('guard: (none said)'))[7:] }}"

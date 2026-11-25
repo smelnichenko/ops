@@ -275,12 +275,22 @@ def failing_run(pod, failing):
             and any(key[0] == ns and re.fullmatch(rf"{re.escape(name)}-[0-9]+", key[2]) for ns, name in failing))
 
 
+def running_statuses(pod):
+    """A pod's containers' statuses and its native sidecars' (init containers restarting Always - Istio's istio-proxy
+    when native: they run beside the app, their readiness and restarts the pod's as much as its containers')."""
+    status = pod.get("status") or {}
+    sidecars = {c.get("name") for c in (pod.get("spec") or {}).get("initContainers") or [] if c.get("restartPolicy") == "Always"}
+    return list(status.get("containerStatuses") or []) + [
+        c for c in status.get("initContainerStatuses") or [] if c.get("name") in sidecars]
+
+
 def oom_killed(pods, since):
     """The containers the kernel killed for memory at or after `since` (their last or present termination OOMKilled),
     as <namespace>/<pod>/<container> at <time>."""
     out = []
     for p in pods["items"]:
-        for c in (p.get("status") or {}).get("containerStatuses") or []:
+        st = p.get("status") or {}
+        for c in (st.get("containerStatuses") or []) + (st.get("initContainerStatuses") or []):
             for state in (c.get("lastState") or {}, c.get("state") or {}):
                 t = state.get("terminated") or {}
                 if t.get("reason") == "OOMKilled" and t.get("finishedAt") and iso(t["finishedAt"]) >= since:
@@ -288,8 +298,8 @@ def oom_killed(pods, since):
     return sorted(set(out))
 
 
-def ready_now(status):
-    containers = status.get("containerStatuses") or []
+def ready_now(pod):
+    status, containers = pod.get("status") or {}, running_statuses(pod)
     return status.get("phase") == "Running" and containers and all(c.get("ready") for c in containers)
 
 
@@ -310,7 +320,7 @@ def pod_state(pod, now=None, quiet=0, replaced=frozenset(), since=None, complete
     in `replaced`) is no pod to wait for - one whose owner never replaced it is; a failed attempt of a Job a later
     attempt completed (its key in `completed`) is none either, nor a failed run of a CronJob in `failing`."""
     status = pod.get("status") or {}
-    containers = status.get("containerStatuses") or []
+    containers = running_statuses(pod)
     restarts = sum(c.get("restartCount", 0) for c in containers)
     if status.get("phase") == "Succeeded":
         return True, restarts, ""
@@ -319,7 +329,7 @@ def pod_state(pod, now=None, quiet=0, replaced=frozenset(), since=None, complete
         return (True, restarts, "") if key in replaced else (False, restarts, "node-shutdown leftover, not replaced")
     if status.get("phase") == "Failed" and (owner_key(pod) in completed or failing_run(pod, failing)):
         return True, restarts, ""
-    if not ready_now(status):
+    if not ready_now(pod):
         return False, restarts, status.get("phase", "?")
     latest = last_restart(containers)
     if latest is not None:
@@ -351,7 +361,7 @@ def evaluate(apps, pods, allowed, mirror, now=None, quiet=0, expected=None, extr
             if not (extra and re.search(extra, name)):
                 problems.setdefault(name, []).append("not expected")
     not_ready, restarts = [], {}
-    replaced = {owner_key(p) for p in pods["items"] if ready_now(p.get("status") or {})} - {None}
+    replaced = {owner_key(p) for p in pods["items"] if ready_now(p)} - {None}
     completed = {k for p in pods["items"] if (p.get("status") or {}).get("phase") == "Succeeded"
                  and (k := owner_key(p)) is not None and k[1] == "Job"}
     for pod in pods["items"]:
@@ -387,7 +397,7 @@ def restart_history(path, step, pods, expected=False):
         owner = owner_key(pod)
         key = "/".join(owner) if owner else meta["uid"]
         name = f"{owner[0]}/{owner[2]}" if owner else f"{meta['namespace']}/{meta['name']}"
-        count = sum(c.get("restartCount", 0) for c in (pod.get("status") or {}).get("containerStatuses") or [])
+        count = sum(c.get("restartCount", 0) for c in running_statuses(pod))
         rec = old_pods.get(meta["uid"]) or {}
         # the workload's restart steps so far: its own record, else (an earlier file) its pod's by uid
         before = work.get(key, {}).get("restart_steps") or old_work.get(key, {}).get("restart_steps") or list(

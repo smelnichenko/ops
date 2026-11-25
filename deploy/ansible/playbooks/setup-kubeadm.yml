@@ -66,9 +66,9 @@
     # renovate: datasource=helm depName=strimzi-kafka-operator registryUrl=https://strimzi.io/charts/
     strimzi_chart_version: "1.2.0"
     # renovate: datasource=helm depName=scylla-operator registryUrl=https://scylla-operator-charts.storage.googleapis.com/stable
-    scylla_operator_chart_version: "v1.22.0"
+    scylla_operator_chart_version: "v1.22.1"
     # renovate: datasource=helm depName=scylla-manager registryUrl=https://scylla-operator-charts.storage.googleapis.com/stable
-    scylla_manager_chart_version: "v1.22.0"
+    scylla_manager_chart_version: "v1.22.1"
     # renovate: datasource=git-tags depName=https://github.com/kubernetes-sigs/gateway-api versioning=semver
     gateway_api_version: "v1.6.3"
     # its standard-install.yaml - TLS alone, Gateway API signs no release (scripts/renovate-checksums.py - moved with the
@@ -128,7 +128,7 @@
       # its new features (rendered 2026-10-04)
       upgradeCompatibility: "1.19"
     # renovate: datasource=helm depName=istiod registryUrl=https://blob.istio.io/istio-release/charts
-    istio_version: "1.31.1"
+    istio_version: "1.31.4"
     data_dir: "/mnt/storage"
 
   tasks:

@@ -1,7 +1,12 @@
 ---
 # Restart every workload whose pods run an Istio sidecar older than the control plane, so the data plane catches up
 # after an in-place istiod upgrade. Istio allows the control plane only ONE minor ahead of the sidecars, so each
-# in-place minor upgrade needs this before the next one.
+# in-place minor upgrade needs this before the next one. And every one whose sidecar is of the other mode than istiod
+# injects now - a classic container where istiod injects native sidecars (an init container restarting Always), or the
+# other way round - so a change of istiod's ENABLE_NATIVE_SIDECARS reaches every pod: the mode istiod's (unset: native,
+# Istio's default since 1.27), a pod's own sidecar.istio.io/nativeSidecar annotation deciding for it. A gateway's pod
+# (the proxy its workload: sidecar.istio.io/inject "false", or a Gateway's name label) has no sidecar mode - its
+# version alone judged.
 #
 # Each kind is restarted the way its owner restarts it:
 #   Deployment, StatefulSet, DaemonSet  `kubectl rollout restart` (the gateway too: istiod made it, but it is a
@@ -11,14 +16,16 @@
 #   StrimziPodSet                       strimzi.io/manual-rolling-update=true - the operator rolls the pods;
 #   Job                                 left alone: it finishes on its own sidecar.
 # A pod with an old sidecar and any other owner fails the run (nothing here would restart it). The data tier goes
-# first (CNPG clusters, Strimzi pod sets, StatefulSets) and is waited for - on the new sidecar and ready again (a
-# StatefulSet's replicas ready and updated, a CNPG cluster healthy, a pod set's pods ready) - then the rest: the apps
-# come back to a database that is up, not all at once (production has one Kafka broker, one ClickHouse, one ScyllaDB node). Then it
-# waits until every running pod's istio-proxy runs the target version. kagent's pods are restarted like any other:
+# first, ONE workload at a time (CNPG clusters, then Strimzi pod sets, then StatefulSets), each waited for - on the new
+# sidecar and ready again (a StatefulSet's replicas ready and updated, a CNPG cluster healthy, a pod set's pods ready) -
+# before the next; then the rest, each Deployment and DaemonSet rolled out: the apps come back to a database that is
+# up, not all at once (production has one Kafka broker, one ClickHouse, one ScyllaDB node). Then it waits until every
+# running pod's istio-proxy runs the target version, in its mode. kagent's pods are restarted like any other:
 # the skew rule allows no older sidecar (operator, 2026-10-04).
 #
-# Usage: task deploy:mesh:restart -- <-e vars>   (production; the copy first: task test:copy:playbook
-#        PLAYBOOK=restart-mesh-workloads.yml)
+# Usage: task deploy:mesh:restart -- -e istio_version=<X.Y.Z> [-e sidecar_mode=native|classic]   (production; the
+#        copy first: task test:copy:playbook PLAYBOOK=restart-mesh-workloads.yml ARGS='-e ...'). sidecar_mode after a
+#        switch of ENABLE_NATIVE_SIDECARS: the run refused unless istiod injects that mode already.
 - name: Bring every sidecar to the control plane's version
   hosts: target
   become: true
@@ -27,10 +34,15 @@
     kubeconfig: /etc/kubernetes/admin.conf
     kubectl: "kubectl --kubeconfig {{ kubeconfig }}"
     target: "{{ istio_version | default('') }}"
-    # every pod (Pending or Running; not a finished Job's) with an istio-proxy older than the target, and its owner
+    # the data tier's reads, each workload: 60 x 20 s (CNPG rolls its instances one by one, a smart shutdown each)
+    data_tries: 60
+    data_delay: 20
+    # every pod (Pending or Running; not a finished Job's) with an istio-proxy older than the target, or of the other mode
+    # than the one it is to have (NATIVE: istiod's; its own annotation first), and its owner
     stale_script: |
       import json, os, sys
       target = os.environ["TARGET"]
+      native = os.environ["NATIVE"] == "true"
       items = json.load(sys.stdin)["items"]
       rs_owner = {(i["metadata"]["namespace"], i["metadata"]["name"]): (i["metadata"].get("ownerReferences") or [{}])[0]
                   for i in items if i["kind"] == "ReplicaSet"}
@@ -40,7 +52,17 @@
               continue
           proxies = [c["image"] for c in p["spec"].get("containers", []) + p["spec"].get("initContainers", [])
                      if c["name"] == "istio-proxy"]
-          if not proxies or all(i.rsplit(":", 1)[-1] == target for i in proxies):
+          if not proxies:
+              continue
+          is_native = any(c["name"] == "istio-proxy" and c.get("restartPolicy") == "Always"
+                          for c in p["spec"].get("initContainers", []))
+          # Istio's own rule (its injection template): the annotation set, native unless it is exactly "false"
+          own = (p["metadata"].get("annotations") or {}).get("sidecar.istio.io/nativeSidecar") or ""
+          want = own != "false" if own else native
+          labels = p["metadata"].get("labels") or {}
+          gateway = (labels.get("sidecar.istio.io/inject") == "false" or "gateway.networking.k8s.io/gateway-name" in labels
+                     or "istio.io/gateway-name" in labels)
+          if all(i.rsplit(":", 1)[-1] == target for i in proxies) and (gateway or is_native == want):
               continue
           ns = p["metadata"]["namespace"]
           o = (p["metadata"].get("ownerReferences") or [{"kind": "none", "name": p["metadata"]["name"]}])[0]
@@ -84,11 +106,39 @@
       delay: 15
       until: _cni.rc == 0 and _cni.stdout.endswith(':' ~ target)
 
-    - name: The workloads behind pods with an older sidecar
+    # the mode istiod injects: its ENABLE_NATIVE_SIDECARS - unset, Istio's default (native since 1.27)
+    - name: The sidecar mode istiod injects (native or classic)
+      check_mode: false
+      ansible.builtin.command: >-
+        {{ kubectl }} -n istio-system get deployment istiod
+        -o 'jsonpath={.spec.template.spec.containers[0].env[?(@.name=="ENABLE_NATIVE_SIDECARS")].value}'
+      register: _native_env
+      changed_when: false
+
+    - name: The mode, read
+      ansible.builtin.set_fact:
+        _native: >-
+          {{ 'false' if (_native_env.stdout | trim | lower) == 'false' else 'true' if (_native_env.stdout | trim | lower) == 'true'
+             else ('true' if target is version('1.27.0', '>=') else 'false') }}
+
+    # -e sidecar_mode=native|classic: the mode this run is for, when a switch of it is what the run follows - asserted
+    # to be istiod's (run before Argo synced istiod's change, every pod would read "in its mode": nothing restarted, green)
+    - name: The mode the run is for, when named, is the one istiod injects
+      ansible.builtin.assert:
+        that:
+          - sidecar_mode in ['native', 'classic']
+          - (sidecar_mode == 'native') == (_native == 'true')
+        fail_msg: >-
+          -e sidecar_mode={{ sidecar_mode }}: istiod injects {{ 'native' if _native == 'true' else 'classic' }} sidecars
+          (ENABLE_NATIVE_SIDECARS '{{ _native_env.stdout }}') - wait until Argo synced istiod's change and it rolled out
+        quiet: true
+      when: sidecar_mode is defined
+
+    - name: The workloads behind pods with an older sidecar, or one of the other mode
       check_mode: false
       ansible.builtin.shell: |
         set -euo pipefail
-        {{ kubectl }} get pods,replicasets -A -o json | TARGET='{{ target }}' python3 -c "$SCRIPT"
+        {{ kubectl }} get pods,replicasets -A -o json | TARGET='{{ target }}' NATIVE='{{ _native }}' python3 -c "$SCRIPT"
       args:
         executable: /bin/bash
       environment:
@@ -102,73 +152,62 @@
               | list | length == 0
         fail_msg: "no restart for: {{ _stale.stdout_lines | reject('match', '^(Deployment|StatefulSet|DaemonSet|Cluster|StrimziPodSet|Job) ') | list }}"
 
-    - name: Restart the data tier first (CNPG clusters, Strimzi pod sets, StatefulSets)
-      ansible.builtin.command: >-
-        {% set kind, ns, name = item.split() %}
-        {% if kind == 'StatefulSet' %}
-        {{ kubectl }} -n {{ ns }} rollout restart statefulset/{{ name }}
-        {% elif kind == 'Cluster' %}
-        {{ kubectl }} -n {{ ns }} annotate clusters.postgresql.cnpg.io {{ name }}
-        kubectl.kubernetes.io/restartedAt={{ now(utc=true).strftime('%Y-%m-%dT%H:%M:%SZ') }} --overwrite
-        {% else %}
-        {{ kubectl }} -n {{ ns }} annotate strimzipodsets.core.strimzi.io {{ name }} strimzi.io/manual-rolling-update=true --overwrite
-        {% endif %}
-      loop: "{{ _stale.stdout_lines | select('match', '^(Cluster|StrimziPodSet|StatefulSet) ') | list }}"
-      changed_when: true
-
-    - name: The data tier's sidecars are the target version (CNPG and Strimzi roll one pod at a time)
-      when: not ansible_check_mode
-      ansible.builtin.shell: |
-        set -euo pipefail
-        {{ kubectl }} get pods,replicasets -A -o json | TARGET='{{ target }}' python3 -c "$SCRIPT" \
-          | { grep -E '^(Cluster|StrimziPodSet|StatefulSet) ' || [ $? -eq 1 ]; }
-      args:
-        executable: /bin/bash
-      environment:
-        SCRIPT: "{{ stale_script }}"
-      register: _data_left
-      changed_when: false
-      retries: 60
-      delay: 20
-      until: _data_left.rc == 0 and _data_left.stdout | length == 0
-
-    # a pod on the new sidecar is not yet one that serves: the data tier ready again before the apps restart onto it
-    # ("<kind> <namespace>/<name> not ready yet" per workload still coming back)
-    - name: The data tier ready again (StatefulSets ready and updated, CNPG clusters healthy, Strimzi pod sets ready)
+    # The data tier one workload at a time - restarted, then on the new sidecar AND ready again, before the next (never
+    # Kafka down beside Postgres: a producer's delivery timeout outlasts one restart, not two at once): CNPG's clusters,
+    # Strimzi's pod sets, then the StatefulSets. CNPG rolls its replicas, then restarts its primary IN PLACE (its
+    # primaryUpdateMethod: restart, CNPG's default): the primary's writes stop until it is back. A pod on the new sidecar
+    # is not yet one that serves - each kind's readiness read ("not back after N reads" stops the run before the apps).
+    - name: Restart the data tier one workload at a time (CNPG clusters, Strimzi pod sets, StatefulSets), each back before the next
       when: not ansible_check_mode
       ansible.builtin.shell:
         executable: /bin/bash
         cmd: |
           set -euo pipefail
-          while read -r kind ns name; do
-            [ -n "$kind" ] || continue
-            case $kind in
-              StatefulSet) r=$({{ kubectl }} -n "$ns" get statefulset "$name" -o json | python3 -c '
+          ready() {  # <kind> <ns> <name>: True once it serves again
+            case $1 in
+              StatefulSet) {{ kubectl }} -n "$2" get statefulset "$3" -o json | python3 -c '
           import json, sys
           s = json.load(sys.stdin)
           st, n = s.get("status", {}), s["spec"].get("replicas", 1)
           print(st.get("readyReplicas", 0) == n and st.get("updatedReplicas", 0) == n
-                and st.get("currentRevision") == st.get("updateRevision"))') ;;
-              Cluster) r=$({{ kubectl }} -n "$ns" get clusters.postgresql.cnpg.io "$name" -o json | python3 -c '
+                and st.get("currentRevision") == st.get("updateRevision"))' ;;
+              Cluster) {{ kubectl }} -n "$2" get clusters.postgresql.cnpg.io "$3" -o json | python3 -c '
           import json, sys
           c = json.load(sys.stdin)
           print(c.get("status", {}).get("phase") == "Cluster in healthy state"
-                and c.get("status", {}).get("readyInstances") == c["spec"]["instances"])') ;;
-              StrimziPodSet) r=$({{ kubectl }} -n "$ns" get strimzipodsets.core.strimzi.io "$name" -o json | python3 -c '
+                and c.get("status", {}).get("readyInstances") == c["spec"]["instances"])' ;;
+              StrimziPodSet) {{ kubectl }} -n "$2" get strimzipodsets.core.strimzi.io "$3" -o json | python3 -c '
           import json, sys
           st = json.load(sys.stdin).get("status", {})
-          print(st.get("pods", 0) > 0 and st.get("readyPods") == st.get("pods"))') ;;
-              *) r=False ;;
+          print(st.get("pods", 0) > 0 and st.get("readyPods") == st.get("pods"))' ;;
+              *) echo False ;;
             esac
-            [ "$r" = True ] || echo "$kind $ns/$name not ready yet"
+          }
+          while read -r kind ns name; do
+            [ -n "$kind" ] || continue
+            case $kind in
+              StatefulSet) {{ kubectl }} -n "$ns" rollout restart "statefulset/$name" ;;
+              Cluster) {{ kubectl }} -n "$ns" annotate clusters.postgresql.cnpg.io "$name" \
+                "kubectl.kubernetes.io/restartedAt=$(date -u +%Y-%m-%dT%H:%M:%SZ)" --overwrite ;;
+              StrimziPodSet) {{ kubectl }} -n "$ns" annotate strimzipodsets.core.strimzi.io "$name" strimzi.io/manual-rolling-update=true --overwrite ;;
+            esac
+            n=0
+            while :; do
+              n=$((n + 1))
+              left=$({{ kubectl }} get pods,replicasets -A -o json | TARGET='{{ target }}' NATIVE='{{ _native }}' python3 -c "$SCRIPT")
+              if ! grep -qx "$kind $ns $name" <<< "$left" && [ "$(ready "$kind" "$ns" "$name")" = True ]; then break; fi
+              [ "$n" -lt {{ data_tries }} ] || { echo "$kind $ns/$name not back after $n reads - the apps not restarted"; exit 1; }
+              sleep {{ data_delay }}
+            done
+            echo "$kind $ns/$name back (the new sidecar, ready) after $n reads"
           done <<< "$DATA"
       environment:
-        DATA: "{{ _stale.stdout_lines | select('match', '^(Cluster|StrimziPodSet|StatefulSet) ') | join('\n') }}"
-      register: _data_ready
-      changed_when: false
-      retries: 60
-      delay: 20
-      until: _data_ready.rc == 0 and _data_ready.stdout | length == 0
+        SCRIPT: "{{ stale_script }}"
+        # a double-quoted scalar: YAML makes its \n a newline (a folded one passes the two characters on)
+        DATA: "{{ ((_stale.stdout_lines | select('match', '^Cluster ') | list) + (_stale.stdout_lines | select('match', '^StrimziPodSet ') | list)
+          + (_stale.stdout_lines | select('match', '^StatefulSet ') | list)) | join('\n') }}"
+      register: _data
+      changed_when: _data.stdout | length > 0
 
     - name: Then the rest (Deployments, DaemonSets)
       ansible.builtin.command: >-
@@ -177,11 +216,21 @@
       loop: "{{ _stale.stdout_lines | select('match', '^(Deployment|DaemonSet) ') | list }}"
       changed_when: true
 
+    # a restarted Deployment or DaemonSet rolled out - its new pods ready (a Recreate one's pod stuck in Init has the
+    # right sidecar already: the version read alone would call it caught up)
+    - name: Each restarted Deployment and DaemonSet rolled out
+      when: not ansible_check_mode
+      ansible.builtin.command: >-
+        {% set kind, ns, name = item.split() %}
+        {{ kubectl }} -n {{ ns }} rollout status {{ kind | lower }}/{{ name }} --timeout=600s
+      loop: "{{ _stale.stdout_lines | select('match', '^(Deployment|DaemonSet) ') | list }}"
+      changed_when: false
+
     - name: Every running sidecar is the target version (CNPG and Strimzi roll one pod at a time)
       when: not ansible_check_mode
       ansible.builtin.shell: |
         set -euo pipefail
-        {{ kubectl }} get pods,replicasets -A -o json | TARGET='{{ target }}' python3 -c "$SCRIPT" \
+        {{ kubectl }} get pods,replicasets -A -o json | TARGET='{{ target }}' NATIVE='{{ _native }}' python3 -c "$SCRIPT" \
           | { grep -v '^Job ' || [ $? -eq 1 ]; }
       args:
         executable: /bin/bash
@@ -195,4 +244,7 @@
 
     - name: Data plane caught up
       ansible.builtin.debug:
-        msg: "SIDECARS AT {{ target }}: restarted {{ _stale.stdout_lines | reject('match', '^Job ') | list | length }} workloads"
+        msg: >-
+          SIDECARS AT {{ target }}, {{ 'native' if _native == 'true' else 'classic' }}:
+          restarted {{ _stale.stdout_lines | reject('match', '^Job ') | list | length }} workloads;
+          Jobs left to finish on their own sidecar: {{ _stale.stdout_lines | select('match', '^Job ') | list }}

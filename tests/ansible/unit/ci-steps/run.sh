@@ -27,6 +27,18 @@ if prom:
 foreign = [(s.get("name"), s.get("image")) for s in steps if s.get("image") and not s["image"].startswith("git.pmon.dev/")]
 check("every image not this org's own pinned by its digest",
       [x for x in foreign if not re.search(r"@sha256:[0-9a-f]{64}$", x[1])], [])
+# the docs filter: documents alone run nothing, an upgrade's record does (the commit ops' CI judges after a unit: its
+# merge commit skips CI, a record of docs alone skipped too would leave main unjudged)
+def glob_re(pat):  # Woodpecker's globs (doublestar): ** crosses directories, * and ? never a /
+    return re.compile("^" + re.escape(pat).replace(r"\*\*", "\0").replace(r"\*", "[^/]*").replace(r"\?", "[^/]")
+                      .replace("\0", ".*") + "$")
+def skipped(path, event):
+    w = next((x for x in ci["when"] if x.get("event") == event), {})
+    return any(glob_re(pat).match(path) for pat in ((w.get("path") or {}).get("exclude") or []))
+check("the docs filter: a plan, a runbook, a research note, docs/README.md skipped on push; an upgrade's record not",
+      [skipped(f, "push") for f in ("docs/plans/125-copy-snapshot.md", "docs/runbooks/x.md", "docs/research/y.md",
+                                    "docs/README.md", "docs/upgrades/2026-11-18-wave-patches.md", "scripts/x.sh")],
+      [True, True, True, True, False, False])
 print("ci-steps: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 PYCI

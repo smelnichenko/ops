@@ -1,0 +1,12 @@
+---
+# The model files setup-nexus.yml's models repository holds (tasks/nexus-models.yml uploads each once), and each
+# file's sha256 - read from the file InsightFace's release serves, over TLS alone: InsightFace signs no release
+# (scripts/renovate-checksums.py verifies it). masi's image and its Gradle faceModels fetch buffalo_l from here first,
+# GitHub second; masi's Dockerfile pins the same sha256 (BUFFALO_L_SHA256). No Renovate rule: a model release is moved
+# with masi's face lane, by hand, both pins together.
+insightface_version: "0.7"
+insightface_buffalo_l_sha256: 80ffe37d8a5940d59a7384c201a2a38d4741f2f3c51eef46ebb28218a7b0ca2f
+nexus_model_files:
+  - path: "insightface/v{{ insightface_version }}/buffalo_l.zip"
+    url: "https://github.com/deepinsight/insightface/releases/download/v{{ insightface_version }}/buffalo_l.zip"
+    sha256: "{{ insightface_buffalo_l_sha256 }}"

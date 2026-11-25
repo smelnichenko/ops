@@ -92,15 +92,25 @@
           PY
           )
           if [ "$new" = "$cf" ]; then echo unchanged; exit 0; fi
+          # what changed - a copy reverted to its snapshot finds its own blocks there already, so a change after a
+          # revert says what differs (2026-11-19: one changed, then CoreDNS did not roll out in 180 s)
+          diff <(echo "$cf") <(echo "$new") | sed 's/^/corefile: /' || true
           {{ kubectl }} -n kube-system create cm coredns --from-literal=Corefile="$new" --dry-run=client -o yaml \
             | {{ kubectl }} apply -f - > /dev/null
           {{ kubectl }} -n kube-system rollout restart deployment coredns > /dev/null
-          {{ kubectl }} -n kube-system rollout status deployment coredns --timeout=180s > /dev/null
+          if ! {{ kubectl }} -n kube-system rollout status deployment coredns --timeout=180s > /dev/null; then
+            # why, while the copy is still up: its pods, their events, the nodes
+            echo "CoreDNS not rolled out 180 s after its restart:"
+            {{ kubectl }} -n kube-system get pods -l k8s-app=kube-dns -o wide || true
+            {{ kubectl }} -n kube-system describe pods -l k8s-app=kube-dns | sed -n '/^Events:/,/^Name:/p' | tail -40 || true
+            {{ kubectl }} get nodes -o wide || true
+            exit 1
+          fi
           echo changed
       vars:
         vagrant_gateway: "{{ ansible_host }}"
       register: _dns
-      changed_when: "'changed' in _dns.stdout"
+      changed_when: (_dns.stdout_lines | last | default('')) == 'changed'
 
     # the rewrite is proven by what the cluster's DNS answers, not by the ConfigMap: a Pi-served name -> the Vagrant
     # Pi VIP, any other pmon.dev name and the apex -> this node, never a production address
@@ -230,6 +240,19 @@
         or _node_probe.stdout_lines | select('eq', 'public-blocked') | list | length != production_public | length
         or 'vagrant-reachable' not in _node_probe.stdout_lines
 
+    # the probe's image: one production runs with a real curl in it (num_connects and exit 28 tell a dropped SYN), the
+    # stale PR sweeper's alpine/k8s - a CronJob, so production's inventory always lists it and the copy holds it (this
+    # runs before Argo has synced the sweeper here). A pinned curlimages/curl stayed behind production's (its only users
+    # are hook Jobs, no object to read it from; Renovate reads nothing under tests/)
+    - name: The probe's image - alpine/k8s as production's inventory has it
+      tags: [proof]
+      ansible.builtin.set_fact:
+        probe_image: "alpine/k8s:{{ _k8s | first }}"
+      vars:
+        _k8s: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/prod-inventory.txt').splitlines()
+                  | select('match', '^image alpine/k8s [0-9]') | map('regex_replace', '^image alpine/k8s ', '') | list }}"
+      failed_when: _k8s | length != 1
+
     - name: Prove it - a pod cannot reach production's VIP nor its public addresses, and can reach the Vagrant VIP
       tags: [proof]
       ansible.builtin.shell: |
@@ -241,7 +264,7 @@
         {{ kubectl }} create namespace isolation-probe --dry-run=client -o yaml | {{ kubectl }} apply -f - > /dev/null
         if [ "$({{ kubectl }} get pod isolation-probe $N -o jsonpath='{.status.phase}' 2> /dev/null)" != Running ]; then
           {{ kubectl }} delete pod isolation-probe $N --ignore-not-found --wait=true > /dev/null
-          {{ kubectl }} run isolation-probe $N --restart=Never --image=curlimages/curl:8.12.1 \
+          {{ kubectl }} run isolation-probe $N --restart=Never --image={{ probe_image }} \
             --overrides='{"metadata":{"labels":{"sidecar.istio.io/inject":"false"}}}' --command -- sleep 2147483647 > /dev/null
           {{ kubectl }} wait pod/isolation-probe $N --for=condition=Ready --timeout=120s > /dev/null
         fi

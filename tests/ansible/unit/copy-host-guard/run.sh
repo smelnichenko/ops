@@ -169,6 +169,17 @@ printf 'config.vm.define "a" do |a|\n  # v.memory = 99999\n  v.memory = 1024\nen
 COPY_VAGRANTFILE="$W/odd/Vagrantfile" guard vagrant up; rc=$?
 check "a commented v.memory not read" "$rc $(grep -c '(a 1024 MB) + 0 MB the running ones may still take + 2048 MB kept' <<< "$out")" "0 1"
 stop_watcher
+# the memory a variable sets (VAGRANT_PI_MEMORY, test:nexus's 4 GB Pis): read as the Vagrantfile reads it - its default
+# unset, the variable set; a value that is no number of MB no v.memory (refused, as Vagrant itself would fail)
+printf 'config.vm.define "a" do |a|\n  v.memory = Integer(ENV.fetch("VAGRANT_A_MEMORY", "1024"))\nend\n' > "$W/odd/Vagrantfile"
+COPY_VAGRANTFILE="$W/odd/Vagrantfile" guard vagrant up; rc=$?
+check "a v.memory from a variable: its default when it is unset" "$rc $(grep -c '(a 1024 MB) + 0 MB the running ones may still take' <<< "$out")" "0 1"
+stop_watcher
+VAGRANT_A_MEMORY=3072 COPY_VAGRANTFILE="$W/odd/Vagrantfile" guard vagrant up; rc=$?
+check "  the variable set: its value (a test's bigger VM sized as it starts)" "$rc $(grep -c '(a 3072 MB) + 0 MB the running ones may still take' <<< "$out")" "0 1"
+stop_watcher
+VAGRANT_A_MEMORY=lots COPY_VAGRANTFILE="$W/odd/Vagrantfile" guard vagrant up; rc=$?
+check "  the variable no number: refused (no v.memory to size)" "$rc $(grep -c 'without a v.memory' <<< "$out")" "1 1"
 printf 'config.vm.define "a" do |a|\n  v.memory = 1024\nend\nconfig.vm.define "b" do |b|\nend\n' > "$W/odd/Vagrantfile"
 COPY_VAGRANTFILE="$W/odd/Vagrantfile" guard vagrant up; rc=$?
 check "a VM without a v.memory: refused (it could not be counted nor powered off)" "$rc $(grep -c 'without a v.memory' <<< "$out")" "1 1"
@@ -254,6 +265,17 @@ bash scripts/copy-host-guard.sh watch > "$W/w2.out" 2>&1 & w2=$!
 wait "$w1" "$w2"
 loops=$(for e in /proc/[0-9]*/environ; do { tr '\0' '\n' < "$e"; } 2> /dev/null | grep -qxF "COPY_HOST_DIR=$COPY_HOST_DIR" && grep -q '_loop' "${e%environ}cmdline" 2> /dev/null && echo x; done | wc -l)
 check "two watch calls at once: one watcher, the other says it watches" "$loops $(cat "$W/w1.out" "$W/w2.out" | grep -c 'watches already')" "1 1"
+stop_watcher
+# a watcher slow to start (a loaded host: 6 s): its caller waits for it by the clock - never "did not start" - and the
+# second caller finds it watching, one watcher
+fresh 9000 ops_kubeadm
+COPY_HOST_LOOP_DELAY=6 bash scripts/copy-host-guard.sh watch > "$W/w1.out" 2>&1 & w1=$!
+sleep 1
+bash scripts/copy-host-guard.sh watch > "$W/w2.out" 2>&1 & w2=$!
+wait "$w1"; r1=$?; wait "$w2"
+loops=$(for e in /proc/[0-9]*/environ; do { tr '\0' '\n' < "$e"; } 2> /dev/null | grep -qxF "COPY_HOST_DIR=$COPY_HOST_DIR" && grep -q '_loop' "${e%environ}cmdline" 2> /dev/null && echo x; done | wc -l)
+check "a watcher 6 s slow to start: its caller waited (rc 0, no REFUSED), the other found it, one watcher" \
+  "$r1 $(grep -c REFUSED "$W/w1.out") $(grep -c 'watches already' "$W/w2.out") $loops" "0 0 1 1"
 p=$(watcher)
 read -r st < "/proc/$p/stat"; st=${st##*) }; set -- $st; loop_sid=$4   # after the name: state ppid pgrp session
 read -r st < "/proc/$$/stat"; st=${st##*) }; set -- $st; my_sid=$4
@@ -280,7 +302,9 @@ COPY_HOST_GRACE=10 guard watch; rc=$?
 clock 111; c=$(polls); wait_for 10 polls_ge $((c + 4))
 check "a watch while it is quiet (a vagrant up after a destroy): it says it watches, and the grace starts again" \
   "$rc $(grep -c 'watches already' <<< "$out") $(pid_on "$p" && echo on)" "0 1 on"
-echo ops_kubeadm > "$STUB/active"; clock 130; c=$(polls); wait_for 10 polls_ge $((c + 4))
+# the VMs back seen by the watcher before the clock moves: a poll reading the empty active file, then the moved clock,
+# was a whole grace with no VM - it ended (CI, 2026-11-19: "got '  <pid>', want 'on <pid>'")
+echo ops_kubeadm > "$STUB/active"; c=$(polls); wait_for 10 polls_ge $((c + 2)); clock 130; c=$(polls); wait_for 10 polls_ge $((c + 4))
 check "  the VMs back: still the same watcher, watching" "$(pid_on "$p" && echo on) $(watcher)" "on $p"
 : > "$STUB/active"; clock 150; c=$(polls); wait_for 10 polls_ge $((c + 4)); clock 161
 wait_for 10 pid_off "$p"; gone=$?

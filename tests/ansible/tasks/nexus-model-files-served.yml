@@ -1,0 +1,28 @@
+---
+# Each file setup-nexus.yml's models repository holds, fetched through the VIP as
+# a build fetches it - no credentials - and checked against the sha256 the
+# playbook pins.
+# Expects: nexus_model_files (deploy/ansible/vars/nexus-models.yml), keepalived_vip
+# (or the Vagrant default).
+
+- name: A private directory for the fetched files
+  ansible.builtin.tempfile:
+    state: directory
+    suffix: .models-served
+  register: _served_tmp
+
+# get_url sends no credentials here: an anonymous read refused fails this, as it would fail the build
+- name: Fetch each model file via the VIP (checksummed)
+  ansible.builtin.get_url:
+    url: "http://{{ keepalived_vip | default('192.168.56.50') }}:8081/repository/models/{{ item.path }}"
+    dest: "{{ _served_tmp.path }}/{{ item.path | basename }}"
+    checksum: "sha256:{{ item.sha256 }}"
+    mode: "0600"
+    timeout: 300
+  loop: "{{ nexus_model_files }}"
+  loop_control: { label: "{{ item.path }}" }
+
+- name: Remove the fetched files
+  ansible.builtin.file:
+    path: "{{ _served_tmp.path }}"
+    state: absent

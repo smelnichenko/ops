@@ -4,11 +4,12 @@
     "The upgrade cycle's shared preset (ops docs/plans/120-automated-upgrade-cycle.md): Renovate finds the upgrades and",
     "opens one branch per unit, the same name in infra, platform and ops; the cycle proves a unit on the Vagrant copy",
     "(task test:copy:unit UNIT=<it>) and applies it - Renovate never merges. Units (scripts/upgrade-units.py reads these",
-    "names): renovate/wave-patches (every patch); renovate/<family>-<X.Y> for the families moved one minor at a time",
+    "names): renovate/wave-patches (every patch and digest, and every minor not a family's or a store's - operator 2026-11-23: one unit, not one each); renovate/<family>-<X.Y> for the families moved one minor at a time",
     "(istio, kubernetes, cilium); renovate/<family> for the other families' minors (observability, data-operators, argocd,",
-    "pi-services); each other minor and every major on a branch of its own (Renovate's own name). Label one-way: a change",
-    "whose stores have no backup path in the cycle yet - the runner leaves it for the operator.",
+    "pi-services); every major that can be undone on renovate/wave-majors (its newest only); a store's and a release line's major on a branch of its own (Renovate's own name). Label one-way: a change",
+    "its store cannot undo - the runner backs the store up first (scripts/upgrade-stores.json), or blocks it, naming the part with none.",
     "A test environment's files: renovate/test-<unit>, merged before its production twin.",
+    "Every update waits on the dashboard for approval (operator 2026-11-24: dozens of open pull requests were noise): the runner ticks the one unit it would pick next (scripts/upgrade-units.py replenish) and runs Renovate again, so only the unit being worked on exists as pull requests. Pull requests opened before keep going until merged.",
     "Renovate rebases a branch only on a conflict (rebaseWhen conflicted): infra's main moves many times a day by CD, and a rebase of every branch at every run was a queue of CI builds ahead of the apps' deploys - the cycle brings the one unit it picks onto main itself (Forgejo's update). No cap on pull requests: a cap per repo split one unit across the repos."
   ],
   "extends": [
@@ -17,7 +18,7 @@
   ],
   "dependencyDashboardTitle": "Upgrade cycle - Renovate's dashboard (label upgrades-paused: the cycle stops)",
   "automerge": false,
-  "dependencyDashboardApproval": false,
+  "dependencyDashboardApproval": true,
   "minimumReleaseAge": "3 days",
   "minimumReleaseAgeBehaviour": "timestamp-optional",
   "internalChecksFilter": "strict",
@@ -27,6 +28,7 @@
   "rebaseWhen": "conflicted",
   "prConcurrentLimit": 0,
   "prHourlyLimit": 0,
+  "prBodyTemplate": "{{{table}}}{{{warnings}}}{{{changelogs}}}",
   "branchConcurrentLimit": 0,
   "branchPrefix": "renovate/",
   "labels": [
@@ -63,13 +65,13 @@
     },
     {
       "customType": "regex",
-      "description": "Images written as one string in values and manifests (image: repo:tag, CNPG's imageName: repo:tag@digest)",
+      "description": "Images written as one string in values and manifests (image: repo:tag, CNPG's imageName: repo:tag@digest, a key named <x>Image - platform's rcloneImage, CNPG's ephemeralImage: missed until 2026-11-18, rclone 1.71.2 stood still)",
       "managerFilePatterns": [
         "/^clusters/.+\\.ya?ml$/",
         "/^helm/.+\\.ya?ml$/"
       ],
       "matchStrings": [
-        "(?:image|imageName):\\s*\"?(?<depName>[a-z0-9][a-z0-9._/-]*[a-z0-9]):(?<currentValue>[A-Za-z0-9][A-Za-z0-9._-]*)(?:@(?<currentDigest>sha256:[a-f0-9]{64}))?\"?\\s"
+        "(?:image|imageName|[a-z][A-Za-z0-9]*Image):\\s*\"?(?<depName>[a-z0-9][a-z0-9._/-]*[a-z0-9]):(?<currentValue>[A-Za-z0-9][A-Za-z0-9._-]*)(?:@(?<currentDigest>sha256:[a-f0-9]{64}))?\"?\\s"
       ],
       "datasourceTemplate": "docker"
     },
@@ -97,19 +99,19 @@
     },
     {
       "customType": "regex",
-      "description": "Renovate's own image (scripts/upgrade-renovate.sh: image=renovate/renovate:<version>) - nothing watched it: 44.198.3 (2026-10-30) stood while 44.246.4 was out (2026-11-16)",
+      "description": "Renovate's own image (scripts/upgrade-renovate.sh: image=renovate/renovate:<version>) - nothing watched it: 44.198.3 (2026-10-30) stood while 44.246.4 was out (2026-11-16) - pinned by digest too (a Docker Hub tag can move, and this image holds the bot's token: the wave-patches review, 2026-11-23)",
       "managerFilePatterns": [
         "/^scripts/upgrade-renovate\\.sh$/"
       ],
       "matchStrings": [
-        "image=(?<depName>renovate/renovate):(?<currentValue>\\d+\\.\\d+\\.\\d+)"
+        "image=(?<depName>renovate/renovate):(?<currentValue>\\d+\\.\\d+\\.\\d+)@(?<currentDigest>sha256:[a-f0-9]{64})"
       ],
       "datasourceTemplate": "docker"
     }
   ],
   "packageRules": [
     {
-      "description": "First-party images are promoted by GitOps (task promote:prod), never by Renovate",
+      "description": "First-party images are promoted by GitOps (task promote:run), never by Renovate",
       "matchPackageNames": [
         "/^git\\.pmon\\.dev\\//"
       ],
@@ -156,9 +158,36 @@
       "enabled": false
     },
     {
-      "description": "Every patch, every repo: one unit",
+      "description": "Every patch and digest, every repo: one unit",
       "matchUpdateTypes": [
-        "patch"
+        "patch",
+        "digest"
+      ],
+      "groupName": "wave patches",
+      "groupSlug": "wave-patches",
+      "group": {
+        "branchTopic": "wave-patches"
+      }
+    },
+    {
+      "description": "Every minor in the same unit (operator 2026-11-23: a unit each was a week of runs for ~30 minors) - the stores' minors aside (scripts/upgrade-stores.json's packages, each its own unit; the harness checks the two lists alike), and the families below take theirs back: each of them names its branch by group.branchTopic, or this rule's would stay",
+      "matchUpdateTypes": [
+        "minor"
+      ],
+      "matchPackageNames": [
+        "!/(^|\\/)postgresql$/",
+        "!/^(docker\\.io\\/)?scylladb\\/scylla$/",
+        "!/scylladb\\/scylla$/",
+        "!/(^|\\/)kafka$/",
+        "!strimzi-kafka-operator",
+        "!/^quay\\.io\\/strimzi\\//",
+        "!/clickhouse-server$/",
+        "!grafana",
+        "!grafana/grafana",
+        "!/(^|\\/)vault$/",
+        "!/(^|\\/)consul$/",
+        "!sonarqube",
+        "!/(^|\\/)sonarqube$/"
       ],
       "groupName": "wave patches",
       "groupSlug": "wave-patches",
@@ -250,7 +279,10 @@
         "/^quay\\.io\\/prometheus\\//"
       ],
       "groupName": "observability",
-      "groupSlug": "observability"
+      "groupSlug": "observability",
+      "group": {
+        "branchTopic": "observability"
+      }
     },
     {
       "description": "The data operators and their stores' minors (Strimzi with Kafka, the Scylla operator and Manager with ScyllaDB)",
@@ -265,7 +297,10 @@
         "/^(docker\\.io\\/)?scylladb\\//"
       ],
       "groupName": "data operators",
-      "groupSlug": "data-operators"
+      "groupSlug": "data-operators",
+      "group": {
+        "branchTopic": "data-operators"
+      }
     },
     {
       "description": "ScyllaDB's release lines (2026.1 -> 2026.3: a minor by number, one-way by format) - renovate/scylladb-<X.Y>, one at a time, out of the data operators' unit",
@@ -294,7 +329,10 @@
         "/^quay\\.io\\/argoproj\\//"
       ],
       "groupName": "argocd",
-      "groupSlug": "argocd"
+      "groupSlug": "argocd",
+      "group": {
+        "branchTopic": "argocd"
+      }
     },
     {
       "description": "The Pis' services (their upgrade playbooks, one Pi at a time)",
@@ -312,7 +350,10 @@
         "hashicorp/consul"
       ],
       "groupName": "pi services",
-      "groupSlug": "pi-services"
+      "groupSlug": "pi-services",
+      "group": {
+        "branchTopic": "pi-services"
+      }
     },
     {
       "description": "Kubernetes, Cilium, Istio and ScyllaDB's release lines: one minor at a time (each minor its own branch - the families above name it)",
@@ -351,7 +392,7 @@
       "allowedVersions": "/^15\\./"
     },
     {
-      "description": "Majors wait out the operator's 24 h veto notice; one-way ones take their stores' backup first (the cycle)",
+      "description": "Majors: proven, reviewed for compatibility (each step from the version running) and applied like any unit - one major a unit, the lower first (separateMultipleMajor); one-way ones take their stores' backup first (the cycle)",
       "matchUpdateTypes": [
         "major"
       ],
@@ -360,13 +401,86 @@
       ]
     },
     {
-      "description": "One-way majors whose stores have no backup path in the cycle yet (Postgres, ScyllaDB, Kafka and Strimzi, ClickHouse, Grafana, Vault, Consul): label one-way - the runner leaves them for the operator",
+      "description": "The majors that can be undone in one unit, renovate/wave-majors (operator 2026-11-23: a unit each was a day of runs for five) - each package's newest major alone (the next rule), the review judging every step's release notes; a store's major (scripts/upgrade-stores.json's packages: one-way, backed up first) and the release lines' (Kubernetes, Cilium, Istio, the Gateway API, ScyllaDB - the rule naming them above) each a unit of its own; the harness checks this list is those two",
       "matchUpdateTypes": [
         "major"
       ],
       "matchPackageNames": [
-        "postgres",
-        "/(^|\\/)postgres$/",
+        "!/(^|\\/)postgresql$/",
+        "!/^(docker\\.io\\/)?scylladb\\/scylla$/",
+        "!/scylladb\\/scylla$/",
+        "!/(^|\\/)kafka$/",
+        "!strimzi-kafka-operator",
+        "!/^quay\\.io\\/strimzi\\//",
+        "!/clickhouse-server$/",
+        "!grafana",
+        "!grafana/grafana",
+        "!/(^|\\/)vault$/",
+        "!/(^|\\/)consul$/",
+        "!sonarqube",
+        "!/(^|\\/)sonarqube$/",
+        "!registry.k8s.io/kube-apiserver",
+        "!alpine/k8s",
+        "!bitnami/kubectl",
+        "!docker.io/bitnami/kubectl",
+        "!cilium",
+        "!cilium/cilium",
+        "!/^quay\\.io\\/cilium\\//",
+        "!base",
+        "!istiod",
+        "!cni",
+        "!ztunnel",
+        "!gateway",
+        "!/^istio\\//",
+        "!/^docker\\.io\\/istio\\//",
+        "!https://github.com/kubernetes-sigs/gateway-api"
+      ],
+      "groupName": "wave majors",
+      "groupSlug": "wave-majors",
+      "group": {
+        "branchTopic": "wave-majors"
+      }
+    },
+    {
+      "description": "The wave's majors: each package's newest major alone (kube-prometheus-stack 91 -> 93, not 92 then 93) - two majors of one package in one branch collide and Renovate keeps either; the same packages as the rule above (without an update type: Renovate reads this before it knows one)",
+      "matchPackageNames": [
+        "!/(^|\\/)postgresql$/",
+        "!/^(docker\\.io\\/)?scylladb\\/scylla$/",
+        "!/scylladb\\/scylla$/",
+        "!/(^|\\/)kafka$/",
+        "!strimzi-kafka-operator",
+        "!/^quay\\.io\\/strimzi\\//",
+        "!/clickhouse-server$/",
+        "!grafana",
+        "!grafana/grafana",
+        "!/(^|\\/)vault$/",
+        "!/(^|\\/)consul$/",
+        "!sonarqube",
+        "!/(^|\\/)sonarqube$/",
+        "!registry.k8s.io/kube-apiserver",
+        "!alpine/k8s",
+        "!bitnami/kubectl",
+        "!docker.io/bitnami/kubectl",
+        "!cilium",
+        "!cilium/cilium",
+        "!/^quay\\.io\\/cilium\\//",
+        "!base",
+        "!istiod",
+        "!cni",
+        "!ztunnel",
+        "!gateway",
+        "!/^istio\\//",
+        "!/^docker\\.io\\/istio\\//",
+        "!https://github.com/kubernetes-sigs/gateway-api"
+      ],
+      "separateMultipleMajor": false
+    },
+    {
+      "description": "One-way majors (Postgres - the CNPG image ghcr.io/cloudnative-pg/postgresql the databases run; the plain postgres image here is only the init-users Job's psql client and CI services, no store -, ScyllaDB, Kafka and Strimzi, ClickHouse, Grafana, Vault, Consul): label one-way - the runner backs the store up first or blocks the unit, naming the part with no backup (scripts/upgrade-stores.json: each package here a store's there, the harness checks)",
+      "matchUpdateTypes": [
+        "major"
+      ],
+      "matchPackageNames": [
         "/(^|\\/)postgresql$/",
         "/scylladb\\/scylla$/",
         "/(^|\\/)kafka$/",
@@ -378,6 +492,21 @@
         "/(^|\\/)vault$/",
         "/(^|\\/)consul$/"
       ],
+      "addLabels": [
+        "one-way"
+      ]
+    },
+    {
+      "description": "SonarQube: every release migrates its database one way (api/system/migrate_db in the setup hook) - its patches, minors and majors a unit of their own, labelled one-way: the runner backs its CNPG cluster up first (scripts/upgrade-stores.json). It rode in the wave, unproven and with no backup (the wave-patches review, 2026-11-23)",
+      "matchPackageNames": [
+        "sonarqube",
+        "/(^|\\/)sonarqube$/"
+      ],
+      "groupName": "sonarqube",
+      "groupSlug": "sonarqube",
+      "group": {
+        "branchTopic": "sonarqube-{{{newMajor}}}.x"
+      },
       "addLabels": [
         "one-way"
       ]
@@ -420,10 +549,11 @@
       ]
     },
     {
-      "description": "Woodpecker, the CI server (its chart): a unit of its own, renovate/manual-woodpecker - the Vagrant copy runs no Woodpecker, so nothing proves it there and the copy refuses it (SHADOW run 7, 2026-11-16). The runner never picks a manual- unit: applied by hand - infra's pull request merged, then ops' (setup-woodpecker.yml's woodpecker_chart_default moves with it), a pipeline run checked (a bad one is CI down, reverted by its commit), then production's inventory read again and committed (task test:copy:inventory) - ops' main fails defaults-follow-production from ops' merge until then, as after every applied unit until its record. Last, so it takes Woodpecker out of wave-patches and every group (operator 2026-11-16). Its group.branchTopic too: the wave-patches rule names its branch by one, and a groupSlug alone left Woodpecker on renovate/manual-wave-patches (SHADOW run 8, 2026-11-16)",
+      "description": "Woodpecker, the CI server (its chart, and the server and agent images infra's values pin - registry and repository named there since 2026-11-21 so Renovate reads their tag; they move together): a unit of its own, renovate/manual-woodpecker - the Vagrant copy runs no Woodpecker, so nothing proves it there and the copy refuses it (SHADOW run 7, 2026-11-16). The runner never picks a manual- unit: applied by hand - infra's pull request merged, then ops' (setup-woodpecker.yml's woodpecker_chart_default moves with it), a pipeline run checked (a bad one is CI down, reverted by its commit), then production's inventory read again and committed (task test:copy:inventory) - ops' main fails defaults-follow-production from ops' merge until then, as after every applied unit until its record. Last, so it takes Woodpecker out of wave-patches and every group (operator 2026-11-16). Its group.branchTopic too: the wave-patches rule names its branch by one, and a groupSlug alone left Woodpecker on renovate/manual-wave-patches (SHADOW run 8, 2026-11-16)",
       "matchPackageNames": [
         "woodpecker",
-        "/woodpecker-ci\\/helm/"
+        "/woodpecker-ci\\/helm/",
+        "/woodpeckerci\\/woodpecker-(server|agent)$/"
       ],
       "groupName": "woodpecker",
       "groupSlug": "woodpecker",

@@ -1,0 +1,90 @@
+---
+# The Vagrant copy's base as it boots cold, before Argo: what a reverted base must share with a fresh build - written to
+# .copy/base-fingerprint-<label>.txt, one line a fact, sorted, no times (a revert's proof diffs a build's and a revert's:
+# test:copy:build and test:copy:ready take it when COPY_FINGERPRINT=<label> is set). Per VM: its packages and versions,
+# its enabled units, its timers (by name), its failed units; the Pis: Consul's members, Vault's seal and HA state,
+# Patroni's members and roles, Gluster's volumes and bricks online, versitygw's buckets; the node: the cluster's objects
+# by name, its node's images.
+#
+# Usage: ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/base-fingerprint.yml -e label=<label>
+- name: Vagrant VMs only
+  ansible.builtin.import_playbook: ../vagrant-only-play.yml
+
+- name: The base's fingerprint
+  hosts: target:pi1:pi2
+  become: true
+  gather_facts: false
+  tasks:
+    - name: The label - letters, digits, dashes
+      ansible.builtin.assert:
+        that: label is defined and label is match('^[A-Za-z0-9-]+$')
+        quiet: true
+      run_once: true
+
+    - name: What every VM holds
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          h={{ inventory_hostname }}
+          dpkg-query -W -f '${Package} ${Version}\n' | sed "s/^/$h pkg /"
+          systemctl list-unit-files --state=enabled --no-legend --no-pager | awk -v h="$h" '{ print h, "enabled", $1 }'
+          systemctl list-timers --all --no-legend --no-pager | awk -v h="$h" '{ for (i = 1; i <= NF; i++) if ($i ~ /\.timer$/) print h, "timer", $i }'
+          systemctl --failed --no-legend --no-pager --plain | awk -v h="$h" 'NF { print h, "failed", $1 }'
+      register: _fp_vm
+      changed_when: false
+
+    - name: What the Pis hold
+      when: inventory_hostname in groups['pis']
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          h={{ inventory_hostname }}
+          consul members 2> /dev/null | awk -v h="$h" 'NR > 1 { print h, "consul", $1, $3 }' || echo "$h consul unreadable"
+          VAULT_ADDR=https://127.0.0.1:8200 VAULT_SKIP_VERIFY=true vault status -format=json 2> /dev/null \
+            | python3 -c 'import json, sys; d = json.load(sys.stdin); print("%s vault sealed=%s ha=%s" % (sys.argv[1], d.get("sealed"), d.get("ha_enabled")))' "$h" \
+            || echo "$h vault unreadable"
+          patronictl -c /etc/patroni/patroni.yml list -f json 2> /dev/null \
+            | python3 -c 'import json, sys; [print(sys.argv[1], "patroni", m["Member"], m["Role"], m["State"]) for m in json.load(sys.stdin)]' "$h" \
+            || echo "$h patroni unreadable"
+          gluster volume status all detail 2> /dev/null | awk -v h="$h" '/^Brick/ { b = $3 } /^Online/ { print h, "gluster", b, $3 }' \
+            || echo "$h gluster unreadable"
+          # versitygw's buckets through its own gateway, as setup-pi-services makes them (its root keys, a private HOME)
+          (set -a; . /etc/versitygw/env; set +a; home=$(mktemp -d); trap 'rm -rf "$home"' EXIT
+           export HOME=$home RCLONE_CONFIG="" RCLONE_CONFIG_VGW_TYPE=s3 RCLONE_CONFIG_VGW_PROVIDER=Other \
+             RCLONE_CONFIG_VGW_ENDPOINT=http://localhost:9000 RCLONE_CONFIG_VGW_ACCESS_KEY_ID="$ROOT_ACCESS_KEY" \
+             RCLONE_CONFIG_VGW_SECRET_ACCESS_KEY="$ROOT_SECRET_KEY"
+           rclone lsf --dirs-only vgw:) 2> /dev/null | sed "s#^#$h versitygw bucket #" || echo "$h versitygw unreadable"
+      register: _fp_pi
+      changed_when: false
+
+    - name: What the node holds
+      when: inventory_hostname == 'target'
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          k="kubectl --kubeconfig /etc/kubernetes/admin.conf"
+          $k get all -A -o name 2> /dev/null | sed 's/^/target object /' || echo "target objects unreadable"
+          crictl images -o json 2> /dev/null | python3 -c 'import json, sys
+          for i in json.load(sys.stdin)["images"]:
+              for t in i.get("repoTags") or []:
+                  print("target image", t)' || echo "target images unreadable"
+      register: _fp_node
+      changed_when: false
+
+    - name: Written to .copy/base-fingerprint-<label>.txt, sorted
+      delegate_to: localhost
+      become: false
+      run_once: true
+      ansible.builtin.copy:
+        dest: "{{ playbook_dir }}/../../../.copy/base-fingerprint-{{ label }}.txt"
+        mode: "0644"
+        # a double-quoted scalar: YAML makes its \n a newline - a folded one passed the two characters on, the whole
+        # fingerprint one line (copy run 6, 2026-11-18)
+        content: "{{ (ansible_play_hosts | map('extract', hostvars) | map(attribute='_fp_vm') | map(attribute='stdout_lines') | flatten
+          + ansible_play_hosts | map('extract', hostvars) | map(attribute='_fp_pi') | selectattr('stdout_lines', 'defined')
+          | map(attribute='stdout_lines') | flatten
+          + ansible_play_hosts | map('extract', hostvars) | map(attribute='_fp_node') | selectattr('stdout_lines', 'defined')
+          | map(attribute='stdout_lines') | flatten) | sort | join('\n') }}\n"
