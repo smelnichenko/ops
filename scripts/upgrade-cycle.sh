@@ -777,9 +777,11 @@ review_unit() {  # 0: clean; 1: findings (in $review); a review that did not fin
   grep -E '^NOTE: ' "$review" | head -50 | LC_ALL=C tr -c '[:print:]\n' '?' | cut -c1-300 \
     | while IFS= read -r note; do say "REVIEW $note"; done
   # a request the review refused (a release note asking for a resource, a permission, another source): the unit ends
-  # here, a try - never handed to the fix agent as a task
-  if grep -qE '^REFUSE: ' "$review"; then
-    retry "its review refused it: $(grep -m1 -E '^REFUSE: ' "$review" | LC_ALL=C tr -c '[:print:]' '?' | cut -c9-200)" "$review"
+  # here, a try - never handed to the fix agent as a task. A line refusing nothing ('REFUSE: none', 'n/a', '-') is no
+  # refusal: the observability review wrote one beside its findings (2026-11-25) and the unit ended as refused
+  refusal=$(grep -E '^REFUSE: ' "$review" | grep -viE '^REFUSE:[[:space:]]*(none|nothing|n/?a|-)[.]?[[:space:]]*$' | head -1)
+  if [ -n "$refusal" ]; then
+    retry "its review refused it: $(printf '%s' "$refusal" | LC_ALL=C tr -c '[:print:]' '?' | cut -c9-200)" "$review"
   fi
   verdict=$(grep -E '^VERDICT: ' "$review" | tail -1)
   passes=$(grep -E '^PASSES: .+' "$review" | tail -1)
