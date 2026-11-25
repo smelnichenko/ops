@@ -419,8 +419,10 @@ def show_bodies(name, out_dir):
 
 # Renovate's release notes section (its changelogs template) - in a body only when it fetched them (a github.com token)
 NOTES = "### Release Notes"
-# packages that publish none (docker-library images) - review.md spells out their path
-NO_NOTES = {"postgres"}
+# packages that publish none - review.md spells out their path: docker-library's postgres; alpine/k8s, Docker Hub's
+# kubectl image (no source Renovate can fetch notes from - its kubernetes-1.36 unit stopped for none, 2026-11-25), its
+# version the cluster's, judged by kubectl's skew to the API server
+NO_NOTES = {"postgres", "alpine/k8s"}
 # the families taken one minor at a time - a minor of theirs carries breaking changes as a major does
 NOTES_FAMILIES = ("istio", "gateway-api", "kubernetes", "cilium")
 
