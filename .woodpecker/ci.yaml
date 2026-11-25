@@ -49,8 +49,13 @@ steps:
           requests: { memory: 256Mi }
           limits: { memory: 512Mi }
 
+  # 8 CPUs and 8 harnesses at once (operator 2026-11-25): at the namespace's default 4 it was CPU-bound (3982m and 4000m
+  # of 4000m on two builds), ~23 min a run - infra's woodpecker LimitRange admits 8 for this step alone. Memory doubled
+  # with the harnesses (4 at once read 296-417Mi live)
   - name: ansible-unit
     image: git.pmon.dev/schnappy/ansible-lint:latest
+    environment:
+      UNIT_JOBS: "8"
     commands:
       - bash tests/ansible/unit/run.sh
     backend_options:
@@ -58,7 +63,7 @@ steps:
         securityContext: *nonroot
         resources:
           requests: { memory: 256Mi }
-          limits: { memory: 1Gi }
+          limits: { memory: 2Gi, cpu: "8" }
 
   # the tests' PromQL as Prometheus evaluates it (the unit harnesses' stubs answer whatever is asked) - on the version
   # production runs, pinned by its digest (the tag's manifest list, read 2026-10-08): a tag moves
