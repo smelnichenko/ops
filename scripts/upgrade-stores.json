@@ -150,6 +150,23 @@
       ],
       "taken_by": [],
       "_why": "every SonarQube release migrates its database one way (api/system/migrate_db in the setup hook) - the wave-patches review of 2026-11-23 found 26.9 -> 26.10 riding in the wave, unproven (the copy leaves SonarQube out) and with no backup: its CNPG cluster's base backup first; the way back a recovery from it (CNPG bootstrap.recovery, the path the copy rehearses on production's cluster every run)"
+    },
+    {
+      "store": "keycloak",
+      "units": "(^|-)keycloak-[0-9]+\\.(x|[0-9]+)$",
+      "packages": [
+        "quay.io/keycloak/keycloak"
+      ],
+      "backups": [],
+      "missing": [
+        "nothing dumps its database right before its version moves - plan 122 part 3 (a pg_dump in tasks/keycloak-restart.yml, before any restart onto a new version); the Pis' daily pg-keycloak.dump is a day old"
+      ],
+      "examples": [
+        "keycloak-26.8",
+        "quay.io-keycloak-keycloak-27.x"
+      ],
+      "taken_by": [],
+      "_why": "Keycloak migrates its database one way (Liquibase, no downgrade) on minors too; it runs on the Pis (setup-pi-services.yml), its database on Patroni"
     }
   ]
 }

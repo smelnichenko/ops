@@ -559,18 +559,19 @@ PYWAVE
 # upgrade-cycle alone - a store's version outside its own unit, so nothing backed it up (Grafana migrates its database
 # one way on every new version from 13 on). Each its own unit now, renovate/<store>-<X.Y>, labelled one-way - its name
 # the store's in scripts/upgrade-stores.json; Grafana's k6 (no store) stays in observability
-check "the preset: Grafana's and ClickHouse's minors each a one-way unit of its own, named for its store; k6 in observability" \
+check "the preset: Grafana's, ClickHouse's and Keycloak's minors each a one-way unit of its own, named for its store; k6 in observability" \
   "$("$PY" - <<'PYSTOREMIN'
 import json, re, sys
 sys.path.insert(0, "tests/ansible/unit")
 from renovate_preset import branch, resolved
 t = {s["store"]: s for s in json.load(open("scripts/upgrade-stores.json"))["stores"]}
 got = [(p, branch(p, "minor", version=v), "one-way" in resolved(p, "minor").get("addLabels", []))
-       for p, v in (("grafana", "13.3.2"), ("grafana/grafana", "13.3.2"), ("clickhouse/clickhouse-server", "26.8.1"))]
-print(got, [bool(re.search(t[s]["units"], b)) for s, (_, b, _) in zip(("grafana", "grafana", "clickhouse"), got)],
+       for p, v in (("grafana", "13.3.2"), ("grafana/grafana", "13.3.2"), ("clickhouse/clickhouse-server", "26.8.1"),
+                    ("quay.io/keycloak/keycloak", "26.8.2"))]
+print(got, [bool(re.search(t[s]["units"], b)) for s, (_, b, _) in zip(("grafana", "grafana", "clickhouse", "keycloak"), got)],
       branch("grafana/k6", "minor", version="1.8.3"), "one-way" in resolved("grafana/k6", "minor").get("addLabels", []))
 PYSTOREMIN
-)" "[('grafana', 'grafana-13.3', True), ('grafana/grafana', 'grafana-13.3', True), ('clickhouse/clickhouse-server', 'clickhouse-26.8', True)] [True, True, True] observability False"
+)" "[('grafana', 'grafana-13.3', True), ('grafana/grafana', 'grafana-13.3', True), ('clickhouse/clickhouse-server', 'clickhouse-26.8', True), ('quay.io/keycloak/keycloak', 'keycloak-26.8', True)] [True, True, True, True] observability False"
 # The wave-patches review (2026-11-23): SonarQube a store of its own (every release migrates its database one way) - its
 # updates out of the wave and the majors, on renovate/sonarqube-<N>.x, labelled one-way. Woodpecker's own database and
 # Renovate's image stay in the cycle's units (operator 2026-11-23: a manual unit defeats the automation - never a
