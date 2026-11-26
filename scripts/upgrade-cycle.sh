@@ -10,8 +10,7 @@
 # "deploy once it works in vagrant tests"; its flag gone 2026-11-20 - the first applying run's gate it was had passed).
 #
 #   0. gates    before anything (and alone with --preflight, which task upgrade:run runs before Renovate) and again right
-#               before the merge: no backup window within the run's span (its start: the proof's time and the
-#               apply's, 330 min; before the merge: the apply's own waits, 210); no page open; no run stopped mid-apply (its journal - one found with no page
+#               before the merge: no page open; no run stopped mid-apply (its journal - one found with no page
 #               is paged now; one that ends verified is a record to push, said); ops on main,
 #               origin's, clean but for the copy's inventory record; at the start, the local infra and platform mains
 #               origin's but for CD's app promotions (the copy mirrors them); production settled and quiet (critical alerts included). The
@@ -83,8 +82,7 @@
 # Env:   UPGRADE_FORGEJO_TOKEN (the bot's), UPGRADE_AGENT (the agent's command, default claude), UPGRADE_AGENT_TIMEOUT
 #        (seconds, 3600), UPGRADE_WORK (the agents' clones, default <ops>/../.upgrade-cycle-work - the agents' settings
 #        let them read that one), UPGRADE_HEADS_READS (12) / UPGRADE_HEADS_WAIT (10 s): Forgejo read after a push until
-#        it shows it; the harness's: UPGRADE_NOW_HM / UPGRADE_NOW_HM_FILE (HH:MM UTC - the file's lines one a read),
-#        UPGRADE_NOW_DOW (1-7), UPGRADE_MEMINFO, UPGRADE_FORGEJO_GIT (the bot's git URL
+#        it shows it; the harness's: UPGRADE_MEMINFO, UPGRADE_FORGEJO_GIT (the bot's git URL
 #        base, default https://git.pmon.dev)
 set -uo pipefail
 # C's messages and byte order, UTF-8's encoding: what the runner starts includes Ansible (the copy's build, the apply's
@@ -172,38 +170,6 @@ bot_git() {  # git as the bot: its token through a credential helper of the call
   GIT_TERMINAL_PROMPT=0 git -c credential.helper= -c "credential.helper=!f() { test \"\$1\" = get || exit 0; h=; while IFS== read -r k v && [ -n \"\$k\" ]; do [ \"\$k\" != host ] || h=\$v; done; test \"\$h\" = $host && printf 'username=renovate-bot\\npassword=%s\\n' \"\$UPGRADE_FORGEJO_TOKEN\"; }; f" "$@"
 }
 
-now_hm() {  # the time, UTC - the harness's sequence when given (its last line stays)
-  if [ -n "${UPGRADE_NOW_HM_FILE:-}" ]; then
-    head -n 1 "$UPGRADE_NOW_HM_FILE"
-    [ "$(wc -l < "$UPGRADE_NOW_HM_FILE")" -le 1 ] || sed -i 1d "$UPGRADE_NOW_HM_FILE"
-  else
-    echo "${UPGRADE_NOW_HM:-$(date -u +%H:%M)}"
-  fi
-}
-# the backup windows (UTC) - no merge or apply may meet one:
-#   00:50-04:00 every day   the offsite git mirror (04:00 local: 01:00 UTC in summer), CNPG's base backup 01:30, Velero's
-#                           daily 02:00, the Pis' backups 02:40, ScyllaDB's backup and Sunday's Velero weekly 03:00
-#   04:00-05:00 Sundays     ScyllaDB's repair
-#   05:20-05:50 every day   the Pis' restore check 05:30
-window_within() {  # a window meeting [now, now + $1 minutes] - "<from>-<to>" said (exit 0), or none (exit 1)
-  local span=$1 hm dow t w from to day off d fm tm
-  hm=$(now_hm); dow=${UPGRADE_NOW_DOW:-$(date -u +%u)}
-  t=$(( 10#${hm%:*} * 60 + 10#${hm#*:} ))
-  for off in 0 1440; do  # today's windows and tomorrow's (a span over midnight)
-    d=$(( (dow - 1 + off / 1440) % 7 + 1 ))
-    for w in "00:50 04:00 any" "04:00 05:00 7" "05:20 05:50 any"; do
-      read -r from to day <<< "$w"
-      { [ "$day" = any ] || [ "$day" = "$d" ]; } || continue
-      fm=$(( off + 10#${from%:*} * 60 + 10#${from#*:} )); tm=$(( off + 10#${to%:*} * 60 + 10#${to#*:} ))
-      if [ "$fm" -le $(( t + span )) ] && [ "$tm" -ge "$t" ]; then echo "$from-$to (now $hm, the next $span min)"; return 0; fi
-    done
-  done
-  return 1
-}
-# the spans no backup window may meet: the apply's (the etcd snapshot up to 15 min, Argo settling up to 30, the
-# commands, verify's settle up to 30 and its hour of hold - 210 min), and at the start the proof's before it too (a
-# build, the proof and the review: 2 h)
-APPLY_SPAN=210; START_SPAN=330
 
 # 0. the gates
 # infra's and platform's local mains brought to origin's when only behind it - on main, clean, a fast-forward: the
@@ -218,9 +184,8 @@ mains_forward() {
     git -C "$r" fetch -q origin main < /dev/null >> "$log" 2>&1 && git -C "$r" merge -q --ff-only origin/main < /dev/null >> "$log" 2>&1 || true
   done
 }
-gates() {  # $1: the span (minutes) no backup window may meet; $2: start or merge
-  local w open branch head origin
-  if w=$(window_within "$1"); then say "REFUSED: a backup window meets the run ($w UTC) - run when none is that near"; return 1; fi
+gates() {  # $1: start or merge
+  local open branch head origin
   open=$(scripts/upgrade-notice.sh open) || { say "REFUSED: the open pages not read"; return 1; }
   if [ -n "$open" ]; then
     say "REFUSED: a one-way failure's page is open ($(echo $open)) - its fix first, then: scripts/upgrade-notice.sh resolve <unit>"
@@ -246,7 +211,7 @@ gates() {  # $1: the span (minutes) no backup window may meet; $2: start or merg
   git -C "$ops" fetch -q origin main >> "$log" 2>&1 || { say "REFUSED: origin's main not read"; return 1; }
   head=$(git -C "$ops" rev-parse HEAD 2> /dev/null); origin=$(git -C "$ops" rev-parse origin/main 2> /dev/null)
   [ -n "$head" ] && [ "$head" = "$origin" ] || { say "REFUSED: ops is not origin's main (${head:0:12} here, ${origin:0:12} there)"; return 1; }
-  if [ "$2" = start ]; then  # the copy mirrors the local mains (before the merge the base pin stands for them)
+  if [ "$1" = start ]; then  # the copy mirrors the local mains (before the merge the base pin stands for them)
     mains_forward
     scripts/copy-main-current.sh ../infra ../platform >> "$log" 2>&1 \
       || { say "REFUSED: the local infra or platform main is not origin's (the copy mirrors them) - see the log"; return 1; }
@@ -261,10 +226,10 @@ memory() {  # the copy must fit: the guard's own figure (22.5 GB of VMs + its 2 
   [ "${avail:-0}" -ge "$need" ] || { say "REFUSED: memory - $avail of $need MB free: stop the radar (sudo systemctl stop radar-live) - or a copy left running (vagrant status; vagrant halt) - then run again"; return 1; }
 }
 if [ -n "$preflight" ]; then
-  gates "$START_SPAN" start && memory && { say "PREFLIGHT: a run may start"; exit 0; }
+  gates start && memory && { say "PREFLIGHT: a run may start"; exit 0; }
   exit 1
 fi
-gates "$START_SPAN" start || exit 1
+gates start || exit 1
 gate_head=$(git -C "$ops" rev-parse HEAD)  # what ops' main may hold at the merge: this, and the unit's own merge
 
 # 1. the pick
@@ -376,7 +341,7 @@ fresh_or_end() {
 # none (its data is no store to keep - the test environment is where a one-way change runs first). The labels or the
 # table not read: nothing applied
 unit_labels="" unit_store=""  # the one-way store the unit is (its fix may move that store's version alone)
-one_way_backups=() one_way_taken=() one_way_minutes=0
+one_way_backups=() one_way_taken=()
 stop_if_one_way() {
   local labels line need judged=$unit
   labels=$(scripts/upgrade-units.py list) || { stopped "its labels not read from Forgejo - nothing applied" "$log"; exit 1; }
@@ -397,8 +362,7 @@ stop_if_one_way() {
       [ "$action" != test ] || { say "ONE-WAY $unit: its production twin's store can take it - no backup in the test environment"; return 0; }
       mapfile -t one_way_backups < <(sed -n 's/^backup //p' <<< "$need")
       mapfile -t one_way_taken < <(sed -n 's/^taken-by //p' <<< "$need")
-      one_way_minutes=$(awk 'NR == 1 {print $3}' <<< "$need")
-      [ "$(( ${#one_way_backups[@]} + ${#one_way_taken[@]} ))" -gt 0 ] && [[ $one_way_minutes =~ ^[0-9]+$ ]] \
+      [ "$(( ${#one_way_backups[@]} + ${#one_way_taken[@]} ))" -gt 0 ] \
         || { stopped "a one-way change, its store's backups not read - nothing applied" "$log"; exit 1; }
       say "ONE-WAY $unit: ${need%%$'\n'*} - backed up before the merge: $(printf '%s; ' "${one_way_backups[@]}" "${one_way_taken[@]/#/its command }")"
       return 0 ;;
@@ -860,7 +824,6 @@ for c in "${one_way_taken[@]}"; do  # a store whose backup its own command takes
   printf '%s\n' "${cmds[@]}" | grep -qx -- "$c" \
     || { stopped "a one-way change whose backup its command takes ($c) - not in its plan; nothing merged" "$log"; exit 1; }
 done
-APPLY_SPAN=$((APPLY_SPAN + one_way_minutes))  # the backups' bound: the apply's window holds them too
 # what production runs only as an Argo hook - k6, schnappy-production-apps' PostSync smoke test: Argo leaves hooks out of
 # its diff, so the apply alone never runs the new version (production met it at the next unrelated sync, a failure
 # failing that deploy - the observability review, 2026-11-25). Its app synced after the apply, the hook to succeed
@@ -869,7 +832,7 @@ if grep -q '^grafana/k6 ' "$ops/.copy/unit-moves-$unit.txt" 2> /dev/null; then
 fi
 
 # 6. the apply - the gates again (hours since the start), the backups a one-way change needs, still free, a journal
-gates "$APPLY_SPAN" merge || { stopped "proven and reviewed, not applied: a gate refused it now (see the log) - the next run proves it again" "$log"; exit 1; }
+gates merge || { stopped "proven and reviewed, not applied: a gate refused it now (see the log) - the next run proves it again" "$log"; exit 1; }
 gate_head=$(git -C "$ops" rev-parse HEAD)
 for c in "${pre[@]}"; do
   read -ra words <<< "$c"

@@ -2,8 +2,7 @@
 # scripts/upgrade-cycle.sh - the upgrade cycle's run - in a throwaway ops directory, every helper and tool stubbed (the
 # pick, the labels, the notices, verify, record, copy-main-current; task, the agent, ssh, vagrant, git), each call
 # recorded:
-#   the backup windows at their edges (the function itself, span 0 and over midnight) and the run's two spans at
-#   theirs; the gates (before anything, and again before the merge): an open page (posted again), a run stopped
+#   the gates (before anything, and again before the merge): an open page (posted again), a run stopped
 #   mid-apply (its journal - paged now), ops not on main / changed (but for the copy's inventory) / not origin's, the
 #   local mains stale (at the start alone), production's Alertmanager not routing the notices (its loaded config),
 #   production not settled - each refuses; the copy's memory for a unit
@@ -259,25 +258,20 @@ def setup(pick, proofs=(0,), plan="test:copy:change INFRA_REF=renovate/x PLATFOR
     open(os.path.join(ST, "heads.last"), "w").write(heads[-1])
     for f, v in (files or {}).items():
         open(os.path.join(ST, f), "w").write(v)
-def environ(hm, dow, env=None):
-    e = {**os.environ, "PATH": BIN + ":" + os.environ["PATH"], "ST": ST, "UPGRADE_NOW_DOW": dow, "UPGRADE_WORK": WORK,
+def environ(env=None):
+    e = {**os.environ, "PATH": BIN + ":" + os.environ["PATH"], "ST": ST, "UPGRADE_WORK": WORK,
          "UPGRADE_MEMINFO": os.path.join(ST, "meminfo"), "UPGRADE_HEADS_WAIT": "0",
          "UPGRADE_HEADS_READS": "3", "ANTHROPIC_API_KEY": "sk-the-apps-key", "RENOVATE_TOKEN": "bot-token",
          "VAULT_ROOT_TOKEN": "root", "UPGRADE_FORGEJO_TOKEN": "bot-token"}
-    if isinstance(hm, list):
-        open(os.path.join(ST, "hm"), "w").write("".join(f"{x}\n" for x in hm))
-        e["UPGRADE_NOW_HM_FILE"] = os.path.join(ST, "hm")
-    else:
-        e["UPGRADE_NOW_HM"] = hm
     e.update(env or {})
     return e
 def calls_now():
     p = os.path.join(ST, "calls")
     return open(p).read().splitlines() if os.path.exists(p) else []
-def night(pick, hm="12:00", dow="3", args=(), env=None, **kw):
+def night(pick, args=(), env=None, **kw):
     setup(pick, **kw)
     r = subprocess.run(["bash", os.path.join(OPS, "scripts/upgrade-cycle.sh"), *args], capture_output=True, text=True,
-                       env=environ(hm, dow, env), timeout=120)
+                       env=environ(env), timeout=120)
     night.out = r.stdout
     return r.returncode, calls_now()
 def has(calls, prefix):
@@ -322,7 +316,7 @@ def stopped(sig, flag_file, pick="prove wave-patches patch", **kw):
         for s_ in (signal.SIGINT, signal.SIGQUIT, signal.SIGTERM, signal.SIGHUP):
             signal.signal(s_, signal.SIG_DFL)
     p = subprocess.Popen(["bash", os.path.join(OPS, "scripts/upgrade-cycle.sh")], stdout=subprocess.DEVNULL,
-                         stderr=subprocess.DEVNULL, env=environ("12:00", "3"), preexec_fn=defaults)
+                         stderr=subprocess.DEVNULL, env=environ(), preexec_fn=defaults)
     for _ in range(400):
         if os.path.exists(os.path.join(ST, flag_file)):
             break
@@ -330,33 +324,7 @@ def stopped(sig, flag_file, pick="prove wave-patches patch", **kw):
     p.send_signal(sig)
     p.wait(timeout=60)
     return p.returncode, calls_now()
-# ── the backup windows: the function itself at its edges ─────────────────────────────────────────────────────────────
-src = open(os.path.join(OPS, "scripts/upgrade-cycle.sh")).read()
-funcs = "\n".join(src[src.index(f"\n{n}() {{") + 1:].split("\n}\n", 1)[0] + "\n}" for n in ("now_hm", "window_within"))
-def window(hm, dow, span):
-    r = subprocess.run(["bash", "-c", funcs + f"\nwindow_within {span}"], capture_output=True, text=True,
-                       env={**os.environ, "UPGRADE_NOW_HM": hm, "UPGRADE_NOW_DOW": dow})
-    return r.returncode == 0
-for hm, dow, span, want, why in (("00:49", "3", 0, False, "a minute before the night's backups"),
-                                 ("00:50", "3", 0, True, "their first minute"), ("04:00", "3", 0, True, "their last minute"),
-                                 ("04:01", "3", 0, False, "after them, a weekday"),
-                                 ("04:01", "7", 0, True, "after them, Sunday: ScyllaDB's repair"),
-                                 ("05:00", "7", 0, True, "the repair's last minute"), ("05:01", "7", 0, False, "after it"),
-                                 ("05:19", "3", 0, False, "before the restore check"), ("05:20", "3", 0, True, "its first minute"),
-                                 ("05:50", "3", 0, True, "its last minute"), ("05:51", "3", 0, False, "after it"),
-                                 ("23:49", "3", 60, False, "an hour from 23:49: 00:49 tomorrow"),
-                                 ("23:50", "3", 60, True, "an hour from 23:50: 00:50 tomorrow (over midnight)"),
-                                 ("23:50", "7", 60, True, "Sunday night into Monday's 00:50 (the week's wrap)")):
-    check(f"window {hm} day {dow}, {span} min on: {'meets one' if want else 'none'} - {why}", window(hm, dow, span), want)
 # ── the gates ─────────────────────────────────────────────────────────────────────────────────────────────────────────
-for hm, dow, why in (("03:00", "3", "in Velero's, the Pis' and ScyllaDB's"), ("05:30", "3", "the Pis' restore check"),
-                     ("04:30", "7", "Sunday's ScyllaDB repair"), ("19:20", "3", "00:50 the start's span's last minute (330)")):
-    rc, calls = night("prove wave-patches patch", hm=hm, dow=dow)
-    check(f"a backup window ({hm}, day {dow}: {why}): refused at once, nothing asked", (rc, calls), (1, []))
-rc, calls = night("prove wave-patches patch", hm="19:19", dow="3")
-check("19:19: 00:50 a minute past the start's span - on", (rc, picked(calls)), (0, True))
-rc, calls = night("prove wave-patches patch", hm="06:00", dow="3")
-check("06:00: the day's windows behind it - on", (rc, picked(calls)), (0, True))
 rc, calls = night("prove wave-patches patch", files={"open": "scylla-2026.3\n"})
 check("an open page: refused, nothing picked - nothing posted (no mail since 2026-11-20)",
       (rc, has(calls, "upgrade-notice.sh"), picked(calls)), (1, ["upgrade-notice.sh open"], False))
@@ -523,7 +491,7 @@ check("  the third try for the unit's pull requests (red CI, its heads moved bet
 setup("prove wave-patches patch", plan=PLAN, files={"green.rc": "4"})
 os.makedirs(os.path.join(OPS, ".upgrade-cycle/tries"), exist_ok=True)
 open(os.path.join(OPS, ".upgrade-cycle/tries/wave-patches"), "w").write("schnappy/infra#1,schnappy/ops#2 2026-11-01T00:00:00Z old\n" * 5)
-subprocess.run(["bash", os.path.join(OPS, "scripts/upgrade-cycle.sh")], capture_output=True, text=True, env=environ("12:00", "3"), timeout=120)
+subprocess.run(["bash", os.path.join(OPS, "scripts/upgrade-cycle.sh")], capture_output=True, text=True, env=environ(), timeout=120)
 check("  tries of an earlier unit of the name (other pull requests): not this one's - a first try, not labelled",
       has(calls_now(), "upgrade-label.py wave-patches upgrade-blocked"), [])
 rc, calls = night("prove wave-patches patch", plan=PLAN, files={"green.rc": "4"})
@@ -624,7 +592,7 @@ check("a fix whose stop-updating label does not set (Renovate would rewrite it):
 setup("prove istio minor", proofs=(1, 0), files={"fix.heads": H2, "merge.rc": "1"})  # ends before the apply clears it
 os.makedirs(os.path.join(OPS, ".upgrade-cycle/fixes"), exist_ok=True)
 open(os.path.join(OPS, ".upgrade-cycle/fixes/istio.diff"), "w").write("=== the agent's fix of renovate/istio, long ago (applied) - files:\nOLD\n")
-subprocess.run(["bash", os.path.join(OPS, "scripts/upgrade-cycle.sh")], capture_output=True, text=True, env=environ("12:00", "3"), timeout=120)
+subprocess.run(["bash", os.path.join(OPS, "scripts/upgrade-cycle.sh")], capture_output=True, text=True, env=environ(), timeout=120)
 check("a unit of a name fixed before (its record of an applied instance): this fix's record alone - the old one never mailed",
       "OLD" in open(os.path.join(OPS, ".upgrade-cycle/fixes/istio.diff")).read(), False)
 rc, calls = night("prove istio minor", proofs=(1, 0), files={"fix.heads": H2, "blob": "v: 1.0.1\n# " + "y" * 120000 + "\n"})
@@ -786,17 +754,6 @@ check("a clone's diff not written for the review: blocked, no review run, nothin
       (rc, [c for c in calls if c.startswith("claude")], merged(calls, "istio"), has(calls, "upgrade-label.py istio upgrade-blocked"),
        notices(calls), "its diffs not written for the review" in " ".join(stopped_lines())),
       (1, [], False, [], ["stopped istio"], True))
-# the apply's span holds what it waits for: Argo's settle and verify's (each its settle default), verify's hold, the
-# commands (30 min at least)
-import re as _re
-vsrc = open(os.path.join(REAL, "scripts/upgrade-verify.sh")).read()
-vsettle = int(_re.search(r"settle=\$\{UPGRADE_VERIFY_SETTLE:-([0-9]+)\}", vsrc).group(1))
-vhold = int(_re.search(r"hold=\$\{UPGRADE_VERIFY_HOLD:-([0-9]+)\}", vsrc).group(1))
-aspan = int(_re.search(r"APPLY_SPAN=([0-9]+)", src).group(1))
-esrc = open(os.path.join(REAL, "scripts/etcd-backup-now.sh")).read()
-etcd = int(_re.search(r"tries=\$\{ETCD_BACKUP_TRIES:-([0-9]+)\}", esrc).group(1)) * int(_re.search(r"poll=\$\{ETCD_BACKUP_POLL:-([0-9]+)\}", esrc).group(1)) // 60
-check(f"the apply's span ({aspan} min) holds the etcd snapshot ({etcd}), Argo's settle and verify's ({vsettle} min each), "
-      f"verify's hold ({vhold}) and 30 min of commands", aspan >= etcd + 2 * vsettle + vhold + 30, True)
 AF = {"list": "istio-1.32 minor schnappy/infra agent-fixed,stop-updating,upgrade-cycle\n"}
 rc, calls = night("prove istio-1.32 minor", files=AF)
 check("a unit an earlier run fixed (agent-fixed, stop-updating): proven, reviewed, applied in this run - no notice, no "
@@ -833,7 +790,7 @@ check("  its review handed what production runs NOW - the inventory this run rea
       "image istio/proxyv2 1.31.4 read-this-run\n")
 setup("prove centrifugo-7.x major", files=MAJOR)
 os.remove(os.path.join(OPS, "tests/ansible/copy/prod-inventory.txt"))
-r = subprocess.run(["bash", os.path.join(OPS, "scripts/upgrade-cycle.sh")], capture_output=True, text=True, env=environ("12:00", "3"), timeout=120)
+r = subprocess.run(["bash", os.path.join(OPS, "scripts/upgrade-cycle.sh")], capture_output=True, text=True, env=environ(), timeout=120)
 calls = calls_now()
 check("  production's inventory missing: no review run, nothing merged, said",
       (r.returncode, [c for c in calls if c.startswith("claude")], merged(calls, "centrifugo-7.x"),
@@ -926,7 +883,7 @@ try:
               (rc, merged(calls, unit), has(calls, "task"), NET_GAPS[st] in blocked_why(calls)), (1, False, [], True))
 finally:
     open(TABLE, "w").write(REAL_TABLE)
-SCYLLA_WHOLE = {"backups": ["check:production:scylla-backup"], "missing": [], "minutes": 30}
+SCYLLA_WHOLE = {"backups": ["check:production:scylla-backup"], "missing": []}
 try:
     table_with(scylladb=SCYLLA_WHOLE)
     rc, calls = night("prove scylladb-2026.3 minor", files={"list": "scylladb-2026.3 minor schnappy/infra one-way,upgrade-cycle\n"})
@@ -938,10 +895,6 @@ try:
                                                             "task.check_production_scylla-backup.rc": "1"})
     check("  its backup failing: nothing merged, blocked (said)", (rc, merged(calls, "scylladb-2026.3"), notices(calls)),
           (1, False, ["stopped scylladb-2026.3"]))
-    table_with(scylladb={**SCYLLA_WHOLE, "minutes": 900})
-    rc, calls = night("prove scylladb-2026.3 minor", files={"list": "scylladb-2026.3 minor schnappy/infra one-way,upgrade-cycle\n"})
-    check("  its backups' bound in the apply's span: one that reaches a backup window refuses the apply, nothing merged",
-          (rc, merged(calls, "scylladb-2026.3"), "a gate refused it now" in blocked_why(calls)), (1, False, True))
     table_with(scylladb={**SCYLLA_WHOLE, "backups": ["check:production:scylla-backup -- -e a=b",
                                                      "deploy:postgres:base-backup -- -e pg_namespace=x -e cluster=y"]})
     rc, calls = night("prove scylladb-2026.3 minor", files={"list": "scylladb-2026.3 minor schnappy/infra one-way,upgrade-cycle\n"})
@@ -1056,11 +1009,6 @@ rc, calls = night("prove wave-patches patch", plan=PLAN, files={"task.deploy_etc
 check("the etcd snapshot failing (before the merge): blocked, nothing merged, not paged, no journal",
       (rc, merged(calls, "wave-patches"), has(calls, "task --yes deploy:kubeadm"), notices(calls), inflight()),
       (1, False, [], ["stopped wave-patches"], False))
-for hm, want, why in ((["12:00", "21:19"], True, "21:19: 00:50 a minute past the apply's 210 min - applied"),
-                      (["12:00", "21:20"], False, "21:20: 00:50 the apply's last minute - not applied, reported")):
-    rc, calls = night("prove wave-patches patch", plan=PLAN, hm=hm)
-    check(f"the gate before the merge, {why}", (merged(calls, "wave-patches"), notices(calls)[-1:]),
-          (want, ["applied wave-patches"] if want else ["stopped wave-patches"]))
 for files, why in (({"held": "veto\n"}, "a veto set since the pick"), ({"held": "paused\n"}, "the kill switch set since"),
                    ({"held.fail": ""}, "held not read")):
     rc, calls = night("prove wave-patches patch", plan=PLAN, files=files)
@@ -1201,7 +1149,7 @@ rc, calls = night("test observability minor")
 check("a test action for a unit with no test- name: refused, nothing done", (rc, has(calls, "upgrade-label.py")), (1, []))
 # the log keeps every line when the terminal is gone (its stdout a pipe whose reader died)
 setup("prove wave-patches patch", plan=PLAN)
-subprocess.run(f"bash {os.path.join(OPS, 'scripts/upgrade-cycle.sh')} | true", shell=True, env=environ("12:00", "3"), timeout=120)
+subprocess.run(f"bash {os.path.join(OPS, 'scripts/upgrade-cycle.sh')} | true", shell=True, env=environ(), timeout=120)
 logs = [os.path.join(OPS, ".copy", f) for f in os.listdir(os.path.join(OPS, ".copy")) if f.startswith("upgrade-cycle-")]
 check("stdout a pipe whose reader is gone (a closed terminal): the run goes on to its end, its log holds every line",
       (bool(logs) and "APPLIED wave-patches" in open(logs[0]).read(), notices(calls_now())[-1:]), (True, ["applied wave-patches"]))
@@ -1262,7 +1210,7 @@ check("Forgejo not read: the run changes nothing", (rc, has(calls, "task")), (1,
 setup("prove wave-patches patch", plan=PLAN)
 holder = subprocess.Popen(["flock", os.path.join(OPS, ".upgrade-cycle/lock"), "sleep", "5"])
 time.sleep(0.3)
-r = subprocess.run(["bash", os.path.join(OPS, "scripts/upgrade-cycle.sh")], capture_output=True, text=True, env=environ("12:00", "3"))
+r = subprocess.run(["bash", os.path.join(OPS, "scripts/upgrade-cycle.sh")], capture_output=True, text=True, env=environ())
 holder.kill()
 holder.wait()
 check("a second run while one holds the lock: refused, nothing read", (r.returncode, "another upgrade run" in r.stdout, calls_now()),

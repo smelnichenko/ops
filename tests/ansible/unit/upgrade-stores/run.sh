@@ -35,15 +35,14 @@ check("postgres-19.x (the init-users Job's psql client) a unit of no store; the 
 check("a unit of no store, unlabelled: none; labelled one-way: unknown (blocked - its store decided in the table)",
       (run("wave-patches", "upgrade-cycle")[:2], run("data-operators", "one-way,upgrade-cycle")[:2]), ((0, "none"), (0, "unknown")))
 store = {"store": "x", "units": "(^|-)x-[0-9]+\\.x$", "packages": ["x"], "backups": ["deploy:x"], "missing": [], "taken_by": [],
-         "minutes": 5, "examples": ["x-1.x"]}
-check("a store backed up whole: store <name> <minutes>, then each backup",
+         "examples": ["x-1.x"]}
+check("a store backed up whole: store <name>, then each backup",
       subprocess.run([sys.executable, "-I", "scripts/upgrade-stores.py", "x-1.x", "one-way"], capture_output=True, text=True,
                      env={**os.environ, "UPGRADE_STORES_TABLE": (open(os.path.join(W, "ok.json"), "w").write(json.dumps({"stores": [store]})) and os.path.join(W, "ok.json"))}).stdout,
-      "store x 5\nbackup deploy:x\n")
+      "store x\nbackup deploy:x\n")
 for table, why in (({"stores": [{**store, "backups": [], "missing": [], "taken_by": []}]}, "a store with neither backups, taken_by nor missing"),
                    ({"stores": [{**store, "backups": "deploy:x"}]}, "backups no list"),
                    ({"stores": [{k: v for k, v in store.items() if k != "packages"}]}, "a key missing (packages)"),
-                   ({"stores": [{**store, "minutes": -1}]}, "minutes below zero"),
                    ({"stores": [{**store, "units": "(x"}]}, "a bad regex"),
                    ({"stores": [store, {**store, "store": "y"}]}, "two stores naming one unit"),
                    ("{not json", "not JSON")):
