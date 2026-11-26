@@ -94,9 +94,11 @@ rather than the API key), settings of their own (`.claude/upgrade-agent/fix.json
 dontAsk --permission-prompts none` - what they do not allow is denied, never asked; smoke-tested: a push and kubectl
 denied; both `--restricted` since the rounds below), in clones of the unit's branches (outside every checkout since
 round two: `../.upgrade-cycle-work`); the runner labels stop-updating itself. The gates before anything (and `--preflight` before
-Renovate): the backup windows from the real schedules (00:50-04:00 daily: the mirror at 04:00 local, CNPG 01:30,
+Renovate): ~~the backup windows from the real schedules (00:50-04:00 daily: the mirror at 04:00 local, CNPG 01:30,
 Velero 02:00, the Pis' backups 02:40, ScyllaDB and Sunday's Velero 03:00; Sundays 04:00-05:00 ScyllaDB's repair;
-05:20-05:50 the Pis' restore check), no open page (posted again), ops on main clean and origin's, the memory free
+05:20-05:50 the Pis' restore check)~~ - removed 2026-11-26 by the operator's decision: runs go back to back at any hour
+(earlier backups cover a nightly one an apply disturbs; a one-way unit still takes its own backups before the merge) -
+no open page (posted again), ops on main clean and origin's, the memory free
 (refused at once), no apply recorded today. The heads read before the proof and after it, the merge pinned to them
 (`--merge --expect`, Forgejo's head_commit_id); the plan read or the unit blocked; `task deploy:etcd:backup` (a Job
 of its own name, waited for) checked; the window read again before the apply (refused when near - never waited out);
