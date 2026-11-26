@@ -9,7 +9,8 @@
 # target's still equals production (the copy proves it against infra's half). Its target not in the clone: refused.
 # A branch's push (ops' CI runs on pushes, not pull requests, since 2026-11-24) holds no target - the clone step fetches
 # one for a pull request only, and the CI's read token cannot read ops - so there a default differing from production
-# passes, said: main's push judges it against production after the apply. Comparing with main would fail only when main
+# passes when it moves the default ahead of production, said: main's push judges it against production after the apply;
+# one moved back fails. Self-tested by tests/ansible/unit/branch-defaults-self. Comparing with main would fail only when main
 # already differs from production, which main's own push fails anyway. Main's push and a run without CI: equal, or fail.
 set -u
 cd "$(dirname "$0")/../../../.." || exit 1
@@ -76,6 +77,7 @@ def target_text(path):
 
 
 same = lambda a, b: a is not None and b is not None and str(a).lstrip("v") == str(b).lstrip("v")
+numbers = lambda v: tuple(int(x) for x in re.findall(r"\d+", str(v)))  # 1.36.5-1.1, v1.22.1, 2.1.4-1: compared part by part
 value = lambda found: found[1] if found else None
 have = open("tests/ansible/copy/prod-inventory.txt").read().splitlines()
 texts, readings = {}, {}
@@ -88,8 +90,9 @@ for path, key, pat, reading in MAP:
     ok = len(live) == 1 and same(d, live[0])
     why = ""
     if not ok and len(live) == 1 and d is not None and BRANCH:
-        ok = True
-        why = f" (branch {BRANCH}'s push: passes here - main's push judges it against production after the apply)"
+        ok = numbers(d) > numbers(live[0])
+        why = (f" (branch {BRANCH}'s push moves it ahead: passes here - main's push judges it against production after the "
+               "apply)" if ok else f" (branch {BRANCH}'s push moves it BACK, below production: a unit only moves ahead)")
     elif not ok and len(live) == 1 and d is not None:
         t = target_text(path)
         if t is not None:
