@@ -27,6 +27,10 @@ def run(unit, labels, table=None):
 check("each store's real unit names: its own store's answer (missing, store) - none unknown",
       sorted({(s["store"], run(e, "one-way")[1]) for s in REAL["stores"] for e in s["examples"]}),
       sorted({(s["store"], "missing" if s["missing"] else "store") for s in REAL["stores"]}))
+# Keycloak stays blocked until plan 122 part 3's dump exists - a literal, not read from the table: emptying its missing
+# part without the dump fails here (delete this check deliberately when the dump lands)
+check("Keycloak's units (minor and major): missing - no dump right before its version moves yet",
+      [run(u, "one-way")[1] for u in ("keycloak-26.8", "quay.io-keycloak-keycloak-27.x")], ["missing", "missing"])
 # Postgres' store is the CNPG image alone (2026-11-21): the plain postgres image in infra and platform is the init-users
 # Job's psql client - its major, postgres-19.x, is an ordinary unit; the databases' image a store's as before
 check("postgres-19.x (the init-users Job's psql client) a unit of no store; the CNPG image's major Postgres' store",

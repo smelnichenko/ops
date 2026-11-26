@@ -187,7 +187,8 @@
         "!/(^|\\/)vault$/",
         "!/(^|\\/)consul$/",
         "!sonarqube",
-        "!/(^|\\/)sonarqube$/"
+        "!/(^|\\/)sonarqube$/",
+        "!quay.io/keycloak/keycloak"
       ],
       "groupName": "wave patches",
       "groupSlug": "wave-patches",
@@ -376,7 +377,6 @@
       ],
       "matchPackageNames": [
         "forgejo/forgejo",
-        "quay.io/keycloak/keycloak",
         "caddy",
         "versity/versitygw",
         "sonatype/nexus-public",
@@ -389,6 +389,23 @@
       "group": {
         "branchTopic": "pi-services"
       }
+    },
+    {
+      "description": "Keycloak's minors (a store, scripts/upgrade-stores.json: its database migrates one way on a new version) - renovate/keycloak-<X.Y>, labelled one-way, out of the Pis' services unit: a store's version moves only in its own unit, its backup first (plan 122). It rode in renovate/pi-services, which the copy could not prove (2026-11-26)",
+      "matchUpdateTypes": [
+        "minor"
+      ],
+      "matchPackageNames": [
+        "quay.io/keycloak/keycloak"
+      ],
+      "groupName": "keycloak",
+      "groupSlug": "keycloak",
+      "group": {
+        "branchTopic": "keycloak-{{{newMajor}}}.{{{newMinor}}}"
+      },
+      "addLabels": [
+        "one-way"
+      ]
     },
     {
       "description": "Kubernetes, Cilium, Istio and ScyllaDB's release lines: one minor at a time (each minor its own branch - the families above name it)",
@@ -454,6 +471,7 @@
         "!/(^|\\/)consul$/",
         "!sonarqube",
         "!/(^|\\/)sonarqube$/",
+        "!quay.io/keycloak/keycloak",
         "!registry.k8s.io/kube-apiserver",
         "!alpine/k8s",
         "!bitnami/kubectl",
@@ -492,6 +510,7 @@
         "!/(^|\\/)consul$/",
         "!sonarqube",
         "!/(^|\\/)sonarqube$/",
+        "!quay.io/keycloak/keycloak",
         "!registry.k8s.io/kube-apiserver",
         "!alpine/k8s",
         "!bitnami/kubectl",
@@ -511,7 +530,7 @@
       "separateMultipleMajor": false
     },
     {
-      "description": "One-way majors (Postgres - the CNPG image ghcr.io/cloudnative-pg/postgresql the databases run; the plain postgres image here is only the init-users Job's psql client and CI services, no store -, ScyllaDB, Kafka and Strimzi, ClickHouse, Grafana, Vault, Consul): label one-way - the runner backs the store up first or blocks the unit, naming the part with no backup (scripts/upgrade-stores.json: each package here a store's there, the harness checks)",
+      "description": "One-way majors (Postgres - the CNPG image ghcr.io/cloudnative-pg/postgresql the databases run; the plain postgres image here is only the init-users Job's psql client and CI services, no store -, ScyllaDB, Kafka and Strimzi, ClickHouse, Grafana, Vault, Consul, Keycloak): label one-way - the runner backs the store up first or blocks the unit, naming the part with no backup (scripts/upgrade-stores.json: each package here a store's there, the harness checks)",
       "matchUpdateTypes": [
         "major"
       ],
@@ -525,7 +544,8 @@
         "grafana",
         "grafana/grafana",
         "/(^|\\/)vault$/",
-        "/(^|\\/)consul$/"
+        "/(^|\\/)consul$/",
+        "quay.io/keycloak/keycloak"
       ],
       "addLabels": [
         "one-way"
