@@ -95,6 +95,7 @@
    "scripts/vagrant-preload-images.sh ../infra ../platform {{.INFRA_REF}} {{.PLATFORM_REF}}",
    "scripts/copy-refs.sh set '{{.INFRA_REF}}' '{{.PLATFORM_REF}}'",
    "env -i HOME=\"$HOME\" PATH=\"$PATH\" scripts/vagrant-gitops-mirror.py --infra-ref {{.INFRA_REF}} --platform-ref {{.PLATFORM_REF}}",
+   "scripts/upgrade-leftovers.py --on copy --base main --head {{.INFRA_REF}}",
    "cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/argo-settled.yml -e expect_mirror=true {{if eq .APPS_CHANGED \"true\"}}-e record_apps=true{{else}}-e expect_apps=true{{end}} -e restart_stage=change-$(date +%Y%m%d%H%M%S) {{.COPY_SETTLE}}",
    "scripts/vagrant-inventory.sh && cp .copy/vagrant-inventory.txt .copy/vagrant-inventory-after-change.txt",
    {

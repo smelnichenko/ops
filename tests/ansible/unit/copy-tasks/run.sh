@@ -62,11 +62,13 @@ check("test:copy:build: main checked, then the record of what the copy ran clear
               r"^test:copy:inventory$"), True)
 # test:copy:change
 s = change[index(change, SETTLE)][1]
-check("test:copy:change: the refs checked against origin/main, recorded, the mirror, the settle, the "
+check("test:copy:change: the refs checked against origin/main, recorded, the mirror, the leftovers a moved chart "
+      "dropped deleted (Argo on its new version first), the settle, the "
       "inventory as the change left it (before any check), then every check",
       ordered(change, r"copy-main-current\.sh \.\./infra:\{\{\.INFRA_REF\}\} \.\./platform:\{\{\.PLATFORM_REF\}\}$",
               r"copy-refs\.sh set '\{\{\.INFRA_REF\}\}' '\{\{\.PLATFORM_REF\}\}'",
-              r"--infra-ref \{\{\.INFRA_REF\}\} --platform-ref \{\{\.PLATFORM_REF\}\}", SETTLE, r"^scripts/vagrant-inventory\.sh && cp \.copy/vagrant-inventory\.txt \.copy/vagrant-inventory-after-change\.txt$",
+              r"--infra-ref \{\{\.INFRA_REF\}\} --platform-ref \{\{\.PLATFORM_REF\}\}",
+              r"^scripts/upgrade-leftovers\.py --on copy --base main --head \{\{\.INFRA_REF\}\}$", SETTLE, r"^scripts/vagrant-inventory\.sh && cp \.copy/vagrant-inventory\.txt \.copy/vagrant-inventory-after-change\.txt$",
               r"^test:copy:check$"), True)
 check("  its settle: on the pushed commits, the apps by APPS_CHANGED, its own stage, the deciding values",
       [f in s for f in ("-e expect_mirror=true",

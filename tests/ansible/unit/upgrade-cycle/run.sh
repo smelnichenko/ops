@@ -91,6 +91,8 @@ echo "upgrade-verify.sh AFTER ${UPGRADE_VERIFY_REVISIONS:-}" >> "$ST/calls"
 rc=$(cat "$ST/verify.rc" 2>/dev/null || echo 0); [ "$rc" = 0 ] || cat "$ST/verify.out" 2>/dev/null
 exit "$rc"''')
 stub(os.path.join(OPS, "scripts/upgrade-record.sh"), LOG + '\nexit "$(cat "$ST/record.rc" 2>/dev/null || echo 0)"')
+# the objects a moved chart stopped shipping, deleted on production after the merge (its verdict from a file)
+stub(os.path.join(OPS, "scripts/upgrade-leftovers.py"), LOG + '\nexit "$(cat "$ST/leftovers.rc" 2>/dev/null || echo 0)"')
 # the copy's snapshot: used (the copy halted after a run), forget (the proof after a fix on a base built fresh)
 stub(os.path.join(OPS, "scripts/copy-snapshot.sh"), LOG + '\nexit "$(cat "$ST/snap.rc" 2>/dev/null || echo 0)"')
 # the local mains (the start's gate) apart from the unit's branches (fresh: a list, one verdict a call)
@@ -428,6 +430,12 @@ check("a patch unit: heads, green, its plan read, built, proven, heads again, re
            "upgrade-verify.sh ARGO " + REVS, "task --yes deploy:kubeadm:upgrade", "task --yes deploy:forgejo:upgrade",
            "upgrade-verify.sh AFTER " + REVS, "task test:copy:inventory", "upgrade-record.sh wave-patches"]))
 check("  said applied on the terminal - nothing mailed", notices(calls), ["applied wave-patches"])
+check("  what its charts stopped shipping cleared on production after the merge, before Argo is waited on - from infra's "
+      "proven base to its proven head",
+      ([words(c, 3) for c in calls if c.startswith(("upgrade-label.py wave-patches --merge", "upgrade-leftovers.py",
+                                                     "upgrade-verify.sh ARGO"))], has(calls, "upgrade-leftovers.py")),
+      (["upgrade-label.py wave-patches --merge", "upgrade-leftovers.py --on ten", "upgrade-verify.sh ARGO " + REVS],
+       ["upgrade-leftovers.py --on ten --base " + "e" * 40 + " --head " + "a" * 40]))
 check("  merged at the heads proven - head and base each - ops brought by fetch and fast-forward (never a pull)",
       (open(os.path.join(ST, "merged.expect")).read(), len(has(calls, "git -C " + OPS + " merge -q --ff-only origin/main")),
        has(calls, "git -C " + OPS + " pull")), (H1, 1, []))
@@ -1217,6 +1225,26 @@ HO = "schnappy/ops 7 " + "c" * 40 + " " + "e" * 40 + "\n"
 rc, calls = night("prove centrifugo minor", heads=(HO,), plan="test:copy:playbook PLAYBOOK=upgrade-forgejo.yml ARGS='-e @/x/f.yml'\n")
 check("a unit of ops alone: no merge commit of infra's or platform's for Argo to reach - none asked of verify",
       (rc, [c for c in calls if c.startswith("upgrade-verify.sh AFTER")]), (0, ["upgrade-verify.sh AFTER "]))
+rc, calls = night("prove wave-patches patch", plan=PLAN, files={"leftovers.rc": "1"})
+check("its charts' leftovers not cleared after the merge: paged, and nothing after it - no wait on Argo, no production "
+      "command, no verify, no record",
+      (rc, notices(calls), [c for c in calls if c.startswith(("upgrade-verify.sh ARGO", "upgrade-verify.sh AFTER",
+                                                               "task --yes deploy:kubeadm", "upgrade-record.sh"))]),
+      (1, ["page wave-patches"], []))
+journal_now = open(os.path.join(OPS, ".upgrade-cycle/inflight")).read() if inflight() else ""
+check("  the journal says the step began and never ended; the page says what was not cleared",
+      (re.search(r"Z leftovers$", journal_now, re.M) is not None, "leftovers done" in journal_now,
+       any("what its charts stopped shipping not cleared" in c for c in has(calls, "upgrade-notice.sh page"))),
+      (True, False, True))
+H_BADBASE = "schnappy/infra 4 " + "a" * 40 + " main\nschnappy/ops 7 " + "c" * 40 + " " + "e" * 40 + "\n"
+rc, calls = night("prove wave-patches patch", plan=PLAN, heads=(H_BADBASE,))
+check("infra's base in the heads no commit (a branch name): paged after the merge, no leftovers asked about, nothing after",
+      (merged(calls, "wave-patches"), notices(calls), has(calls, "upgrade-leftovers.py"),
+       [c for c in calls if c.startswith(("upgrade-verify.sh AFTER", "task --yes deploy:kubeadm"))],
+       any("infra's proven base and head not read" in c for c in has(calls, "upgrade-notice.sh page"))),
+      (True, ["page wave-patches"], [], [], True))
+rc, calls = night("prove centrifugo minor", heads=(HO,), plan="test:copy:playbook PLAYBOOK=upgrade-forgejo.yml ARGS='-e @/x/f.yml'\n")
+check("a unit of ops alone: no chart of infra's moved - no leftovers asked about", has(calls, "upgrade-leftovers.py"), [])
 # ── refusals, the lock ──────────────────────────────────────────────────────────────────────────────────────
 rc, calls = night("prove wave-patches patch", plan=PLAN)
 check("the run's pick the plain one (the test environment's units first)", has(calls, "upgrade-units.py pick"),
