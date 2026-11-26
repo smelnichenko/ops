@@ -549,12 +549,12 @@ cases = [
     ("registry.k8s.io/kube-apiserver", "minor", "1.37.2"), ("scylladb/scylla", "minor", "2026.3.6"),
     ("https://github.com/kubernetes-sigs/gateway-api", "minor", "1.7.0"), ("ghcr.io/woodpecker-ci/helm/woodpecker", "minor"),
     ("quay.io/strimzi/kafka", "minor"), ("clickhouse/clickhouse-server", "minor"), ("grafana/grafana", "minor"),
-    ("hashicorp/consul", "minor")]
+    ("hashicorp/consul", "minor"), ("caddy", "minor"), ("quay.io/keycloak/keycloak", "minor", "26.8.2")]
 print([branch(c[0], c[1], version=c[2] if len(c) > 2 else "1.2.0") for c in cases],
       branch("nginx", "minor", "clusters/production/schnappy-test/values.yaml"),
       sorted(p[1:] for p in wave["matchPackageNames"]) == sorted({p for s in t["stores"] for p in s["packages"]}))
 PYWAVE
-)" "['wave-patches', 'wave-patches', 'wave-patches', 'wave-patches', 'wave-patches', 'wave-patches', 'own', 'observability', 'grafana-1.2', 'data-operators', 'data-operators', 'argocd', 'pi-services', 'pi-services', 'istio-1.32', 'kubernetes-1.37', 'scylladb-2026.3', 'gateway-api-1.7', 'manual-woodpecker', 'data-operators', 'clickhouse-1.2', 'grafana-1.2', 'pi-services'] test-wave-patches True"
+)" "['wave-patches', 'wave-patches', 'wave-patches', 'wave-patches', 'wave-patches', 'wave-patches', 'own', 'observability', 'grafana-1.2', 'data-operators', 'data-operators', 'argocd', 'pi-services', 'pi-services', 'istio-1.32', 'kubernetes-1.37', 'scylladb-2026.3', 'gateway-api-1.7', 'manual-woodpecker', 'data-operators', 'clickhouse-1.2', 'grafana-1.2', 'pi-services', 'pi-services', 'keycloak-26.8'] test-wave-patches True"
 # The observability review (2026-11-25): Grafana's and ClickHouse's minors rode in renovate/observability, labelled
 # upgrade-cycle alone - a store's version outside its own unit, so nothing backed it up (Grafana migrates its database
 # one way on every new version from 13 on). Each its own unit now, renovate/<store>-<X.Y>, labelled one-way - its name
@@ -608,11 +608,14 @@ alone = {p for s in t["stores"] for p in s["packages"]} | set(lines["matchPackag
 cases = ["kube-prometheus-stack", "grafana/k6", "postgres", "nginx", "argo-cd", "ghcr.io/cloudnative-pg/postgresql",
          "hashicorp/vault", "hashicorp/consul", "scylladb/scylla", "quay.io/strimzi/kafka", "grafana/grafana",
          "registry.k8s.io/kube-apiserver", "istiod", "cilium", "https://github.com/kubernetes-sigs/gateway-api",
-         "ghcr.io/woodpecker-ci/helm/woodpecker"]
+         "ghcr.io/woodpecker-ci/helm/woodpecker", "quay.io/keycloak/keycloak"]
 print([branch(c, "major") for c in cases], branch("nginx", "major", "clusters/production/schnappy-test/values.yaml"),
       [resolved(c).get("separateMultipleMajor", PRESET["separateMultipleMajor"]) for c in cases],
       {p[1:] for p in group["matchPackageNames"]} == alone, newest["matchPackageNames"] == group["matchPackageNames"],
-      "major" in resolved("kube-prometheus-stack", "major").get("addLabels", []))
+      "major" in resolved("kube-prometheus-stack", "major").get("addLabels", []),
+      # a store's major is one-way wherever its package is named - the runner backs it up first, or blocks it
+      sorted(p for s in t["stores"] for p in s["packages"] if not p.startswith("/")
+             and "one-way" not in resolved(p, "major").get("addLabels", [])))
 PYMAJORS
-)" "['wave-majors', 'wave-majors', 'wave-majors', 'wave-majors', 'wave-majors', 'own', 'own', 'own', 'own', 'own', 'own', 'own', 'own', 'own', 'own', 'manual-woodpecker'] test-wave-majors [False, False, False, False, False, True, True, True, True, True, True, True, True, True, True, False] True True True"
+)" "['wave-majors', 'wave-majors', 'wave-majors', 'wave-majors', 'wave-majors', 'own', 'own', 'own', 'own', 'own', 'own', 'own', 'own', 'own', 'own', 'manual-woodpecker', 'own'] test-wave-majors [False, False, False, False, False, True, True, True, True, True, True, True, True, True, True, False, True] True True True []"
 if [ "$fails" = 0 ]; then echo "upgrade-renovate: ALL-PASS"; else echo "upgrade-renovate: $fails FAILED"; exit 1; fi

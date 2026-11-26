@@ -941,6 +941,12 @@ rc, calls = night("prove centrifugo-6.x minor", files={"list": "centrifugo-6.x m
 check("a one-way label put on during the proof (its labels read again after it): blocked, nothing merged - the copy built",
       (rc, merged(calls, "centrifugo-6.x"), bool(has(calls, "task test:copy:ready")), "scripts/upgrade-stores.json" in blocked_why(calls)),
       (1, False, True, True))
+# Keycloak (plan 122): its store's missing part - no dump right before its version moves - blocks its units on the REAL
+# table, minor and major alike, before anything is built; filling `missing` without the dump fails here
+for unit, kind in (("keycloak-26.8", "minor"), ("quay.io-keycloak-keycloak-27.x", "major")):
+    rc, calls = night(f"prove {unit} {kind}", files={"list": f"{unit} {kind} schnappy/ops one-way,upgrade-cycle\n"})
+    check(f"{unit} (Keycloak, one-way, its dump not yet there): blocked before anything is built, never merged, plan 122 named",
+          (rc, merged(calls, unit), has(calls, "task test:copy"), "plan 122" in blocked_why(calls)), (1, False, [], True))
 rc, calls = night("prove data-operators minor", files={"list": "data-operators minor schnappy/infra one-way,upgrade-cycle\n"})
 check("a unit labelled one-way, its name no store's: blocked, never merged, the table named (a new store is decided there)",
       (rc, merged(calls, "data-operators"), "scripts/upgrade-stores.json" in blocked_why(calls)), (1, False, True))
