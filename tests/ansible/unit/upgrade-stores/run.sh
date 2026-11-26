@@ -27,10 +27,11 @@ def run(unit, labels, table=None):
 check("each store's real unit names: its own store's answer (missing, store) - none unknown",
       sorted({(s["store"], run(e, "one-way")[1]) for s in REAL["stores"] for e in s["examples"]}),
       sorted({(s["store"], "missing" if s["missing"] else "store") for s in REAL["stores"]}))
-# Keycloak stays blocked until plan 122 part 3's dump exists - a literal, not read from the table: emptying its missing
-# part without the dump fails here (delete this check deliberately when the dump lands)
-check("Keycloak's units (minor and major): missing - no dump right before its version moves yet",
-      [run(u, "one-way")[1] for u in ("keycloak-26.8", "quay.io-keycloak-keycloak-27.x")], ["missing", "missing"])
+# Keycloak's dump is its own production command's (plan 122 part 3: tasks/keycloak-restart.yml dumps before any restart
+# onto a new version) - a literal, not read from the table: the runner wants deploy:pi-services in the unit's plan
+check("Keycloak's units (minor and major): its store, the backup taken by deploy:pi-services",
+      [subprocess.run([sys.executable, "-I", "scripts/upgrade-stores.py", u, "one-way"], capture_output=True, text=True).stdout
+       for u in ("keycloak-26.8", "quay.io-keycloak-keycloak-27.x")], ["store keycloak\ntaken-by deploy:pi-services\n"] * 2)
 # Postgres' store is the CNPG image alone (2026-11-21): the plain postgres image in infra and platform is the init-users
 # Job's psql client - its major, postgres-19.x, is an ordinary unit; the databases' image a store's as before
 check("postgres-19.x (the init-users Job's psql client) a unit of no store; the CNPG image's major Postgres' store",

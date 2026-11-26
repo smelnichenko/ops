@@ -158,15 +158,15 @@
         "quay.io/keycloak/keycloak"
       ],
       "backups": [],
-      "missing": [
-        "nothing dumps its database right before its version moves - plan 122 part 3 (a pg_dump in tasks/keycloak-restart.yml, before any restart onto a new version); the Pis' daily pg-keycloak.dump is a day old"
-      ],
+      "missing": [],
       "examples": [
         "keycloak-26.8",
         "quay.io-keycloak-keycloak-27.x"
       ],
-      "taken_by": [],
-      "_why": "Keycloak migrates its database one way (Liquibase, no downgrade) on minors too; it runs on the Pis (setup-pi-services.yml), its database on Patroni"
+      "taken_by": [
+        "deploy:pi-services"
+      ],
+      "_why": "Keycloak migrates its database one way (Liquibase, no downgrade) on minors too; it runs on the Pis (setup-pi-services.yml), its database on Patroni. Its production command takes the backup itself: tasks/keycloak-restart.yml dumps the keycloak database through HAProxy before any Pi restarts onto a new version (/var/backups/keycloak on the play's first Pi, the last 3 kept) - the way back that dump into an emptied database, Keycloak stopped on both Pis, the old symlink back (plan 122)"
     }
   ]
 }

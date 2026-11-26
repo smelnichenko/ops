@@ -941,12 +941,20 @@ rc, calls = night("prove centrifugo-6.x minor", files={"list": "centrifugo-6.x m
 check("a one-way label put on during the proof (its labels read again after it): blocked, nothing merged - the copy built",
       (rc, merged(calls, "centrifugo-6.x"), bool(has(calls, "task test:copy:ready")), "scripts/upgrade-stores.json" in blocked_why(calls)),
       (1, False, True, True))
-# Keycloak (plan 122): its store's missing part - no dump right before its version moves - blocks its units on the REAL
-# table, minor and major alike, before anything is built; filling `missing` without the dump fails here
+# Keycloak (plan 122) on the REAL table: its dump is deploy:pi-services' own (tasks/keycloak-restart.yml) - a unit whose
+# plan proves setup-pi-services.yml applies with that command; one whose plan has not that step is refused, nothing merged
+KHO = "schnappy/ops 7 " + "c" * 40 + " " + "e" * 40 + "\n"  # a unit of ops alone
+KPLAN = ("test:copy:playbook PLAYBOOK=setup-pi-services.yml ARGS='-e @../../tests/ansible/copy/pi-versions.yml "
+         "-e @/x/setup-pi-services-vars.yml'\n")
 for unit, kind in (("keycloak-26.8", "minor"), ("quay.io-keycloak-keycloak-27.x", "major")):
-    rc, calls = night(f"prove {unit} {kind}", files={"list": f"{unit} {kind} schnappy/ops one-way,upgrade-cycle\n"})
-    check(f"{unit} (Keycloak, one-way, its dump not yet there): blocked before anything is built, never merged, plan 122 named",
-          (rc, merged(calls, unit), has(calls, "task test:copy"), "plan 122" in blocked_why(calls)), (1, False, [], True))
+    rc, calls = night(f"prove {unit} {kind}", plan=KPLAN, heads=(KHO,),
+                      files={"list": f"{unit} {kind} schnappy/ops one-way,upgrade-cycle\n"})
+    check(f"{unit} (Keycloak, one-way): proven, merged, deploy:pi-services run (it dumps before the new version starts)",
+          (rc, merged(calls, unit), has(calls, "task --yes deploy:pi-services")), (0, True, ["task --yes deploy:pi-services"]))
+    rc, calls = night(f"prove {unit} {kind}", heads=(KHO,), plan="test:copy:playbook PLAYBOOK=upgrade-forgejo.yml ARGS='-e @/x/f.yml'\n",
+                      files={"list": f"{unit} {kind} schnappy/ops one-way,upgrade-cycle\n"})
+    check(f"  {unit} whose plan lacks setup-pi-services.yml: refused, nothing merged (its backup is that command's)",
+          (rc, merged(calls, unit), "deploy:pi-services" in blocked_why(calls)), (1, False, True))
 rc, calls = night("prove data-operators minor", files={"list": "data-operators minor schnappy/infra one-way,upgrade-cycle\n"})
 check("a unit labelled one-way, its name no store's: blocked, never merged, the table named (a new store is decided there)",
       (rc, merged(calls, "data-operators"), "scripts/upgrade-stores.json" in blocked_why(calls)), (1, False, True))

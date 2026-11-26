@@ -810,6 +810,7 @@ while IFS= read -r step; do
     "test:copy:playbook PLAYBOOK=upgrade-vault.yml"*) cmds+=("deploy:vault:upgrade") ;;
     "test:copy:playbook PLAYBOOK=upgrade-forgejo.yml"*) cmds+=("deploy:forgejo:upgrade") ;;
     "test:copy:playbook PLAYBOOK=setup-caddy.yml"*) cmds+=("deploy:caddy") ;;  # it installs the version pinned
+    "test:copy:playbook PLAYBOOK=setup-pi-services.yml"*) cmds+=("deploy:pi-services") ;;  # Keycloak: its restart onto the new version and its dump first are the playbook's (tasks/keycloak-restart.yml)
     "test:copy:playbook PLAYBOOK=restart-mesh-workloads.yml"*)  # every sidecar on istiod's version - Argo applied it first
       v=$(version_of istio_version "$step") || { stopped "no Istio version in its plan ($step) - nothing merged" "$log"; exit 1; }
       cmds+=("deploy:mesh:restart -- -e istio_version=$v") ;;
