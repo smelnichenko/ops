@@ -1231,6 +1231,18 @@ check("its charts' leftovers not cleared after the merge: paged, and nothing aft
       (rc, notices(calls), [c for c in calls if c.startswith(("upgrade-verify.sh ARGO", "upgrade-verify.sh AFTER",
                                                                "task --yes deploy:kubeadm", "upgrade-record.sh"))]),
       (1, ["page wave-patches"], []))
+journal_now = open(os.path.join(OPS, ".upgrade-cycle/inflight")).read() if inflight() else ""
+check("  the journal says the step began and never ended; the page says what was not cleared",
+      (re.search(r"Z leftovers$", journal_now, re.M) is not None, "leftovers done" in journal_now,
+       any("what its charts stopped shipping not cleared" in c for c in has(calls, "upgrade-notice.sh page"))),
+      (True, False, True))
+H_BADBASE = "schnappy/infra 4 " + "a" * 40 + " main\nschnappy/ops 7 " + "c" * 40 + " " + "e" * 40 + "\n"
+rc, calls = night("prove wave-patches patch", plan=PLAN, heads=(H_BADBASE,))
+check("infra's base in the heads no commit (a branch name): paged after the merge, no leftovers asked about, nothing after",
+      (merged(calls, "wave-patches"), notices(calls), has(calls, "upgrade-leftovers.py"),
+       [c for c in calls if c.startswith(("upgrade-verify.sh AFTER", "task --yes deploy:kubeadm"))],
+       any("infra's proven base and head not read" in c for c in has(calls, "upgrade-notice.sh page"))),
+      (True, ["page wave-patches"], [], [], True))
 rc, calls = night("prove centrifugo minor", heads=(HO,), plan="test:copy:playbook PLAYBOOK=upgrade-forgejo.yml ARGS='-e @/x/f.yml'\n")
 check("a unit of ops alone: no chart of infra's moved - no leftovers asked about", has(calls, "upgrade-leftovers.py"), [])
 # ── refusals, the lock ──────────────────────────────────────────────────────────────────────────────────────

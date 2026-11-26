@@ -147,6 +147,12 @@ gate("an app OutOfSync for a chart's leftovers: the objects needing pruning name
      "ClusterRole/r0, ClusterRole/r1, ClusterRole/r2, ClusterRole/r3, ClusterRole/r4 and 2 more")
 rc, out = run([with_(app("a"), ["status", "sync", "status"], "OutOfSync"), B], P)
 check("  one with nothing needing pruning: no such note", (rc, "needs pruning" in out), (1, False), out)
+UNKNOWN = with_(app("a"), ["status", "sync", "status"], "Unknown")
+UNKNOWN["status"]["resources"] = [{"kind": "Deployment", "name": "d", "status": "Unknown", "requiresPruning": True},
+                                  {"kind": "Job", "name": "hook", "hook": True, "requiresPruning": True}]
+rc, out = run([UNKNOWN, B], P)
+check("  a failed render (every object Unknown, marked requiresPruning) and a hook: none named a leftover",
+      (rc, "needs pruning" in out), (1, False), out)
 gate("the same app allowed out of sync: green", [with_(app("a"), ["status", "sync", "status"], "OutOfSync"), B], P, 0,
      "", "--allow-out-of-sync", "a")
 gate("an app Degraded: not green", [with_(app("a"), ["status", "health", "status"], "Degraded"), B], P, 1, "health=Degraded")

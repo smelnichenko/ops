@@ -107,7 +107,8 @@ def empty(value):
 
 def pruning_note(status):
     """What Argo marks as needing pruning - a chart's leftovers (prune is off): named, so a drift says what it is."""
-    left = [f"{r.get('kind')}/{r.get('name')}" for r in status.get("resources") or [] if r.get("requiresPruning")]
+    left = [f"{r.get('kind')}/{r.get('name')}" for r in status.get("resources") or []
+            if r.get("requiresPruning") and r.get("status") == "OutOfSync" and not r.get("hook")]  # a failed render: Unknown
     if not left:
         return None
     more = f" and {len(left) - 5} more" if len(left) > 5 else ""

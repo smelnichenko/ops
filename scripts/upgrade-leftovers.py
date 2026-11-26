@@ -9,11 +9,17 @@ release that dropped them and where that is said.
 
 For each declared app whose Application file the change moves (git diff <base>...<head> in infra's
 clusters/production/argocd/apps): wait until Argo runs it on the head's chart versions - its spec's targetRevisions
-the head's, compared against that spec, no operation running, nothing out of sync but what needs pruning - then delete
-each declared object Argo marks as needing pruning for that app. A CustomResourceDefinition goes only while no object
-of its kind exists anywhere (deleting it would delete them too): one that has any refuses the app, and nothing of the
-app's is deleted. An object Argo still ships is not touched; one that needs pruning but is not declared is left and
-said - the settle check still fails on it, and names it.
+the head's, compared against that spec AND synced at it (a failed render compares the new spec too, then marks every
+object "to prune" with status Unknown: never acted on), no error condition, Synced or OutOfSync, Healthy (the new
+version rolled out - the vendor's "after the upgrade"), no operation running, nothing out of sync but what needs
+pruning - on two looks in a row; then delete each declared object Argo marks as needing pruning (OutOfSync, no hook)
+for that app. A CustomResourceDefinition goes only while no object of its kind exists anywhere (deleting it would
+delete them too): one that has any refuses the app, and nothing of the app's is deleted. A declaration may name only
+controller wiring (CRDs, RBAC, service accounts, webhooks, config maps, services) - never a workload or anything
+holding data. An object Argo still ships is not touched; one that needs pruning but is not declared is left and said
+- the settle check still fails on it, and names it. On the copy every app is asked to refresh first (the change was
+just pushed), and an app showing an error condition is hard-refreshed once (the repo-server serves a cached failed
+render for an hour).
 
 Usage: scripts/upgrade-leftovers.py --on ten|copy --base <rev> --head <rev> [--minutes N] [--poll S]
   ten   production, through ssh (BatchMode)
@@ -26,6 +32,7 @@ Exit 0: nothing declared moved, or each declared leftover deleted; 1: not reache
 import argparse
 import json
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -38,6 +45,13 @@ APPS_DIR = "clusters/production/argocd/apps/"
 CRD = "CustomResourceDefinition"
 COPY_KUBECTL = "sudo kubectl --kubeconfig /etc/kubernetes/admin.conf"
 BUSY = ("Running", "Terminating")
+COMPARED = ("Synced", "OutOfSync")  # Unknown: a render or fetch failed - the target taken as empty, everything "to prune"
+REFRESH = "argocd.argoproj.io/refresh"
+# the kinds a declaration may name: what a chart's controller wiring is made of - never a workload, a volume, a secret
+# or anything holding data (a declaration naming another kind refuses the run before anything is read)
+DELETABLE = {CRD, "ClusterRole", "ClusterRoleBinding", "Role", "RoleBinding", "ServiceAccount", "ConfigMap", "Service",
+             "ValidatingWebhookConfiguration", "MutatingWebhookConfiguration"}
+REVISION = r"^[\w./-]+$"
 
 
 def say(text):
@@ -53,6 +67,14 @@ def chart_revisions(spec):
     """The targetRevisions of an Application's chart sources, sorted - what "on the new version" is judged by."""
     sources = spec.get("sources") or ([spec["source"]] if spec.get("source") else [])
     return sorted(str(s.get("targetRevision", "")) for s in sources if s.get("chart"))
+
+
+def synced_chart_revisions(spec, sync):
+    """The revisions Argo last synced the chart sources at (sync.revisions lines up with the sources), sorted - empty
+    after a failed render, which is how a target that never rendered is told from one that did."""
+    sources = spec.get("sources") or ([spec["source"]] if spec.get("source") else [])
+    revisions = sync.get("revisions") or ([sync["revision"]] if sync.get("revision") else [])
+    return sorted(str(r) for s, r in zip(sources, revisions) if s.get("chart"))
 
 
 def moved_apps(infra, base, head, declared):
@@ -99,19 +121,45 @@ def read_app(on, name):
         return None
 
 
+def leftover(resource):
+    """A tracked object the app's target no longer holds - Argo's requiresPruning on a compared resource. On a failed
+    render Argo marks every object requiresPruning too, but with status Unknown: never a leftover."""
+    return bool(resource.get("requiresPruning")) and resource.get("status") == "OutOfSync" and not resource.get("hook")
+
+
+def unsettled(status):
+    """Why the app is not compared, synced and healthy on its spec - or None."""
+    errors = [c for c in status.get("conditions") or [] if str(c.get("type", "")).endswith("Error")]
+    if errors:
+        return f"{errors[0].get('type')}: {(errors[0].get('message') or '')[:200]}"
+    sync = (status.get("sync") or {}).get("status")
+    if sync not in COMPARED:
+        return f"its sync status {sync!r} (a render or fetch failed?)"
+    health = (status.get("health") or {}).get("status")
+    if health != "Healthy":
+        return f"its health {health!r} - the new version not yet rolled out"
+    return None
+
+
 def waiting_for(app, want):
     """Why the app is not yet on the head's version with only leftovers out of sync - or None when it is."""
     if app is None:
         return "its Application not read"
     spec, status = app.get("spec") or {}, app.get("status") or {}
-    sync = status.get("sync") or {}
     if chart_revisions(spec) != want:
         return f"its spec still at {chart_revisions(spec)}, the change's {want}"
+    sync = status.get("sync") or {}
     if chart_revisions(sync.get("comparedTo") or {}) != want:
         return "not yet compared against the change's spec"
+    why = unsettled(status)
+    if why:
+        return why
+    if synced_chart_revisions(spec, sync) != want:
+        return f"its chart still synced at {synced_chart_revisions(spec, sync)}"
     if app.get("operation") is not None or (status.get("operationState") or {}).get("phase") in BUSY:
         return "a sync under way"
-    syncing = [r for r in status.get("resources") or [] if r.get("status") == "OutOfSync" and not r.get("requiresPruning")]
+    syncing = [r for r in status.get("resources") or []
+               if not r.get("hook") and r.get("status") != "Synced" and not leftover(r)]
     if syncing:
         return f"{len(syncing)} object(s) not yet synced, e.g. {syncing[0].get('kind')}/{syncing[0].get('name')}"
     return None
@@ -155,7 +203,7 @@ def kinds_empty(on, name, doomed):
 def clear(on, name, app, objects):
     """Delete the app's declared leftovers - each CRD's kind checked empty first, all before any delete. True when done."""
     declared = {key(o) for o in objects}
-    pruning = [r for r in (app.get("status") or {}).get("resources") or [] if r.get("requiresPruning")]
+    pruning = [r for r in (app.get("status") or {}).get("resources") or [] if leftover(r)]
     doomed = [r for r in pruning if key(r) in declared]
     for r in pruning:
         if key(r) not in declared:
@@ -175,36 +223,94 @@ def clear(on, name, app, objects):
     return True
 
 
-def one_round(on, pending, declared):
-    """One look at each pending app: the ready ones cleared and dropped. {app: why it waits}, or None on a failure."""
+def refresh(on, names, how):
+    """Argo asked to compare again now (the copy: the change was just pushed; hard: past the repo-server's cache, which
+    serves a failed render for an hour). Best effort - the wait judges what Argo shows."""
+    if names:
+        kubectl(on, "-n", "argocd", "annotate", "applications.argoproj.io", *names, f"{REFRESH}={how}", "--overwrite")
+
+
+def note_wait(on, name, why, state):
+    """A new reason to wait said; on the copy an error condition hard-refreshed, once an app."""
+    if why == state["said"].get(name):
+        return
+    say(f"{name}: waiting - {why}")
+    state["said"][name] = why
+    if on == "copy" and why.split(":")[0].endswith("Error") and name not in state["hard"]:
+        state["hard"].add(name)
+        refresh(on, [name], "hard")
+
+
+def one_round(on, pending, declared, state):
+    """One look at each pending app: one ready on two looks in a row cleared and dropped (a look between a compare and
+    its sync is no settle), a new reason to wait said. {app: why it waits}, or None on a failure."""
     why = {}
     for name, want in sorted(pending.items()):
         app = read_app(on, name)
         why[name] = waiting_for(app, want)
         if why[name] is not None:
-            continue
-        if not clear(on, name, app, declared[name]):
+            state["ready"].discard(name)
+            note_wait(on, name, why[name], state)
+        elif name not in state["ready"]:
+            state["ready"].add(name)
+            why[name] = "ready at one look - looked at again before anything is deleted"
+        elif clear(on, name, app, declared[name]):
+            del pending[name]
+        else:
             return None
-        del pending[name]
     return why
 
 
 def load(path):
+    """{app: its declared objects} - None (said) when a declaration names a kind no declaration may delete."""
     with open(path) as f:
         data = json.load(f)
-    return {app: [o for entry in entries for o in entry["objects"]] for app, entries in data.items()}
+    declared = {app: [o for entry in entries for o in entry["objects"]] for app, entries in data.items()}
+    bad = [f"{app}: {describe(o)}" for app, objs in declared.items() for o in objs if o.get("kind") not in DELETABLE]
+    if bad:
+        say(f"REFUSED - declared, of a kind never deleted here: {'; '.join(bad)}")
+        return None
+    return declared
 
 
-def main():
+def wait_and_clear(on, pending, declared, minutes, poll, now=time.monotonic, sleep=time.sleep):
+    """Look every poll seconds until each pending app is cleared (0), a clear fails or minutes are up (1)."""
+    if on == "copy":
+        refresh(on, ["--all"], "normal")
+    state = {"ready": set(), "said": {}, "hard": set()}
+    deadline = now() + minutes * 60
+    while True:
+        why = one_round(on, pending, declared, state)
+        if why is None:
+            return 1
+        if not pending:
+            return 0
+        if now() >= deadline:
+            for name in sorted(pending):
+                say(f"{name}: not on the change's version within {minutes:g} min - {why[name]}; nothing of it deleted")
+            return 1
+        sleep(poll)
+
+
+def parser():
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("--on", choices=("ten", "copy"), required=True)
     p.add_argument("--base", required=True)
     p.add_argument("--head", required=True)
     p.add_argument("--minutes", type=float, default=30)
     p.add_argument("--poll", type=float, default=20)
-    a = p.parse_args()
+    return p
+
+
+def main():
+    a = parser().parse_args()
     infra = os.environ.get("UPGRADE_LEFTOVERS_INFRA") or os.path.join(os.path.dirname(OPS), "infra")
-    declared = load(os.path.join(OPS, "scripts", "upgrade-leftovers.json"))
+    if not (re.match(REVISION, a.base) and re.match(REVISION, a.head)) or "-" in (a.base[:1], a.head[:1]):
+        say(f"REFUSED - base {a.base!r} and head {a.head!r}: revisions, both given")
+        return 2
+    declared = load(os.environ.get("UPGRADE_LEFTOVERS_DECLARED") or os.path.join(OPS, "scripts", "upgrade-leftovers.json"))
+    if declared is None:
+        return 1
     try:
         pending = moved_apps(infra, a.base, a.head, declared)
     except (RuntimeError, OSError, subprocess.TimeoutExpired, yaml.YAMLError) as e:
@@ -213,18 +319,7 @@ def main():
     if not pending:
         say("no declared app moved by the change")
         return 0
-    deadline = time.monotonic() + a.minutes * 60
-    while True:
-        why = one_round(a.on, pending, declared)
-        if why is None:
-            return 1
-        if not pending:
-            return 0
-        if time.monotonic() >= deadline:
-            for name in sorted(pending):
-                say(f"{name}: not on the change's version within {a.minutes:g} min - {why[name]}; nothing of it deleted")
-            return 1
-        time.sleep(a.poll)
+    return wait_and_clear(a.on, pending, declared, a.minutes, a.poll)
 
 if __name__ == "__main__":
     sys.exit(main())

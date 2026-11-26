@@ -104,12 +104,19 @@ for name, apps in (("an app out of sync", [app("x", sync="OutOfSync")]), ("an ap
     rc, out = run(apps, OK_PODS)
     check(f"{name}: not settled, named", (rc, "NOT SETTLED" in out, "app x" in out), (1, True, True))
 LEFT = app("x", sync="OutOfSync")
-LEFT["status"]["resources"] = [{"kind": "CustomResourceDefinition", "name": "remoteowners.scylla.scylladb.com",
-                                "status": "OutOfSync", "requiresPruning": True}, {"kind": "Service", "name": "s", "status": "Synced"}]
+LEFT["status"]["resources"] = [{"kind": "Service", "name": "s", "status": "Synced"},
+                               {"kind": "Job", "name": "hook", "hook": True, "requiresPruning": True}] + \
+    [{"kind": "ClusterRole", "name": f"r{i}", "status": "OutOfSync", "requiresPruning": True} for i in range(7)]
 rc, out = run([LEFT], OK_PODS)
-check("an app out of sync for a chart's leftover: the object needing pruning named",
-      (rc, "app x OutOfSync Healthy Succeeded - needs pruning: CustomResourceDefinition/remoteowners.scylla.scylladb.com" in out),
-      (1, True))
+UNKNOWN = app("y", sync="Unknown")
+UNKNOWN["status"]["resources"] = [{"kind": "Deployment", "name": "d", "status": "Unknown", "requiresPruning": True}]
+rc2, out2 = run([UNKNOWN], OK_PODS)
+check("a failed render (every object Unknown, marked requiresPruning): not settled, nothing named a leftover",
+      (rc2, "app y Unknown" in out2, "needs pruning" in out2), (1, True, False))
+check("an app out of sync for a chart's leftovers: those needing pruning named exactly - five and the count of the rest, "
+      "nothing synced, no hook",
+      (rc, "app x OutOfSync Healthy Succeeded - needs pruning: ClusterRole/r0, ClusterRole/r1, ClusterRole/r2, "
+           "ClusterRole/r3, ClusterRole/r4 and 2 more" in out, "Service/s" in out or "Job/hook" in out), (1, True, False))
 rc, out = run(OK_APPS, [pod("schnappy-production", "monitor-1", ready=(True, False))])
 check("a running pod unready: not settled, named", (rc, "pod schnappy-production/monitor-1 unready: c1" in out), (1, True))
 rc, out = run(OK_APPS, [pod("schnappy-production", "chat-1", native=False)])

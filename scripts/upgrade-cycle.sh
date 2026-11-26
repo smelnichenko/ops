@@ -883,9 +883,12 @@ journal "revisions $revs"
 # what a chart the unit moves stopped shipping (declared in scripts/upgrade-leftovers.json), deleted once Argo runs the
 # new version - before any settle: prune is off, so those objects keep the app OutOfSync and verify never passes (the
 # copy's change did the same; data-operators' scylla-operator v1.23.0, 2026-11-26)
+[ -z "$dry" ] || say "RUN scripts/upgrade-leftovers.py --on ten --base <infra's base> --head <infra's head> (a unit with an infra part)"
 infra_part=$(grep '^schnappy/infra ' "$heads" 2> /dev/null)
 if [ -n "$infra_part" ]; then
   read -r _ _ infra_head infra_base <<< "$infra_part"
+  [[ $infra_head =~ ^[0-9a-f]{40}$ && $infra_base =~ ^[0-9a-f]{40}$ ]] \
+    || { page "merged, infra's proven base and head not read ($infra_part) - what its charts stopped shipping not cleared, production not verified"; exit 1; }
   journal "leftovers"
   run scripts/upgrade-leftovers.py --on ten --base "$infra_base" --head "$infra_head" \
     || { page "merged, what its charts stopped shipping not cleared (scripts/upgrade-leftovers.py, see the log) - production not verified"; exit 1; }
