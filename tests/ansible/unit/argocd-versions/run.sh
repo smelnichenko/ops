@@ -6,12 +6,18 @@
 # -m3vr-7329-44ww, -fmxq-cgp8-87wp (critical: the repo-server running commands, reading files; hooks past AppProject)
 # and -4439-h7jw-5cjj (the login's rate limit), fixed in v3.3.15, v3.4.10 and v3.5.4 (2026-10-06). Argo CD holds
 # cluster-admin.
+# A branch's push that moves the chart (an upgrade unit's: Renovate moves the default ahead of production, which the
+# cycle's apply then upgrades) passes the two equalities, said - main's push judges them against production after the
+# apply, as defaults-follow-production does. Main's push and a run without CI: equal, or fail. The security floor
+# holds everywhere.
 set -u
 cd "$(dirname "$0")/../../../.." || exit 1
 PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY'
-import re, sys
+import os, re, sys
 import yaml
 fails = 0
+BRANCH = (os.environ.get("CI_COMMIT_BRANCH") if os.environ.get("CI_PIPELINE_EVENT") == "push"
+          and os.environ.get("CI_COMMIT_BRANCH") != "main" else None)
 
 
 def check(name, got, want):
@@ -30,9 +36,13 @@ inventory = open("tests/ansible/copy/prod-inventory.txt").read()
 helm = re.search(r"(?m)^helm argocd/argocd argo-cd-(\S+) (v\S+)$", inventory)
 image = re.search(r"(?m)^image quay\.io/argoproj/argocd (v\S+)$", inventory)
 check("production's Argo CD read from its inventory (helm and image lines)", bool(helm and image), True)
-if helm and image:
+if helm and image and default != helm[1] and BRANCH:
+    print(f"PASS setup-argocd's default chart {default}, production's {helm[1]}: branch {BRANCH}'s push moves it (an "
+          "upgrade unit) - main's push judges it and its image against production after the apply")
+elif helm and image:
     check("setup-argocd's default chart is production's", default, helm[1])
     check(f"the image setup-argocd puts on chart {default} is production's", pins.get(default) or helm[2], image[1])
+if helm and image:
     version = tuple(int(x) for x in image[1][1:].split("."))
     check(f"production's {image[1]} at least its minor's fixed release",
           version >= FIXED.get(f"{version[0]}.{version[1]}", (0,)), True)
