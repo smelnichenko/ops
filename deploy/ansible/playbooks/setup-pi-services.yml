@@ -15,16 +15,13 @@
   # a restart notified before a later task failed still happens: a re-run would find nothing changed and leave the new
   # config unloaded
   force_handlers: true
-  # Forgejo's version and checksums (shared with upgrade-forgejo.yml, which moves a running Forgejo)
+  # Forgejo's and Keycloak's versions and checksums (shared with upgrade-forgejo.yml and upgrade-keycloak.yml, which move
+  # a running one)
   vars_files:
     - ../vars/forgejo.yml
+    - ../vars/keycloak.yml
 
   vars:
-    # renovate: datasource=docker depName=quay.io/keycloak/keycloak versioning=semver
-    keycloak_version: "26.5.7"
-    # the tarball, its .asc checked against Keycloak's key (scripts/renovate-checksums.py - moved with the version, never
-    # by hand)
-    keycloak_sha256: "34870950e9edfd6e5647e5a95efbd6a235499813c2f652361d84298c74b5711c"
     pi_ip: "{{ node_ip_override | default(ansible_default_ipv4.address) }}"
     pi1_ip: "{{ hostvars['pi1']['ansible_host'] | default('192.168.11.4') }}"
     pi2_ip: "{{ hostvars['pi2']['ansible_host'] | default('192.168.11.6') }}"

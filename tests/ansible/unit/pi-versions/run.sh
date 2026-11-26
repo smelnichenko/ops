@@ -31,7 +31,7 @@ own = {
     "patroni": str(yaml.safe_load(open("deploy/ansible/vars/patroni.yml"))["patroni_version"]),
     "vault": str(yaml.safe_load(open("deploy/ansible/vars/vault.yml"))["vault_version"]),
     "consul": str(yaml.safe_load(open(f"{pb}/setup-consul.yml"))[0]["vars"]["consul_version"]),
-    "keycloak": str(yaml.safe_load(open(f"{pb}/setup-pi-services.yml"))[0]["vars"]["keycloak_version"]),
+    "keycloak": str(yaml.safe_load(open("deploy/ansible/vars/keycloak.yml"))["keycloak_version"]),
     "versitygw": re.search(r"vgw_version \| default\('([0-9.]+)'\)", open(f"{pb}/tasks/versitygw.yml").read())[1],
     "caddy": str(yaml.safe_load(open(f"{pb}/setup-caddy.yml"))[0]["vars"]["caddy_version"]),
 }

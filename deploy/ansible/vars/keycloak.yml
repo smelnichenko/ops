@@ -1,0 +1,8 @@
+---
+# Keycloak's release on the Pis, and its tarball's sha256 - the .asc checked against Keycloak's key
+# (scripts/renovate-checksums.py - moved with the version, never by hand). setup-pi-services.yml installs it where
+# Keycloak is missing; upgrade-keycloak.yml moves a running one to it (its database migrates one way: dumped first, every
+# Pi stopped, the VIP's started first - plan 122).
+# renovate: datasource=docker depName=quay.io/keycloak/keycloak versioning=semver
+keycloak_version: "26.5.7"
+keycloak_sha256: "34870950e9edfd6e5647e5a95efbd6a235499813c2f652361d84298c74b5711c"

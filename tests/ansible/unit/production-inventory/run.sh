@@ -22,7 +22,7 @@ v = lambda f, k: str(yaml.safe_load(open(f"{t}/deploy/ansible/vars/{f}.yml"))[k]
 pv = lambda f, k: str(yaml.safe_load(open(f"{pb}/{f}.yml"))[0]["vars"][k])
 print(" ".join([f"forgejo={v('forgejo', 'forgejo_version')}", f"patroni={v('patroni', 'patroni_version')}",
                 f"vault={v('vault', 'vault_version')}", f"consul={pv('setup-consul', 'consul_version')}",
-                f"keycloak={pv('setup-pi-services', 'keycloak_version')}", f"caddy={pv('setup-caddy', 'caddy_version')}",
+                f"keycloak={v('keycloak', 'keycloak_version')}", f"caddy={pv('setup-caddy', 'caddy_version')}",
                 "versitygw=" + re.search(r"vgw_version \| default\('([0-9.]+)'\)", open(f"{pb}/tasks/versitygw.yml").read())[1]]))
 PY
 )
