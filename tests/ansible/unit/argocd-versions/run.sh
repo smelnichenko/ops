@@ -6,10 +6,12 @@
 # -m3vr-7329-44ww, -fmxq-cgp8-87wp (critical: the repo-server running commands, reading files; hooks past AppProject)
 # and -4439-h7jw-5cjj (the login's rate limit), fixed in v3.3.15, v3.4.10 and v3.5.4 (2026-10-06). Argo CD holds
 # cluster-admin.
-# A branch's push that moves the chart (an upgrade unit's: Renovate moves the default ahead of production, which the
-# cycle's apply then upgrades) passes the two equalities, said - main's push judges them against production after the
-# apply, as defaults-follow-production does. Main's push and a run without CI: equal, or fail. The security floor
-# holds everywhere.
+# A branch's push that moves the chart AHEAD of production (an upgrade unit's: Renovate moves the default, the cycle's
+# apply then upgrades production) passes the two equalities, said - main's push judges them against production after
+# the apply, as defaults-follow-production does; a pin it puts on the new chart is still at least production's image.
+# A chart moved back, a pull request (CI runs on pushes; unlike defaults-follow-production, no target is read here),
+# main's push and a run without CI: equal, or fail. The security floor holds everywhere.
+# Self-tested by tests/ansible/unit/branch-defaults-self.
 set -u
 cd "$(dirname "$0")/../../../.." || exit 1
 PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY'
@@ -36,9 +38,13 @@ inventory = open("tests/ansible/copy/prod-inventory.txt").read()
 helm = re.search(r"(?m)^helm argocd/argocd argo-cd-(\S+) (v\S+)$", inventory)
 image = re.search(r"(?m)^image quay\.io/argoproj/argocd (v\S+)$", inventory)
 check("production's Argo CD read from its inventory (helm and image lines)", bool(helm and image), True)
-if helm and image and default != helm[1] and BRANCH:
-    print(f"PASS setup-argocd's default chart {default}, production's {helm[1]}: branch {BRANCH}'s push moves it (an "
+numbers = lambda v: tuple(int(x) for x in re.findall(r"\d+", str(v)))
+if helm and image and BRANCH and numbers(default) > numbers(helm[1]):
+    print(f"PASS setup-argocd's default chart {default}, production's {helm[1]}: branch {BRANCH}'s push moves it ahead (an "
           "upgrade unit) - main's push judges it and its image against production after the apply")
+    if default in pins:
+        check(f"the image pinned on the moved chart {default} ({pins[default]}) at least production's {image[1]}",
+              numbers(pins[default]) >= numbers(image[1]), True)
 elif helm and image:
     check("setup-argocd's default chart is production's", default, helm[1])
     check(f"the image setup-argocd puts on chart {default} is production's", pins.get(default) or helm[2], image[1])
