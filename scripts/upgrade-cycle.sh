@@ -62,7 +62,9 @@
 #               promotions since aside; ops' main where the gate saw it, or nothing merged; a partial or unknown merge
 #               - any exit but Forgejo's refusal - pages); ops
 #               brought to origin's main (fetch, fast-forward) only when it holds the gate's main and the unit's own
-#               merge alone; Argo settled on the merge (infra's and platform's parts) before each production command
+#               merge alone; what a chart the unit moves stopped shipping deleted once Argo runs the new version
+#               (scripts/upgrade-leftovers.py: declared objects only - prune is off; failing, paged); Argo settled on
+#               the merge (infra's and platform's parts) before each production command
 #   7. verify   Argo settled on the merge, every pod ready, no critical alert through the hold; red: paged
 #   8. record   docs/upgrades/<date>-<unit>.md committed, production's inventory read again; the journal removed
 #
@@ -878,6 +880,17 @@ start_journal
 merge
 revs=$(revisions) || { page "merged, the merge's commits not read - its production commands not run"; exit 1; }
 journal "revisions $revs"
+# what a chart the unit moves stopped shipping (declared in scripts/upgrade-leftovers.json), deleted once Argo runs the
+# new version - before any settle: prune is off, so those objects keep the app OutOfSync and verify never passes (the
+# copy's change did the same; data-operators' scylla-operator v1.23.0, 2026-11-26)
+infra_part=$(grep '^schnappy/infra ' "$heads" 2> /dev/null)
+if [ -n "$infra_part" ]; then
+  read -r _ _ infra_head infra_base <<< "$infra_part"
+  journal "leftovers"
+  run scripts/upgrade-leftovers.py --on ten --base "$infra_base" --head "$infra_head" \
+    || { page "merged, what its charts stopped shipping not cleared (scripts/upgrade-leftovers.py, see the log) - production not verified"; exit 1; }
+  journal "leftovers done"
+fi
 if [ -n "$revs" ] && [ "${#cmds[@]}" -gt 0 ]; then
   # Argo applies infra's and platform's part first, as on the copy - a command (kubeadm restarting the API server)
   # in the middle of its sync fails the sync

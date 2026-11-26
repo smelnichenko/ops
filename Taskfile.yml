@@ -580,6 +580,9 @@ tasks:
       # the refs the copy is to run, recorded first (their commits now): one that fails half-way is still a change's copy
       - cmd: scripts/copy-refs.sh set '{{.INFRA_REF}}' '{{.PLATFORM_REF}}'
       - cmd: env -i HOME="$HOME" PATH="$PATH" scripts/vagrant-gitops-mirror.py --infra-ref {{.INFRA_REF}} --platform-ref {{.PLATFORM_REF}}
+      # what a chart the change moves stopped shipping, deleted once Argo runs the new version - declared objects only
+      # (scripts/upgrade-leftovers.json; prune is off, so they would keep the app OutOfSync), as the cycle does in production
+      - cmd: scripts/upgrade-leftovers.py --on copy --base main --head {{.INFRA_REF}}
       # Argo on the pushed commits, every app green and every pod ready; the apps the build recorded - or, for a change
       # that adds or removes apps, recorded anew (their names printed)
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/argo-settled.yml -e expect_mirror=true {{if eq .APPS_CHANGED "true"}}-e record_apps=true{{else}}-e expect_apps=true{{end}} -e restart_stage=change-$(date +%Y%m%d%H%M%S) {{.COPY_SETTLE}}

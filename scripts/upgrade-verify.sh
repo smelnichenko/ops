@@ -87,6 +87,11 @@ def stalled(a):
     return (auto is not None and auto.get("enabled") is not False and (st.get("sync") or {}).get("status") == "OutOfSync"
             and a.get("operation") is None and op.get("phase") == "Succeeded" and not op.get("syncResult")
             and ((op.get("operation") or {}).get("initiatedBy") or {}).get("automated") is True)
+def pruning_note(st):
+    """What Argo marks as needing pruning - a chart's leftovers (prune is off): named (the copy's argo-settled.py, its twin)."""
+    left = [f"{r.get('kind')}/{r.get('name')}" for r in st.get("resources") or [] if r.get("requiresPruning")]
+    more = f" and {len(left) - 5} more" if len(left) > 5 else ""
+    return f" - needs pruning: {', '.join(left[:5])}{more}" if left else ""
 preview = {((a.get("spec") or {}).get("destination") or {}).get("namespace") for a in apps["items"]
            if (a["metadata"].get("labels") or {}).get("preview-env") == "true"} - {None, ""}
 bad = []
@@ -98,7 +103,8 @@ for a in apps["items"]:
     op = (st.get("operationState") or {}).get("phase", "")
     if sync != "Synced" or health != "Healthy" or op not in ("Succeeded", ""):
         bad.append(f"app {a['metadata']['name']} {sync} {health} {op or '-'}" + (" STALLED (Argo will not sync it again: "
-                                                                                 "sync it by hand)" if stalled(a) else ""))
+                                                                                 "sync it by hand)" if stalled(a) else "")
+                   + pruning_note(st))
     spec = a.get("spec") or {}
     if without_empty(srcs((st.get("sync") or {}).get("comparedTo") or {})) != without_empty(srcs(spec)):
         bad.append(f"app {a['metadata']['name']} compared against an older spec")

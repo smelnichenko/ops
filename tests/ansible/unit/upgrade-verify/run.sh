@@ -103,6 +103,13 @@ for name, apps in (("an app out of sync", [app("x", sync="OutOfSync")]), ("an ap
                    ("a sync still running", [app("x", op="Running")])):
     rc, out = run(apps, OK_PODS)
     check(f"{name}: not settled, named", (rc, "NOT SETTLED" in out, "app x" in out), (1, True, True))
+LEFT = app("x", sync="OutOfSync")
+LEFT["status"]["resources"] = [{"kind": "CustomResourceDefinition", "name": "remoteowners.scylla.scylladb.com",
+                                "status": "OutOfSync", "requiresPruning": True}, {"kind": "Service", "name": "s", "status": "Synced"}]
+rc, out = run([LEFT], OK_PODS)
+check("an app out of sync for a chart's leftover: the object needing pruning named",
+      (rc, "app x OutOfSync Healthy Succeeded - needs pruning: CustomResourceDefinition/remoteowners.scylla.scylladb.com" in out),
+      (1, True))
 rc, out = run(OK_APPS, [pod("schnappy-production", "monitor-1", ready=(True, False))])
 check("a running pod unready: not settled, named", (rc, "pod schnappy-production/monitor-1 unready: c1" in out), (1, True))
 rc, out = run(OK_APPS, [pod("schnappy-production", "chat-1", native=False)])

@@ -105,6 +105,15 @@ def empty(value):
     return value is None or (isinstance(value, (dict, list, str)) and len(value) == 0)
 
 
+def pruning_note(status):
+    """What Argo marks as needing pruning - a chart's leftovers (prune is off): named, so a drift says what it is."""
+    left = [f"{r.get('kind')}/{r.get('name')}" for r in status.get("resources") or [] if r.get("requiresPruning")]
+    if not left:
+        return None
+    more = f" and {len(left) - 5} more" if len(left) > 5 else ""
+    return f"needs pruning (prune is off; a chart's leftovers go in scripts/upgrade-leftovers.json): {', '.join(left[:5])}{more}"
+
+
 def app_problems(app, allowed, mirror):
     name = app["metadata"]["name"]
     spec, status = app.get("spec") or {}, app.get("status") or {}
@@ -112,6 +121,7 @@ def app_problems(app, allowed, mirror):
     problems = []
     if sync.get("status") != "Synced" and name not in allowed:
         problems.append(f"sync={sync.get('status', '?')}")
+        problems += filter(None, [pruning_note(status)])
     if health.get("status") != "Healthy":
         problems.append(f"health={health.get('status', '?')}")
     if op.get("phase") in RUNNING_PHASES:
