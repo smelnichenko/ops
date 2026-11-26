@@ -158,7 +158,9 @@
         "quay.io/keycloak/keycloak"
       ],
       "backups": [],
-      "missing": [],
+      "missing": [
+        "its way back not yet rehearsed on the copy - restoring the pre-upgrade dump into an emptied keycloak database, Keycloak stopped on both Pis, the old version's symlink and pin back, the old version serving with a marker from before the upgrade and none from after (plan 122 part 5)"
+      ],
       "examples": [
         "keycloak-26.8",
         "quay.io-keycloak-keycloak-27.x"
