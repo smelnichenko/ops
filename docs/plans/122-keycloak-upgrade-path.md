@@ -43,3 +43,32 @@
 5. **Review and a copy proof (open).** The full review; then a run on the copy with a real unit (26.5.7 -> 26.8.2:
    its tarball and `.asc` checked by scripts/renovate-checksums.py): both Pis restarted onto 26.8.2, the dump
    there, every check after green. Then the push, with the upgrade cycle idle.
+
+## Rework after the review of 2026-11-27 (ops #79 held)
+
+The review (platform reliability, test quality - real Ansible) refused parts 1-4 as built: the rolling restart ran
+two Keycloak versions on one database while it migrated (Keycloak supports only stop-and-start across minors), a run
+limited to one Pi left them split for good, the dump came after the symlink moved and was keyed on the processes, not
+the database, the cycle's command (deploy:pi-services) ran far more than Keycloak, setup-patroni would have upgraded
+Keycloak outside the cycle, the check after failed on a stopped Keycloak, the dump's check refused every ordinary run
+(real Ansible: the skipped run_once result), and the store was cleared before any way back had run. The shape that
+answers all of it is the one Forgejo and Consul already have:
+
+1. **upgrade-keycloak.yml** (as upgrade-forgejo.yml): every Pi in the run, one installed version on all; the version
+   each serves and the schema the database holds (migration_model); nothing to do when all serve the target; never a
+   downgrade; a run cut short taken forward; the dump BEFORE anything changes - pg_dump through HAProxy on the first
+   Pi, named for the database's version, written aside, checked, the newest pre-upgrade dump never rotated away, its
+   path said; then Keycloak stopped on every Pi, the target's tarball checked and installed, the symlink moved
+   (`ln -sfn`), the VIP's Pi started first (it migrates; Keycloak's database-lock wait), serving the target, then the
+   other; every Pi serving the target.
+2. **setup-pi-services.yml** installs Keycloak where none is (a fresh Pi, the copy's build); where one runs another
+   version it refuses, naming `task deploy:keycloak:upgrade` - never a restart onto a new version.
+   **tasks/keycloak-restart.yml** goes back to file changes alone, plus that refusal (setup-patroni imports it).
+3. **The cycle:** copy-unit.sh proves keycloak_version/keycloak_sha256 with upgrade-keycloak.yml on the copy's Pis;
+   upgrade-cycle.sh maps it to `deploy:keycloak:upgrade`; the store's backup is that command's (taken_by).
+4. **The way back, scripted and rehearsed:** `restore-keycloak.yml` - Keycloak stopped on both Pis, the dump restored
+   into an emptied keycloak database, the old version's symlink back, started, the old version serving; and a copy
+   check (as scylla-way-back-check.yml): a marker before the upgrade there after the restore, one made after the
+   upgrade gone. Only when it passes does the store's `missing` clear.
+5. **Tests:** the playbooks' conditions as Ansible renders them, and a real-Ansible smoke of the run_once/hostvars
+   paths (two local hosts, pg_dump stubbed); the review's revert table re-run.
