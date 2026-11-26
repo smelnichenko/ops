@@ -77,6 +77,18 @@ def synced_chart_revisions(spec, sync):
     return sorted(str(r) for s, r in zip(sources, revisions) if s.get("chart"))
 
 
+def declared_in(text, declared):
+    """{app: its chart revisions} for each declared Application in one file (a file may hold several)."""
+    found = {}
+    for doc in yaml.safe_load_all(text):
+        if not isinstance(doc, dict) or doc.get("kind") != "Application":
+            continue
+        name = (doc.get("metadata") or {}).get("name")
+        if name in declared:
+            found[name] = chart_revisions(doc.get("spec") or {})
+    return found
+
+
 def moved_apps(infra, base, head, declared):
     """{app: the head's chart revisions} for each declared app whose Application file the change moves."""
     rc, out = git(infra, "diff", "--name-only", f"{base}...{head}", "--", APPS_DIR)
@@ -85,13 +97,8 @@ def moved_apps(infra, base, head, declared):
     moved = {}
     for path in filter(None, out.splitlines()):
         rc, text = git(infra, "show", f"{head}:{path}")
-        if rc != 0:
-            continue  # gone at the head: its app is root's to remove, not a chart's leftover
-        for doc in yaml.safe_load_all(text):
-            if isinstance(doc, dict) and doc.get("kind") == "Application":
-                name = (doc.get("metadata") or {}).get("name")
-                if name in declared:
-                    moved[name] = chart_revisions(doc.get("spec") or {})
+        if rc == 0:  # else gone at the head: its app is root's to remove, not a chart's leftover
+            moved.update(declared_in(text, declared))
     return moved
 
 
