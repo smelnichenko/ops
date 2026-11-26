@@ -2,8 +2,9 @@
 # Runs every Ansible unit harness (localhost plays, no infrastructure). Each
 # harness directory carries its own run.sh; a non-zero exit fails the build.
 # Usage: tests/ansible/unit/run.sh [harness directory, default this one]
-# UNIT_JOBS harnesses run side by side, as processes (default 4: CI's container has 4 CPUs - one by one the suite
-# outgrew Woodpecker's 60 min limit, 2026-10-20); each one's output is printed whole, in the suite's order.
+# UNIT_JOBS harnesses run side by side, as processes (default 4 - one by one the suite outgrew Woodpecker's 60 min
+# limit, 2026-10-20; CI's step sets 8, its 8 CPUs since 2026-11-25); each one's output is printed whole, in the suite's
+# order.
 set -u
 # a directory that is none fails (an empty H globbed /*/run.sh)
 H=$(cd "${1:-$(dirname "$0")}" && pwd) || exit 1

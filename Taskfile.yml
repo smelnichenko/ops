@@ -817,10 +817,12 @@ tasks:
       # after a change: its own differences printed for review, any the build had too failing (production moved), and
       # what the checks changed since the change settled failing (a check's leftovers)
       - cmd: scripts/vagrant-inventory.sh
+      # COPY_UNIT_MOVES (the environment's): what the unit moves - the upgrade cycle's proof sets it (scripts/upgrade-cycle.sh's
+      # prove); the change's inventory must show it
       - cmd: |
           if [ "{{.CHANGE}}" = yes ]; then
             scripts/copy-change-inventory.sh tests/ansible/copy/prod-inventory.txt .copy/vagrant-inventory-build.txt \
-              .copy/vagrant-inventory-after-change.txt .copy/vagrant-inventory.txt {{.ALLOWED_MISSING}}
+              .copy/vagrant-inventory-after-change.txt .copy/vagrant-inventory.txt {{.ALLOWED_MISSING}} ${COPY_UNIT_MOVES:-}
           else
             scripts/inventory-diff.sh tests/ansible/copy/prod-inventory.txt .copy/vagrant-inventory.txt {{.ALLOWED_MISSING}}
           fi
@@ -1355,6 +1357,15 @@ tasks:
     prompt: "Swap containerd on PRODUCTION (the kubelet stopped for the install)?"
     cmds:
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/upgrade-containerd.yml {{.CLI_ARGS}}
+
+  deploy:argo:sync:
+    desc: "PRODUCTION: an Argo CD application synced now, its hooks required to succeed (argo-sync-app.yml -- -e argo_app=<it>) - the upgrade cycle's command after a unit moving what production runs only as a hook (k6)"
+    dir: deploy/ansible
+    deps: [deploy:install]
+    dotenv: ['../../.env']
+    prompt: "Sync the Argo CD application on PRODUCTION?"
+    cmds:
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/argo-sync-app.yml {{.CLI_ARGS}}
 
   deploy:mesh:restart:
     desc: "PRODUCTION: every sidecar brought to the control plane's Istio version (restart-mesh-workloads.yml -- -e istio_version=<it>) - the data stores first, then the apps"

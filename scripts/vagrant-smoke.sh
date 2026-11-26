@@ -57,6 +57,12 @@ mounts = [v for v in job["spec"]["template"]["spec"]["volumes"]
 if len(mounts) != 1:
     sys.exit("smoke render: the Job no longer mounts ConfigMap schnappy-k6-smoke - update this script")
 mounts[0]["configMap"]["name"] = name
+# every sample tagged with the run's name: its metrics told apart in Mimir from the PostSync hook's own k6 (the same
+# namespace and source tags) - the remote shell asks for them by it
+k6 = [c for c in job["spec"]["template"]["spec"].get("containers", []) if c.get("name") == "k6"]
+if len(k6) != 1 or k6[0].get("command", [])[:2] != ["k6", "run"]:
+    sys.exit("smoke render: the Job's k6 container no longer runs 'k6 run' - update this script")
+k6[0]["command"][2:2] = ["--tag", f"testid={name}"]
 print(yaml.safe_dump_all([cm, job], sort_keys=False))
 EOF
 
@@ -123,6 +129,18 @@ $K logs "job/$NAME" -c k6 --tail=80 | grep -E '[✓✗]|http_req_failed|level=(e
 passed=$($K get job "$NAME" -o jsonpath='{.status.succeeded}')
 # its checks are printed above; a failed pod left behind would hold the next settle wait (argo-settled.yml) - the
 # EXIT trap deletes the Job and its ConfigMap
+# k6 exits 0 with its remote write failing (the observability review, 2026-11-25): passed only once the run's own metrics
+# are in Mimir - k6_checks_rate, which production's K6Smoke rules read, under the run's testid (pick.py tags them)
+if [ "$passed" = 1 ]; then
+  seen=0
+  for _ in $(seq 12); do
+    seen=$($K get --raw "/api/v1/namespaces/schnappy-infra/services/schnappy-mimir:9009/proxy/prometheus/api/v1/query?query=count(k6_checks_rate%7Btestid%3D%22$NAME%22%7D)" 2> /dev/null \
+      | python3 -c 'import json, sys; print(len(json.load(sys.stdin)["data"]["result"]))' 2> /dev/null) || seen=0
+    [ "${seen:-0}" -gt 0 ] && break
+    sleep "$SMOKE_POLL"
+  done
+  [ "${seen:-0}" -gt 0 ] || { echo "SMOKE FAILED: k6 passed, but its metrics never reached Mimir (k6_checks_rate, testid $NAME - its remote write)"; exit 1; }
+fi
 if [ "$passed" = 1 ]; then echo "SMOKE PASSED"; else echo "SMOKE FAILED${ended:+ ($ended)}"; exit 1; fi
 SH
 }

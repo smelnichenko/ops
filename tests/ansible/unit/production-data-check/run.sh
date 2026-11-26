@@ -31,8 +31,11 @@ case "$a" in
   *"clickhouse-client"*) echo "${LOG_ROWS:-42}" ;;
   *"/api/datasources/uid/"*) echo "{\"status\": \"${DS:-OK}\"}" ;;
   *"/api/datasources"*) printf '['; sep=; for u in ${DS_LISTED-prom ch}; do printf '%s{"uid": "%s"}' "$sep" "$u"; sep=', '; done; echo ']' ;;
-  *" get configmap schnappy-grafana-datasources "*)
-    printf 'apiVersion: 1\ndatasources:\n'; for u in ${DS_PROV-prom ch}; do printf '  - name: %s\n    uid: %s\n' "$u" "$u"; done ;;
+  # the ConfigMap read WHOLE, as the play asks: a jsonpath on the dotted key lost its backslash to the command module's
+  # split and read nothing (the copy run of 2026-11-25) - any other read of it is "unexpected" here
+  *" get configmap schnappy-grafana-datasources -o json ")
+    y='apiVersion: 1\ndatasources:\n'; for u in ${DS_PROV-prom ch}; do y="$y  - name: $u\n    uid: $u\n"; done
+    printf '{"data": {"datasources.yml": "%s"}}\n' "$y" ;;
   *" get clusters.postgresql.cnpg.io "*)
     echo "{\"items\": [{\"metadata\": {\"namespace\": \"p\", \"name\": \"pg\"}, \"spec\": {\"instances\": 2},
       \"status\": {\"phase\": \"${PG_PHASE:-Cluster in healthy state}\", \"readyInstances\": 2, \"currentPrimary\": \"pg-1\",
