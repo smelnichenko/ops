@@ -1308,6 +1308,31 @@ tasks:
           trap - EXIT
           pb "$C" $V -e phase=cleanup -e marker="$M"
 
+  test:copy:consul-way-back:
+    desc: "Vagrant: Consul's way back with production's playbooks - CONSUL_TO=<newer> CONSUL_TO_SHA256=<its amd64 zip's> (the Consul unit's target): a KV marker, upgrade-consul.yml to it, a second marker, restore-consul.yml (its snapshot into a new cluster on the pin's binary): the pin on all three servers, three voters and a leader, the first marker there, the second gone, Patroni healthy and the database writable, Vault unsealed with one active, External Secrets reading it (a readied copy, alone)"
+    dir: deploy/ansible
+    deps: [deploy:install]
+    requires:
+      vars: [CONSUL_TO, CONSUL_TO_SHA256]
+    cmds:
+      # the copy's VMs used: one run at a time (scripts/copy-lock.sh - a nested task shares its caller's lock)
+      - cmd: ../../scripts/copy-lock.sh
+      # each playbook behind the Vagrant guard, production's secrets kept out (env -i), the marker one per run
+      - cmd: |
+          set -euo pipefail
+          M=way-back-$(date -u +%Y%m%dT%H%M%SZ)
+          C=../../tests/ansible/copy/consul-way-back-check.yml
+          pb() { env -i HOME="$HOME" PATH="$PATH" venv/bin/ansible-playbook -i inventory/vagrant.yml "$@"; }
+          trap 'pb "$C" -e phase=cleanup -e marker="$M"' EXIT
+          pb "$C" -e phase=before -e marker="$M" -e consul_to='{{.CONSUL_TO}}'
+          pb ../../tests/ansible/vagrant-only-play.yml playbooks/upgrade-consul.yml -e consul_version='{{.CONSUL_TO}}' -e '{"consul_checksums": {"amd64": "{{.CONSUL_TO_SHA256}}"}}'
+          pb "$C" -e phase=after -e marker="$M"
+          pb ../../tests/ansible/vagrant-only-play.yml playbooks/restore-consul.yml -e confirm="$(cat ../../.copy/consul-way-back-confirm)"
+          pb "$C" -e phase=verify -e marker="$M"
+          # on success the cleanup a command of its own (a failing EXIT trap never fails the task); the trap for a failure
+          trap - EXIT
+          pb "$C" -e phase=cleanup -e marker="$M"
+
   test:pi:rerun-guards:
     desc: "Vagrant: re-running the Pi playbooks is safe - setup-patroni refuses while Patroni is stopped (its data untouched), passes while it runs and keeps the database port; setup-consul keeps the key and restarts nothing; setup-keepalived reloads a changed config (PgBouncer put in front first, as on the Pis, where missing)"
     deps: [deploy:install]
@@ -1623,6 +1648,15 @@ tasks:
     prompt: "Upgrade Consul on PRODUCTION?"
     cmds:
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/upgrade-consul.yml {{.CLI_ARGS}}
+
+  deploy:consul:way-back:
+    desc: "PRODUCTION: the way back from a Consul upgrade - after the unit is reverted (setup-consul.yml's old pin - refused otherwise), confirmed with -- -e confirm=<the snapshot's file name>: Patroni paused and stopped (Postgres keeps running), Vault stopped, the three servers a new cluster on the kept old binary, the pre-upgrade snapshot restored, Patroni back (the primary first) and Vault unsealed (everything written to Consul since the snapshot lost - Vault's secrets too)"
+    dir: deploy/ansible
+    deps: [deploy:install]
+    dotenv: ['../../.env']
+    prompt: "Restore Consul's whole state on PRODUCTION from the pre-upgrade snapshot (everything written since it lost)?"
+    cmds:
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/restore-consul.yml {{.CLI_ARGS}}
 
   test:consul-upgrade:
     desc: "Vagrant: Consul's servers set back to 1.20.5, a key written; a server down refused; upgrade-consul.yml as in production, sampled - every server on setup-consul.yml's version, never 15 s without a leader, the key back, the old binary kept, the snapshot this run's; again nothing to do; a downgrade refused"

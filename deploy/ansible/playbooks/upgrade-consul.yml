@@ -6,9 +6,9 @@
 # healthy (also checked when nothing is to do), each binary on disk the one its agent runs; a snapshot of the whole
 # state (Vault's storage, Patroni's leader keys) into /var/backups/consul-upgrade on pi1, inspected; the running binary
 # kept beside the new (/usr/local/bin/consul-<ver>). After: every server on the version, three voters, one leader,
-# autopilot healthy - and Vault (its storage) answering on both Pis. The way back: that binary, and if the new version
-# wrote what the old cannot read, the snapshot (consul snapshot restore - Vault and Patroni stopped) - by hand. Never a
-# downgrade; a server already on the version is not restarted; nothing to do when all are. Any server failing stops the
+# autopilot healthy - and Vault (its storage) answering on both Pis. The way back: that binary and the snapshot together -
+# an old binary may not read what the new one wrote - by restore-consul.yml (task deploy:consul:way-back, rehearsed by
+# task test:copy:consul-way-back). Never a downgrade; a server already on the version is not restarted; nothing to do when all are. Any server failing stops the
 # run (any_errors_fatal).
 #
 # The version comes from setup-consul.yml's play vars (one place - what a new install installs), or -e consul_version

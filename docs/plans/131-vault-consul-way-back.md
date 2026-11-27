@@ -1,9 +1,11 @@
 # Plan 131 - Vault's and Consul's way back, rehearsed on the copy (minimum plan)
 
-**Status:** the operator answered the question (2026-11-27: keep the root token) - building. Vault's part (items 1-2 and
-the root token) on its own branch: restore-vault.yml, the copy check, upgrade-vault.yml's root-token check and its
-backups fetched off the Pi, backup-vault-keys.yml requiring the token; its store's `missing` clears only once
-`task test:copy:vault-way-back` passes. Consul's part (items 3-4) next.
+**Status:** the operator answered the question (2026-11-27: keep the root token). Vault's part (items 1-2 and the root
+token) merged (ops #84): restore-vault.yml, the copy check, upgrade-vault.yml's root-token check and its backups fetched
+off the Pi, backup-vault-keys.yml requiring the token; its store's `missing` clears only once
+`task test:copy:vault-way-back` passes. Consul's part (items 3-4) built on its own branch - restore-consul.yml, its copy
+check, `task deploy:consul:way-back` and `task test:copy:consul-way-back`; its store's `missing` clears only once that
+passes.
 
 ## Why
 
@@ -59,18 +61,40 @@ replaced by a refusal. Also: the kept binary's version and the export's seal con
 the export host's Consul leader asked, the import compared key by key, the newest export by name, the root token proven
 on the restored keys.
 
-## Consul's part - its design (next)
+## Consul's part - built (2026-11-27)
 
 `upgrade-consul.yml` leaves a whole-state snapshot on pi1 and the old binary on all three servers. An old binary may not
 read a raft data directory the new one wrote, and `consul snapshot restore` needs a cluster on the snapshot's version, so
-the way back is: Patroni paused (scripts/patroni-pause.py, as setup-consul's restarts do), Vault stopped on both Pis;
-the three servers stopped, their data directories moved aside (never deleted), the old binary back, a fresh cluster of
-three (bootstrap_expect) with a leader, the snapshot restored, three voters healthy; Patroni resumed (its leader key as
-the snapshot holds it - the rehearsal must show Patroni takes it back cleanly), Vault started and unsealed. Its copy check:
-a KV marker and a Patroni-side write before, the upgrade, markers after, the restore; the old version on all three, the
-database writable through its leader, Vault unsealed, the before-marker there and the after-marker gone.
+`restore-consul.yml` starts the servers again as a new cluster on the old binary and restores the snapshot into it.
+Refused before anything stops: a server left out of the run, no snapshot (the newest on pi1 by name, or one given), the
+unit not reverted (setup-consul.yml's pin not the snapshot's version), not confirmed by the snapshot's name, the kept
+binary gone or another version on any server, a snapshot that binary cannot inspect, Postgres on the Pis not one primary
+and a running replica (read from Postgres itself), Patroni paused already, a tier-0 backup or a restore check running
+(each holds a Consul lock).
+
+What the design above left open, decided in the build:
+- **Patroni stopped, not only paused.** The snapshot holds Patroni's state from before any pause, so a pause does not
+  survive the restore, and the new cluster is empty until the snapshot goes in. Patroni is paused (this run's marker),
+  then stopped on both Pis - paused, it leaves Postgres running and serving; HAProxy's check marks the primary down
+  without Patroni's REST, so the database is away through HAProxy until Patroni is back (Vault is down then too).
+- **Patroni's stale keys deleted.** After the restore, the snapshot's leader and member keys belong to sessions that died
+  with the old cluster; a leader key naming the other Pi would demote the running primary. They are deleted (initialize,
+  config and history kept), Patroni starts on the primary's Pi first and must hold the leader key, then the replica.
+- **The node-id and gossip keyring carried over.** Each data directory is set aside whole; the new one gets the node's
+  node-id (the catalog names each node by it - a new id would clash with the restored catalog) and its keyring (the key
+  the servers use; consul.hcl's is read only by an empty keyring).
+- **A run again after a failure** takes up where it stopped: Patroni already stopped needs no pause (Postgres is read
+  directly), the data is set aside again, the node-id carried from the last set-aside copy.
+
+Its copy check (`tests/ansible/copy/consul-way-back-check.yml`): a KV marker before, `upgrade-consul.yml` to the target,
+a marker after, the restore; then the pin on all three, three voters and a leader, the before-marker there with its value
+and the after-marker gone, Patroni healthy and the database writable through each Pi's HAProxy, Vault unsealed with one
+active, External Secrets reading it after a forced sync.
 
 ## Could add later (not needed to clear the gates)
+
+- Consul's way back with Consul down (no quorum): the pause needs Consul answering, so today that case is refused before
+  anything stops and is a hand job.
 
 - A rehearsal of the likelier trigger: upgrade-vault.yml failing in the active's turn (a 2.x standby beside a 1.21
   active), then restore-vault.yml - the review's suggestion.

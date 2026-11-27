@@ -33,8 +33,8 @@ check("Keycloak's units (minor and major): its store - its way back rehearsed gr
 # literal, not read from the table: the runner wants deploy:keycloak:upgrade in the unit's plan
 check("  its store taken by deploy:keycloak:upgrade (the playbook that dumps it)",
       next(s for s in REAL["stores"] if s["store"] == "keycloak")["taken_by"], ["deploy:keycloak:upgrade"])
-# Vault's and Consul's own commands take their snapshots, but the way back from them has never run (by hand, the
-# playbooks' headers say): blocked until a way-back check passes on the copy - a literal, as Keycloak's
+# Vault's and Consul's own commands take their snapshots, and their way backs are scripted (restore-vault.yml,
+# restore-consul.yml) but have never run on the copy: blocked until a way-back check passes there - a literal, as Keycloak's
 check("Vault's and Consul's majors: missing - their way backs not yet rehearsed; their commands still the ones taking the snapshot",
       ([run(u, "major,one-way")[1] for u in ("hashicorp-vault-2.x", "hashicorp-consul-2.x")],
        [next(s for s in REAL["stores"] if s["store"] == x)["taken_by"] for x in ("vault", "consul")]),
