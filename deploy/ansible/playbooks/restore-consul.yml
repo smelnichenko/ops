@@ -555,7 +555,8 @@
     - name: The way back - from the first stop to everything serving
       block:
         # judged by whether they are enabled (setup-pi-backups and setup-pi-restore-check enable them; this play never
-        # disables them): a run again after one that stopped them still starts them at its end
+        # disables them): a run again after one that stopped them still starts them at its end. A timer a host has not
+        # (not-found: the copy's Pis have neither - the first rehearsal failed on it, 2026-11-28) is left alone
         - name: The Consul-locked jobs' timers - enabled here or not
           ansible.builtin.command:
             argv: [systemctl, is-enabled, "{{ item }}.timer"]
@@ -567,10 +568,12 @@
 
         - name: Their timers stopped (started again at the end where enabled)
           ansible.builtin.systemd:
-            name: "{{ item }}.timer"
+            name: "{{ item.item }}.timer"
             state: stopped
-          loop: "{{ consul_lock_jobs }}"
-          when: inventory_hostname in groups['pis']
+          loop: "{{ _lock_timers.results | default([]) }}"
+          loop_control:
+            label: "{{ item.item }}"
+          when: inventory_hostname in groups['pis'] and item.stdout | default('') not in ['', 'not-found']
 
         - name: Unattended-upgrades' timer on ten - enabled or not
           ansible.builtin.command:
@@ -584,7 +587,7 @@
           ansible.builtin.systemd:
             name: apt-daily-upgrade.timer
             state: stopped
-          when: inventory_hostname not in groups['pis']
+          when: inventory_hostname not in groups['pis'] and _apt_timer.stdout | default('') not in ['', 'not-found']
 
         - name: The jobs read again, their timers stopped
           ansible.builtin.command:
@@ -1072,7 +1075,7 @@
         - name: Where the way back stopped, and what to run
           ansible.builtin.fail:
             msg: >-
-              FAILED after the first stop, at "{{ ansible_failed_task.name | default('?') }}"
+              FAILED after the first stop, at "{{ ansible_failed_task.name | default("another server's failure (every server stops with it)") }}"
               ({{ ansible_failed_result.msg | default(ansible_failed_result.stderr | default('')) }}) - nothing is undone by
               this play. Patroni may be stopped and off at a boot on both Pis, Postgres running unmanaged on them
               ({{ _pg_primary }} the primary at the start - patronictl list says which now; no failover, the database away
