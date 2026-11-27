@@ -28,7 +28,7 @@
         src: "{{ item }}"
         dest: "{{ vault_recovery_dir }}/"
         flat: true
-        fail_on_missing: false
+        fail_on_missing: true  # both required - a copy left on the controller by an earlier run never passes for one gone
       loop:
         - /etc/vault-unseal/unseal-keys
         - /etc/vault-unseal/root-token

@@ -886,9 +886,9 @@
 
     # the root token on pi2 too, as the shares are (read on pi1 into memory, on stdin, only when pi2's differs, root's
     # alone): the Vault-admin plays run on the Pi holding the VIP and read the token where they run - on pi1 alone,
-    # every one of them failed while pi1 was down. Root's own token, none if setup purged it on pi1 (then none sent)
-    # none on pi1 (purged there) is an answer - pi2's goes too, below; any failure to look or to read fails the play
-    # (skipped, a later Vault-admin play on pi2 would fail with a 403 or a stale token)
+    # every one of them failed while pi1 was down. Root's own token, required on both since 2026-11-27 (Vault 2.x needs
+    # it for sys/rekey and sys/generate-root - the operator's choice): none on pi1 is refused below, its step named;
+    # any failure to look or to read fails the play (skipped, a later Vault-admin play would fail with a 403)
     - name: Whether pi1 holds the root token
       ansible.builtin.stat:
         path: /etc/vault-unseal/root-token
@@ -947,23 +947,16 @@
         mode: '0400'
       when: _pi2_token_sum.rc == 0 or (_pi1_token.content is defined and not ansible_check_mode)
 
-    # pi1 without a token and pi2 with one: a purge on pi1 (pi2's copy would outlive it) or pi1 rebuilt without its token
-    # (pi2's the last copy) - the run cannot tell which, so it removes nothing unless told (-e vault_root_token_purged=true)
-    - name: Pi2's root token kept while pi1 has none, unless its purge is said
+    # pi1 without a token: refused, never purged - pi2's (or backup-vault-keys.yml's copy) is the break-glass now
+    - name: The root token on pi1 - required (Vault 2.x's break-glass), never purged
       ansible.builtin.assert:
-        that: _pi2_token_sum.rc != 0 or (vault_root_token_purged | default(false) | bool)
+        that: _pi1_token.content is defined
         fail_msg: >-
-          pi1 holds no root token, pi2 does: pi1 rebuilt without it - copy pi2's back to pi1
-          (/etc/vault-unseal/root-token, root 0400) and run again; or it was purged on purpose - run again with
-          -e vault_root_token_purged=true to remove pi2's copy too
+          REFUSED: pi1 holds no root token - required on both Pis (Vault 2.x needs it for sys/rekey and sys/generate-root):
+          {{ "copy pi2's back to pi1 (/etc/vault-unseal/root-token, root 0400)" if _pi2_token_sum.rc == 0 else
+          "neither Pi holds one - put backup-vault-keys.yml's copy back on pi1, or make one with vault operator
+          generate-root (1.x: the key shares alone)" }}, then run again
         quiet: true
-      when: _pi1_token.content is not defined
-
-    - name: Pi2's root token gone with pi1's, its purge said
-      ansible.builtin.file:
-        path: /etc/vault-unseal/root-token
-        state: absent
-      when: _pi1_token.content is not defined and (vault_root_token_purged | default(false) | bool)
 
     - name: Unseal pi2 if sealed (its own script - the key shares never on a command line)
       ansible.builtin.command: /etc/vault-unseal/unseal.sh

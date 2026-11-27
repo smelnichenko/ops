@@ -3,8 +3,9 @@
 # playbook's `before` (both Pis unsealed on vars/vault.yml's pin; a secret written); upgrade-vault.yml to a newer
 # version (the Vault unit's target - its snapshot and export taken, both Vaults moved); `after` (a second secret on the
 # new version; the newest export's name for the restore's confirmation); restore-vault.yml (that export into vault/,
-# the pin's binary back); `verify` (the pin unsealed on both Pis, one active, the first secret there, the second gone);
-# `cleanup` always (both secrets' paths deleted). The marker's name is the task's, one per run. Only when this passes
+# the pin's binary back); `verify` (the pin unsealed on both Pis, one active, the first secret there with its value, the
+# second gone; External Secrets reading the restored Vault through the VIP - its store Ready, an ExternalSecret
+# force-synced after the restore); `cleanup` always (both secrets' paths deleted). The marker's name is the task's, one per run. Only when this passes
 # may the vault store's `missing` clear (scripts/upgrade-stores.json - the one-way rule: the way back rehearsed first).
 #
 # Usage: ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/vault-way-back-check.yml
@@ -21,8 +22,11 @@
   vars:
     vault_api: https://127.0.0.1:8200
     kv_pi: "{{ groups['pis'] | first }}"
-    # the root token the copy's Vault was initialised with (setup-vault-pi); a standby forwards to the active
-    vault_env: export VAULT_ADDR={{ vault_api }} VAULT_CACERT=/etc/vault.d/tls/ca-cert.pem VAULT_TOKEN=$(cat /etc/vault-unseal/root-token)
+    # the root token the copy's Vault was initialised with (setup-vault-pi), read on its own line and never empty (else
+    # the CLI's token helper would answer); a standby forwards to the active
+    vault_env: >-
+      T=$(cat /etc/vault-unseal/root-token); [ -n "$T" ];
+      export VAULT_ADDR={{ vault_api }} VAULT_CACERT=/etc/vault.d/tls/ca-cert.pem VAULT_TOKEN=$T
   tasks:
     - name: A phase and a marker name given (one per run - the task's)
       ansible.builtin.assert:
@@ -94,7 +98,7 @@
           set -euo pipefail
           shopt -s nullglob
           exports=(/var/backups/vault-upgrade/consul-*-vault-*.vault-kv.json)
-          [ -z "${exports[0]-}" ] || ls -1t "${exports[@]}" | head -n 1
+          [ -z "${exports[0]-}" ] || printf '%s\n' "${exports[@]}" | LC_ALL=C sort | tail -n 1
       register: _newest
       changed_when: false
       when: phase == 'after'
@@ -124,10 +128,29 @@
       no_log: true
       when: phase == 'verify'
 
-    - name: Verify - the secret from before there, the one from after gone
+    - name: Verify - the value of the one from before
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          {{ vault_env }}
+          vault kv get -field=phase secret/way-back/{{ marker }}-before
+      register: _value
+      changed_when: false
+      failed_when: false
+      delegate_to: "{{ kv_pi }}"
+      run_once: true
+      no_log: true
+      when: phase == 'verify'
+
+    - name: Verify - the secret from before there with its value, the one from after gone
       ansible.builtin.assert:
-        that: _secrets.stdout_lines == [marker ~ '-before']
-        fail_msg: "VAULT WAY BACK FAILED: secrets after the restore {{ _secrets.stdout_lines }} (want ['{{ marker }}-before'])"
+        that:
+          - _secrets.stdout_lines == [marker ~ '-before']
+          - _value.stdout | default('') | trim == 'before'
+        fail_msg: >-
+          VAULT WAY BACK FAILED: secrets after the restore {{ _secrets.stdout_lines }} (want ['{{ marker }}-before']), its
+          value '{{ _value.stdout | default('') | trim }}' (want 'before')
         success_msg: >-
           VAULT WAY BACK OK: upgraded, then restored - the secret from before there, the one from after gone;
           Vault {{ vault_version }} unsealed on {{ ansible_play_hosts | join(', ') }}, one active
@@ -147,3 +170,47 @@
       run_once: true
       no_log: true
       when: phase == 'cleanup'
+
+# External Secrets is production's consumer: through the VIP, Kubernetes auth, the restored keys - its store Ready, and
+# an ExternalSecret force-synced now refreshed after the restore and Ready (a store judged by its age alone proves nothing)
+- name: Vault's way back - External Secrets reads the restored Vault
+  hosts: target
+  become: true
+  gather_facts: false
+  vars:
+    kubectl: kubectl --kubeconfig /etc/kubernetes/admin.conf
+  tasks:
+    - name: Verify - the ClusterSecretStore Ready
+      ansible.builtin.command:
+        argv: [kubectl, --kubeconfig, /etc/kubernetes/admin.conf, get, clustersecretstore, vault-backend, -o,
+               "jsonpath={.status.conditions[?(@.type=='Ready')].status}"]
+      register: _store
+      changed_when: false
+      retries: 12
+      delay: 5
+      until: _store.stdout == 'True'
+      when: phase == 'verify'
+
+    - name: Verify - an ExternalSecret force-synced now
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          date -u +%Y-%m-%dT%H:%M:%SZ
+          {{ kubectl }} -n argocd annotate externalsecret vault-cleanup-token force-sync="$(date +%s)" --overwrite > /dev/null
+      register: _since
+      changed_when: true
+      when: phase == 'verify'
+
+    - name: Verify - refreshed after that and Ready
+      ansible.builtin.command:
+        argv: [kubectl, --kubeconfig, /etc/kubernetes/admin.conf, -n, argocd, get, externalsecret, vault-cleanup-token, -o,
+               "jsonpath={.status.refreshTime} {.status.conditions[?(@.type=='Ready')].status}"]
+      register: _synced
+      changed_when: false
+      retries: 24
+      delay: 5
+      until: >-
+        (_synced.stdout.split() + ['', ''])[0] >= _since.stdout_lines[0]
+        and (_synced.stdout.split() + ['', ''])[1] == 'True'
+      when: phase == 'verify'
