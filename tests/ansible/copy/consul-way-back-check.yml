@@ -331,7 +331,8 @@
     - name: Verify - exactly one Vault active
       ansible.builtin.assert:
         that: groups['pis'] | map('extract', hostvars, ['_vault', 'status']) | select('equalto', 200) | list | length == 1
-        fail_msg: "{{ groups['pis'] | zip(groups['pis'] | map('extract', hostvars, ['_vault', 'status'])) | list }}"
+        # a string: a list of pairs is no fail_msg (the module refuses it, even when the assertion holds)
+        fail_msg: "{{ groups['pis'] | zip(groups['pis'] | map('extract', hostvars, ['_vault', 'status'])) | list | to_json }}"
         quiet: true
       run_once: true
       when: phase == 'verify'

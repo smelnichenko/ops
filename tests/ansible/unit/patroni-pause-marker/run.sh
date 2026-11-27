@@ -356,7 +356,7 @@ for book in ("setup-consul", "setup-patroni", "upgrade-patroni"):
 # restore-consul.yml pauses and never resumes (the restore replaces the DCS with the snapshot's): its pause the script
 # takes - its marker, the cluster paused - and its not-paused check the script's own
 every = [t for play in yaml.safe_load(open("deploy/ansible/playbooks/restore-consul.yml")) for t in tasks(play.get("tasks"))]
-pause = [t for t in every if "patroni-pause.py pause" in text(t)]
+pause = [t for t in every if "patroni-pause.py pause " in text(t)]  # not its `paused` proofs
 checks = [t for t in every if "patroni-pause.py check" in text(t)]
 counts = (len(pause), len(checks), len([t for t in every if "patroni-pause.py resume" in text(t)]))
 check("restore-consul: one pause, two not-paused checks (before the stop, and after the load - the keys loaded hold no pause), no "
@@ -366,6 +366,17 @@ check("restore-consul: the check after the load - not paused: passes; paused (a 
       r.returncode == 0, (r.returncode, r.stdout))
 r, calls, kv = run(checks[-1], paused=True)
 check("  paused after the load: fails", r.returncode == 1 and "REFUSED" in r.stdout, (r.returncode, r.stdout))
+held = [t for t in every if "patroni-pause.py paused consul-way-back" in text(t)]
+check("restore-consul: its pause proven twice by `paused` (taking up its own, right before the stop)", len(held), 2)
+OURS = "consul-way-back 2026-11-27T15:00:00Z ab12cd34"
+outcomes = []
+for st_, want in ((dict(paused=True, marker=OURS), 0), (dict(paused=True, members_paused=[True, False], marker=OURS), 1),
+                  (dict(paused=False, marker=OURS), 1), (dict(paused=True, marker="setup-consul 2026-11-27T15:00:00Z ab12cd34"), 1),
+                  (dict(paused=True), 1)):
+    r, calls, kv = run(held[0], **st_)
+    outcomes.append((r.returncode == want, r.returncode, r.stdout.strip()[:90]))
+check("  `paused consul-way-back`: its marker with the config and every member paused - 0; a member not paused, nothing paused (a stale "
+      "marker), another run's marker, no marker - 1, said; nothing written", all(o[0] for o in outcomes), outcomes)
 r, calls, kv = run(pause[0])
 check("restore-consul: its pause accepted - its marker (consul-way-back, the time, a nonce), then every member paused",
       r.returncode == 0 and kv is not None and kv.startswith("consul-way-back ") and len(kv.split()) == 3

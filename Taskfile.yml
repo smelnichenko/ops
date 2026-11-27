@@ -1661,7 +1661,8 @@ tasks:
     dotenv: ['../../.env']
     prompt: "Take Consul on PRODUCTION back to the pinned version (its servers a new cluster, its KV carried over - or the snapshot's)?"
     cmds:
-      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/restore-consul.yml {{.CLI_ARGS}}
+      # one way back at a time (a second would take up the first's record and stop Consul under its import)
+      - mkdir -p ../../.copy && flock -n -E 75 ../../.copy/consul-way-back.lock venv/bin/ansible-playbook -i inventory/production.yml playbooks/restore-consul.yml {{.CLI_ARGS}}
 
   test:consul-upgrade:
     desc: "Vagrant: Consul's servers set back to 1.20.5, a key written; a server down refused; upgrade-consul.yml as in production, sampled - every server on setup-consul.yml's version, never 15 s without a leader, the key back, the old binary kept, the snapshot this run's; again nothing to do; a downgrade refused"
