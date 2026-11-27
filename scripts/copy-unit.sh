@@ -194,11 +194,12 @@ VARS_FILES = {  # a vars file -> its playbook and the arguments production's tas
     "deploy/ansible/vars/patroni.yml": ("upgrade-patroni.yml", ""),
     "deploy/ansible/vars/vault.yml": ("upgrade-vault.yml", "-e @vars/vault-vagrant.yml"),
     "deploy/ansible/vars/forgejo.yml": ("upgrade-forgejo.yml", ""),
+    "deploy/ansible/vars/keycloak.yml": ("upgrade-keycloak.yml", ""),
 }
 # Consul before Vault: Consul is Vault's storage (and Patroni's DCS)
 ORDER = {"upgrade-kubeadm.yml": 0, "setup-kubeadm.yml": 1, "setup-argocd.yml": 2, "upgrade-patroni.yml": 3,
          "upgrade-consul.yml": 4, "upgrade-vault.yml": 5, "upgrade-forgejo.yml": 6, "setup-host-hardening.yml": 7,
-         "setup-caddy.yml": 8, "setup-pi-services.yml": 9}
+         "setup-caddy.yml": 8, "upgrade-keycloak.yml": 9}
 # node_exporter on ten: its version and the hash that moves with it - production's setup-host-hardening.yml on the copy
 NODE_EXPORTER = {"node_exporter_version", "node_exporter_sha256"}
 # Argo CD itself (no Argo app holds it): its chart default and the image pinned on a chart - setup-argocd.yml on the copy
@@ -210,11 +211,6 @@ CADDY = {"caddy_version"}
 # Consul's three servers: its version and the zips' hashes that move with it - production's upgrade-consul.yml on the
 # copy (setup-consul.yml installs only where Consul is not: a running one moves through the upgrade's rolling order)
 CONSUL = {"consul_version", "consul_checksums"}
-# Keycloak on the Pis: its version and the tarball's hash that moves with it - production's setup-pi-services.yml on the
-# copy's Pis, production's Pi versions first (tests/ansible/copy/pi-versions.yml, as the build runs it, read when the
-# step runs) and the branch's Keycloak after them; its restart where the version moved, one Pi at a time, and the check
-# that the new version runs are the playbook's own (tasks/keycloak-restart.yml)
-KEYCLOAK = {"keycloak_version", "keycloak_sha256"}
 for path in changed:
     if path == "scripts/upgrade-renovate.sh":
         # Renovate's own image (the copy runs no Renovate): the new image smoke-run here - it starts and its config
@@ -300,19 +296,6 @@ for path in changed:
             moved_values = {k: new[k] for k in moved if k in new}
             refused += pins({k: old.get(k) for k in moved}, moved_values, path)
             steps.append(("setup-caddy.yml", f"-e @{vars_file(moved_values, 'setup-caddy-vars.yml')}", False))
-    elif path == "deploy/ansible/playbooks/setup-pi-services.yml":
-        old, new = play_vars(show("main", path) or ""), play_vars(show(BRANCH, path) or "")
-        moved = sorted(k for k in set(old) | set(new) if old.get(k) != new.get(k))
-        if without_vars(show("main", path)) != without_vars(show(BRANCH, path)):
-            refused.append(f"{path} (its tasks)")
-        elif not moved or set(moved) - KEYCLOAK:
-            refused.append(f"{path} {' '.join(sorted(set(moved) - KEYCLOAK)) or '(its tasks)'}")
-        else:
-            version(new["keycloak_version"])
-            moved_values = {k: new[k] for k in KEYCLOAK if k in new}
-            refused += pins({k: old.get(k) for k in moved}, {k: new[k] for k in moved if k in new}, path)
-            steps.append(("setup-pi-services.yml", "-e @../../tests/ansible/copy/pi-versions.yml "
-                          f"-e @{vars_file(moved_values, 'setup-pi-services-vars.yml')}", False))
     elif path == "deploy/ansible/playbooks/setup-istio.yml":
         # Istio's version restated from production's istiod chart (defaults-follow-production): it moves with the infra
         # unit, proven by Argo on the copy - no step of its own; anything else in it is unproven

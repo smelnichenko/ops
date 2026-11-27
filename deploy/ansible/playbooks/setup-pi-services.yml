@@ -705,6 +705,29 @@
     # Phase 5: Keycloak
     # ================================================================
 
+    # a Keycloak already installed moves to a new version only through upgrade-keycloak.yml (its database dumped
+    # first, both Pis stopped, the VIP's started first - plan 122): installed here where missing (a fresh Pi, the
+    # copy's build), the same version left as it is, another one - or one this cannot read - refused
+    - name: Keycloak's install here (the version /opt/keycloak names)
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          if [ ! -e /opt/keycloak ]; then echo missing; exit 0; fi
+          v=$(readlink -f /opt/keycloak | sed -n 's|^/opt/keycloak-\([^/]*\)/*$|\1|p')
+          echo "${v:-unknown}"
+      register: _keycloak_installed
+      changed_when: false
+      check_mode: false  # a read
+
+    - name: Keycloak installed where missing - another version moves through task deploy:keycloak:upgrade
+      ansible.builtin.assert:
+        that: _keycloak_installed.stdout in ['missing', keycloak_version]
+        fail_msg: >-
+          REFUSED: Keycloak {{ _keycloak_installed.stdout }} is installed on {{ inventory_hostname }}, vars/keycloak.yml
+          pins {{ keycloak_version }} - task deploy:keycloak:upgrade moves it (its dump first, both Pis stopped)
+        quiet: true
+
     - name: Download Keycloak tarball (retry — github.com is flaky from vagrant NAT)
       ansible.builtin.get_url:
         url: "https://github.com/keycloak/keycloak/releases/download/{{ keycloak_version }}/keycloak-{{ keycloak_version }}.tar.gz"

@@ -19,85 +19,39 @@
          not in ['active', 'activating'] }}
   when: not ansible_check_mode
 
-# a new version moves only /opt/keycloak (setup-pi-services: its tarball, the symlink) - the unit and secrets the same,
-# the stamp read current and the old version ran on, until a reboot started the new one and migrated its database
-# unattended. The version it runs - the install its processes hold open, as scripts/version-inventory-pi.sh reads it -
-# against the one /opt/keycloak names: another (or two: a stale process) is a restart due, as a changed file is. Not
-# running: none due (the start above, or the Pi-not-serving restart, starts it on what is installed). Running and
-# holding no install open (a JVM still loading): read again; then refused - its version unknown.
+# a new version moves only through upgrade-keycloak.yml (its database dumped first, both Pis stopped, the VIP's started
+# first - plan 122): a Keycloak running another version than the one /opt/keycloak names here is never restarted onto
+# it - refused, the command named (setup-patroni imports these too: no version moves there)
 - name: Keycloak's install - the one it runs against the one /opt/keycloak names
   ansible.builtin.shell:
     executable: /bin/bash
-    cmd: &keycloak_install_read |
+    cmd: |
       set -euo pipefail
-      installed=$(readlink /opt/keycloak | sed -n 's|^/opt/keycloak-\([^/]*\)$|\1|p')
+      installed=$(readlink -f /opt/keycloak 2> /dev/null | sed -n 's|^/opt/keycloak-\([^/]*\)/*$|\1|p')
       pid=$(systemctl show -p MainPID --value keycloak)
       if [ "$pid" = 0 ]; then running=not-running
       else
         running=$(for p in "$pid" $(pgrep -P "$pid" || true); do readlink /proc/"$p"/fd/* 2> /dev/null || true; done \
           | sed -n 's|^/opt/keycloak-\([^/]*\)/.*|\1|p' | sort -u | paste -sd' ')
       fi
-      printf '%s\n%s\n' "$installed" "$running"
+      printf '%s\n%s\n' "${installed:-none}" "${running:-unknown}"
   register: _keycloak_install
   changed_when: false
   check_mode: false  # a read
   retries: 10
   delay: 3
-  until: _keycloak_install.rc == 0 and _keycloak_install.stdout_lines | length == 2 and _keycloak_install.stdout_lines[1] | length > 0
-  failed_when: >-
-    _keycloak_install.rc != 0 or _keycloak_install.stdout_lines | length != 2
-    or _keycloak_install.stdout_lines[0] | length == 0 or _keycloak_install.stdout_lines[1] | length == 0
+  # a JVM still loading holds no install open yet: read again
+  until: _keycloak_install.rc == 0 and _keycloak_install.stdout_lines | length == 2 and _keycloak_install.stdout_lines[1] != 'unknown'
 
-- name: Keycloak's restart due here - a file it loads changed, or it runs another version than installed
-  ansible.builtin.set_fact:
-    _keycloak_restart_due: >-
-      {{ (not ansible_check_mode)
-         and (_restart_pending.stdout_lines[0] == 'pending'
-              or _keycloak_install.stdout_lines[1] not in ['not-running', _keycloak_install.stdout_lines[0]]) }}
-
-# a new version migrates Keycloak's database one way on its first start (Liquibase, no downgrade): before any Pi
-# restarts onto it, a pg_dump of the database through HAProxy (Patroni's primary) on the play's first Pi into
-# /var/backups/keycloak (the last 3 kept; written aside, checked, then renamed - a failed dump never counts), as
-# upgrade-forgejo.yml dumps Forgejo's. Once, whichever Pi's version moved; not when only a file changed; a dump that
-# fails refuses the run before anything restarts. The way back: that dump into an emptied keycloak database, Keycloak
-# stopped on both Pis, the old version's /opt/keycloak symlink back - by hand.
-- name: Keycloak's version moves here - it runs another than the one installed
-  ansible.builtin.set_fact:
-    _keycloak_version_moves: >-
-      {{ (not ansible_check_mode)
-         and _keycloak_install.stdout_lines[1] not in ['not-running', _keycloak_install.stdout_lines[0]] }}
-
-- name: Keycloak's database dumped, before any Pi restarts onto the new version
-  ansible.builtin.shell:
-    executable: /bin/bash
-    cmd: |
-      set -euo pipefail
-      # the password on stdin, not in the environment Ansible puts on the command line
-      read -r PGPASSWORD; export PGPASSWORD
-      dir=/var/backups/keycloak
-      mkdir -p "$dir" && chmod 0700 "$dir"
-      out=$dir/keycloak-$(date -u +%Y%m%dT%H%M%SZ)-{{ _keycloak_install.stdout_lines[1].split() | first }}.sql.gz
-      pg_dump -w -h 127.0.0.1 -p 5000 -U postgres keycloak | gzip > "$out.part"
-      gzip -t "$out.part"
-      [ "$(gzip -dc "$out.part" | tail -n 5 | grep -c 'PostgreSQL database dump complete')" = 1 ]
-      mv "$out.part" "$out"
-      ls -1t "$dir"/keycloak-*.sql.gz | tail -n +4 | xargs -r rm -f
-      echo "$out $(du -h "$out" | cut -f1)"
-    stdin: "{{ postgres_admin_password }}"
-  register: _keycloak_dump
-  changed_when: true
-  failed_when: false
-  run_once: true
-  no_log: true  # the password went in on stdin - the dump's own error below, without it
-  when: ansible_play_hosts | map('extract', hostvars, '_keycloak_version_moves') | map('bool') | select | list | length > 0
-
-- name: The dump taken before the new version starts - its error otherwise, nothing restarted
+- name: Keycloak runs the version installed here - a new one moves through task deploy:keycloak:upgrade
   ansible.builtin.assert:
-    that: _keycloak_dump.rc | default(1) == 0
-    fail_msg: "REFUSED: Keycloak's dump before its new version failed - nothing restarted: {{ _keycloak_dump.stderr | default('') }}"
+    that: _keycloak_install.stdout_lines[1] in ['not-running', _keycloak_install.stdout_lines[0]]
+    fail_msg: >-
+      REFUSED: {{ inventory_hostname }} runs Keycloak {{ _keycloak_install.stdout_lines[1] }},
+      {{ _keycloak_install.stdout_lines[0] }} installed - a version moves only through task deploy:keycloak:upgrade (its
+      dump first, both Pis stopped): nothing restarted
     quiet: true
-  run_once: true
-  when: _keycloak_dump is not skipped
+  when: not ansible_check_mode
 
 # only the VIP's Caddy serves logins (each Pi's proxies auth.pmon.dev to its own Keycloak): the other Pi's restart
 # costs nothing and a unit that does not start is found there - the VIP's last, logins down while it starts
@@ -150,7 +104,7 @@
   changed_when: true
   when:
     - not ansible_check_mode
-    - _keycloak_restart_due | bool
+    - _restart_pending.stdout_lines[0] == 'pending'
     - _keycloak_serves.status | default(0) != 200
 
 - name: Keycloak restarted where pending - the Pi without the VIP
@@ -164,7 +118,7 @@
   changed_when: true
   when:
     - not ansible_check_mode
-    - _keycloak_restart_due | bool
+    - _restart_pending.stdout_lines[0] == 'pending'
     - _keycloak_serves.status | default(0) == 200
     - _keycloak_vip.stdout | length == 0
 
@@ -191,26 +145,9 @@
   changed_when: true
   when:
     - not ansible_check_mode
-    - _keycloak_restart_due | bool
+    - _restart_pending.stdout_lines[0] == 'pending'
     - _keycloak_serves.status | default(0) == 200
     - _keycloak_vip.stdout | length > 0
-
-# after the restarts: the version it runs is the one installed - a restart that brought the old one back (or none ran)
-# refused here, not found at the next reboot
-- name: Keycloak runs the version installed
-  ansible.builtin.shell:
-    executable: /bin/bash
-    cmd: *keycloak_install_read
-  register: _keycloak_runs
-  changed_when: false
-  check_mode: false  # a read
-  retries: 10
-  delay: 3
-  until: _keycloak_runs.rc == 0 and _keycloak_runs.stdout_lines | length == 2 and _keycloak_runs.stdout_lines[1] | length > 0
-  failed_when: >-
-    _keycloak_runs.rc != 0 or _keycloak_runs.stdout_lines | length != 2
-    or _keycloak_runs.stdout_lines[1] != _keycloak_runs.stdout_lines[0]
-  when: not ansible_check_mode
 
 # what the next run compares with: restarted (a failure ends this Pi's run before here), or current
 - name: Keycloak's config as it runs it, recorded

@@ -1239,6 +1239,15 @@ tasks:
     cmds:
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/upgrade-forgejo.yml {{.CLI_ARGS}}
 
+  deploy:keycloak:upgrade:
+    desc: "PRODUCTION: Keycloak on both Pis to vars/keycloak.yml's version - a pg_dump first (named for the database's schema), both stopped, the VIP's Pi started first (it migrates), then the other (logins down while it migrates; plan 122)"
+    dir: deploy/ansible
+    deps: [deploy:install]
+    dotenv: ['../../.env']
+    prompt: "Upgrade Keycloak on PRODUCTION's Pis (logins down while its database migrates)?"
+    cmds:
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/upgrade-keycloak.yml {{.CLI_ARGS}}
+
   test:pi:rerun-guards:
     desc: "Vagrant: re-running the Pi playbooks is safe - setup-patroni refuses while Patroni is stopped (its data untouched), passes while it runs and keeps the database port; setup-consul keeps the key and restarts nothing; setup-keepalived reloads a changed config (PgBouncer put in front first, as on the Pis, where missing)"
     deps: [deploy:install]

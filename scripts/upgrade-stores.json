@@ -166,9 +166,9 @@
         "quay.io-keycloak-keycloak-27.x"
       ],
       "taken_by": [
-        "deploy:pi-services"
+        "deploy:keycloak:upgrade"
       ],
-      "_why": "Keycloak migrates its database one way (Liquibase, no downgrade) on minors too; it runs on the Pis (setup-pi-services.yml), its database on Patroni. Its production command takes the backup itself: tasks/keycloak-restart.yml dumps the keycloak database through HAProxy before any Pi restarts onto a new version (/var/backups/keycloak on the play's first Pi, the last 3 kept) - the way back that dump into an emptied database, Keycloak stopped on both Pis, the old symlink back (plan 122)"
+      "_why": "Keycloak migrates its database one way (Liquibase, no downgrade) on minors too; it runs on the Pis, its database on Patroni. Its production command takes the backup itself: upgrade-keycloak.yml dumps the keycloak database through HAProxy before anything stops (named for the schema the database holds; the last 5 kept), then both Pis stopped and the VIP's started first (plan 122). Blocked until the way back - that dump restored - has run on the copy"
     }
   ]
 }

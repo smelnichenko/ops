@@ -289,7 +289,6 @@ PROVEN = {  # the keys each playbook's branch in copy-unit.sh accepts, read from
     "deploy/ansible/playbooks/setup-host-hardening.yml": pyset("NODE_EXPORTER"),
     "deploy/ansible/playbooks/setup-caddy.yml": pyset("CADDY"),
     "deploy/ansible/playbooks/setup-consul.yml": pyset("CONSUL"),
-    "deploy/ansible/playbooks/setup-pi-services.yml": pyset("KEYCLOAK"),
 }
 VARS_FILES = set(re.findall(r'"(deploy/ansible/vars/[^"]+)": \(', cu))
 NO_PROOF = {  # tracked, with no proof path on the copy yet - such a unit is refused by the proof, after its build

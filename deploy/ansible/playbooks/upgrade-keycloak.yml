@@ -1,0 +1,311 @@
+---
+# Keycloak on both Pis to one version (plan 122) - as upgrade-forgejo.yml: its database migrates one way (Liquibase, no
+# downgrade) on a new version's first start, so the two never run different versions on it - every Pi stopped, the
+# VIP's Pi started first (it migrates), serving the target, then the other. Logins are down while the first migrates.
+#
+# Before anything stops: a pg_dump of the keycloak database through HAProxy (Patroni's primary) on the first Pi into
+# /var/backups/keycloak, named for the schema version the database holds (its migration_model table - not the version
+# a process runs), written aside, checked, renamed; the last 5 kept, so reruns never rotate a pre-upgrade dump away. Its
+# path is said. The way back from a migrated database is that dump - restore-keycloak.yml.
+#
+# The version a Pi runs is the install its processes hold open (/opt/keycloak-<v>, as scripts/version-inventory-pi.sh
+# reads it); serving is /realms/master answering 200. Every Pi or none (a run without all of them is refused); one
+# version installed and running per Pi; never a downgrade; nothing to do when every Pi runs the target. A run cut short
+# after the swap - every Pi either running the target or down with the target installed - is taken forward: the down
+# ones started, the VIP's first, no download, no dump, nothing stopped. Any other Pi not serving is refused: by hand.
+#
+# Usage: task deploy:keycloak:upgrade   (production; the copy: copy-unit.sh's proof hands it vars/keycloak.yml's values)
+- name: Keycloak on both Pis to one version
+  hosts: pis
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  vars_files:
+    - ../vars/keycloak.yml
+  vars:
+    keycloak_dump_password: "{{ postgres_admin_password }}"  # the dump's login: the superuser's (pg_dump -U postgres)
+    vip: "{{ keepalived_vip }}"
+    dump_dir: /var/backups/keycloak
+  tasks:
+    - name: Every Pi in the run (one left out would keep the old version on the migrated database)
+      ansible.builtin.assert:
+        that: ansible_play_hosts | sort == groups['pis'] | sort
+        fail_msg: "REFUSED: the run has {{ ansible_play_hosts | sort }}, Keycloak runs on {{ groups['pis'] | sort }}"
+        quiet: true
+      run_once: true
+
+    # the install /opt/keycloak names, and the one(s) its processes hold open - "not-running" when the unit has no process
+    - name: The version installed and the version running
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: &keycloak_read |
+          set -euo pipefail
+          installed=$(readlink -f /opt/keycloak 2> /dev/null | sed -n 's|^/opt/keycloak-\([^/]*\)/*$|\1|p')
+          pid=$(systemctl show -p MainPID --value keycloak)
+          if [ "$pid" = 0 ]; then running=not-running
+          else
+            running=$(for p in "$pid" $(pgrep -P "$pid" || true); do readlink /proc/"$p"/fd/* 2> /dev/null || true; done \
+              | sed -n 's|^/opt/keycloak-\([^/]*\)/.*|\1|p' | sort -u | paste -sd' ')
+          fi
+          printf '%s\n%s\n' "${installed:-none}" "${running:-unknown}"
+      register: _read
+      changed_when: false
+      check_mode: false  # a read
+      retries: 10
+      delay: 3
+      # a JVM still loading holds no install open yet: read again
+      until: _read.rc == 0 and _read.stdout_lines | length == 2 and _read.stdout_lines[1] != 'unknown'
+
+    - name: Whether it serves
+      ansible.builtin.uri:
+        url: http://127.0.0.1:8080/realms/master
+        status_code: 200
+        timeout: 10
+        follow_redirects: none
+      register: _serves
+      failed_when: false  # a read: not serving is an answer
+      check_mode: false
+
+    # silent while its unit is active or activating is starting (a cut-short run's - maybe migrating), not down
+    - name: Its unit
+      ansible.builtin.systemd:
+        name: keycloak
+      register: _unit
+      check_mode: false
+
+    - name: Its versions - installed, running ('' when down), starting
+      ansible.builtin.set_fact:
+        _installed: "{{ _read.stdout_lines[0] }}"
+        _running: "{{ '' if _read.stdout_lines[1] == 'not-running' else _read.stdout_lines[1] }}"
+        _starting: "{{ _serves.status | default(0) != 200 and _unit.status.ActiveState in ['active', 'activating'] }}"
+
+    - name: One version running here (two would be a stale process on another install)
+      ansible.builtin.assert:
+        that: _running is not search(' ')
+        fail_msg: "REFUSED: {{ inventory_hostname }} runs Keycloak {{ _running }} at once - by hand"
+        quiet: true
+
+    - name: At most one Keycloak starting (two would be migrating one database)
+      ansible.builtin.assert:
+        that: ansible_play_hosts | map('extract', hostvars) | selectattr('_starting') | list | length <= 1
+        fail_msg: >-
+          REFUSED: Keycloak is starting on {{ ansible_play_hosts | map('extract', hostvars) | selectattr('_starting')
+          | map(attribute='inventory_hostname') | list }} at once - two migrations of one database: by hand
+        quiet: true
+      run_once: true
+
+    # a run cut short after the swap: every Pi runs the target or is down with the target installed - taken forward
+    - name: A run to take forward
+      ansible.builtin.set_fact:
+        _forward: >-
+          {{ _down | length > 0
+             and _down | map('extract', hostvars, '_installed') | unique | list == [keycloak_version]
+             and _up | map('extract', hostvars, '_running') | reject('equalto', keycloak_version) | list | length == 0 }}
+      vars:
+        _down: "{{ ansible_play_hosts | map('extract', hostvars) | selectattr('_running', 'equalto', '') | map(attribute='inventory_hostname') | list }}"
+        _up: "{{ ansible_play_hosts | map('extract', hostvars) | rejectattr('_running', 'equalto', '') | map(attribute='inventory_hostname') | list }}"
+      run_once: true
+
+    - name: Every Pi running, unless taken forward
+      ansible.builtin.assert:
+        that: _forward | bool or _running != ''
+        fail_msg: >-
+          REFUSED: {{ inventory_hostname }}'s Keycloak is down with {{ _installed }} installed - not a run to take forward
+          to {{ keycloak_version }} (every Pi on it or down with it installed): by hand
+        quiet: true
+
+    - name: One version on both Pis before (two would already share a database)
+      ansible.builtin.assert:
+        that: _forward | bool or ansible_play_hosts | map('extract', hostvars, '_running') | unique | list | length == 1
+        fail_msg: >-
+          REFUSED: the Pis run Keycloak {{ ansible_play_hosts | map('extract', hostvars, '_running') | unique | list }}
+          - two versions on one database: by hand
+        quiet: true
+      run_once: true
+
+    - name: Never a downgrade
+      ansible.builtin.assert:
+        that: _forward | bool or _running is version(keycloak_version, '<=')
+        fail_msg: "REFUSED: {{ inventory_hostname }} runs Keycloak {{ _running }}, newer than {{ keycloak_version }}"
+        quiet: true
+
+    - name: Nothing to do - every Pi runs {{ keycloak_version }}
+      ansible.builtin.meta: end_play
+      when: ansible_play_hosts | map('extract', hostvars, '_running') | unique | list == [keycloak_version]
+
+    - name: The Pi that starts first (it holds the VIP)
+      ansible.builtin.command:
+        argv: [ip, -o, -4, addr, show, to, "{{ vip }}/32"]
+      register: _addrs
+      changed_when: false
+      check_mode: false
+
+    # the Pi already starting (a cut-short run's, maybe migrating) is the first whatever holds the VIP now; else the
+    # VIP's holder; else the first in the play
+    - name: The first Pi
+      ansible.builtin.set_fact:
+        _first: >-
+          {{ (ansible_play_hosts | map('extract', hostvars) | selectattr('_starting') | map(attribute='inventory_hostname')
+              | list + ansible_play_hosts | map('extract', hostvars) | selectattr('_addrs.stdout', '!=', '')
+              | map(attribute='inventory_hostname') | list + ansible_play_hosts) | first }}
+      run_once: true
+
+    - name: The target's tarball, its sha256 checked (retried - github.com is flaky)
+      when: not _forward | bool
+      ansible.builtin.get_url:
+        url: "https://github.com/keycloak/keycloak/releases/download/{{ keycloak_version }}/keycloak-{{ keycloak_version }}.tar.gz"
+        dest: "/opt/keycloak-{{ keycloak_version }}.tar.gz"
+        checksum: "sha256:{{ keycloak_sha256 }}"
+        mode: '0644'
+        timeout: 60
+      register: _dl
+      retries: 5
+      delay: 15
+      until: _dl is succeeded
+
+    - name: The target extracted beside the running install
+      when: not _forward | bool
+      ansible.builtin.unarchive:
+        src: "/opt/keycloak-{{ keycloak_version }}.tar.gz"
+        dest: /opt
+        remote_src: true
+        creates: "/opt/keycloak-{{ keycloak_version }}"
+
+    - name: The target owned by the keycloak user (its first start builds into it)
+      when: not _forward | bool
+      ansible.builtin.file:
+        path: "/opt/keycloak-{{ keycloak_version }}"
+        owner: keycloak
+        group: keycloak
+        recurse: true
+
+    # the schema the database holds - the dump is named for it, and a rerun after a migration is never mistaken for
+    # the database before it
+    - name: The version the database holds (migration_model)
+      when: not _forward | bool
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          read -r PGPASSWORD; export PGPASSWORD
+          psql -w -h 127.0.0.1 -p 5000 -U postgres -d keycloak -tA \
+            -c "SELECT version FROM migration_model ORDER BY update_time DESC, id DESC LIMIT 1"
+        stdin: "{{ keycloak_dump_password }}"
+      register: _schema
+      changed_when: false
+      check_mode: false
+      delegate_to: "{{ _first }}"
+      run_once: true
+      no_log: true
+
+    - name: Keycloak's database dumped, before anything stops
+      when: not _forward | bool
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          # the password on stdin, not in the environment Ansible puts on the command line
+          read -r PGPASSWORD; export PGPASSWORD
+          mkdir -p {{ dump_dir }} && chmod 0700 {{ dump_dir }}
+          out={{ dump_dir }}/keycloak-$(date -u +%Y%m%dT%H%M%SZ)-schema-{{ _schema.stdout | trim | regex_replace('[^0-9A-Za-z.-]', '_') }}.sql.gz
+          trap 'rm -f "$out.part"' ERR
+          # written aside and renamed once checked: a failed dump never counts among those kept
+          pg_dump -w -h 127.0.0.1 -p 5000 -U postgres keycloak | gzip > "$out.part"
+          gzip -t "$out.part"
+          [ "$(gzip -dc "$out.part" | tail -n 5 | grep -c 'PostgreSQL database dump complete')" = 1 ]
+          mv "$out.part" "$out"
+          ls -1t {{ dump_dir }}/keycloak-*.sql.gz | tail -n +6 | xargs -r rm -f
+          echo "$out $(du -h "$out" | cut -f1)"
+        stdin: "{{ keycloak_dump_password }}"
+      register: _dump
+      changed_when: true
+      failed_when: false
+      delegate_to: "{{ _first }}"
+      run_once: true
+      no_log: true  # the password went in on stdin - the dump's own error below, without it
+
+    - name: The dump taken (its error otherwise) - nothing stopped yet
+      when: not _forward | bool
+      ansible.builtin.assert:
+        that: _dump.rc | default(1) == 0 and (_schema.stdout | default('') | trim) != ''
+        fail_msg: >-
+          REFUSED: the Keycloak dump failed - nothing stopped:
+          {{ _dump.stderr | default('') }} {{ '' if (_schema.stdout | default('') | trim) else 'the database schema not read' }}
+        success_msg: "{{ _dump.stdout | default('') }}"
+      run_once: true
+
+    - name: Keycloak stopped on every Pi
+      when: not _forward | bool
+      ansible.builtin.systemd:
+        name: keycloak
+        state: stopped
+
+    - name: The target installed (/opt/keycloak moved to it)
+      when: not _forward | bool
+      ansible.builtin.file:
+        src: "/opt/keycloak-{{ keycloak_version }}"
+        dest: /opt/keycloak
+        state: link
+        force: true
+
+    - name: Started on the first Pi - it migrates the database
+      ansible.builtin.systemd:
+        name: keycloak
+        state: started
+      when: inventory_hostname == _first
+
+    # Keycloak waits for its database lock up to 15 min: the first start of a new version builds and migrates
+    - name: The first Pi runs and serves the target
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -uo pipefail
+          v=$(bash -s <<'KEYCLOAK_READ' | sed -n 2p
+          {{ _read_script }}
+          KEYCLOAK_READ
+          )
+          code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 http://127.0.0.1:8080/realms/master || true)
+          echo "$v $code"
+          [ "$v" = "{{ keycloak_version }}" ] && [ "$code" = 200 ]
+      vars:
+        _read_script: *keycloak_read
+      register: _first_up
+      changed_when: false
+      retries: 90
+      delay: 10
+      until: _first_up.rc == 0
+      when: inventory_hostname == _first
+
+    - name: Then the others
+      ansible.builtin.systemd:
+        name: keycloak
+        state: started
+      when: inventory_hostname != _first
+
+    - name: Every Pi runs and serves the target
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -uo pipefail
+          v=$(bash -s <<'KEYCLOAK_READ' | sed -n 2p
+          {{ _read_script }}
+          KEYCLOAK_READ
+          )
+          code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 http://127.0.0.1:8080/realms/master || true)
+          echo "$v $code"
+          [ "$v" = "{{ keycloak_version }}" ] && [ "$code" = 200 ]
+      vars:
+        _read_script: *keycloak_read
+      register: _up
+      changed_when: false
+      retries: 90
+      delay: 10
+      until: _up.rc == 0
+
+    - name: Upgraded
+      ansible.builtin.debug:
+        msg: >-
+          KEYCLOAK {{ keycloak_version }} on {{ ansible_play_hosts | join(', ') }} (was {{ ansible_play_hosts
+          | map('extract', hostvars, '_running') | map('default', 'down', true) | unique | join(', ') }}); {{ _first }}
+          started first; dump {{ _dump.stdout | default('none - a run taken forward') }}
+      run_once: true
