@@ -275,6 +275,17 @@ check("  the task: before, production's upgrade-vault.yml to the target, after, 
        all("vagrant-only-play.yml" in l for l in seq if "playbooks/" in l), "env -i" in task_cmd,
        "trap 'pb \"$C\" $V -e phase=cleanup -e marker=\"$M\"' EXIT" in task_cmd and "trap - EXIT" in task_cmd, "vault-way-back-confirm" in task_cmd),
       (["phase=before", "upgrade-vault.yml", "phase=after", "restore-vault.yml", "phase=verify", "phase=cleanup"], True, True, True, True))
+msgs = []
+MSGS = sum(1 for t in flat(C) for k in ("fail_msg", "success_msg") if k in (t.get("ansible.builtin.assert") or {}))
+for t in C:
+    a = t.get("ansible.builtin.assert")
+    for k in ("fail_msg", "success_msg"):
+        if a and k in a:
+            v = render(a[k], ansible_play_hosts=["pi1", "pi2"], hostvars={"pi1": {"_health": {"status": 200}}, "pi2": {"_health": {"status": 429}}},
+                       marker="way-back-1Z", vault_version="1.21.4", vault_to="2.2.2", _secrets={"stdout_lines": []}, _value={"stdout": ""})
+            msgs.append((t["name"][:40], k, isinstance(v, str), type(v).__name__))
+check("  every rehearsal assert's message renders to a string (a list of pairs is refused by the module even when the assertion "
+      "holds - the first rehearsal, 2026-11-27) - all of them read", (len(msgs), [m for m in msgs if not m[2]]), (MSGS, []))
 print("vault-way-back: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 PY_VWB
