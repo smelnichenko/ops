@@ -137,7 +137,10 @@
 
     - name: Never a downgrade
       ansible.builtin.assert:
-        that: _forward | bool or (_running == '' and _installed is version(keycloak_version, '<=')) or (_running != '' and _running is version(keycloak_version, '<='))
+        that: >-
+          _forward | bool
+          or (_running == '' and _installed is version(keycloak_version, '<='))
+          or (_running != '' and _running is version(keycloak_version, '<='))
         fail_msg: "REFUSED: {{ inventory_hostname }} runs Keycloak {{ _running }}, newer than {{ keycloak_version }}"
         quiet: true
 
@@ -197,7 +200,9 @@
       when: not _forward | bool
       ansible.builtin.assert:
         that: _target_files.results | map(attribute='stat.exists') | list == [true, true]
-        fail_msg: "REFUSED: /opt/keycloak-{{ keycloak_version }} on {{ inventory_hostname }} is incomplete (a cut-short extract?) - remove it and run again: nothing stopped"
+        fail_msg: >-
+          REFUSED: /opt/keycloak-{{ keycloak_version }} on {{ inventory_hostname }} is incomplete (a cut-short extract?) -
+          remove it and run again: nothing stopped
         quiet: true
 
     - name: The target owned by the keycloak user (its first start builds into it)

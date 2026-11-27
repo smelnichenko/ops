@@ -31,7 +31,8 @@
       # the password on stdin, not in the environment Ansible puts on the command line
       read -r PGPASSWORD; export PGPASSWORD
       mkdir -p {{ dump_dir }} && chmod 0700 {{ dump_dir }}
-      out={{ dump_dir }}/keycloak-$(date -u +%Y%m%dT%H%M%SZ)-{{ keycloak_dump_running }}-schema-{{ _schema.stdout | trim | regex_replace('[^0-9A-Za-z.-]', '_') }}.sql.gz
+      schema={{ _schema.stdout | trim | regex_replace('[^0-9A-Za-z.-]', '_') }}
+      out={{ dump_dir }}/keycloak-$(date -u +%Y%m%dT%H%M%SZ)-{{ keycloak_dump_running }}-schema-$schema.sql.gz
       trap 'rm -f "$out.part"' ERR
       # written aside and renamed once checked: a failed dump never counts among those kept
       pg_dump -w -h 127.0.0.1 -p 5000 -U postgres keycloak | gzip > "$out.part"

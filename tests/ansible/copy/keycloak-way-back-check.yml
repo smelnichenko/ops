@@ -81,7 +81,9 @@
     - name: After - the newest dump on either Pi (the upgrade's)
       ansible.builtin.shell:
         executable: /bin/bash
-        cmd: ls -1t /var/backups/keycloak/keycloak-*.sql.gz 2> /dev/null | head -n 1 || true
+        cmd: |
+          set -o pipefail
+          ls -1t /var/backups/keycloak/keycloak-*.sql.gz 2> /dev/null | head -n 1 || true
       register: _newest
       changed_when: false
       when: phase == 'after'

@@ -29,7 +29,9 @@
     - name: The newest dump here
       ansible.builtin.shell:
         executable: /bin/bash
-        cmd: ls -1t /var/backups/keycloak/keycloak-*.sql.gz 2> /dev/null | head -n 1 || true
+        cmd: |
+          set -o pipefail
+          ls -1t /var/backups/keycloak/keycloak-*.sql.gz 2> /dev/null | head -n 1 || true
       register: _newest
       changed_when: false
       check_mode: false
@@ -49,7 +51,8 @@
 
     - name: Its version, from its name
       ansible.builtin.set_fact:
-        _dump_version: "{{ _dump_path | basename | regex_search('^keycloak-[0-9]{8}T[0-9]{6}Z-(.+)-schema-.*[.]sql[.]gz$', '\\1') | default([''], true) | first }}"
+        _dump_version: "{{ _dump_path | basename | regex_search('^keycloak-[0-9]{8}T[0-9]{6}Z-(.+)-schema-.*[.]sql[.]gz$', '\\1')
+          | default([''], true) | first }}"
       run_once: true
 
     - name: A dump, its Pi and its version known - else nothing stopped
