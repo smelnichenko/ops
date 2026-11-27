@@ -5,11 +5,10 @@ levels, OpenSearch) and replaces its single "one location per entity" model for 
 
 ## Goal
 
-The operator, 2026-11-12: "we need a thorough redesign here, so we can implement job/company or person search by
-address/parts of address like country/city/other address levels", "or even by range from some point/address", "we cover
-whole world but start with EU countries", "what if we hold addresses both in DB and opensearch, where we use opensearch
-exactly for searches?", "address data source collectors for other countries besides EE is the next step after address
-connection redesign", "save it as plan and start implementing".
+The operator, 2026-11-12: a thorough redesign, so jobs, companies and people can be searched by address or its parts
+(country, city, other levels) or by range from a point or an address; the whole world covered, the EU countries first;
+addresses held both in the database and in OpenSearch, OpenSearch for the searches alone; the other countries' address
+collectors the step after this redesign; saved as a plan and implemented.
 
 A job, a company or a person can be found by any part of an address - country, region, municipality, settlement,
 district, street, postal code - and by range from a point or an address. One address model serves all three.
@@ -48,8 +47,8 @@ district, street, postal code - and by range from a point or an address. One add
 7. **Postgres is the truth, OpenSearch only searches:** an outbox written in the same transaction as each change, an
    indexer lane draining it, every index rebuildable from Postgres; if OpenSearch is down only address search says so.
 8. **Order:** this plan on Estonia's data first; then the address collectors of the other EU countries (the next plan,
-   from `docs/places-feeds.md`); place upkeep guards and self-healing are a later plan still (the operator: "a things of
-   distant future/next plan").
+   from `docs/places-feeds.md`); place upkeep guards and self-healing are a later plan still (the operator: a later
+   plan).
 
 ## Model (Postgres)
 
@@ -70,11 +69,11 @@ district, street, postal code - and by range from a point or an address. One add
   (as built in A3: `source` a key of `source(key)`, `ref` the register's id - Estonia's ADR_ID - `retired_on` as
   `place`'s), unique `(source, country, ref)` (led by the source: its foreign key's index); 1.37 million Estonian rows,
   read monthly from `sihtnumbrid.zip` (148 MB of CSV), diff-only by `ref`, never deleted (an address gone from the file
-  is retired). **No place is stored with it** (changeset 131, the operator 2026-11-13: "there should be no execution
-  order dependency"): the place an address lies in is found when it is read (`AddressResolver.Resolver.placeOfAddress`),
+  is retired). **No place is stored with it** (changeset 131, the operator 2026-11-13: no dependency on the order
+  the collectors run in): the place an address lies in is found when it is read (`AddressResolver.Resolver.placeOfAddress`),
   among the places current then, by the join `places-feeds.md` section 3 describes (component 2 = municipality,
   component 3 = settlement when EHAK has it there). `addresses:ee` and `places:ee` run in either order. Former names
-  never place an address (the operator, 2026-11-13: "no"): an address the Board's file still writes with a village's
+  never place an address (the operator declined them, 2026-11-13): an address the Board's file still writes with a village's
   old name lies in its municipality until the file has the new one.
 - Settlements' postal codes come from the same file, read by `places:ee` itself (`addressesUrl`, by the same join) -
   independent of `addresses:ee`. GeoNames stays for Estonia's former names.

@@ -1,6 +1,6 @@
 # Plan 111 — masi: face matching measured and tuned before it is switched on
 
-**Status:** asked for 2026-11-08 by the operator: "yes, we need face matching tuned proper way before enabling it".
+**Status:** asked for 2026-11-08 by the operator: face matching tuned properly before it is enabled.
 Face matching stays off in production (`masiService.enrich.contactPictures.face: false`) until step 5.
 
 ## Why

@@ -1,0 +1,59 @@
+---
+# One Pi's Caddy brought to the pin and restarted where pending - setup-caddy.yml includes it for the Pi without the
+# VIP, then for the holder: an installed package moved to the pin on this Pi alone (the other keeps its binary until
+# this one serves),
+# its config validated by the binary that will run it, then restarted under the Pi restart lock (refused while this Pi
+# serves and the other does not - both down together), this Pi serving git.pmon.dev again checked, the files it now runs
+# recorded (tasks/restart-recorded.yml). Expects: caddy_version, _caddy_install, _caddy_pending, _restart_pending
+# (tasks/restart-pending.yml's, for loaded_service caddy), peer_ip.
+
+# an installed package moved to a new pin on this Pi alone (an absent one setup-caddy.yml installed before its unit
+# named the binary)
+- name: Caddy moved to the pin here
+  ansible.builtin.include_tasks: caddy-install.yml
+  when: _caddy_install and not ansible_check_mode
+
+- name: The config as the binary installed reads it - before this Pi restarts
+  ansible.builtin.command: /usr/bin/caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+  environment:
+    XDG_DATA_HOME: /var/lib/caddy
+    XDG_CONFIG_HOME: /etc/caddy
+  changed_when: false
+  when: _caddy_pending and not ansible_check_mode
+
+# Caddy itself answering git.pmon.dev through a Pi's own address (--resolve: its TLS - the wildcard verified - and its site):
+# any HTTP answer, a 502 too - Forgejo down on both Pis (an upgrade's stop, a database outage) must not keep Caddy from
+# restarting. Needs Consul's quorum (the lock); without it: systemctl restart caddy by hand
+- name: Caddy restarted here under the Pi restart lock - the other Pi serving, this one serving again after
+  ansible.builtin.shell: |
+    /usr/local/bin/pi-restart-locked caddy <<'RESTART'
+    set -euo pipefail
+    up() { [ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 --resolve "git.pmon.dev:443:$1" https://git.pmon.dev/api/healthz)" != 000 ]; }
+    if up 127.0.0.1 && ! up {{ peer_ip }}; then
+      echo "REFUSED on {{ inventory_hostname }}: Caddy serves here but not on the other Pi ({{ peer_ip }})" >&2; exit 1
+    fi
+    systemctl restart caddy
+    end=$(( $(cut -d. -f1 /proc/uptime) + 60 ))
+    for _ in $(seq 30); do
+      up 127.0.0.1 && exit 0
+      [ "$(cut -d. -f1 /proc/uptime)" -lt "$end" ] || break
+      sleep 2
+    done
+    echo "{{ inventory_hostname }}'s Caddy not serving git.pmon.dev a minute after its restart" >&2
+    exit 1
+    RESTART
+  changed_when: true
+  when: _caddy_pending and not ansible_check_mode
+
+- name: A preview - Caddy would be restarted here
+  ansible.builtin.debug:
+    msg: "{{ inventory_hostname }}: Caddy would be brought to {{ caddy_version }} and restarted ({{ _caddy_running.stdout }} now)"
+  changed_when: true
+  when: _caddy_pending and ansible_check_mode
+
+- name: The files it runs recorded
+  ansible.builtin.include_tasks: restart-recorded.yml
+  vars:
+    loaded_service: caddy
+    loaded_hash: "{{ _restart_pending.stdout_lines[1] }}"
+  when: not ansible_check_mode and (_caddy_pending or _restart_pending.stdout_lines[0] == 'current')

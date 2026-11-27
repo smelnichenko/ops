@@ -77,11 +77,14 @@ check("E01 the pinned version: on", condition(nd["ansible.builtin.assert"]["that
 cd = next(t for t in tasks("deploy/ansible/playbooks/upgrade-containerd.yml") if t.get("register") == "_config_diff")
 check("E04 the live config differing: failed; the same: on",
       (condition(cd["failed_when"], _config_diff={"rc": 1}), condition(cd["failed_when"], _config_diff={"rc": 0})), (True, False))
-# E06: the data tier's sidecars waited for until none is left
-dl = next(t for t in tasks("deploy/ansible/playbooks/restart-mesh-workloads.yml") if t.get("register") == "_data_left")
-check("E06 a data-tier workload left on the old sidecar: still waiting; none left: done",
-      (condition(dl["until"], _data_left={"rc": 0, "stdout": "StatefulSet ns kafka"}),
-       condition(dl["until"], _data_left={"rc": 0, "stdout": ""})), (False, True))
+# E06: the data tier waited for one workload at a time - each restarted, then off the old sidecar AND ready, in a
+# bounded loop that stops the run before the apps (its behaviour: restart-mesh-order's one-at-a-time, slow and
+# never-ready cases - the wait gone there, 10 checks red)
+dl = next(t for t in tasks("deploy/ansible/playbooks/restart-mesh-workloads.yml") if t.get("register") == "_data")
+cmd = dl["ansible.builtin.shell"]["cmd"]
+check("E06 the data tier's loop: off the old sidecar and ready before the next, bounded, failing before the apps",
+      [x for x in ('grep -qx "$kind $ns $name" <<< "$left"', '[ "$(ready "$kind" "$ns" "$name")" = True ]',
+                   '[ "$n" -lt {{ data_tries }} ]', 'the apps not restarted"; exit 1') if x not in cmd], [])
 # K01: acme-check's certificate not Ready: the task fails (its script run against a kubectl stub)
 import subprocess, tempfile
 ac = task("deploy/ansible/playbooks/acme-check.yml", "The certificate, Ready")
@@ -126,6 +129,160 @@ good = ["50 def", "compat= 24.8.14", "users=default,schnappy", "formats="]
 check("L02 the canary as seeded: on; another count, checksum or user list: failed",
       (survival(good), survival(["49 def"] + good[1:]), survival(["50 deg"] + good[1:]),
        survival(good[:2] + ["users=default"] + good[3:])), (False, True, True, True))
+# L03: Grafana's dashboards as seeded - or, its database moved since the seed, the canary gone and the rest there again
+gf = next(t for t in tasks("tests/ansible/copy/survival-check.yml") if t.get("register") == "_grafana")
+UIDS = ["infrastructure", "masi", "upgrade-check"]
+def grafana(mode, uids, canary, db, seed_db="sqlite3"):
+    import json
+    v = dict(mode=mode, dashboard_uid="upgrade-check", dashboard_text="upgrade survival canary",
+             _seed={"grafana_uids": UIDS, "grafana_db": seed_db},
+             _grafana={"rc": 0, "stdout_lines": [json.dumps(uids), canary, db][:3 if db else 2]})
+    # the task's vars as Ansible holds them: trusted templates, rendered only when read (lazily - the length clause
+    # first, so two lines never reach the third)
+    v.update(as_loaded(gf.get("vars") or {}))
+    return condition(gf["failed_when"], **v)
+C = "upgrade survival canary"
+check("L03 the seed, its canary read: on; the same database after a change, every UID and the canary: on",
+      (grafana("seed", UIDS, C, "sqlite3"), grafana("verify", UIDS, C, "sqlite3")), (False, False))
+check("L03 the same database: the canary gone, or another dashboard gone: failed",
+      (grafana("verify", UIDS[:2], "-", "sqlite3"), grafana("verify", UIDS[1:], C, "sqlite3")), (True, True))
+check("L03 moved to another database: the canary gone, every other dashboard there again: on",
+      grafana("verify", UIDS[:2], "-", "postgres"), False)
+check("L03 moved: the canary still there (the old database read), or another dashboard lost with the old one: failed",
+      (grafana("verify", UIDS, C, "postgres"), grafana("verify", ["masi"], "-", "postgres")), (True, True))
+check("L03 seeded on Postgres (a copy built after the move), still there: every UID and the canary: on",
+      grafana("verify", UIDS, C, "postgres", seed_db="postgres"), False)
+check("L03 the database not said (two lines): failed", grafana("verify", UIDS, C, ""), True)
+# L04/L05: Grafana's datasources - each the chart provisions there and healthy, in the copy's check and production's (the
+# observability review, 2026-11-25: a check of only what Grafana listed passed one a new version failed to register).
+# The task's script run as Ansible renders it, kubectl a stub answering Grafana's API
+import subprocess, tempfile
+STUB = """#!/bin/bash
+cat > /dev/null
+q="${@: -1}"
+case $q in
+  /api/datasources) python3 -c 'import json, os; print(json.dumps([{"uid": u} for u in os.environ["LISTED"].split()]))' ;;
+  */health) u=${q#/api/datasources/uid/}; u=${u%/health}
+    case " $BAD " in *" $u "*) echo '{"status": "ERROR"}' ;; *) echo '{"status": "OK"}' ;; esac ;;
+esac
+"""
+CM_YAML = "apiVersion: 1\ndeleteDatasources:\n  - name: Prometheus\ndatasources:\n  - name: Mimir\n    uid: prometheus\n  - name: ClickHouse-Logs\n    uid: clickhouse-logs\n  - name: Tempo\n    uid: tempo\n"
+import json, shlex
+def configmap(datasources_yml):
+    """The ConfigMap as `kubectl get configmap -o json` prints it: the provisioning file under its dotted key."""
+    return json.dumps({"kind": "ConfigMap", "data": {"datasources.yml": datasources_yml}})
+CM = configmap(CM_YAML)
+def datasources(path, listed, bad=()):
+    t = task(path, "Grafana - every datasource healthy")
+    d = tempfile.mkdtemp()
+    stub = os.path.join(d, "kubectl")
+    open(stub, "w").write(STUB)
+    os.chmod(stub, 0o755)
+    prov = (t.get("environment") or {}).get("PROVISIONED")
+    provisioned = render(prov, _ds_provisioned={"stdout": CM}) if prov else ""
+    env = dict(os.environ, LISTED=" ".join(listed), BAD=" ".join(bad), PROVISIONED=provisioned)
+    r = subprocess.run(["bash", "-c", render(t["ansible.builtin.shell"]["cmd"], kubectl=stub)], capture_output=True, text=True,
+                       env=env, timeout=60)
+    lines = r.stdout.splitlines()
+    return lines, condition(t["until"], _datasources={"rc": r.returncode, "stdout_lines": lines})
+ALL = ["prometheus", "clickhouse-logs", "tempo"]
+for path in ("tests/ansible/copy/survival-check.yml", "deploy/ansible/playbooks/production-data-check.yml"):
+    name = path.split("/")[-1]
+    check(f"L04 {name}: every datasource provisioned listed and healthy: done", datasources(path, ALL),
+          (["prometheus OK", "clickhouse-logs OK", "tempo OK"], True))
+    check(f"L04 {name}: one provisioned that Grafana does not list: MISSING, not done", datasources(path, ["prometheus", "tempo"]),
+          (["prometheus OK", "clickhouse-logs MISSING", "tempo OK"], False))
+    check(f"L04 {name}: one listed and unhealthy: not done", datasources(path, ALL, bad=["tempo"])[1], False)
+    check(f"L04 {name}: one listed and not provisioned: checked too", datasources(path, ALL + ["extra"])[0][-1], "extra OK")
+    rd = task(path, "Grafana - the datasources provisioned")
+    check(f"L05 {name}: the provisioned ones read from the ConfigMap; none there, or rc != 0: failed",
+          (condition(rd["failed_when"], _ds_provisioned={"rc": 0, "stdout": CM}),
+           condition(rd["failed_when"], _ds_provisioned={"rc": 0, "stdout": configmap("apiVersion: 1\ndatasources: []\n")}),
+           condition(rd["failed_when"], _ds_provisioned={"rc": 1, "stdout": CM})), (False, True, True))
+    check(f"L05 {name}: a ConfigMap without the provisioning key: failed",
+          condition(rd["failed_when"], _ds_provisioned={"rc": 0, "stdout": json.dumps({"data": {}})}), True)
+    # split as the command module splits it: a backslash outside quotes is consumed there, which turned the old
+    # jsonpath's escaped dot into a nested path that reads nothing (the copy run of 2026-11-25)
+    argv = shlex.split(render(rd["ansible.builtin.command"], kubectl="kubectl"))
+    check(f"L05 {name}: the ConfigMap read whole, as kubectl receives it", argv[-5:],
+          ["get", "configmap", "schnappy-grafana-datasources", "-o", "json"])
+# L06: the copy's Prometheus reconciled and available AT ITS GENERATION - a condition the old operator left (its
+# observedGeneration behind the object's) satisfied the check (the observability review, 2026-11-25)
+mc = "tests/ansible/copy/metrics-check.yml"
+pr = task(mc, "Prometheus is reconciled by the operator and available")
+check("L06 Reconciled and Available at the object's generation: done; either behind it, or either not True: not done",
+      tuple(condition(pr["until"], _prom={"stdout": o}) for o in
+            ("7/True/7/True/7", "8/True/7/True/8", "8/True/8/True/7", "7/False/7/True/7", "7/True/7/False/7", "True/True")),
+      (True, False, False, False, False, False))
+# L07: every rule group the PrometheusRule objects define loaded, as many rules, each healthy - the copy read only its
+# targets, and with the operator's admission webhooks off a group a new operator or chart drops or breaks went unseen
+# (the same review). The task's script run as Ansible renders it, kubectl a stub
+PRULES = {"items": [
+    {"metadata": {"namespace": "schnappy-infra", "name": "schnappy-alerts", "uid": "11111111-2222-3333-4444-555555555555"},
+     "spec": {"groups": [{"name": "infra-a", "rules": [{"alert": "A1"}, {"alert": "A2"}]}, {"name": "infra-b", "rules": [{"alert": "B1"}]}]}},
+    {"metadata": {"namespace": "kagent", "name": "kagent-alerts", "uid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"},
+     "spec": {"groups": [{"name": "kagent", "rules": [{"alert": "K1"}]}]}}]}
+def loaded(drop=(), fewer=(), unhealthy=(), extra=False):
+    groups = []
+    for r in PRULES["items"]:
+        f = "/etc/prometheus/rules/x/%s-%s-%s.yaml" % (r["metadata"]["namespace"], r["metadata"]["name"], r["metadata"]["uid"])
+        for g in r["spec"]["groups"]:
+            if g["name"] in drop:
+                continue
+            rules = [{"name": x["alert"], "health": "err" if x["alert"] in unhealthy else "ok", "lastError": "boom"} for x in g["rules"]]
+            groups.append({"name": g["name"], "file": f, "rules": rules[:-1] if g["name"] in fewer else rules})
+    if extra:
+        groups.append({"name": "stray", "file": "/etc/prometheus/rules/x/old-0.yaml", "rules": [{"name": "S", "health": "ok"}]})
+    return {"data": {"groups": groups}}
+import json as _json
+def rules_check(prom_spec=None, **kw):
+    t = task(mc, "Every rule group the PrometheusRules define loaded")
+    d = tempfile.mkdtemp()
+    for n, v in (("prom.json", {"spec": prom_spec if prom_spec is not None else {"ruleSelector": {}, "ruleNamespaceSelector": {}}}),
+                 ("prules.json", PRULES), ("rules.json", loaded(**kw))):
+        open(os.path.join(d, n), "w").write(_json.dumps(v))
+    stub = os.path.join(d, "kubectl")
+    open(stub, "w").write("""#!/bin/bash
+case " $* " in
+  *" get prometheus schnappy-prometheus "*) cat "%s/prom.json" ;;
+  *" get prometheusrules "*) cat "%s/prules.json" ;;
+  *"/api/v1/rules"*) cat "%s/rules.json" ;;
+  *) echo "unexpected: $*" >&2; exit 9 ;;
+esac
+""" % (d, d, d))
+    os.chmod(stub, 0o755)
+    env = dict(os.environ, PATH=d + ":" + os.environ["PATH"])
+    r = subprocess.run(["bash", "-c", render(t["ansible.builtin.shell"]["cmd"], kubeconfig="/x", proxy="/p")],
+                       capture_output=True, text=True, env=env, timeout=60)
+    return r.returncode, r.stdout
+rc, out = rules_check()
+check("L07 every group defined loaded, as many rules, all healthy: rc 0, the counts said", (rc, "3 groups defined, 3 loaded" in out), (0, True))
+check("L07 a group the objects define not loaded: failed, named",
+      (lambda r: (r[0] != 0, "NOT LOADED schnappy-infra/schnappy-alerts infra-b" in r[1]))(rules_check(drop=("infra-b",))), (True, True))
+check("L07 a group loaded with fewer rules: failed, named",
+      (lambda r: (r[0] != 0, "FEWER schnappy-infra/schnappy-alerts infra-a: 1 of 2" in r[1]))(rules_check(fewer=("infra-a",))), (True, True))
+check("L07 a rule not healthy: failed, named with its error",
+      (lambda r: (r[0] != 0, "UNHEALTHY kagent/kagent-alerts kagent K1: err boom" in r[1]))(rules_check(unhealthy=("K1",))), (True, True))
+check("L07 the Prometheus selecting by labels (not every object): refused, said",
+      (lambda r: (r[0] != 0, "SELECTORS" in r[1]))(rules_check(prom_spec={"ruleSelector": {"matchLabels": {"a": "b"}}})), (True, True))
+check("L07 a group loaded that no object defines (an old file): no failure", rules_check(extra=True)[0], 0)
+# K02: argo-sync-app.yml - the application named, and its own sync's end read: the operation started at or after the
+# patch, Succeeded (an older operation's result, or a sync Failed, is no success)
+asy = "deploy/ansible/playbooks/argo-sync-app.yml"
+nm = task(asy, "The application named")["ansible.builtin.assert"]["that"]
+check("K02 an application's name: on; one with a space or an option: refused",
+      (condition(nm, app="schnappy-production-apps"), condition(nm, app="a b"), condition(nm, app="--all"), condition(nm, app="")),
+      (True, False, False, False))
+end = task(asy, "Its sync ended Succeeded")
+T0 = "2026-11-25T16:30:00Z"
+def synced(out):
+    v = dict(_st={"rc": 0, "stdout": out}, _t0={"stdout": T0})
+    return condition(end["until"], **v), condition(end["failed_when"], **v)
+check("K02 its sync Succeeded after the patch: done, passed; Failed after it: done, failed",
+      (synced("Succeeded|2026-11-25T16:30:05Z|successfully synced"), synced("Failed|2026-11-25T16:31:00Z|hook k6 failed")),
+      ((True, False), (True, True)))
+check("K02 an older operation's Succeeded (before the patch), or one still Running: not done",
+      (synced("Succeeded|2026-11-25T16:00:00Z|old")[0], synced("Running|2026-11-25T16:30:05Z|")[0]), (False, False))
 print("guard-conditions: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 PY_GUARD_CONDITIONS

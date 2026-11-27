@@ -12,9 +12,11 @@
 # Assertions:
 #   - Exactly ONE Pi has nexus.service active at any time (the VIP holder)
 #   - VIP-level HTTP curl returns 200 on /service/rest/v1/status
-#   - 11 repos provisioned (shared via Gluster — visible regardless of which
-#     Pi is active), pytorch-cpu among them
+#   - 12 repos provisioned (shared via Gluster — visible regardless of which
+#     Pi is active), pytorch-cpu and models among them
 #   - pypi-public lists the PyTorch CPU wheels before and after the failover
+#   - models serves each file setup-nexus.yml uploads, its sha256 the pinned
+#     one, to anyone (as a build fetches it), before and after the failover
 #   - Docker group port 8082 accessible on the active Pi
 #   - Maven / npm / PyPI proxy flows work
 #   - Failover scenario:
@@ -23,7 +25,7 @@
 #        curl still responds 200
 #     3. sentinel artifact (maven-releases upload) is intact on the new
 #        active Pi (Gluster replicated it)
-#     4. restart keepalived on the original Pi; no flap-back (nopreempt)
+#     4. restart keepalived on the original Pi; no flap-back (both Pis at one priority)
 
 - name: Vagrant VMs only
   ansible.builtin.import_playbook: vagrant-only-play.yml
@@ -84,6 +86,9 @@
   hosts: pi1
   become: true
   gather_facts: false
+  # the files models holds, as the playbook pins them
+  vars_files:
+    - ../../deploy/ansible/vars/nexus-models.yml
 
   vars:
     vip: "{{ keepalived_vip | default('192.168.56.50') }}"
@@ -109,7 +114,7 @@
       retries: 5
       delay: 5
 
-    - name: List repositories (11 expected)
+    - name: List repositories (12 expected)
       ansible.builtin.uri:
         follow_redirects: none
         url: "http://{{ vip }}:{{ nexus_port }}/service/rest/v1/repositories"
@@ -133,6 +138,7 @@
           - "'pypi-proxy' in repo_names"
           - "'pypi-public' in repo_names"
           - "'pytorch-cpu' in repo_names"
+          - "'models' in repo_names"
         fail_msg: "Missing repos. Found: {{ repo_names }}"
       vars:
         repo_names: "{{ repos.json | map(attribute='name') | list }}"
@@ -184,6 +190,9 @@
         return_content: true
       register: torch_index
       failed_when: "'+cpu-cp313' not in torch_index.content"
+
+    - name: Each model file served by models via VIP, with no credentials, its sha256 the pinned one
+      ansible.builtin.include_tasks: tasks/nexus-model-files-served.yml
 
 # ─── Failover scenario ─────────────────────────────────────────────────────
 - name: Upload sentinel artifact before failover
@@ -281,6 +290,8 @@
   hosts: pi1
   become: true
   gather_facts: false
+  vars_files:
+    - ../../deploy/ansible/vars/nexus-models.yml
 
   tasks:
     - name: Fetch sentinel via VIP (new active Pi is serving)
@@ -307,6 +318,9 @@
       register: torch_index_after
       failed_when: "'+cpu-cp313' not in torch_index_after.content"
 
+    - name: Each model file still served via VIP (the other Pi's Nexus is serving)
+      ansible.builtin.include_tasks: tasks/nexus-model-files-served.yml
+
 # ─── Recovery: restart original keepalived, verify no flap-back ────────────
 - name: Restart keepalived on original Pi
   hosts: "{{ hostvars['pi1']['nexus_active_host'] | default('pi1') }}"
@@ -314,16 +328,17 @@
   gather_facts: false
 
   tasks:
-    - name: Restart keepalived (with nopreempt it shouldn't reclaim VIP)
+    - name: Restart keepalived (at one priority it shouldn't reclaim VIP)
       ansible.builtin.systemd:
         name: keepalived
         state: started
 
-    - name: Give cluster 10s to settle
+    # past the preempt_delay (30 s) and the checks' rise: a takeback, were there one, would have happened
+    - name: Give cluster 45s to settle
       ansible.builtin.pause:
-        seconds: 10
+        seconds: 45
 
-- name: Confirm VIP stayed on the failover Pi (nopreempt behaviour)
+- name: Confirm VIP stayed on the failover Pi (no preempting at one priority)
   hosts: pi1,pi2
   become: true
   gather_facts: false
@@ -342,13 +357,13 @@
     - name: Assert new_active still holds VIP
       ansible.builtin.assert:
         that: _vip_final.stdout == "has-vip"
-        fail_msg: "{{ new_active }} should still hold VIP (nopreempt), got no-vip"
+        fail_msg: "{{ new_active }} should still hold VIP (one priority), got no-vip"
       when: inventory_hostname == new_active
 
     - name: Assert orig_active does NOT hold VIP
       ansible.builtin.assert:
         that: _vip_final.stdout == "no-vip"
-        fail_msg: "VIP flapped back to {{ inventory_hostname }} — nopreempt didn't hold"
+        fail_msg: "VIP flapped back to {{ inventory_hostname }} — an equal priority preempted"
       when: inventory_hostname != new_active
 
 - name: TEST PASSED
@@ -370,5 +385,5 @@
           ✓ Sentinel artifact uploaded to maven-releases
           ✓ Forced failover (stop keepalived on active) → VIP + Nexus move
           ✓ Sentinel intact on new active Pi (Gluster replicated)
-          ✓ Recovery: original keepalived restarted, nopreempt holds
+          ✓ Recovery: original keepalived restarted, no flap-back at one priority
           ====================================================

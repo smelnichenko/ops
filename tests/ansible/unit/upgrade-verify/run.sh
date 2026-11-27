@@ -32,7 +32,7 @@ esac
 STUB
 chmod +x "$W/bin/ssh"
 W=$W python3 - <<'PYCHECK'
-import json, os, subprocess, sys
+import json, os, re, subprocess, sys
 W = os.environ["W"]
 fails = 0
 def check(name, got, want):
@@ -56,9 +56,13 @@ def app(name, sync="Synced", health="Healthy", op="Succeeded", sources=None, rev
             a["spec"]["sources"] = srcs; st["sync"]["revisions"] = revisions
             st["sync"]["comparedTo"] = {"sources": compared if compared else srcs}
     return a
-def pod(ns, name, phase="Running", ready=(True,)):
-    return {"metadata": {"namespace": ns, "name": name},
-            "status": {"phase": phase, "containerStatuses": [{"name": f"c{i}", "ready": r} for i, r in enumerate(ready)]}}
+def pod(ns, name, phase="Running", ready=(True,), native=None):
+    out = {"metadata": {"namespace": ns, "name": name},
+           "status": {"phase": phase, "containerStatuses": [{"name": f"c{i}", "ready": r} for i, r in enumerate(ready)]}}
+    if native is not None:  # Istio's native sidecar (an init container restarting Always) and a plain init container, done
+        out["spec"] = {"initContainers": [{"name": "istio-proxy", "restartPolicy": "Always"}, {"name": "setup"}]}
+        out["status"]["initContainerStatuses"] = [{"name": "istio-proxy", "ready": native}, {"name": "setup", "ready": False}]
+    return out
 def run(apps, pods, alerts=(), alert_after=None, down=False, settle="0", hold="2", pods_raw=None, streak="5", revs="",
         alert_until=None, alert_looks=None, bad_app_looks=None, bad_apps=None, apps_by_look=None, pods_by_look=None):
     for f in [x for x in os.listdir(W) if x.startswith(("apps-bad.", "pods."))] + ["down", "looks", "alert-after", "alert-until", "alert-looks", "bad-app-looks"]:
@@ -99,14 +103,41 @@ for name, apps in (("an app out of sync", [app("x", sync="OutOfSync")]), ("an ap
                    ("a sync still running", [app("x", op="Running")])):
     rc, out = run(apps, OK_PODS)
     check(f"{name}: not settled, named", (rc, "NOT SETTLED" in out, "app x" in out), (1, True, True))
+LEFT = app("x", sync="OutOfSync")
+LEFT["status"]["resources"] = [{"kind": "Service", "name": "s", "status": "Synced"},
+                               {"kind": "Job", "name": "hook", "hook": True, "requiresPruning": True}] + \
+    [{"kind": "ClusterRole", "name": f"r{i}", "status": "OutOfSync", "requiresPruning": True} for i in range(7)]
+rc, out = run([LEFT], OK_PODS)
+UNKNOWN = app("y", sync="Unknown")
+UNKNOWN["status"]["resources"] = [{"kind": "Deployment", "name": "d", "status": "Unknown", "requiresPruning": True}]
+rc2, out2 = run([UNKNOWN], OK_PODS)
+check("a failed render (every object Unknown, marked requiresPruning): not settled, nothing named a leftover",
+      (rc2, "app y Unknown" in out2, "needs pruning" in out2), (1, True, False))
+check("an app out of sync for a chart's leftovers: those needing pruning named exactly - five and the count of the rest, "
+      "nothing synced, no hook",
+      (rc, "app x OutOfSync Healthy Succeeded - needs pruning: ClusterRole/r0, ClusterRole/r1, ClusterRole/r2, "
+           "ClusterRole/r3, ClusterRole/r4 and 2 more" in out, "Service/s" in out or "Job/hook" in out), (1, True, False))
 rc, out = run(OK_APPS, [pod("schnappy-production", "monitor-1", ready=(True, False))])
 check("a running pod unready: not settled, named", (rc, "pod schnappy-production/monitor-1 unready: c1" in out), (1, True))
+rc, out = run(OK_APPS, [pod("schnappy-production", "chat-1", native=False)])
+check("a running pod's native sidecar unready: not settled, named", (rc, "pod schnappy-production/chat-1 unready: istio-proxy" in out), (1, True))
+rc, out = run(OK_APPS, [pod("schnappy-production", "chat-2", native=True)])
+check("  its native sidecar ready, a plain init container done (not ready): settled", rc, 0)
 CRIT = [{"labels": {"alertname": "PostgresDown", "severity": "critical"}}]
 rc, out = run(OK_APPS, OK_PODS, alerts=CRIT, alert_after=1, streak="1")
 check("a critical alert during the hold (one look in a row enough): not quiet, named",
       (rc, "NOT QUIET" in out, "critical alert PostgresDown" in out), (1, True, True))
 rc, out = run(OK_APPS, OK_PODS, alerts=CRIT, alert_after=1, streak="3", hold="15")
 check("one still firing 3 looks in a row (the streak): not quiet", (rc, "NOT QUIET during the hold (3 looks in a row)" in out), (1, True))
+check("  each look of the streak said as it came - its time first, the count in a row, what fired",
+      [re.sub(r"^\d\d:\d\d:\d\d ", "", l) for l in out.splitlines() if re.match(r"\d\d:\d\d:\d\d not quiet", l)],
+      [f"not quiet ({n} of 3 looks in a row): critical alert PostgresDown" for n in (1, 2, 3)])
+rc, out = run(OK_APPS, OK_PODS, hold="25")
+lines = out.strip().splitlines()
+held = [re.fullmatch(r"\d\d:\d\d:\d\d quiet - (\d+) of 25 min held", l) for l in lines]
+check("a quiet hold of 25 min: its start said with its time, then one line every 10 minutes - how far, never past the hold",
+      (rc, bool(re.fullmatch(r"SETTLED at \d\d:\d\d:\d\d - the hold: 25 min", lines[0])), [int(m.group(1)) for m in held if m],
+       lines[-1], len(lines)), (0, True, [12, 21], "SETTLED AND QUIET for 25 min", 4))
 rc, out = run(OK_APPS, OK_PODS, alerts=CRIT, alert_after=1, alert_until=3, streak="3", hold="15")
 check("one firing 2 looks, then gone (a rollout's minutes): quiet", (rc, out.strip().splitlines()[-1]), (0, "SETTLED AND QUIET for 15 min"))
 rc, out = run(OK_APPS, OK_PODS, alerts=CRIT, alert_looks=(1, 2, 4, 5), streak="3", hold="15")
@@ -118,6 +149,8 @@ check("firing 2 looks, a look with something else wrong alone, firing again: not
 rc, out = run(OK_APPS, OK_PODS, alerts=CRIT, alert_after=0, hold="0")
 check("hold 0 (the gate's look), a critical alert firing: not settled, named - never applied on top of it",
       (rc, "critical alert PostgresDown" in out), (1, True))
+check("  the gate's one look (settle 0): no progress line - the verdict alone",
+      [l for l in out.splitlines() if re.match(r"\d\d:\d\d:\d\d ", l)], [])
 rc, out = run(OK_APPS, OK_PODS, hold="0")
 check("hold 0, nothing firing: settled and quiet in one look", (rc, out.strip()), (0, "SETTLED AND QUIET (1 look)"))
 rc, out = run(OK_APPS, OK_PODS, hold="0", settle="5")
@@ -125,7 +158,14 @@ check("hold 0 while waiting for Argo (settle > 0): two clean looks in a row (a l
       "settle)", (rc, out.strip(), int(open(os.path.join(W, "looks")).read())), (0, "SETTLED AND QUIET (2 looks in a row)", 2))
 rc, out = run(OK_APPS, OK_PODS, hold="0", settle="15", bad_app_looks=(1,))
 check("  clean, then not, then clean twice: the count starts again - three clean looks of four, settled on the last two",
-      (rc, out.strip(), int(open(os.path.join(W, "looks")).read())), (0, "SETTLED AND QUIET (2 looks in a row)", 4))
+      (rc, out.strip().splitlines()[-1], int(open(os.path.join(W, "looks")).read())), (0, "SETTLED AND QUIET (2 looks in a row)", 4))
+# the console's progress (operator 2026-11-22: a silent hour read as a hang): each look not settled said as it came, on one
+# line, its time first (the runner's test_only skips such lines - never a complaint)
+check("  the look not settled said as it came: one line, its time first, what it found",
+      [bool(re.fullmatch(r"\d\d:\d\d:\d\d not settled yet: app x Synced Progressing Succeeded", l)) for l in out.strip().splitlines()[:-1]], [True])
+rc, out = run(OK_APPS, OK_PODS, hold="0", settle="15", bad_app_looks=(0, 1), bad_apps=[app("x", health="Progressing"), app("y", sync="OutOfSync")])
+check("  a look finding two things: both on its one line", [l[9:] for l in out.strip().splitlines()[:-1]],
+      ["not settled yet: app x Synced Progressing Succeeded; app y OutOfSync Healthy Succeeded"] * 2)
 rc, out = run(OK_APPS + [app("pr-42-monitor", health="Degraded", labels={"preview-env": "true"})], OK_PODS)
 check("a preview environment's app broken (a pull request's): no part of production - settled", rc, 0)
 rc, out = run(OK_APPS, OK_PODS, alerts=[{"labels": {"alertname": "Watchdog", "severity": "critical"}}], alert_after=0, streak="1")
@@ -156,9 +196,35 @@ check("an app broken through the hold, its state flipping each look (Degraded, P
       (rc, "NOT QUIET" in out), (1, True))
 rc, out = run(OK_APPS, OK_PODS, streak="3", hold="15",
               pods_by_look={n: [pod("schnappy-production", f"monitor-7d9f8b6c4d-{x}", ready=(False,))]
-                            for n, x in ((1, "aaaa1"), (2, "bbbb2"), (3, "cccc3"), (4, "dddd4"))})
+                            for n, x in ((1, "bbbb2"), (2, "cccc4"), (3, "dddd5"), (4, "ffff6"))})
 check("a Deployment's pod unready, recreated under a new name each look: its owner the subject - not quiet",
       (rc, "NOT QUIET" in out), (1, True))
+rc, out = run(OK_APPS, OK_PODS, streak="3", hold="15", pods_by_look={1: [pod("schnappy-production", f"monitor-7d9f8b6c4d-{x}", ready=(False,))
+                                                                         for x in ("aaaa2", "bbbb4", "cccc5")]})
+check("three replicas unready in one look, quiet after: one subject counted once - quiet (never three looks in one)",
+      (rc, out.strip().splitlines()[-1]), (0, "SETTLED AND QUIET for 15 min"))
+# what a complaint is about - the function itself (Kubernetes' own alphabet names a pod's random parts)
+vsrc = open("scripts/upgrade-verify.sh").read()
+subject_fn = vsrc[vsrc.index("\nsubject() {") + 1:].split("\n}\n", 1)[0] + "\n}"
+def subject(line):
+    return subprocess.run(["bash", "-c", subject_fn + '\nsubject "$1"', "_", line], capture_output=True, text=True).stdout.strip()
+TABLE = [("pod ns/monitor-7d9f8b6c4d-x2k9p unready: c", "pod ns/monitor"), ("pod ns/monitor-bcdfghjklm-x2k9p unready: c", "pod ns/monitor"),
+         ("pod ns/kafka-0 unready: c", "pod ns/kafka"), ("pod ns/kafka-1 unready: c", "pod ns/kafka"),
+         ("pod ns/redis-6379-1 unready: c", "pod ns/redis-6379"), ("pod ns/pg15-7d9f8b6c4d-x2k9p unready: c", "pod ns/pg15"),
+         ("pod ns/node-exporter-x7k2q unready: c", "pod ns/node-exporter"), ("pod ns/etcd-ten unready: c", "pod ns/etcd-ten"),
+         ("app observability Synced Degraded -", "app observability"), ("app observability OutOfSync Healthy Running", "app observability"),
+         ("critical alert NodeDown", "critical alert NodeDown"), ("apps not read", "apps not read"),
+         ("pod ns/api-6d4cf56d-x2k9p unready: c", "pod ns/api"), ("pod ns/node-exporter-zx7k2 unready: c", "pod ns/node-exporter"),
+         # a name of its own whose last part only looks generated - a vowel, a 0, a 1 or a 3 (never in Kubernetes'
+         # alphabet), four characters where it makes five: kept whole
+         ("pod ns/x-bcdfa unready: c", "pod ns/x-bcdfa"), ("pod ns/x-bcdf0 unready: c", "pod ns/x-bcdf0"),
+         ("pod ns/x-bcdf1 unready: c", "pod ns/x-bcdf1"), ("pod ns/x-bcdf3 unready: c", "pod ns/x-bcdf3"),
+         ("pod ns/x-cache unready: c", "pod ns/x-cache"), ("pod ns/web-6d4cf56d4-x2k9 unready: c", "pod ns/web-6d4cf56d4-x2k9"),
+         ("pod ns/web-bcdf unready: c", "pod ns/web-bcdf")]
+check("a complaint's subject: a ReplicaSet's pods by their name (a hash with no digit too), a StatefulSet's by theirs, a "
+      "DaemonSet's, a name of its own as it is (a part that only looks generated kept); an app whatever its state; an "
+      "alert by its name",
+      [(l, subject(l), w) for l, w in TABLE if subject(l) != w], [])
 STALL = app("cert-manager", sync="OutOfSync")
 STALL["spec"]["syncPolicy"] = {"automated": {}}
 STALL["status"]["operationState"] = {"phase": "Succeeded", "operation": {"initiatedBy": {"automated": True}}}

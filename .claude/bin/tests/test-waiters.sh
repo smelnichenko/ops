@@ -68,8 +68,8 @@ s = http.server.HTTPServer(('127.0.0.1', 0), H)
 open(os.path.join(root, 'port'), 'w').write(str(s.server_port))
 s.serve_forever()
 EOF
-status() {   # status <state> <updated_at>
-    printf '{"state":"%s","statuses":[{"status":"%s","target_url":"http://ci/1","updated_at":"%s"}]}' "$1" "$1" "$2" > "$scratch/api/status.json"
+status() {   # status <state> <updated_at> - Woodpecker's context beside Renovate's (success)
+    printf '{"state":"%s","statuses":[{"context":"renovate/stability-days","status":"success","target_url":"http://renovate/","updated_at":"%s"},{"context":"ci/woodpecker/pr/ci","status":"%s","target_url":"http://ci/1","updated_at":"%s"}]}' "$1" "$2" "$1" "$2" > "$scratch/api/status.json"
 }
 none() { printf '{"state":"","statuses":[]}' > "$scratch/api/status.json"; }
 none
@@ -91,11 +91,28 @@ status failure "2026-01-01T00:00:00Z"
 out=$(ci_wait o/r "$sha" 10 2>&1); rc=$?
 [[ $rc == 1 ]] && pass "a standing verdict is reported at once" || fail "a standing verdict is reported at once" "rc=$rc: $out"
 
+# Renovate's stability-days alone (its pipeline never created - 2026-11-19): Forgejo's combined state "success", but no
+# CI ran - never a success; no Woodpecker error either here: it keeps waiting
+printf '{"state":"success","statuses":[{"context":"renovate/stability-days","status":"success","target_url":"http://renovate/","updated_at":"%s"}]}' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$scratch/api/status.json"
+cat > "$scratch/wp-none" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+chmod +x "$scratch/wp-none"
+out=$(CI_WAIT_NONE_GRACE=1 CI_WAIT_PIPELINE_ROWS="$scratch/wp-none" ci_wait o/r "$sha" 4 2>&1); rc=$?
+[[ $rc == 2 && $out != *"CI success"* ]] && pass "Renovate's status alone is no CI: never a success" \
+    || fail "Renovate's status alone is no CI: never a success" "rc=$rc: $out"
+# the CI finished green while Renovate's own status is still pending (Forgejo's combined state pending): the CI's verdict
+printf '{"state":"pending","statuses":[{"context":"renovate/stability-days","status":"pending","updated_at":"2026-01-01T00:00:00Z"},{"context":"ci/woodpecker/pr/ci","status":"success","target_url":"http://ci/1","updated_at":"2026-01-01T00:00:00Z"}]}' > "$scratch/api/status.json"
+out=$(ci_wait o/r "$sha" 10 2>&1); rc=$?
+[[ $rc == 0 && $out == *"CI success $sha http://ci/1"* ]] && pass "the CI's verdict, not Renovate's pending status" \
+    || fail "the CI's verdict, not Renovate's pending status" "rc=$rc: $out"
+
 # a pipeline Woodpecker could not even create posts nothing on the commit: after the grace the waiter asks Woodpecker
 none
 cat > "$scratch/wp-errors" <<'EOF'
 #!/usr/bin/env bash
-# exactly what `sqlite3 -json` prints for the pipelines table (errors is a JSON string column)
+# errors as a JSON string column (sqlite3 -json's form, older rows)
 printf '%s\n' '[{"number":343,"errors":"[{\"type\":\"generic\",\"message\":\"could not load config from forge: context deadline exceeded\",\"is_warning\":false,\"data\":null}]"}]'
 EOF
 chmod +x "$scratch/wp-errors"
@@ -103,6 +120,21 @@ start=$(date +%s)
 out=$(CI_WAIT_NONE_GRACE=2 CI_WAIT_PIPELINE_ROWS="$scratch/wp-errors" ci_wait o/r "$sha" 60 2>&1); rc=$?
 took=$(( $(date +%s) - start ))
 [[ $rc == 1 && $out == *"could not load config"* && $took -lt 30 ]] && pass "a silent pipeline error ends the wait" || fail "a silent pipeline error ends the wait" "rc=$rc after ${took}s: $out"
+
+# what Woodpecker's Postgres answers (json_agg - errors a JSON array, not a string): the same verdict
+none
+cat > "$scratch/wp-errors" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' '[{"number":344,"errors":[{"type":"compiler","message":"go-yaml load error at L162","is_warning":false,"data":null}]}]'
+EOF
+chmod +x "$scratch/wp-errors"
+out=$(CI_WAIT_NONE_GRACE=2 CI_WAIT_PIPELINE_ROWS="$scratch/wp-errors" ci_wait o/r "$sha" 60 2>&1); rc=$?
+[[ $rc == 1 && $out == *"pipeline 344 error: go-yaml load error"* ]] && pass "a pipeline error as Postgres answers it ends the wait" \
+    || fail "a pipeline error as Postgres answers it ends the wait" "rc=$rc: $out"
+# the database the rows come from: Woodpecker's Postgres (the SQLite file stopped 2026-11-01 - no error was ever found)
+grep -q 'kubectl -n woodpecker exec woodpecker-postgres-1' "$here/forgejo-ci-wait" && ! grep -q 'sqlite3' "$here/forgejo-ci-wait" \
+    && pass "the rows read from Woodpecker's Postgres, never the stale SQLite file" \
+    || fail "the rows read from Woodpecker's Postgres, never the stale SQLite file" "sqlite3 still read"
 
 # no status and no pipeline error: the waiter keeps waiting (a pipeline that is merely queued)
 cat > "$scratch/wp-errors" <<'EOF'
@@ -115,6 +147,37 @@ out=$(CI_WAIT_NONE_GRACE=1 CI_WAIT_PIPELINE_ROWS="$scratch/wp-errors" ci_wait o/
 # a queue of an hour and more is normal now: the default must outlast it
 grep -qE '^repo=.*timeout=\$\{3:-(10800|[0-9]{6,})\}|timeout=\$\{timeout:-(10800|[0-9]{6,})\}' "$here/forgejo-ci-wait" \
     && pass "the default timeout outlasts a queued pipeline" || fail "the default timeout outlasts a queued pipeline" "default is under 3 h"
+
+# the lookup itself (pipeline_rows - the stub above stands in for it): the command it sends to ten through ssh, read
+# by a fake ssh - the query's words, psql's form (-At: one JSON value, never a table json cannot read; ON_ERROR_STOP);
+# a repo or sha outside its alphabet never reaches the SQL
+rows_fn=$(sed -n '/^pipeline_rows() {/,/^}/p' "$here/forgejo-ci-wait")
+mkdir -p "$scratch/fakebin"
+printf '#!/bin/sh\nprintf "%%s\\n" "$@" > "%s/ssh.args"\necho "[]"\n' "$scratch" > "$scratch/fakebin/ssh"; chmod +x "$scratch/fakebin/ssh"
+rows() { rm -f "$scratch/ssh.args"; PATH="$scratch/fakebin:$PATH" bash -c "$rows_fn
+pipeline_rows \"\$@\"" _ "$@"; }
+rows schnappy/site a120cb9f45ae1a54274ccb64a929b8f5d6c5ab9d 1700000000 > /dev/null
+q=$(tail -n 1 "$scratch/ssh.args" 2> /dev/null)
+ok=1
+for want in "psql -At -d woodpecker -v ON_ERROR_STOP=1" "r.full_name = 'schnappy/site'" "p.commit = 'a120cb9f45ae1a54274ccb64a929b8f5d6c5ab9d'" \
+            "p.status = 'error'" "p.created >= 1700000000" "kubectl -n woodpecker exec woodpecker-postgres-1" "json_agg"; do
+  [[ $q == *"$want"* ]] || { ok=""; fail "the lookup's query: $want" "$q"; }
+done
+[ -n "$ok" ] && pass "the lookup sends its query to Woodpecker's Postgres: the repo, the sha, errored, since the wait began; psql -At, ON_ERROR_STOP"
+for bad in "schnappy/site' or '1'='1 a120cb9f 1" "schnappy/site a120cb9f' or '1 1" "schnappy/site --exec=x 1" "schnappy/site a120cb9f 1;drop"; do
+  read -r r c t <<< "$bad"
+  rows "$r" "$c" "$t" > /dev/null
+  [ ! -e "$scratch/ssh.args" ] && pass "a repo, sha or time outside its alphabet never sent: $bad" || fail "a repo, sha or time outside its alphabet never sent" "$bad"
+done
+# the real lookup against production's database - only when asked (CI_WAIT_LIVE=1: ten reachable over ssh): site's
+# pipeline 222 errored on its YAML (2026-11) and must be found
+if [ "${CI_WAIT_LIVE:-}" = 1 ]; then
+  out=$(bash -c "$(sed -n '/^pipeline_rows() {/,/^}/p;/^pipeline_errors() {/,/^}/p' "$here/forgejo-ci-wait")
+pipeline_errors schnappy/site a120cb9f45ae1a54274ccb64a929b8f5d6c5ab9d 0")
+  [[ $out == "pipeline 222 error: go-yaml load error"* ]] && pass "live: site's pipeline 222 found with its error" || fail "live: site's pipeline 222" "$out"
+else
+  echo "skip live: site's pipeline 222 in production's database (CI_WAIT_LIVE=1 runs it)"
+fi
 
 echo
 (( fails == 0 )) && echo "all passed" || echo "$fails failed"

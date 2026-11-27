@@ -42,7 +42,7 @@ stub consul 'printf "Consul v1.20.6\nRevision 1\n"'
 stub caddy 'echo "v2.10.0 h1:abc="'
 # pids above any pid_max: their /proc globs never match a real process
 running=(PID_versitygw=9999901 EXE_9999901=/usr/bin/versitygw PID_vault=9999902 EXE_9999902=/usr/local/bin/vault
-  PID_consul=9999903 EXE_9999903=/usr/local/bin/consul PID_caddy=9999904 EXE_9999904=/usr/local/bin/caddy
+  PID_consul=9999903 EXE_9999903=/usr/local/bin/consul PID_caddy=9999904 EXE_9999904=/usr/bin/caddy
   'FORGEJO_JSON={"version":"15.0.9+gitea-1.22.0"}' 'PATRONI_JSON={"state":"running","patroni":{"version":"4.1.5","scope":"x"}}'
   PID_keycloak=9999905 'FD_9999905=/dev/null /opt/keycloak-26.5.7/bin/kc.sh' CHILD_9999905=9999906
   'FD_9999906=/opt/keycloak-26.5.7/lib/lib/main/a.jar /opt/keycloak-26.5.7/lib/lib/main/b.jar'
@@ -74,6 +74,10 @@ case_ "services not running read not-running" "$(sed -E 's/^(pi pi9 (consul|forg
   "${running[@]}" PID_consul=0 FORGEJO_JSON= PATRONI_JSON= PID_keycloak=0
 case_ "Keycloak holding two installs open reads stale" "$(sed 's/^pi pi9 keycloak .*/pi pi9 keycloak stale/' <<< "$all")" \
   "${running[@]}" 'FD_9999906=/opt/keycloak-26.4.2/lib/lib/main/a.jar'
+case_ "Caddy the xcaddy build a Pi was not moved from yet (/usr/local/bin/caddy): its version" "$all" "${running[@]}" \
+  EXE_9999904=/usr/local/bin/caddy
+case_ "Caddy another binary: stale" "$(sed 's/^pi pi9 caddy .*/pi pi9 caddy stale/' <<< "$all")" "${running[@]}" \
+  EXE_9999904=/opt/caddy/caddy
 case_ "a package removed but its config kept (rc) has no line" "$(grep -v haproxy <<< "$all")" "${running[@]}" "DPKGST_haproxy=rc "
 echo "version-inventory-pi: $([ $fails = 0 ] && echo ALL-PASS || echo "$fails FAILED")"
 [ $fails = 0 ]

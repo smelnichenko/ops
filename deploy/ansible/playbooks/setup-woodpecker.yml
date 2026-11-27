@@ -23,7 +23,10 @@
     woodpecker_namespace: "{{ woodpecker_ns | default('woodpecker') }}"
     woodpecker_host: "{{ woodpecker_domain | default('ci.pmon.dev') }}"
     woodpecker_chart: "oci://ghcr.io/woodpecker-ci/helm/woodpecker"
-    woodpecker_chart_version: "{{ woodpecker_version | default('3.7.3') }}"
+    # production's chart (infra's woodpecker app; defaults-follow-production), annotated so the upgrade cycle's Renovate
+    # moves it with infra's (renovate/manual-woodpecker) - inside default('...') it stood at 3.7.3 after 3.7.7 went live
+    # renovate: datasource=docker depName=ghcr.io/woodpecker-ci/helm/woodpecker
+    woodpecker_chart_version: "3.7.7"
     woodpecker_admin: "{{ forgejo_admin_user | default('forgejo_admin') }}"
     woodpecker_tls_issuer: "{{ woodpecker_cluster_issuer | default('letsencrypt-dns') }}"
     forgejo_namespace: "{{ forgejo_ns | default('forgejo') }}"

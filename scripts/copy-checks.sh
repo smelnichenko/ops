@@ -9,6 +9,8 @@
 #   smoke      production's k6 smoke
 #   prod       the data paths as production's check reads them (production-data-check.yml)
 #   isolation  the copy still cannot reach production (isolate-cluster.yml's proof)
+#   kafka      a Kafka dump by production's backup Job: its guard judges Kafka against the build's dump (TopicIds,
+#              offsets, retention) - a Kafka change's describe and configs as the guard reads them
 # None reads what another writes. Each one's log is printed whole as it ends (with its time); the exit is non-zero when
 # any failed, naming them. The check pays the slowest, not their sum.
 #
@@ -30,7 +32,7 @@ pools_gone=${COPY_SCRAPE_POOLS_GONE:-}
   || { echo "COPY_SCRAPE_POOLS_GONE='$pools_gone': scrape pool names, comma-separated"; exit 1; }
 # ClickHouse's compatibility setting and users as the copy runs them: what the platform ref under test sets (its
 # clickhouse-users.xml, read by scripts/clickhouse-expected.sh - the survival seed reads the same)
-ch=$(scripts/clickhouse-expected.sh "$platform_ref") || exit 1
+ch=$(scripts/clickhouse-expected.sh "$platform_ref" "$infra_ref") || exit 1
 read -r clickhouse_compat clickhouse_users <<< "$ch"
 [ "$clickhouse_compat" != - ] || clickhouse_compat=""
 # own_jobs, stop_groups
@@ -131,6 +133,7 @@ start metrics play ../../tests/ansible/copy/metrics-check.yml -e "scrape_pools_g
 start smoke scripts/vagrant-smoke.sh "$infra_ref" "$platform_ref"
 start prod play playbooks/production-data-check.yml
 start isolation play ../../tests/ansible/copy/isolate-cluster.yml --tags proof
+start kafka play playbooks/kafka-backup-check.yml -e kafka_backup_expect_judged=true
 
 # the checks' own bound: one that never ends - stopped by a signal (wait -n waits on it while any other job runs, this
 # one always: measured on bash 5.2), or a hang none of them bounds - ends them after COPY_CHECKS_SECONDS, said, those

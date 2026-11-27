@@ -1,0 +1,45 @@
+---
+# Kafka backs up: its topics dumped to the Pi store now, as its CronJob does each night - before a change Kafka cannot
+# take back (a metadata version, a Strimzi conversion: the upgrade cycle's one-way table, scripts/upgrade-stores.json),
+# and after a change to Kafka, Strimzi or the store. A preview changes nothing (the Job writes to the store).
+#
+# kafka_backup_expect_judged=true (the copy's checks, after its build's dump): the guard must have judged topics - TopicIds,
+# offsets, retention against the dump before - never "nothing to compare" or no verdict at all.
+#
+# Usage: task check:production:kafka-backup   (production; the copy: test:copy:kafka-restore restores one too)
+- name: Kafka backs up
+  hosts: target
+  become: true
+  gather_facts: false
+  vars:
+    kubeconfig: /etc/kubernetes/admin.conf
+    kubectl: "kubectl --kubeconfig {{ kubeconfig }}"
+  tasks:
+    - name: Its topics dumped now
+      ansible.builtin.include_tasks: tasks/kafka-backup.yml
+      when: not ansible_check_mode
+
+    # the judgement asked only of a backup that has its guard (the dump's ConfigMap holding guard.sh): ops' copy checks
+    # ran against platform's chart from before the guard too (copy run 7's build, 2026-11-19)
+    - name: Whether the backup has its guard
+      when: not ansible_check_mode and (kafka_backup_expect_judged | default(false) | bool)
+      check_mode: false
+      ansible.builtin.command: >-
+        {{ kubectl }} -n {{ kafka_namespace | default('schnappy-production') }} get configmap
+        {{ kafka_namespace | default('schnappy-production') }}-kafka-backup -o jsonpath={.data.guard\\.sh}
+      register: _kb_guard_script
+      changed_when: false
+
+    - name: The guard judged topics against the dump before (the copy's checks)
+      when:
+        - not ansible_check_mode
+        - kafka_backup_expect_judged | default(false) | bool
+        - (_kb_guard_script | default({})).stdout | default('') | length > 0
+      ansible.builtin.assert:
+        that: "kafka_backup_guard is search(': .*[A-Za-z0-9._-]+@[0-9]{8}T[0-9]{6}Z')"
+        fail_msg: "the guard judged nothing: {{ kafka_backup_guard }}"
+        quiet: true
+
+    - name: Backed up
+      ansible.builtin.debug:
+        msg: "KAFKA BACKUP OK: {{ kafka_backup_name | default('(a preview - none taken)') }} - {{ kafka_backup_guard | default('') }}"

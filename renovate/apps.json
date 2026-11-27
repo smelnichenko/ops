@@ -1,0 +1,214 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "description": "The app repos' shared preset (each repo's renovate.json extends local>schnappy/ops//renovate/apps; task upgrade:apps:run / :check): one JDK and one Node everywhere - a repo's CI images, its Dockerfile, its mise.toml (the workstation's toolchain, a major alone: java temurin-25, node 22 - Adoptium's build numbers are not mise's) and its Gradle toolchain move together",
+  "extends": [
+    "config:recommended",
+    ":dependencyDashboard",
+    ":semanticCommits"
+  ],
+  "prBodyTemplate": "{{{table}}}{{{warnings}}}",
+  "prConcurrentLimit": 5,
+  "prHourlyLimit": 0,
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "The Gradle Java toolchain - java { toolchain { languageVersion = JavaLanguageVersion.of(N) } } - read by no manager: its major alone, from Adoptium's releases (an LTS major, config:recommended's javaLTSVersions)",
+      "managerFilePatterns": [
+        "/(^|/)build\\.gradle(\\.kts)?$/"
+      ],
+      "matchStrings": [
+        "JavaLanguageVersion\\.of\\((?<currentValue>\\d+)\\)"
+      ],
+      "depNameTemplate": "java",
+      "packageNameTemplate": "java-jdk",
+      "datasourceTemplate": "java-version",
+      "extractVersionTemplate": "^(?<version>\\d+)",
+      "versioningTemplate": "loose"
+    }
+  ],
+  "packageRules": [
+    {
+      "description": "First-party images are promoted via GitOps (task promote:run), never by Renovate",
+      "matchDatasources": [
+        "docker"
+      ],
+      "matchPackageNames": [
+        "/^git\\.pmon\\.dev\\/schnappy\\//"
+      ],
+      "enabled": false
+    },
+    {
+      "description": "Auto-merge low-risk updates once CI is green",
+      "matchUpdateTypes": [
+        "patch",
+        "pin",
+        "digest"
+      ],
+      "automerge": true
+    },
+    {
+      "description": "Every patch, minor, digest and pin of a repo (the six Dockerfiles' digest pins: their weekly group's) in ONE pull request, renovate/app-wave (operator 2026-11-23: a pull request each was a CI run, a deploy and the next one's conflict each) - the groups below take theirs back (java, node, playwright, Spring Boot's minors, the six Dockerfiles' weekly digests: each its own slug, and no rule names a branch topic, so none stays on this one's); majors their own pull request (the next rule). It merges itself only when every update in it would (a branch automerges when all its updates do): with a minor in it, merged by hand on a green CI",
+      "matchUpdateTypes": [
+        "patch",
+        "minor",
+        "digest",
+        "pin"
+      ],
+      "groupName": "app wave",
+      "groupSlug": "app-wave"
+    },
+    {
+      "description": "A repo's majors in ONE pull request of their own, renovate/major-app-majors (the operator's decision, 2026-11-23) - each package's newest major alone (separateMultipleMajor's default); java, node and playwright keep theirs in their groups, Spring Boot's its own (the next rules); never merged by itself - a major that needs code changes is fixed on its branch",
+      "matchUpdateTypes": [
+        "major"
+      ],
+      "groupName": "app majors",
+      "groupSlug": "app-majors"
+    },
+    {
+      "description": "One JDK everywhere: the eclipse-temurin images (Dockerfiles, CI steps), mise's java and the Gradle toolchain in one pull request",
+      "matchPackageNames": [
+        "eclipse-temurin",
+        "java",
+        "java-jdk",
+        "java-jre"
+      ],
+      "groupName": "java",
+      "groupSlug": "java"
+    },
+    {
+      "description": "Spring Boot's minors a pull request of their own, renovate/spring-boot (4.1 -> 4.2: the deprecations and removals a build meets), and its majors another (renovate/major-spring-boot) - never holding the app wave or the repo's other majors up; its patches in the wave",
+      "matchUpdateTypes": [
+        "minor",
+        "major"
+      ],
+      "matchPackageNames": [
+        "/^org\\.springframework\\.boot(:|$)/"
+      ],
+      "groupName": "spring boot",
+      "groupSlug": "spring-boot"
+    },
+    {
+      "description": "One Node everywhere: the node images, mise's node and @types/node (the types of the runtime's major) in one pull request - LTS (even) majors only",
+      "matchPackageNames": [
+        "node",
+        "/(^|\\/)node$/"
+      ],
+      "groupName": "node",
+      "groupSlug": "node",
+      "allowedVersions": "/^v?\\d*[02468](\\.|-|$)/"
+    },
+    {
+      "description": "Playwright's browsers image and its library together - a version apart and the tests fail to start",
+      "matchPackageNames": [
+        "mcr.microsoft.com/playwright",
+        "@playwright/test",
+        "playwright",
+        "com.microsoft.playwright:playwright"
+      ],
+      "groupName": "playwright",
+      "groupSlug": "playwright"
+    },
+    {
+      "description": "The Gradle wrapper's checksum moved with its version (a pinned distributionSha256Sum would fail the build on the old sum): Gradle's own published sum over HTTPS - never Nexus's .sha256, which takes the zip's plain-http hop - 64 hex or nothing written; a wrapper with no distributionSha256Sum line left as it is. The version an argument, never shell text",
+      "matchManagers": [
+        "gradle-wrapper"
+      ],
+      "postUpgradeTasks": {
+        "commands": [
+          "sh -c 'set -eu; s=$(curl -fsSL --proto =https \"https://services.gradle.org/distributions/gradle-$1-bin.zip.sha256\"); printf %s \"$s\" | grep -qxE \"[0-9a-f]{64}\"; sed -i \"s/^distributionSha256Sum=.*/distributionSha256Sum=$s/\" gradle/wrapper/gradle-wrapper.properties' gradle-sum {{{newVersion}}}"
+        ],
+        "fileFilters": [
+          "gradle/wrapper/gradle-wrapper.properties"
+        ],
+        "executionMode": "update"
+      }
+    },
+    {
+      "description": "The six services' Dockerfile base images pinned by tag AND digest (operator 2026-11-21, \"do C\"): every re-published base reaches an app through a reviewed, traceable pull request - not silently at its next code change. CI step images and the CI tool images stay plain tags (the decision covered these alone)",
+      "matchRepositories": [
+        "schnappy/admin",
+        "schnappy/chat",
+        "schnappy/chess",
+        "schnappy/masi",
+        "schnappy/monitor",
+        "schnappy/site"
+      ],
+      "matchManagers": [
+        "dockerfile"
+      ],
+      "pinDigests": true
+    },
+    {
+      "description": "Their digest moves (and the first pins) in ONE pull request per repo, weekly: Mondays - Renovate runs by hand (ops' task upgrade:apps:run), so a run on a Monday opens or refreshes it; version-tag bumps stay their own pull requests",
+      "matchRepositories": [
+        "schnappy/admin",
+        "schnappy/chat",
+        "schnappy/chess",
+        "schnappy/masi",
+        "schnappy/monitor",
+        "schnappy/site"
+      ],
+      "matchManagers": [
+        "dockerfile"
+      ],
+      "matchUpdateTypes": [
+        "pin",
+        "pinDigest",
+        "digest"
+      ],
+      "groupName": "base image digests",
+      "groupSlug": "base-image-digests",
+      "schedule": [
+        "* * * * 1"
+      ]
+    },
+    {
+      "description": "target-scorer: its Python minor and its locked training stack (torch, torchvision) move only with a re-lock - requirements/ci.txt is pip-compiled for one Python (3.13) and Renovate cannot regenerate it, and docker/ten.Dockerfile is the image of the training and generation runs on ten. A Python 3.15 image over the 3.13 lock: CI red, every pinned wheel refused (target-scorer#48, 2026-11-23). Their patches still move; last, so no group above takes them back",
+      "matchRepositories": [
+        "schnappy/target-scorer"
+      ],
+      "matchPackageNames": [
+        "python",
+        "torch",
+        "torchvision"
+      ],
+      "matchUpdateTypes": [
+        "minor",
+        "major"
+      ],
+      "enabled": false
+    },
+    {
+      "description": "site: eslint / @eslint/js 10 wait for eslint-plugin-jsx-a11y (6.10.2 declares eslint ^3 .. ^9) and TypeScript 6.1+ for typescript-eslint (8.73 declares typescript <6.1.0) - in the repo's majors PR they kept the whole set from resolving (site#86, 2026-11-23). Lift each when its plugin's peer range takes the new major",
+      "matchRepositories": [
+        "schnappy/site"
+      ],
+      "matchPackageNames": [
+        "eslint",
+        "@eslint/js"
+      ],
+      "allowedVersions": "<10"
+    },
+    {
+      "description": "site: TypeScript below 6.1 - typescript-eslint 8.73's peer range (see the rule above)",
+      "matchRepositories": [
+        "schnappy/site"
+      ],
+      "matchPackageNames": [
+        "typescript"
+      ],
+      "allowedVersions": "<6.1"
+    },
+    {
+      "description": "site: jsdom below 29 - @testing-library/user-event 14.6.1 (its latest) types nothing into inputs on jsdom 31: site's typing tests failed (site#86, 2026-11-23), on 28.1.0 they pass. Lift when a user-event release works on the newer jsdom",
+      "matchRepositories": [
+        "schnappy/site"
+      ],
+      "matchPackageNames": [
+        "jsdom"
+      ],
+      "allowedVersions": "<29"
+    }
+  ]
+}

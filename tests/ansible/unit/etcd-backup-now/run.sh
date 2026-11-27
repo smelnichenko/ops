@@ -20,7 +20,7 @@ case "$*" in
     [ "$st" != FAIL ] || exit 255
     printf '%s' "$st" ;;
   *"-l job-name=etcd-backup-now-"*"field-selector=status.phase=Succeeded"*) [ -e "$W/nopod" ] || { [ ! -e "$W/twopods" ] || echo "pod/etcd-backup-now-x-early"; echo "pod/etcd-backup-now-x-ok"; } ;;
-  *"logs pod/etcd-backup-now-x-early -c upload"*) echo "an upload that said nothing" ;;
+  *"logs pod/etcd-backup-now-x-early -c upload"*) if [ -e "$W/firstok" ]; then cat "$W/upload.log"; else echo "an upload that said nothing"; fi ;;
   *"logs pod/etcd-backup-now-x-ok -c upload"*) cat "$W/upload.log" ;;
   *"-c upload"*) echo "the failed pod's log: no OK line" ;;
   *"--all-containers"*) echo "pod etcd-backup-now-x: upload: connection refused" ;;
@@ -45,12 +45,24 @@ check "a pod failed, the Job retrying (Failed not set): read on, then Complete -
   "$(run $'/\n/\n/\nTrue/')" "0 4"
 r=$(run $'/\n/True'); check "the Job Failed (its retries spent): FAILED (exit 1), its logs said" \
   "$r $(grep -c 'FAILED' "$W/out") $(grep -c 'connection refused' "$W/out")" "1 2 1 1"
+# the Vagrant copy's run (test:copy:check: the rclone in its upload run for real, the wave-patches review 2026-11-23):
+# its ssh config handed to every ssh, the host its VM; none given - production's, no -F at all
+run 'True/' > /dev/null
+check "  production's run: ten, no ssh config" "$(grep -c -- '-F ' "$W/calls") $(grep -c ' ten kubectl' "$W/calls")" "0 4"
+rm -f "$W/calls" "$W/n"; printf 'True/\n' > "$W/states"
+PATH="$W/bin:$PATH" W="$W" ETCD_BACKUP_POLL=0 ETCD_BACKUP_HOST=kubeadm ETCD_BACKUP_SSH_CONFIG="$W/vagrant-ssh" \
+  bash scripts/etcd-backup-now.sh > "$W/out" 2>&1; rc=$?
+check "the copy's run: every ssh given its config (-F), the host its kubeadm VM; taken" \
+  "$rc $(grep -c -- "^-F $W/vagrant-ssh .* kubeadm kubectl" "$W/calls") $(wc -l < "$W/calls")" "0 4 4"
 run 'True/' > /dev/null; : > "$W/upload.log"
 PATH="$W/bin:$PATH" W="$W" ETCD_BACKUP_POLL=0 bash scripts/etcd-backup-now.sh > "$W/out" 2>&1; rc=$?
 check "Complete but no OK line in the upload's log: not taken as proof (exit 1)" "$rc $(grep -c 'not taken as proof' "$W/out")" "1 1"
 check "a read failing once (ten's ssh): read again, then taken" "$(run $'/\nFAIL\nTrue/')" "0 3"
 check "  the OK line read from the pod that succeeded (a retried Job's failed pod beside it never read)" \
   "$(grep -c 'logs pod/etcd-backup-now-x-ok -c upload' "$W/calls")" "1"
+touch "$W/twopods" "$W/firstok"; r=$(run 'True/'); rm -f "$W/twopods" "$W/firstok"
+check "two pods succeeded, the first's upload OK: taken from it, the second never read" \
+  "$r $(grep -c 'logs pod/etcd-backup-now-x-ok' "$W/calls")" "0 1 0"
 touch "$W/twopods"; r=$(run 'True/'); rm -f "$W/twopods"
 check "two pods succeeded, the first's upload saying nothing: the second's OK line read - taken" "$r $(grep -c '^etcd-backup OK: ' "$W/out")" "0 1 1"
 touch "$W/nopod"; r=$(run 'True/'); rm -f "$W/nopod"

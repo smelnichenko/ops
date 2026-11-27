@@ -32,7 +32,7 @@ def app(name):
                        "health": {"status": "Healthy"}, "operationState": {"phase": "Succeeded"}}}
 
 
-def pod(name, uid, restarts=0, finished="2026-10-06T10:00:00Z", ns="ns", ready=True, owner=None):
+def pod(name, uid, restarts=0, finished="2026-10-06T10:00:00Z", ns="ns", ready=True, owner=None, native=None):
     c = {"ready": ready, "restartCount": restarts}
     if restarts:
         c["lastState"] = {"terminated": {"finishedAt": finished}}
@@ -40,7 +40,12 @@ def pod(name, uid, restarts=0, finished="2026-10-06T10:00:00Z", ns="ns", ready=T
     if owner:  # a Deployment's pod: its ReplicaSet the controller, the template hash in its labels
         meta["ownerReferences"] = [{"controller": True, "kind": "ReplicaSet", "name": f"{owner}-{uid}h"}]
         meta["labels"] = {"pod-template-hash": f"{uid}h"}
-    return {"metadata": meta, "status": {"phase": "Running", "containerStatuses": [c]}}
+    out = {"metadata": meta, "status": {"phase": "Running", "containerStatuses": [c]}}
+    if native is not None:  # Istio's native sidecar: an init container restarting Always, its status among the init ones
+        out["spec"] = {"initContainers": [{"name": "istio-proxy", "restartPolicy": "Always"}, {"name": "setup"}]}
+        out["status"]["initContainerStatuses"] = [dict({"name": "istio-proxy", "ready": True, "restartCount": 0}, **native),
+                                                  {"name": "setup", "ready": False, "restartCount": 0}]
+    return out
 
 
 def run(apps, pods, *args, env=None):
@@ -134,6 +139,20 @@ def gate(name, apps, pods, want_rc, word="", *args, env=None):
     check(name, (rc, word in out), (want_rc, True), out)
 B = app("b")
 gate("an app OutOfSync: not green", [with_(app("a"), ["status", "sync", "status"], "OutOfSync"), B], P, 1, "sync=OutOfSync")
+LEFT = with_(app("a"), ["status", "sync", "status"], "OutOfSync")
+LEFT["status"]["resources"] = [{"kind": "ClusterRole", "name": f"r{i}", "status": "OutOfSync", "requiresPruning": True}
+                               for i in range(7)] + [{"kind": "Deployment", "name": "d", "status": "Synced"}]
+gate("an app OutOfSync for a chart's leftovers: the objects needing pruning named, five and the count of the rest",
+     [LEFT, B], P, 1, "needs pruning (prune is off; a chart's leftovers go in scripts/upgrade-leftovers.json): "
+     "ClusterRole/r0, ClusterRole/r1, ClusterRole/r2, ClusterRole/r3, ClusterRole/r4 and 2 more")
+rc, out = run([with_(app("a"), ["status", "sync", "status"], "OutOfSync"), B], P)
+check("  one with nothing needing pruning: no such note", (rc, "needs pruning" in out), (1, False), out)
+UNKNOWN = with_(app("a"), ["status", "sync", "status"], "Unknown")
+UNKNOWN["status"]["resources"] = [{"kind": "Deployment", "name": "d", "status": "Unknown", "requiresPruning": True},
+                                  {"kind": "Job", "name": "hook", "hook": True, "requiresPruning": True}]
+rc, out = run([UNKNOWN, B], P)
+check("  a failed render (every object Unknown, marked requiresPruning) and a hook: none named a leftover",
+      (rc, "needs pruning" in out), (1, False), out)
 gate("the same app allowed out of sync: green", [with_(app("a"), ["status", "sync", "status"], "OutOfSync"), B], P, 0,
      "", "--allow-out-of-sync", "a")
 gate("an app Degraded: not green", [with_(app("a"), ["status", "health", "status"], "Degraded"), B], P, 1, "health=Degraded")
@@ -240,6 +259,30 @@ errored = oomed(pod("big", "o4"), "2026-10-06T10:40:00Z")
 errored["status"]["containerStatuses"][0]["lastState"]["terminated"]["reason"] = "Error"
 gate("  killed otherwise (Error) after it: settled", A, [errored], 0, "", *OS)
 gate("  the one-shot mode without --oom-since: not judged", A, [oomed(pod("big", "o5"), "2026-10-06T10:40:00Z")], 0, "")
+# Istio's native sidecar (an init container restarting Always): its readiness and its OOM kills the pod's; a finished
+# init container's "not ready" none of its business
+gate("a pod whose native sidecar is not ready: not settled", A, [pod("n1", "n1", native={"ready": False})], 1, "ns/n1")
+gate("  its native sidecar ready, a plain init container done (not ready): settled", A, [pod("n2", "n2", native={})], 0, "")
+gate("  its native sidecar OOM-killed during the wait: not settled, named", A,
+     [pod("n3", "n3", native={"restartCount": 1, "lastState": {"terminated": {"reason": "OOMKilled", "finishedAt": "2026-10-06T10:40:00Z"}}})],
+     1, "ns/n3/istio-proxy at 2026-10-06T10:40:00Z", *OS)
+# its restarts the pod's too: a native istio-proxy restarting (crash-looping, ready between its runs) while the app's
+# container never restarts - the native-sidecar failure the switch can bring - fails the quiet and the since gates
+def proxy_restarted(name, finished, count=2):
+    return pod(name, name, native={"restartCount": count, "lastState": {"terminated": {"reason": "Error", "finishedAt": finished}}})
+gate("  its native sidecar restarted 60 s before now (the app's container never), quiet 300: not settled", A,
+     [proxy_restarted("n4", "2026-10-06T11:59:00Z")], 1, "restarted 60 s ago", "--restart-quiet", "300")
+gate("  its native sidecar restarted at/after --restarted-since: not settled", A,
+     [proxy_restarted("n5", "2026-10-06T11:00:00Z")], 1, "after 2026-10-06T10:30:00", "--restart-quiet", "300",
+     "--restarted-since", "2026-10-06T10:30:00Z")
+gate("  its native sidecar's restart 400 s before now, before --restarted-since: settled", A,
+     [proxy_restarted("n6", "2026-10-06T10:00:00Z")], 0, "", "--restart-quiet", "300", "--restarted-since", "2026-10-06T10:30:00Z")
+gate("  a plain init container's restarts (it ran, it ended): not the pod's", A,
+     [dict(pod("n7", "n7", native={}), status={"phase": "Running", "containerStatuses": [{"ready": True, "restartCount": 0}],
+      "initContainerStatuses": [{"name": "istio-proxy", "ready": True, "restartCount": 0},
+                                {"name": "setup", "ready": False, "restartCount": 3,
+                                 "lastState": {"terminated": {"reason": "Error", "finishedAt": "2026-10-06T11:59:00Z"}}}]})],
+     0, "", "--restart-quiet", "300")
 rc, out = run(A, [pod("p2", "u3")], "--failing-cronjobs", "kube-system/restore check")
 check("  a malformed entry: refused (exit 2), said", (rc, "is no <namespace>/<name>" in out), (2, True), out)
 # the copy's list and its wiring: the playbook passes the file's names (comments and blank lines dropped)
@@ -502,6 +545,12 @@ rc, out = run(A, [pod("p1", "u9", 1)], "--restart-history", H, "--step", "15")
 check("a new pod (another uid) with a restart: one step only, green", rc, 0, out)
 rc, out = run(A, [pod("p1", "u1", 0)], "--restart-history", H)
 check("--restart-history without --step: bad arguments", rc, 2, out)
+# a native sidecar's restarts in the history: the pod restarting in two steps running by its istio-proxy alone fails
+HN = os.path.join(work, "history-native.json")
+for step, count, want in ((20, 1, 0), (21, 2, 0), (22, 3, 1)):
+    rc, out = run(A, [pod("pn", "un", native={"restartCount": count})], "--restart-history", HN, "--step", str(step))
+check("a pod whose native sidecar restarts in two steps running (its app container never): fails, naming the pod",
+      (rc, "ns/pn" in out and "(21, 22)" in out), (1, True), out)
 
 # a workload's pod replaced by the next step (the Istio steps restart every meshed pod) still restarting in it: the
 # crash loop is the workload's - caught though the pod is new (by uid it was never in two steps running)

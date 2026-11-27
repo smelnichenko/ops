@@ -16,10 +16,9 @@ Three additions to masi (`ops/docs/plans/094-masi-job-registry.md`), one arc, fo
    or Töötukassa, one company each, no recruiter seen twice, no agency → client link, no communication —
    the area the operator called weak. The research below says where ties can come from within the rules.
 
-Operator, 2026-09-22: *"masi user should have a calendar for scheduling calls/interviews, similar to outlook.
-a day should show stats like sent, collected, communicated that lead to activity log with links to jobs,
-companies, contacts. also, I would like to see connections between recruiters and companies, this area is
-weak and need research."*
+Operator, 2026-09-22: a calendar in masi for scheduling calls and interviews, Outlook-like; each day showing its
+stats (sent, collected, communicated) leading to an activity log linked to jobs, companies and contacts; and the
+connections between recruiters and companies, an area that is weak and needs research.
 
 ## Why
 
@@ -54,7 +53,7 @@ representatives and its posters — LinkedIn is out by decision, so that gap sta
 
 Open questions the first PRs settle with data: how many cv.ee contacts have an e-mail domain other than the
 employer's (the agency share); how many register persons sit on more than one IT company's board (the
-operator's "connections" between companies); whether Töötukassa's contact is the same person across a
+connections between companies the operator asked about); whether Töötukassa's contact is the same person across a
 company's postings (identity by e-mail vs name).
 
 ## Architecture
@@ -105,9 +104,9 @@ every JOBS user — today one), `TuningService.review` (APPLIED / REJECTED), `Tu
    from `application_package.applied_at` (a one-time changeset, so the log reaches back to day one).
    Invariant: every new job writes exactly one COLLECTED row in the same transaction; a review to APPLIED
    writes one APPLIED row; the log for a day equals the rows whose `at` falls in that Tallinn day.
-1b. **PR1b — the integration API** (`masi` + `admin`/`platform` for the partner role). Operator, 2026-09-22: *"we need
-   an API for import/export/reading/updating of data regarding companies, jobs, hrs which allow 3rd parties to
-   provide us with connections, updates, etc. use swagger so I can test/view it."* Swagger UI is already served
+1b. **PR1b — the integration API** (`masi` + `admin`/`platform` for the partner role). Operator, 2026-09-22: an API to
+   import, export, read and update companies, jobs and HR contacts, through which third parties provide connections
+   and updates, with Swagger so the operator can view and test it. Swagger UI is already served
    (`/api/masi/swagger-ui/index.html`, `/api/masi/api-docs`); it gains a bearer security scheme so Authorize works,
    and a `partner` OpenAPI group with examples. The API:
    - **Identity.** A partner is a Keycloak client (client-credentials) whose token carries the realm role
@@ -161,7 +160,7 @@ every JOBS user — today one), `TuningService.review` (APPLIED / REJECTED), `Tu
    endpoint, secret and MX still wait for the operator's go-live). The
    address is on a **dedicated subdomain** (its own MX to Resend: a Porkbun DNS change at go-live), so masi takes
    the mail sent to its configured addresses and ignores the rest of what Resend delivers.
-   **Operator, 2026-09-24: "be careful not to send anything anywhere".** The inbox only receives: it never
+   **Operator, 2026-09-24: nothing is sent anywhere.** The inbox only receives: it never
    sends, replies or forwards, and nothing it stores is handed to a partner or put in a prompt.
    **As built (masi #55):** `POST /api/masi/webhooks/resend` (the only `@PublicEndpoint`, allow-listed in
    ArchitectureTest), off by default (404) and refusing to start when on without a signing secret; Svix
@@ -396,7 +395,7 @@ Later: ICS subscription; sent mail via a BCC address; reminders (a mail before a
 
 ### PR3d — the register covers every business, and a match is confirmed rather than guessed
 
-**Operator, 2026-09-23:** *"we cannot limit IT vacancies just to IT companies, it can be any business."* The unit of
+**Operator, 2026-09-23:** IT vacancies are not limited to IT companies - any business can have one. The unit of
 interest is the vacancy, not the employer's industry: a bank hiring a Java developer is as relevant as a consultancy.
 
 Checked first: **nothing filters or down-ranks a vacancy by its employer's EMTAK** — the code is only stored and passed
@@ -563,7 +562,7 @@ removed; its desks and addresses listed apart), the agency line, the Register ca
 
 ### PR3f — AI matching: a verdict per requirement, each citing the master's evidence
 
-Operator, 2026-09-24: "we need AI matching!". The word scorer (`MatchScorer`) does not catch:
+Operator, 2026-09-24: matching by AI is needed. The word scorer (`MatchScorer`) does not catch:
 - **synonyms:** "K8s" or "container orchestration" against Kubernetes;
 - **implied skills:** Spring Boot means Java;
 - **concepts:** "distributed systems" against a sharding achievement;

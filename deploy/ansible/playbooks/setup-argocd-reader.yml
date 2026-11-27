@@ -944,7 +944,7 @@
         msg: >-
           Argo CD's Forgejo credentials on ten:
           {% for c in _rd_ten_creds %}{{ c.name }} {{ c.username or '(no username)' }}{{ '' if c.username == reader_user
-          else ' (not ' ~ reader_user ~ ' - retire refuses while so)' }}{{ ', ' if not loop.last }}{% endfor %}
+          else ' (not the reader - retire refuses while so)' }}{{ ', ' if not loop.last }}{% endfor %}
           {{ '' if _rd_ten_read else '(ten not read)' }}
 
     # ── retiring the admin's Argo CD tokens (--tags retire) ────────────

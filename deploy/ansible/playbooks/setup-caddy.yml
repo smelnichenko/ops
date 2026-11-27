@@ -4,9 +4,9 @@
 # Provides HTTPS termination for Pi-hosted services using the cluster's
 # *.pmon.dev wildcard cert (issued + auto-renewed by cert-manager via the
 # Porkbun webhook), installed here from the pmon-dev-wildcard-tls secret.
-# Caddy serves the file cert directly and does NOT obtain per-host certs via
-# ACME — the caddy-dns/porkbun plugin mis-detects the zone as "dev" on .dev
-# domains, so its DNS-01 renewal is permanently broken. A per-Pi systemd timer
+# Caddy serves the file cert directly and obtains no per-host certs via ACME
+# (that was a Porkbun DNS plugin's, retired 2026-06-21: it read the zone of a
+# .dev name as "dev" and every renewal failed). A per-Pi systemd timer
 # (caddy-wildcard-sync) re-pulls the wildcard from the cluster daily and restarts
 # Caddy if it changed, so the on-Pi copy tracks cert-manager renewals on its own
 # (re-running this playbook also refreshes it immediately). It pulls with a
@@ -14,7 +14,9 @@
 # Caddy runs on both Pis — only the VIP holder serves traffic.
 #
 # Proxied services:
-#   git.pmon.dev     → localhost:3000  (Forgejo)
+#   git.pmon.dev     → localhost:3000  (Forgejo), the other Pi's Forgejo while this one's does not answer - both serve
+#                      (one database, the shared data): a restart of the VIP holder's Forgejo is no outage, and the VIP
+#                      follows Forgejo only after a minute down (keepalived's check_forgejo); keepalived checks Caddy
 #   auth.pmon.dev    → localhost:8080  (Keycloak)
 #   nexus.pmon.dev   → localhost:8081  (Nexus)
 #   s3.pmon.dev      → localhost:9000  (MinIO)
@@ -23,8 +25,18 @@
 # admin kubeconfig, never with the controller's kubectl: the controller's kubeconfig points at production, so a run
 # against another inventory (the Vagrant copy) would otherwise read and write production's cluster.
 #
-# Prerequisites:
-#   - PORKBUN_API_KEY and PORKBUN_SECRET_KEY in .env
+# Caddy itself: Caddy's own release from its apt repository (Cloudsmith; its signing key pinned), the version pinned
+# (caddy_version - Renovate moves it from Cloudsmith's own index, the upgrade cycle proves it), held, the source there
+# for an install alone. Built before with xcaddy for the Porkbun plugin - nothing has used it since 2026-06-21 (operator,
+# 2026-11-16: the official package). A restart is pending when the files Caddy runs (its Caddyfile, the wildcard pair,
+# its unit) are not the ones it last loaded (a content stamp: tasks/restart-pending.yml), the pin is not installed, or
+# the process running is not the pinned /usr/bin/caddy (its running image read) - so a run cut short leaves it
+# pending, never forgotten. Then one Pi at a time, the VIP's holder last (tasks/caddy-turn.yml): the package installed
+# on that Pi alone, its config validated by that binary, restarted under the Pi restart lock, serving again checked.
+# A Caddyfile the running Caddy refuses is never written.
+#
+# Rollback: move caddy_version back (the pin installs either way). Never apt remove/purge caddy: its prerm stops this
+# unit, and purge deletes /etc/caddy (the wildcard key, the cert-sync token and CA, the Caddyfile) and /var/lib/caddy.
 #
 # Usage:
 #   ansible-playbook -i inventory/production.yml playbooks/setup-caddy.yml
@@ -36,47 +48,63 @@
   gather_subset: [network]  # the mounts' facts stat every Gluster mount: a hung client's held the play
 
   vars:
-    # renovate: datasource=docker depName=caddy versioning=semver
-    caddy_version: "2.10.0"
-    porkbun_api_key: "{{ lookup('env', 'PORKBUN_API_KEY') }}"
-    porkbun_secret_key: "{{ lookup('env', 'PORKBUN_SECRET_KEY') }}"
+    # renovate: datasource=deb depName=caddy
+    caddy_version: "2.10.2"
+    peer_ip: "{{ hostvars[groups['pis'] | difference([inventory_hostname]) | first]['ansible_host'] }}"
 
   tasks:
-    - name: Install xcaddy build dependencies
-      ansible.builtin.apt:
-        name:
-          - golang
-          - debian-keyring
-          - debian-archive-keyring
-          - apt-transport-https
-        state: present
+    # every restart of a service both Pis run (Caddy, Forgejo, HAProxy, Keycloak) holds Consul's lock pi-restart - one at a
+    # time across both Pis and every Ansible run (files/pi-restart-locked.sh)
+    - name: The Pi restart lock's helper
+      tags: [always]
+      ansible.builtin.import_tasks: tasks/pi-restart-lock.yml
 
-    - name: Check if caddy with porkbun plugin exists
+    # the Caddy running: its binary and the version its image runs (/proc/<pid>/exe - the binary it started from,
+    # replaced or not); the package installed
+    - name: The Caddy running - its binary and the version it runs
       ansible.builtin.shell: |
         set -o pipefail
-        caddy list-modules 2>/dev/null | grep -q porkbun && echo "exists" || echo "missing"
-      register: caddy_check
+        pid=$(systemctl show -p MainPID --value caddy)
+        [ "${pid:-0}" -gt 0 ] || { echo "none none"; exit 0; }
+        exe=$(readlink "/proc/$pid/exe")
+        echo "${exe%% *} $("/proc/$pid/exe" version | awk '{print $1}') $pid"
+      register: _caddy_running
       changed_when: false
+      check_mode: false  # a read: a preview says what it would restart
 
-    - name: Install xcaddy
-      ansible.builtin.shell: |
-        go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
-      environment:
-        GOPATH: /usr/local/go
-        GOBIN: /usr/local/bin
-      when: caddy_check.stdout | trim == 'missing'
-      changed_when: true
+    # its state too: a package removed with its config kept reads 'rc' with a version - not installed
+    - name: The caddy package - its state and version
+      ansible.builtin.command: dpkg-query -W -f=${db:Status-Abbrev}|${Version} caddy
+      register: _caddy_installed
+      changed_when: false
+      failed_when: false
+      check_mode: false
 
-    - name: Build Caddy with Porkbun DNS plugin
-      ansible.builtin.shell: |
-        /usr/local/bin/xcaddy build v{{ caddy_version }} \
-          --with github.com/caddy-dns/porkbun \
-          --output /usr/local/bin/caddy
+    - name: The package absent, or installed at another version
+      ansible.builtin.set_fact:
+        _caddy_absent: "{{ _caddy_installed.rc != 0 or not _caddy_installed.stdout.startswith('ii') }}"
+        _caddy_install: "{{ _caddy_installed.rc == 0 and _caddy_installed.stdout.startswith('ii')
+                            and _caddy_installed.stdout.split('|') | last != caddy_version }}"
+
+    # absent (a fresh Pi, the move from the xcaddy build): installed now, before the unit names /usr/bin/caddy - a new
+    # path, nothing running touched (its start held back); its binary takes the config as it stands at once. An
+    # installed one is moved to a new pin in its Pi's turn below, one Pi at a time
+    - name: Caddy installed where absent - before its unit names the binary
+      ansible.builtin.include_tasks: tasks/caddy-install.yml
+      when: _caddy_absent and not ansible_check_mode
+
+    - name: The binary just installed takes the config as it stands
+      ansible.builtin.command: /usr/bin/caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
       environment:
-        GOPATH: /usr/local/go
-      when: caddy_check.stdout | trim == 'missing'
-      changed_when: true
-      timeout: 600
+        XDG_DATA_HOME: /var/lib/caddy
+        XDG_CONFIG_HOME: /etc/caddy
+      changed_when: false
+      when: _caddy_absent and not ansible_check_mode
+
+    # the pin a fact too: the Verify play below (a play of its own, without this play's vars) checks it is running
+    - name: The pin, for the Verify play
+      ansible.builtin.set_fact:
+        caddy_pinned: "{{ caddy_version }}"
 
     - name: Allow HTTP and HTTPS through UFW
       community.general.ufw:
@@ -121,6 +149,7 @@
       register: _wildcard_crt
       changed_when: false
       failed_when: _wildcard_crt.stdout | length == 0
+      check_mode: false  # a read: a preview needs it (its wait and the copies after it)
 
     - name: Read the *.pmon.dev wildcard key from the cluster (cluster host)
       ansible.builtin.command:
@@ -141,6 +170,7 @@
       changed_when: false
       no_log: true
       failed_when: _wildcard_key.stdout | length == 0
+      check_mode: false  # a read: a preview needs it (its wait and the copies after it)
 
     - name: Install wildcard cert on the Pi
       ansible.builtin.copy:
@@ -149,7 +179,6 @@
         owner: root
         group: root
         mode: '0644'
-      notify: Restart Caddy
 
     - name: Install wildcard key on the Pi
       ansible.builtin.copy:
@@ -159,14 +188,17 @@
         group: root
         mode: '0600'
       no_log: true
-      notify: Restart Caddy
 
+    # a Caddyfile the Caddy running refuses never written (its own image validates it; none running - nothing to break)
     - name: Write Caddyfile
       ansible.builtin.copy:
         dest: /etc/caddy/Caddyfile
         owner: root
         group: root
         mode: '0640'
+        validate: >-
+          {{ ('/proc/' ~ _caddy_running.stdout.split()[2] ~ '/exe') if _caddy_running.stdout.split() | length == 3 else 'true' }}
+          validate --adapter caddyfile --config %s
         content: |
           {
             email admin@pmon.dev
@@ -176,9 +208,19 @@
             tls /etc/caddy/certs/wildcard.crt /etc/caddy/certs/wildcard.key
           }
 
+          # this Pi's Forgejo first; the other Pi's while this one's refuses a connection (the request tried there
+          # at once) or fails its health check. Nexus has no such peer: it runs on the VIP's Pi alone
           git.pmon.dev {
             import wildcard_tls
-            reverse_proxy localhost:3000
+            reverse_proxy localhost:3000 {{ peer_ip }}:3000 {
+              lb_policy first
+              lb_try_duration 15s
+              lb_try_interval 250ms
+              fail_duration 30s
+              health_uri /api/healthz
+              health_interval 10s
+              health_timeout 5s
+            }
           }
 
           nexus.pmon.dev {
@@ -195,7 +237,9 @@
             import wildcard_tls
             reverse_proxy localhost:8080
           }
-      notify: Restart Caddy
+      environment:
+        XDG_DATA_HOME: /var/lib/caddy
+        XDG_CONFIG_HOME: /etc/caddy
 
     - name: Create Caddy systemd service
       ansible.builtin.copy:
@@ -209,8 +253,8 @@
 
           [Service]
           Type=notify
-          ExecStart=/usr/local/bin/caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
-          ExecReload=/usr/local/bin/caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile
+          ExecStart=/usr/bin/caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
+          ExecReload=/usr/bin/caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile
           TimeoutStopSec=5s
           LimitNOFILE=1048576
           LimitNPROC=512
@@ -224,11 +268,11 @@
           WantedBy=multi-user.target
       notify: Reload systemd
 
-    - name: Enable and start Caddy
+    # enabled, started by its turn below (a fresh Pi: the package installed there first)
+    - name: Enable Caddy
       ansible.builtin.systemd_service:
         name: caddy
         enabled: true
-        state: started
         daemon_reload: true
 
     # ── Auto-refresh: pull the renewed wildcard from the cluster on a timer ──
@@ -311,6 +355,7 @@
       retries: 15
       delay: 2
       no_log: true
+      check_mode: false  # a read: a preview needs it (its wait and the copies after it)
 
     - name: Read the cert-reader CA (cluster host)
       ansible.builtin.command:
@@ -329,6 +374,7 @@
       run_once: true
       register: _cert_reader_ca
       changed_when: false
+      check_mode: false  # a read: a preview needs it (its wait and the copies after it)
 
     - name: Read the cluster API endpoint for the Pi client (cluster host)
       ansible.builtin.command:
@@ -345,6 +391,7 @@
       run_once: true
       register: _cluster_api
       changed_when: false
+      check_mode: false  # a read: a preview needs it (its wait and the copies after it)
 
     - name: Install cluster CA for the cert-sync client
       ansible.builtin.copy:
@@ -446,15 +493,87 @@
         state: started
         daemon_reload: true
 
-  handlers:
-    # Restart (not reload): switching from ACME-managed certs to a file cert
-    # leaves orphaned managed certs in certmagic's cache whose maintenance loop
-    # then panics; a restart clears the cache and applies the file cert cleanly.
-    - name: Restart Caddy
-      ansible.builtin.systemd_service:
-        name: caddy
-        state: restarted
+    # a run killed inside the install left Cloudsmith's source (its always skipped): gone on every run
+    - name: Caddy's apt repository never left behind
+      ansible.builtin.file:
+        path: /etc/apt/sources.list.d/caddy-stable.list
+        state: absent
 
+    # ── one Pi at a time, the VIP's holder last: the pin installed, restarted where pending ──
+    - name: Caddy's files against the ones it last loaded
+      ansible.builtin.include_tasks: tasks/restart-pending.yml
+      vars:
+        loaded_service: caddy
+        loaded_files: [/etc/caddy/Caddyfile, /etc/caddy/certs/wildcard.crt, /etc/caddy/certs/wildcard.key,
+                       /etc/systemd/system/caddy.service]
+      when: not ansible_check_mode
+
+    - name: Its restart pending - other files, the pin not installed, or not the pinned /usr/bin/caddy running
+      ansible.builtin.set_fact:
+        _caddy_pending: >-
+          {{ _caddy_install or ((_restart_pending | default({})).stdout_lines | default(['pending']) | first) == 'pending'
+             or (_caddy_running.stdout.split()[:2] | join(' ')) != '/usr/bin/caddy v' ~ caddy_version }}
+
+    - name: Any Pi pending
+      ansible.builtin.set_fact:
+        _caddy_any_pending: >-
+          {{ ansible_play_hosts | map('extract', hostvars) | map(attribute='_caddy_pending', default=false) | select | list | length > 0 }}
+
+    - name: The Pi holding the VIP - its Caddy the last
+      ansible.builtin.include_tasks: tasks/pi-vip-holder.yml
+      when: _caddy_any_pending
+
+    - name: Both Pis in the play before any turn - the holder's needs the other serving
+      ansible.builtin.assert:
+        that: groups['pis'] | difference(ansible_play_hosts) | length == 0
+        fail_msg: "{{ groups['pis'] | difference(ansible_play_hosts) | join(', ') }} not in the play - no Caddy restarted"
+        quiet: true
+      when: _caddy_any_pending
+
+    - name: The Pi without the VIP first
+      ansible.builtin.include_tasks: tasks/caddy-turn.yml
+      when: _caddy_any_pending and inventory_hostname != pi_vip_holder
+
+    - name: Both Pis still in the play before the holder's turn
+      ansible.builtin.assert:
+        that: groups['pis'] | difference(ansible_play_hosts) | length == 0
+        fail_msg: >-
+          {{ groups['pis'] | difference(ansible_play_hosts) | join(', ') }} left the play (its install, validate, restart
+          or serving failed) - the holder {{ pi_vip_holder }}'s Caddy untouched
+        quiet: true
+      when: _caddy_any_pending
+
+    - name: The VIP's holder last
+      ansible.builtin.include_tasks: tasks/caddy-turn.yml
+      when: _caddy_any_pending and inventory_hostname == pi_vip_holder
+
+    - name: Nothing pending - its files recorded current
+      ansible.builtin.include_tasks: tasks/restart-recorded.yml
+      vars:
+        loaded_service: caddy
+        loaded_hash: "{{ _restart_pending.stdout_lines[1] }}"
+      when: not _caddy_any_pending and not ansible_check_mode and _restart_pending.stdout_lines[0] == 'current'
+
+    # the xcaddy build it replaced: gone once the pinned /usr/bin/caddy runs (removed before, a crash meanwhile restarted
+    # the old unit's missing binary); nothing on PATH runs an old binary after
+    - name: The Caddy running now - the pinned /usr/bin/caddy
+      ansible.builtin.shell: |
+        set -o pipefail
+        pid=$(systemctl show -p MainPID --value caddy)
+        echo "$(readlink "/proc/$pid/exe" | cut -d' ' -f1) $("/proc/$pid/exe" version | awk '{print $1}')"
+      register: _caddy_now
+      changed_when: false
+      failed_when: _caddy_now.stdout != '/usr/bin/caddy v' ~ caddy_version
+      when: not ansible_check_mode
+
+    - name: The xcaddy-built Caddy and xcaddy removed
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop: [/usr/local/bin/caddy, /usr/local/bin/xcaddy]
+      when: not ansible_check_mode
+
+  handlers:
     - name: Reload systemd
       ansible.builtin.systemd_service:
         daemon_reload: true
@@ -489,6 +608,19 @@
       # a preview (--check) of a first install has no Caddy yet: it shows the state, a run judges it
       when: not ansible_check_mode
 
+    # the version pinned is the version running: the process's own image (/proc/<pid>/exe), not the file on disk
+    - name: This Pi's Caddy the pinned version
+      ansible.builtin.shell: |
+        set -o pipefail
+        pid=$(systemctl show -p MainPID --value caddy)
+        "/proc/$pid/exe" version | awk '{print $1}'
+      register: caddy_running_version
+      changed_when: false
+      failed_when: caddy_running_version.stdout != 'v' ~ (caddy_pinned | default('not set by the play above'))
+      when: not ansible_check_mode
+
+    # a run's verdicts: a preview (--check) skips the uri module, and its result then has no status - the print below
+    # failed every preview (2026-11-16)
     - name: Test HTTPS Forgejo
       ansible.builtin.uri:
         url: https://git.pmon.dev/api/v1/version
@@ -498,8 +630,10 @@
       retries: 12
       delay: 10
       until: forgejo_https.status == 200
+      when: not ansible_check_mode
 
     - name: Print results
+      when: not ansible_check_mode
       ansible.builtin.debug:
         msg: |
           ============================================

@@ -28,7 +28,7 @@ import yaml
 W = os.environ["W"]
 plays = {p["name"]: p for p in yaml.safe_load(open("tests/ansible/test-pi-rerun-guards.yml")) if "name" in p}
 fails = 0
-for name in ("Keepalived before - pi1 running a drifted router_id", "Keepalived after - reloaded, the VIP where it was"):
+for name in ("Keepalived before - pi1 running a drifted router_id", "Keepalived after - reloaded, the PIDs kept, the VIP on one Pi"):
     data = os.path.join(W, "keepalived.data")
     # a kill of a PID: recorded - none expected
     script = (f'kill() {{ echo "KILL $*" >> {W}/calls; }}\n'

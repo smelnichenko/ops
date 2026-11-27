@@ -1313,7 +1313,7 @@ upgrade it does the manual sync an operator would. Proven on the copy's stuck cl
 
 ## Fourth review round 2026-10-12 and the proof run of 12:07 - what it fixed, what is the operator's
 
-Fixed and pushed 01:38 (ops 750ebcb, platform 5d0a1ee, infra 0572b50; the operator's "fix everything", old bugs
+Fixed and pushed 01:38 (ops 750ebcb, platform 5d0a1ee, infra 0572b50; everything fixed on the operator's word, old bugs
 included): the full run's process stop by start identity; Argo's settle deadline per poll and step 57's settle 60 min;
 the SonarQube setup hook fail-closed (a token Vault never confirmed revoked whatever ends the run, gates set every run,
 its deadline from its projects); every hook Job call costed at its own time-out; init-users' deadline per database and a
@@ -1340,8 +1340,8 @@ auto-migration behind a value or not; the 31 ops Sonar complexity issues.
 
 The 12:07 proof no longer clears production: the runner refuses every phase until a new full run. Two changes void it -
 the Woodpecker upgrade (infra e68b59f: a rendered path on infra main) and its inventory pins (ops 4568421: under
-tests/). Woodpecker v3.19.0 went in outside the steps on the operator's order ("upgrade woodpecker, no full runs",
-13:16): v3.18.1 hung a pipeline whose service stopped within moments of its delete (masi CD 525; #7158). Its SQLite
+tests/). Woodpecker v3.19.0 went in outside the steps on the operator's order (Woodpecker upgraded without
+full runs, 13:16): v3.18.1 hung a pipeline whose service stopped within moments of its delete (masi CD 525; #7158). Its SQLite
 copied first (woodpecker.sqlite.pre-v3.19.0-20261012 beside it; v3.19 only added a nullable column - a rollback is the
 tag, not the copy). The copy runs no Woodpecker: a new full run proves the steps against the new baseline only.
 

@@ -1,0 +1,34 @@
+---
+# A dump from production's backup CronJob the guard must refuse (kafka-restore-check.yml): the Job failed, its upload's
+# last line saying Kafka lost data - each topic of kafka_guard_gone named gone, none of kafka_guard_excused named at all
+# (neither gone nor made again). Nothing uploaded. The Job removed after.
+#
+# Expects: kubectl; kafka_guard_gone, kafka_guard_excused (topic names).
+- name: A dump now - the guard refuses it, nothing uploaded
+  ansible.builtin.shell:
+    executable: /bin/bash
+    cmd: |
+      set -euo pipefail
+      k="{{ kubectl }} -n schnappy-production"
+      j=kafka-guard-check-$(date +%s)
+      $k create job --from=cronjob/schnappy-production-kafka-backup "$j" > /dev/null
+      trap '$k delete job "$j" --ignore-not-found --wait=false > /dev/null' EXIT
+      end=$(( $(cut -d. -f1 /proc/uptime) + 900 )); s=""
+      while [ "$(cut -d. -f1 /proc/uptime)" -lt "$end" ]; do
+        s=$($k get job "$j" -o jsonpath='{.status.succeeded}/{.status.failed}') || s=""
+        case "$s" in 1/*|*/1) break ;; esac
+        sleep 5
+      done
+      echo "job $s"
+      $k logs "job/$j" -c upload --tail=5 2> /dev/null | tail -1
+  register: _guardcheck
+  changed_when: true
+  # each topic by its whole name: the guard writes each loss after ": " or "; " - the names it gives read whole (a
+  # substring - "b gone" inside "ab gone" - named no topic)
+  failed_when: >-
+    _guardcheck.rc != 0 or (_guardcheck.stdout_lines | first | default('')) != 'job /1'
+    or 'Kafka lost data:' not in _guardcheck.stdout
+    or (kafka_guard_gone | difference(_guardcheck.stdout | regex_findall('(?:: |; )([A-Za-z0-9._-]+) gone \\(since '))
+        | length) > 0
+    or (kafka_guard_excused | intersect(_guardcheck.stdout | regex_findall('(?:: |; )([A-Za-z0-9._-]+)(?: gone \\(| made again|\\[)'))
+        | length) > 0

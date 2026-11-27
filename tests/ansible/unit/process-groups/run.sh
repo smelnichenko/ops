@@ -267,10 +267,14 @@ check "a lost process's child started after the TERM, catching it: TERMed once -
 # it lost the TERM (counted sent, it ran to the grace with its handler never run, KILLed - a loaded host put the TERM in
 # that window: 11 of 24 runs). Sent once once it stops ignoring. Here the window held open: the forked subshell waits
 # 1.5 s before it drops the ignore, the TERM 0.8 s after ready (under load either way round the fixed stop passes: a TERM
-# before the fork, or after the handler, is the plain case)
+# before the fork, or after the handler, is the plain case). The subshell goes from ignoring to catching in ONE trap: it
+# once dropped the ignore (trap -) and then exec'd a bash that set the handler - TERM at its default in between, so a
+# look landing there ended it before its handler existed (correctly: at its default a TERM ends it), its pid file never
+# written, the job waiting on it KILLed at the grace (ops CI 2026-11-25, 'rc 137 0  1' - the exec slower under load)
 set -m
 bash -c 'trap "" TERM; echo ready > "$0"; sleep 0.5
-  ( read -r -t 1.5 _ <> <(:) || true; trap - TERM; exec bash -c "trap \"echo caught >> \\\"\$0\\\"; exit 143\" TERM; echo \$\$ > \"\$0.pid\"; for _ in \$(seq 600); do sleep 0.1; done" "$0.n" ) &
+  ( read -r -t 1.5 _ <> <(:) || true; trap "echo caught >> \"\$0.n\"; exit 143" TERM; echo $BASHPID > "$0.n.pid"
+    for _ in $(seq 600); do sleep 0.1; done ) &
   until [ -s "$0.n.pid" ]; do sleep 0.05; done; trap - TERM; wait' "$W/inh.ready" & h=$!
 set +m
 ready "$W/inh.ready"

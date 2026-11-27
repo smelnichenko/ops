@@ -1,0 +1,206 @@
+---
+# Consul on its three servers (pi1, pi2, ten) to setup-consul.yml's consul_version, its release checked against its pinned
+# SHA256 (consul_checksums - Renovate moves both, scripts/renovate-checksums.py) - in HashiCorp's order: the followers
+# first, the leader last, one at a time, each back as a healthy voter before the next. Each: stopped (SIGTERM - a server
+# does not leave the raft on it), its binary replaced, started. Before anything: three voters, one leader, autopilot
+# healthy (also checked when nothing is to do), each binary on disk the one its agent runs; a snapshot of the whole
+# state (Vault's storage, Patroni's leader keys) into /var/backups/consul-upgrade on pi1, inspected; the running binary
+# kept beside the new (/usr/local/bin/consul-<ver>). After: every server on the version, three voters, one leader,
+# autopilot healthy - and Vault (its storage) answering on both Pis. The way back: that binary, and if the new version
+# wrote what the old cannot read, the snapshot (consul snapshot restore - Vault and Patroni stopped) - by hand. Never a
+# downgrade; a server already on the version is not restarted; nothing to do when all are. Any server failing stops the
+# run (any_errors_fatal).
+#
+# The version comes from setup-consul.yml's play vars (one place - what a new install installs), or -e consul_version
+# with consul_checksums (the copy's proof of a Renovate unit hands its branch's values so).
+#
+# Usage: task deploy:consul:upgrade   (production; Vagrant: task test:consul-upgrade)
+- name: Consul's servers to one version
+  hosts: pi1,pi2,target
+  become: true
+  gather_facts: true
+  gather_subset: ['!all', '!min', 'architecture']
+  any_errors_fatal: true
+  vars:
+    _setup: "{{ (lookup('ansible.builtin.file', playbook_dir ~ '/setup-consul.yml') | from_yaml)[0].vars }}"
+    consul_version: "{{ _setup.consul_version }}"
+    consul_checksums: "{{ _setup.consul_checksums }}"
+    consul_servers: [pi1, pi2, target]
+    upgrade_dir: /var/backups/consul-upgrade
+    consul_http: http://127.0.0.1:8500
+  tasks:
+    - name: Every server in the run (three voters - one left out is no rolling upgrade)
+      ansible.builtin.assert:
+        that: consul_servers | difference(ansible_play_hosts) | length == 0
+        fail_msg: "REFUSED: Consul's servers {{ consul_servers }}, the run has {{ ansible_play_hosts }}"
+        quiet: true
+      run_once: true
+
+    - name: Its architecture
+      ansible.builtin.set_fact:
+        _arch: "{{ 'arm64' if ansible_architecture == 'aarch64' else 'amd64' }}"
+
+    - name: The agent's version
+      ansible.builtin.uri:
+        url: "{{ consul_http }}/v1/agent/self"
+        return_content: true
+      register: _self
+      failed_when: false
+
+    - name: Every server's agent answering (one down is no rolling upgrade - three voters needed)
+      ansible.builtin.assert:
+        that: ansible_play_hosts | map('extract', hostvars, ['_self', 'status']) | reject('eq', 200) | list | length == 0
+        fail_msg: >-
+          REFUSED: a Consul agent not answering - {{ ansible_play_hosts | zip(ansible_play_hosts
+          | map('extract', hostvars, ['_self', 'status'])) | list }}
+        quiet: true
+      run_once: true
+
+    - name: Its version
+      ansible.builtin.set_fact:
+        _running: "{{ _self.json.Config.Version }}"
+
+    - name: Never a downgrade
+      ansible.builtin.assert:
+        that: _running is version(consul_version, '<=')
+        fail_msg: "REFUSED: {{ inventory_hostname }} runs Consul {{ _running }}, newer than {{ consul_version }}"
+        quiet: true
+
+    - name: The raft - its peers and autopilot's health
+      ansible.builtin.uri:
+        url: "{{ consul_http }}/v1/operator/autopilot/health"
+        return_content: true
+        status_code: [200, 429]  # 429: autopilot unhealthy
+      register: _autopilot
+      run_once: true
+
+    - name: Three voters, one leader, every server healthy (also when nothing is to do - an unhealthy raft needs a look)
+      ansible.builtin.assert:
+        that:
+          - _autopilot.status == 200
+          - _autopilot.json.Healthy
+          - _autopilot.json.Servers | selectattr('Voter') | list | length == 3
+          - _autopilot.json.Servers | selectattr('Leader') | list | length == 1
+          - _autopilot.json.Servers | rejectattr('Healthy') | list | length == 0
+        fail_msg: "REFUSED: Consul's raft not as an upgrade needs it - {{ _autopilot.json | default(_autopilot.status) | to_json }}"
+        quiet: true
+      run_once: true
+
+    - name: Nothing to do - every server runs {{ consul_version }}
+      ansible.builtin.meta: end_play
+      when: ansible_play_hosts | map('extract', hostvars, '_running') | unique | list == [consul_version]
+
+    - name: The binary on disk
+      ansible.builtin.command: /usr/local/bin/consul version
+      register: _on_disk
+      changed_when: false
+
+    - name: The binary on disk is the one running (else it was replaced under the agent - look first)
+      ansible.builtin.assert:
+        that: (_on_disk.stdout_lines[0].split()[1] | regex_replace('^v', '')) == _running
+        fail_msg: "REFUSED: {{ inventory_hostname }} runs Consul {{ _running }}, its binary on disk is {{ _on_disk.stdout_lines[0] }}"
+        quiet: true
+
+    - name: The release, checked against its pin
+      ansible.builtin.get_url:
+        url: "https://releases.hashicorp.com/consul/{{ consul_version }}/consul_{{ consul_version }}_linux_{{ _arch }}.zip"
+        dest: "/usr/local/lib/consul_{{ consul_version }}_linux_{{ _arch }}.zip"
+        checksum: "sha256:{{ consul_checksums[_arch] }}"
+        mode: '0644'
+
+    - name: Its directory
+      ansible.builtin.file:
+        path: "/usr/local/lib/consul-{{ consul_version }}"
+        state: directory
+        mode: '0755'
+
+    - name: Unpacked
+      ansible.builtin.unarchive:
+        src: "/usr/local/lib/consul_{{ consul_version }}_linux_{{ _arch }}.zip"
+        dest: "/usr/local/lib/consul-{{ consul_version }}"
+        remote_src: true
+        creates: "/usr/local/lib/consul-{{ consul_version }}/consul"
+
+    - name: The running binary kept (the way back)
+      ansible.builtin.copy:
+        src: /usr/local/bin/consul
+        dest: "/usr/local/bin/consul-{{ _running }}"
+        remote_src: true
+        mode: '0755'
+        force: false
+      when: _running != consul_version
+
+    - name: The whole state's snapshot first, on pi1, inspected
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          mkdir -p {{ upgrade_dir }} && chmod 0700 {{ upgrade_dir }}
+          out={{ upgrade_dir }}/consul-$(date -u +%Y%m%dT%H%M%SZ)-{{ _running }}.snap
+          consul snapshot save "$out" > /dev/null
+          consul snapshot inspect "$out" > /dev/null
+          chmod 0600 "$out"
+          echo "$out"
+      register: _snapshot
+      changed_when: true
+      when: inventory_hostname == 'pi1'
+
+    - name: The upgrade order - the followers, then the leader
+      ansible.builtin.set_fact:
+        _order: >-
+          {{ (_autopilot.json.Servers | rejectattr('Leader') | map(attribute='Name') | sort)
+             + (_autopilot.json.Servers | selectattr('Leader') | map(attribute='Name') | list) }}
+      run_once: true
+
+    - name: Each Consul agent's node name its inventory name (setup-consul.yml's node_name) - the order names hosts
+      ansible.builtin.assert:
+        that: _order | sort == consul_servers | sort
+        fail_msg: "REFUSED: the raft's servers {{ _order }} are not {{ consul_servers }}"
+        quiet: true
+      run_once: true
+
+    - name: One at a time, the followers first
+      ansible.builtin.include_tasks: tasks/consul-upgrade-node.yml
+      loop: "{{ _order }}"
+      loop_control:
+        loop_var: _turn
+
+    - name: After - every server on the version, three voters, one leader, autopilot healthy
+      ansible.builtin.uri:
+        url: "{{ consul_http }}/v1/operator/autopilot/health"
+        return_content: true
+        status_code: [200, 429]
+      register: _after
+      retries: 30
+      delay: 5
+      until: >-
+        _after.status == 200 and _after.json.Healthy
+        and _after.json.Servers | selectattr('Voter') | list | length == 3
+        and _after.json.Servers | selectattr('Leader') | list | length == 1
+      run_once: true
+
+    - name: Each agent on the version
+      ansible.builtin.uri:
+        url: "{{ consul_http }}/v1/agent/self"
+        return_content: true
+      register: _self_after
+      failed_when: _self_after.json.Config.Version != consul_version
+
+    - name: Vault answering on both Pis (its storage is Consul) - active or standby, unsealed
+      ansible.builtin.uri:
+        url: https://127.0.0.1:8200/v1/sys/health
+        ca_path: /etc/vault.d/tls/ca-cert.pem  # its certificate names 127.0.0.1
+        status_code: [200, 429]
+      register: _vault
+      retries: 12
+      delay: 5
+      until: _vault.status in [200, 429]
+      when: inventory_hostname in groups['pis']
+
+    - name: Upgraded
+      ansible.builtin.debug:
+        msg: >-
+          CONSUL {{ consul_version }} on {{ ansible_play_hosts | join(', ') }} (was {{ ansible_play_hosts
+          | map('extract', hostvars, '_running') | unique | join(', ') }}); snapshot
+          {{ ansible_play_hosts | map('extract', hostvars, '_snapshot') | map(attribute='stdout', default='') | select | join('') }}
+      run_once: true

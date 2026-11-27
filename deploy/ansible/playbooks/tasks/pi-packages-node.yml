@@ -265,7 +265,7 @@
         executable: python3
       changed_when: true
 
-    # keepalived's own package restarts it here if upgraded (nopreempt: it takes nothing) - said, not assumed
+    # keepalived's own package restarts it here if upgraded (both Pis at one priority: it takes nothing from a healthy holder) - said, not assumed
     - name: The other Pi still holding the VIP and serving
       ansible.builtin.script:
         cmd: "{{ pi_packages }} serving {{ keepalived_vip }} {{ hostvars[_other_pi].pi_packages_vip_units | join(' ') }}"
@@ -357,7 +357,7 @@
       changed_when: false
       check_mode: false  # a read
 
-    # its keepalived came back a backup (nopreempt): the VIP where it went, served there
+    # its keepalived came back a backup (one priority: no preempting a healthy holder): the VIP where it went, served there
     - name: The VIP still on the other Pi, served there
       ansible.builtin.script:
         cmd: "{{ pi_packages }} serving {{ keepalived_vip }} {{ hostvars[_other_pi].pi_packages_vip_units | join(' ') }}"
@@ -382,7 +382,7 @@
       changed_when: false
       when: not ansible_check_mode  # it reads the handover's result: in a preview the holder's Nexus runs, as it should
   always:
-    # running again on the Pi that held the VIP (nopreempt: the VIP stays where it went) - after the reboot it started
+    # running again on the Pi that held the VIP (one priority: the VIP stays where it went) - after the reboot it started
     # itself, and where the run failed before the stop it never stopped: a no-op then
     - name: Keepalived started again where this run stopped it
       ansible.builtin.systemd_service:

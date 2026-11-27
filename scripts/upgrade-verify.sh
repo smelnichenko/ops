@@ -87,6 +87,12 @@ def stalled(a):
     return (auto is not None and auto.get("enabled") is not False and (st.get("sync") or {}).get("status") == "OutOfSync"
             and a.get("operation") is None and op.get("phase") == "Succeeded" and not op.get("syncResult")
             and ((op.get("operation") or {}).get("initiatedBy") or {}).get("automated") is True)
+def pruning_note(st):
+    """What Argo marks as needing pruning - a chart's leftovers (prune is off): named (the copy's argo-settled.py, its twin)."""
+    left = [f"{r.get('kind')}/{r.get('name')}" for r in st.get("resources") or []
+            if r.get("requiresPruning") and r.get("status") == "OutOfSync" and not r.get("hook")]  # a failed render: Unknown
+    more = f" and {len(left) - 5} more" if len(left) > 5 else ""
+    return f" - needs pruning: {', '.join(left[:5])}{more}" if left else ""
 preview = {((a.get("spec") or {}).get("destination") or {}).get("namespace") for a in apps["items"]
            if (a["metadata"].get("labels") or {}).get("preview-env") == "true"} - {None, ""}
 bad = []
@@ -98,7 +104,8 @@ for a in apps["items"]:
     op = (st.get("operationState") or {}).get("phase", "")
     if sync != "Synced" or health != "Healthy" or op not in ("Succeeded", ""):
         bad.append(f"app {a['metadata']['name']} {sync} {health} {op or '-'}" + (" STALLED (Argo will not sync it again: "
-                                                                                 "sync it by hand)" if stalled(a) else ""))
+                                                                                 "sync it by hand)" if stalled(a) else "")
+                   + pruning_note(st))
     spec = a.get("spec") or {}
     if without_empty(srcs((st.get("sync") or {}).get("comparedTo") or {})) != without_empty(srcs(spec)):
         bad.append(f"app {a['metadata']['name']} compared against an older spec")
@@ -113,7 +120,10 @@ for a in apps["items"]:
 for p in pods["items"]:
     if (p.get("status") or {}).get("phase") != "Running" or p["metadata"].get("namespace") in preview:
         continue
-    unready = [c["name"] for c in p["status"].get("containerStatuses") or [] if not c.get("ready")]
+    # its containers and its native sidecars (init containers restarting Always - Istio's istio-proxy when native)
+    sidecars = {c.get("name") for c in (p.get("spec") or {}).get("initContainers") or [] if c.get("restartPolicy") == "Always"}
+    unready = [c["name"] for c in (p["status"].get("containerStatuses") or [])
+               + [i for i in p["status"].get("initContainerStatuses") or [] if i.get("name") in sidecars] if not c.get("ready")]
     if unready:
         bad.append(f"pod {p['metadata']['namespace']}/{p['metadata']['name']} unready: {', '.join(unready)}")
 if os.environ["CRIT"]:
@@ -131,9 +141,11 @@ subject() {  # what a complaint is about: "app <name>", "pod <ns>/<owner>" (a Re
   case "$1" in
     "app "*) cut -d' ' -f1-2 <<< "$1" ;;
     "pod "*) local p=${1#pod }; p=${p%% *}
-      # a ReplicaSet's hash holds a digit (node-exporter-x7k2q is a DaemonSet's pod, "exporter" no hash)
-      if [[ $p =~ ^(.+)-([a-z0-9]{8,10})-[a-z0-9]{5}$ && ${BASH_REMATCH[2]} == *[0-9]* ]]; then echo "pod ${BASH_REMATCH[1]}"
-      elif [[ $p =~ ^(.+)-([0-9]+|[a-z0-9]{5})$ ]]; then echo "pod ${BASH_REMATCH[1]}"
+      # Kubernetes names a pod's random parts from its own alphabet (no vowels, no 0, 1, 3): a ReplicaSet's pod
+      # <name>-<8-10 of it>-<5 of it>, a DaemonSet's or a Job's <name>-<5 of it>, a StatefulSet's <name>-<number>
+      local a=bcdfghjklmnpqrstvwxz2456789
+      if [[ $p =~ ^(.+)-[$a]{8,10}-[$a]{5}$ ]]; then echo "pod ${BASH_REMATCH[1]}"
+      elif [[ $p =~ ^(.+)-([0-9]+|[$a]{5})$ ]]; then echo "pod ${BASH_REMATCH[1]}"
       else echo "pod $p"; fi ;;
     "critical alert "*) cut -d' ' -f1-3 <<< "$1" ;;
     *) echo "$1" ;;
@@ -148,23 +160,34 @@ while :; do
   else
     clean=0
     if [ "$(up)" -ge "$end" ]; then echo "NOT SETTLED after $settle min:"; echo "$out"; exit 1; fi
+    # still waiting: what this look found, on one line - the console's progress (the operator 2026-11-22: an hour with
+    # no line read as a hang); its time first, so never read as a complaint (the runner's test_only skips such lines)
+    echo "$(date '+%T') not settled yet: ${out//$'\n'/; }"
   fi
   sleep "$poll"
 done
 [ "$hold" -gt 0 ] || { echo "SETTLED AND QUIET ($need look$([ "$need" = 1 ] || echo "s in a row"))"; exit 0; }
-echo "SETTLED"
-end=$(( $(up) + hold * 60 ))
+echo "SETTLED at $(date '+%T') - the hold: $hold min"
+end=$(( $(up) + hold * 60 )); note=$(( $(up) + 600 ))
 declare -A seen=()
 while [ "$(up)" -lt "$end" ]; do
   sleep "$poll"
-  out=$(look critical) && { seen=(); continue; }
+  if out=$(look critical); then
+    seen=()
+    # every 10 minutes of the hold, one line: how far it is
+    if [ "$(up)" -ge "$note" ]; then
+      echo "$(date '+%T') quiet - $(( (hold * 60 - end + $(up)) / 60 )) of $hold min held"; note=$(( note + 600 ))
+    fi
+    continue
+  fi
   # what is wrong now, counted in a row by its subject - the app, the pod's owner (a pod recreated under a new name is
   # the same failure), the alert - whatever its words this look; gone from a look, its count starts again
   declare -A now=()
   while IFS= read -r line; do
     [ -n "$line" ] || continue
     key=$(subject "$line")
-    now[$key]=$(( ${seen[$key]:-0} + 1 ))
+    now[$key]=$(( ${seen[$key]:-0} + 1 ))  # from the last look's count: once a look, however many of its pods are wrong
+    echo "$(date '+%T') not quiet (${now[$key]} of $streak looks in a row): $line"
     if [ "${now[$key]}" -ge "$streak" ]; then echo "NOT QUIET during the hold ($streak looks in a row):"; echo "$out"; exit 1; fi
   done <<< "$out"
   seen=(); for k in "${!now[@]}"; do seen[$k]=${now[$k]}; done

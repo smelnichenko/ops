@@ -35,18 +35,14 @@ memory_bounded() {
 }
 
 part_postgres() {
-  local w=$1/pg name="pi-restore-pg-$$" server="" id="" newest="" s b
+  local w=$1/pg name="pi-restore-pg-$$" server=$PI_RESTORE_PG_SERVER id=""
   memory_bounded || return 1
   mkdir -p "$w"
-  # the server written last: production's (an old one - before a rename, before a major upgrade - stops getting
-  # backups)
-  for s in $(rclone lsf --dirs-only store:postgres-backups); do
-    s=${s%/}
-    b=$(rclone lsf --dirs-only "store:postgres-backups/$s/base" 2> /dev/null | grep -E '^[0-9]{8}T[0-9]{6}/$' | sort | tail -1)
-    b=${b%/}
-    if [ -n "$b" ] && [[ "$b" > "$newest" ]]; then newest=$b; server=$s; fi
-  done
-  [ -n "$server" ] || { echo "no base backup in postgres-backups"; return 1; }
+  # production's server, named (setup-pi-restore-check.yml's pi_restore_check_pg_server, infra's backupServerName): the
+  # one written last was taken for it - another cluster's backups beside it (SonarQube's at 01:45, after production's
+  # 01:30) would have been restored and judged instead, red every day, production's never checked (2026-11-17's review)
+  rclone lsf --dirs-only "store:postgres-backups/$server/base" 2> /dev/null | grep -qE '^[0-9]{8}T[0-9]{6}/$' \
+    || { echo "$server: no base backup in postgres-backups (production's server - pi_restore_check_pg_server)"; return 1; }
   # every WAL segment archived (the timeline aside, as a recovery reads them), and the timelines a promotion's history
   # file names
   local listing wals histories wal
@@ -319,7 +315,7 @@ fi
 # on - from here into the whole check again, inside the part, and again in that one (seen 2026-10-17)
 [ "${1:-}" != --part ] || exit 1
 
-: "${PI_RESTORE_NAME:?}" "${PI_RESTORE_PARITY:?}" "${PI_RESTORE_PG_DATABASES:?}" "${PI_RESTORE_ETCD_IMAGE:?}"
+: "${PI_RESTORE_NAME:?}" "${PI_RESTORE_PARITY:?}" "${PI_RESTORE_PG_DATABASES:?}" "${PI_RESTORE_PG_SERVER:?}" "${PI_RESTORE_ETCD_IMAGE:?}"
 : "${STORE_ENDPOINT:?}" "${PI_RESTORE_PG_BASE_MAX_AGE_H:?}" "${PI_RESTORE_PG_BACKUPS_LOOKED_AT:?}" "${PI_RESTORE_PG_WAIT_POLLS:?}"
 : "${PI_RESTORE_ETCD_MAX_AGE_H:?}" "${PI_RESTORE_TIER0_MAX_AGE_H:?}" "${PI_RESTORE_WORK:?}" "${PI_RESTORE_MIN_FREE_GB:?}"
 : "${PI_RESTORE_CONTAINER_MEMORY:?}" "${PI_RESTORE_ETCD_WAIT_POLLS:?}" "${PI_RESTORE_CGROUP_CONTROLLERS:?}"

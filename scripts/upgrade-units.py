@@ -7,35 +7,50 @@ grouped by branch (renovate/<unit> - the same name in each repo).
                    test    a test environment's unit (renovate/test-<unit>: the copy leaves the test environment out -
                            it is its own proof), merged before its production twin - picked first, and the twin waits
                            while it is open
-                   prove   a patch or minor unit (proven, then applied in the same run)
-                   notice  a major with no veto notice yet (proven, then its 24 h notice posted - applied a later run)
-                   apply   a major whose notice has run out, unvetoed (proven again, then applied)
-                 A unit carrying the agent's fix (labelled agent-fixed by the runner) waits for its notice as a major
-                 does, whatever its kind: what an agent wrote reaches production only after the operator was mailed it
-                 and 24 h passed unvetoed.
-                 The order: renovate/wave-patches, then the family minors (istio, kubernetes, cilium, observability,
+                   prove   any other unit, patch, minor or major alike (proven, reviewed - compatibility among the
+                           passes - then applied in the same run; no notice, no waiting: operator 2026-11-21)
+                 STEPS: a unit never goes while a lower step of the same dependency is open - postgres-19.x waits for
+                 postgres-18.x, kubernetes-1.37 for kubernetes-1.36, scylladb-2026.3 for scylladb-2026.2 - whatever
+                 holds the lower one (a try on record, a veto, unlabelled): an upgrade that needs several steps takes
+                 them one at a time, the next one rebased by Renovate onto the step before. The same dependency is
+                 known by its name AND by the packages in Renovate's table (a family's minors and its major are named
+                 apart: scylladb-2026.3 and scylladb-scylla-2027.x move one package) - a major or minor unit waits
+                 while another (the patch wave aside) moves one of its packages to a lower version; a test- unit waits
+                 for the production unit of a lower step too (the test environment one step ahead at most). To skip a
+                 step (not needed, or failing for good) the operator closes its pull requests - Renovate then ignores
+                 that version; a veto on it holds every higher step.
+                 The order: renovate/wave-patches, then the family minors (istio, gateway-api, kubernetes, cilium, observability,
                  data-operators, argocd, pi-services - the first three one minor at a time, named <family>-<X.Y>, the
-                 lowest first), then any other minor (a <name>-<X.Y> one by its version), then majors - a waiting
-                 major's notice before a new one's. Left out:
-                 a unit labelled upgrade-blocked (red after its fix) or veto, a major in its 24 h; everything while the
+                 lowest first), then any other minor (a <name>-<X.Y> one by its version), then majors - the units with
+                 a try on record (the runner's .upgrade-cycle/tries) after the ones with none (no blocked state: one
+                 that keeps failing never holds the queue - except the higher steps of its own dependency). Left out:
+                 a manual- unit (renovate/manual-<unit>: what the copy cannot prove - Woodpecker - applied by hand),
+                 a unit labelled veto (the operator's hold, no clock), a unit any of whose pull
+                 requests lacks Renovate's own labels (upgrade-cycle, major, one-way: its kind not known - Forgejo applies
+                 only labels a repo has); everything while the
                  dashboard issue carries upgrades-paused (the kill switch) - and no dashboard issue open: not read (exit 1)
-  noticed UNIT   when the unit's veto notice was posted and the heads it announced (the runner's latest "UPGRADE
-                 NOTICE <iso> heads=<repo>@<sha>,..." comment: a fix noticed again starts its 24 h again), "<iso>
-                 <heads>", or "NONE" - the runner applies only those heads, main merged into them aside (git judges it);
-                 anything else is noticed again
-  held UNIT      what holds the unit now, one a line - upgrade-blocked, veto (on any of its pull requests), paused (the
+  bodies UNIT DIR  each of the unit's pull requests' body written to DIR/<repo>.pr.md (infra.pr.md, ...): Renovate's
+                 table and release notes - what the review's compatibility pass reads
+  replenish      one unit's pull requests asked of Renovate when nothing open is left to pick - "PAUSED", "OPEN" (a
+                 unit to pick is open: nothing asked), "NOTHING" (none waits either), or "APPROVED <unit> <repos>": the
+                 dashboards hold every update for approval (dependencyDashboardApproval), and the unit the pick would
+                 take first among the ones waiting - the same order, steps and test twins - gets its box ticked on
+                 every dashboard that lists it, as the bot; Renovate's next run opens its pull requests. So only the
+                 unit being worked on exists as pull requests (operator 2026-11-24: dozens open were noise). The
+                 runner runs Renovate itself before and after (task upgrade:run); the body is written whole with the
+                 one box changed, and nothing else writes the dashboard while the run holds the copy lock
+  held UNIT      what holds the unit now, one a line - veto (on any of its pull requests), paused (the
                  dashboard's upgrades-paused); nothing when nothing does: the runner asks again right before a merge
                  (a veto or the kill switch set during the proof and the review was not seen at the pick's time)
 
 A unit is the bot's own pull requests, from branches of the repositories themselves - another account's, or a fork's,
-named renovate/<unit> all the same, is no unit; a notice is the bot's own comment (anyone's backdated one skipped the
-24 h veto).
+named renovate/<unit> all the same, is no unit.
 
 Env: UPGRADE_FORGEJO_URL (default https://git.pmon.dev/api/v1), UPGRADE_FORGEJO_TOKEN (the renovate-bot's PAT),
-     UPGRADE_NOW (an ISO time, for the harness). Exit 0 with an answer, 1 when Forgejo's answer was not read (the
+     UPGRADE_TRIES (the tries' directory, for the harness). Exit 0 with an answer, 1 when Forgejo's answer was not read (the
      dashboard issue missing among them: pick and held fail closed without the kill switch).
 """
-import datetime
+import base64
 import json
 import os
 import re
@@ -48,19 +63,31 @@ API = os.environ.get("UPGRADE_FORGEJO_URL", "https://git.pmon.dev/api/v1").rstri
 TOKEN = os.environ.get("UPGRADE_FORGEJO_TOKEN", "")
 REPOS = ("schnappy/infra", "schnappy/platform", "schnappy/ops")
 BOT = "renovate-bot"
-FAMILIES = ("istio", "kubernetes", "cilium", "observability", "data-operators", "argocd", "pi-services")
+# gateway-api after istio (the operator, 2026-11-16): the control plane first, then the Gateway API it is proven with
+FAMILIES = ("istio", "gateway-api", "kubernetes", "cilium", "observability", "data-operators", "argocd", "pi-services")
 # a unit moved one minor at a time is named for its minor (renovate/upgrade-cycle.json: istio-1.32, scylladb-2026.3)
 VERSIONED = re.compile(r"(?P<base>[a-z0-9][a-z0-9.-]*?)-(?P<major>\d+)\.(?P<minor>\d+)")
-VETO_HOURS = 24
-# the runner's comment starts with it - a line inside another comment of the bot's (Renovate posts as the same account,
-# release notes quoted) is no notice
-NOTICE = re.compile(r"UPGRADE NOTICE (\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ)(?: heads=(\S+))?")
+# a step of an upgrade path: <dependency>-<version>[.x] - postgres-18.x, kube-prometheus-stack-93.x (Renovate's major
+# lines, separateMultipleMajor), kubernetes-1.37, scylladb-2026.3 (the preset's one-minor-at-a-time families)
+STEP = re.compile(r"(?P<base>[a-z0-9][a-z0-9.-]*?)-(?P<ver>\d+(?:\.\d+)*)(?:\.x)?")
 # renovate/upgrade-cycle.json's dependencyDashboardTitle - each repo's dashboard (all three extend the preset)
 DASHBOARD = "Upgrade cycle - Renovate's dashboard (label upgrades-paused: the cycle stops)"
+RENOVATE_LABELS = {"upgrade-cycle", "major", "one-way"}
+# the answers pick and replenish share
+PAUSED, NOTHING = "PAUSED", "NOTHING"
+# the runner's tries, one file a unit (scripts/upgrade-cycle.sh retry): a unit with one on record goes behind the units
+# with none - there is no blocked state (operator 2026-11-20), so one that keeps failing never holds the queue
+TRIES = os.environ.get("UPGRADE_TRIES",
+                       os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".upgrade-cycle", "tries"))
 
 
 class NotRead(Exception):
     pass
+
+
+# a box the dashboard holds for approval (Renovate's markdown: "- [ ] <!-- approve-branch=renovate/<unit> -->...")
+APPROVE = re.compile(r"^(?P<pre>[ \t]*- )\[ \](?P<post> <!-- approve-branch=renovate/(?P<unit>[a-z0-9][a-z0-9.-]*) -->)",
+                     re.M)
 
 
 def get(path, paged=True, **params):
@@ -85,10 +112,17 @@ def get(path, paged=True, **params):
         page += 1
 
 
-def now():
-    v = os.environ.get("UPGRADE_NOW")
-    return (datetime.datetime.fromisoformat(v.replace("Z", "+00:00")) if v
-            else datetime.datetime.now(datetime.timezone.utc))
+def patch(path, payload):
+    """One PATCH as the bot, its answer read - or NotRead."""
+    req = urllib.request.Request(f"{API}{path}", data=json.dumps(payload).encode(), method="PATCH",
+                                 headers={"Content-Type": "application/json"})
+    if TOKEN:  # not kept across a redirect: the token never reaches another host
+        req.add_unredirected_header("Authorization", f"token {TOKEN}")
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return json.loads(r.read() or b"null")
+    except (OSError, ValueError) as e:
+        raise NotRead(f"{path}: {e}") from None
 
 
 def ours(repo, pr):
@@ -97,45 +131,56 @@ def ours(repo, pr):
     return (pr.get("user") or {}).get("login") == BOT and head_repo == repo
 
 
+def add_pr(found, repo, pr):
+    """the bot's pull request on renovate/<unit>, into its unit"""
+    ref = (pr.get("head") or {}).get("ref") or ""
+    if not ref.startswith("renovate/") or not ours(repo, pr):
+        return
+    u = found.setdefault(ref[len("renovate/"):], {"repos": {}, "labels": set(), "unlabelled": False, "bodies": {}})
+    u["repos"][repo] = pr["number"]
+    u["bodies"][repo] = pr.get("body") or ""
+    names = {lb["name"] for lb in pr.get("labels") or []} | renovate_labels(pr)
+    u["labels"] |= names
+    # Renovate's own labels on every pull request of it (the preset: upgrade-cycle, major, one-way - Forgejo applies
+    # only labels the repo has): without them its kind, its one-way mark are not known
+    u["unlabelled"] |= not names & RENOVATE_LABELS
+
+
+def kind_of(name, u):
+    if "major" in u["labels"]:
+        return "major"
+    return "patch" if twin(name) == "wave-patches" else "minor"
+
+
 def units():
     found = {}
     for repo in REPOS:
         for pr in get(f"/repos/{repo}/pulls", state="open"):
-            ref = (pr.get("head") or {}).get("ref") or ""
-            if not ref.startswith("renovate/") or not ours(repo, pr):
-                continue
-            name = ref[len("renovate/"):]
-            u = found.setdefault(name, {"repos": {}, "labels": set()})
-            u["repos"][repo] = pr["number"]
-            u["labels"] |= {lb["name"] for lb in pr.get("labels") or []}
+            add_pr(found, repo, pr)
     for name, u in found.items():
-        if "major" in u["labels"]:
-            u["kind"] = "major"
-        elif twin(name) == "wave-patches":
-            u["kind"] = "patch"
-        else:
-            u["kind"] = "minor"
+        u["kind"] = kind_of(name, u)
     return found
+
+
+def renovate_labels(pr):
+    """The labels Renovate gave the pull request, as its own record in the body says (<!--renovate-debug:...-->) -
+    Forgejo drops a label the repo did not have when the pull request was made, and Renovate, recording it as set,
+    never adds it again: its record is what it decided."""
+    # Renovate appends its own record at the body's end: the last one is its (a copy in the release notes above it is not)
+    found = re.findall(r"<!--renovate-debug:([A-Za-z0-9+/=]+)-->", pr.get("body") or "")
+    if not found:
+        return set()
+    try:
+        record = json.loads(base64.b64decode(found[-1], validate=True))
+    except ValueError:  # not base64, not JSON (binascii.Error is a ValueError)
+        return set()
+    labels = record.get("labels") if isinstance(record, dict) else None
+    return {x for x in labels if isinstance(x, str)} if isinstance(labels, list) else set()
 
 
 def twin(name):
     """The production unit a test environment's unit goes before (test-observability -> observability); itself else."""
     return name[len("test-"):] if name.startswith("test-") else name
-
-
-def noticed(_name, u):
-    """The latest runner notice on any of the unit's pull requests, (its time, the heads it announced) - a unit noticed
-    again (its agent's fix, after its first notice) waits its 24 h from then: what was noticed first is not what
-    applies."""
-    found = []
-    for repo, number in u["repos"].items():
-        for c in get(f"/repos/{repo}/issues/{number}/comments", paged=False):
-            if (c.get("user") or {}).get("login") != BOT:
-                continue
-            m = NOTICE.match(c.get("body") or "")
-            if m:
-                found.append((datetime.datetime.fromisoformat(m.group(1).replace("Z", "+00:00")), m.group(2) or ""))
-    return max(found) if found else None
 
 
 def paused():
@@ -171,43 +216,173 @@ def order(name, u):
     return (2, 0, name, (), name)
 
 
-def waits_notice(u):
-    """A major, or a unit with the agent's fix in it: applied only after a 24 h notice."""
-    return u["kind"] == "major" or "agent-fixed" in u["labels"]
+def step(name):
+    """(the dependency, its version as numbers) for a unit that is a step of an upgrade path - test- units their own
+    path; None for a unit that is none (observability, wave-patches)."""
+    m = STEP.fullmatch(name)
+    return (m["base"], tuple(int(x) for x in m["ver"].split("."))) if m else None
+
+
+def numbers(version):
+    return tuple(int(x) for x in re.findall(r"\d+", version))
+
+
+def package(cell):
+    """a table row's package, one name wherever it is written (docker.io/scylladb/scylla is scylladb/scylla)"""
+    name = re.match(r"\[?([^\]]+)", cell).group(1).strip()
+    return re.sub(r"^(docker\.io/)?(library/)?", "", name)
+
+
+def table_rows(body):
+    """{column: cell} of each row of the body's first table (Renovate's own: | Package | Update | Change |, the columns
+    found by their headers) - one in the release notes below it is upstream's text, never read"""
+    cols, rows = None, 0
+    for line in body.splitlines():
+        if not line.startswith("|"):
+            if rows:
+                return
+            continue
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if "Package" in cells and "Change" in cells:
+            cols = {c: i for i, c in enumerate(cells)}
+        elif cols and len(cells) >= len(cols) and not set(cells[0]) <= {"-", ":"}:
+            rows += 1
+            yield {c: cells[i] for c, i in cols.items()}
+
+
+def table_steps(u):
+    """{package: the version it moves to, as numbers} for each major or minor row of the unit's pull requests' tables -
+    two rows of one package (a minor and a major): its highest target."""
+    found = {}
+    for body in u.get("bodies", {}).values():
+        for row in table_rows(body):
+            values = re.findall(r"`([^`]+)`", row["Change"])
+            if row.get("Update", "") in ("major", "minor") and values:
+                pkg = package(row["Package"])
+                found[pkg] = max(found.get(pkg, ()), numbers(values[-1]))
+    return found
+
+
+def lower_step_open(name, all_units):
+    """Another open unit of the same dependency at a lower version - this step waits for it, whatever holds it: by its
+    name (postgres-18.x for postgres-19.x; for a test- unit its production one's too), and by the packages it moves."""
+    mine = step(name)
+    if mine:
+        bases = {mine[0]} | ({mine[0][len("test-"):]} if mine[0].startswith("test-") else set())
+        if any(o != name and (s := step(o)) and s[0] in bases and s[1] < mine[1] for o in all_units):
+            return True
+    # a patch row is no step (table_steps reads major and minor rows alone): the wave never holds a step, nor waits for one
+    moves = table_steps(all_units.get(name) or {})
+    for o, ou in all_units.items():
+        if o == name or twin(o) == twin(name):  # its twin: the test unit first, by the twin rule - never a deadlock
+            continue
+        theirs = table_steps(ou)
+        if any(pkg in theirs and theirs[pkg] < v for pkg, v in moves.items()):
+            return True
+    return False
+
+
+def tried(name, u):
+    """A try on record for this unit's pull requests: a line of .upgrade-cycle/tries/<unit> whose key is them
+    ("repo#number,..." in any order) - or a key with no "#" (its pull requests not read, the test environment's merge
+    that did not settle): the unit's whatever its pull requests. Another unit of the name before (other pull requests)
+    is not this one."""
+    if not re.fullmatch(r"[a-z0-9][a-z0-9.-]*", name):
+        return False
+    try:
+        lines = open(os.path.join(TRIES, name), encoding="utf-8").read().split("\n")
+    except OSError:
+        return False
+    mine = {f"{repo}#{n}" for repo, n in u["repos"].items()}
+    keys = (line.split(" ", 1)[0] for line in lines)
+    return any(k and ("#" not in k or set(k.split(",")) == mine) for k in keys)
 
 
 def pick():
     if paused():
-        return "PAUSED"
+        return PAUSED
     all_units = units()
-    open_units = {n: u for n, u in all_units.items() if not ({"upgrade-blocked", "veto"} & u["labels"])}
-    tests = sorted((n for n in open_units if n.startswith("test-")), key=lambda n: order(n, open_units[n]))
-    if tests:
+    # unlabelled (Renovate's labels not on it): never picked - a major unlabelled read as a minor, applied with no notice
+    # a manual- unit (renovate/manual-woodpecker, the preset's): what the copy cannot prove - applied by hand, never picked
+    open_units = {n: u for n, u in all_units.items() if "veto" not in u["labels"] and not u["unlabelled"]
+                  and not n.startswith("manual-")}
+    # the units with a try on record after the ones with none, each group in its order
+    def queue(n):
+        return (tried(n, open_units[n]), order(n, open_units[n]))
+    # a step waits for the lower steps of its dependency - against every open unit, held or not (a vetoed or failing
+    # postgres-18.x never lets postgres-19.x jump it)
+    open_units = {n: u for n, u in open_units.items() if not lower_step_open(n, all_units)}
+    tests = sorted((n for n in open_units if n.startswith("test-")), key=queue)
+    # a production unit waits while its test environment's is open - vetoed too (its twin goes first); a test
+    # unit itself is never a production one
+    prod = sorted((n for n in open_units if f"test-{n}" not in all_units and not n.startswith("test-")), key=queue)
+    # tests first - unless the first has a try and a production unit has none (one that keeps failing never holds the
+    # queue: no blocked state)
+    if tests and not (tried(tests[0], open_units[tests[0]]) and prod and not tried(prod[0], open_units[prod[0]])):
         return f"test {tests[0]} {open_units[tests[0]]['kind']}"
-    # a production unit waits while its test environment's is open - blocked or vetoed too (its twin goes first)
-    open_units = {n: u for n, u in open_units.items() if f"test-{n}" not in all_units}
-    for name in sorted((n for n, u in open_units.items() if not waits_notice(u)), key=lambda n: order(n, open_units[n])):
+    for name in prod:
         return f"prove {name} {open_units[name]['kind']}"
-    return pick_noticed(open_units, sorted(n for n, u in open_units.items() if waits_notice(u)))
+    return NOTHING
 
 
-def pick_noticed(open_units, majors):
-    """A major (or a unit carrying the agent's fix) whose notice ran out - the earliest noticed first; else one with no
-    notice yet. Whether it applies what was noticed is the runner's to judge (the notice's heads, by git)."""
-    notices = {name: noticed(name, open_units[name]) for name in majors}
-    waiting = sorted((n[0], name) for name, n in notices.items() if n and now() - n[0] >= datetime.timedelta(hours=VETO_HOURS))
-    if waiting:
-        name = waiting[0][1]
-        return f"apply {name} {open_units[name]['kind']}"
-    for name in majors:
-        if notices[name] is None:
-            return f"notice {name} {open_units[name]['kind']}"
-    return "NOTHING"
+def dashboards():
+    """Each repo's dashboard issue (Renovate's: its title, the bot's), {repo: issue}."""
+    found = {}
+    for repo in REPOS:
+        for issue in get(f"/repos/{repo}/issues", state="open", type="issues"):
+            if issue.get("title") == DASHBOARD and (issue.get("user") or {}).get("login") == BOT:
+                found[repo] = issue
+    return found
+
+
+def pending_kind(name):
+    """A waiting unit's kind before its pull requests carry Renovate's labels, by its name: the waves, a major line
+    (hashicorp-vault-2.x), a minor else - for the order alone; the pick reads the labels once its pull requests open."""
+    name = twin(name)
+    if name == "wave-patches":
+        return "patch"
+    return "major" if name == "wave-majors" or re.fullmatch(r".*-\d+\.x", name) else "minor"
+
+
+def replenish():
+    if paused():
+        return PAUSED
+    if pick() != NOTHING:
+        return "OPEN"
+    boards = dashboards()
+    waiting = {}
+    for repo, issue in boards.items():
+        for m in APPROVE.finditer(issue.get("body") or ""):
+            waiting.setdefault(m["unit"], []).append(repo)
+    # a manual- unit is applied by hand, never asked for here; a step waits for a lower one waiting or open
+    shaped = {n: {"repos": dict.fromkeys(rs, 0), "labels": set(), "unlabelled": False, "bodies": {},
+                  "kind": pending_kind(n)} for n, rs in waiting.items() if not n.startswith("manual-")}
+    known = {**units(), **shaped}
+    ready = {n: u for n, u in shaped.items() if not lower_step_open(n, known)}
+    tests = sorted((n for n in ready if n.startswith("test-")), key=lambda n: order(n, ready[n]))
+    prod = sorted((n for n in ready if not n.startswith("test-") and f"test-{n}" not in known),
+                  key=lambda n: order(n, ready[n]))
+    chosen = (tests or prod or [None])[0]
+    if chosen is None:
+        return NOTHING
+    for repo in waiting[chosen]:
+        issue = boards[repo]
+        body = issue.get("body") or ""
+        box = next(m for m in APPROVE.finditer(body) if m["unit"] == chosen)
+        body = body[:box.start()] + box["pre"] + "[x]" + box["post"] + body[box.end():]
+        patch(f"/repos/{repo}/issues/{issue['number']}", {"body": body})
+    return f"APPROVED {chosen} {','.join(r.split('/')[1] for r in waiting[chosen])}"
+
+
+def show_replenish():
+    print(replenish())
+    return 0
 
 
 def show_list():
     for name, u in sorted(units().items()):
-        print(f"{name} {u['kind']} {','.join(sorted(u['repos']))} {','.join(sorted(u['labels'])) or '-'}")
+        print(f"{name} {u['kind']} {','.join(sorted(u['repos']))} {','.join(sorted(u['labels'])) or '-'}"
+              + (" UNLABELLED" if u["unlabelled"] else ""))
     return 0
 
 
@@ -221,35 +396,61 @@ def show_held(name):
     if u is None:
         print(f"NO UNIT {name}")
         return 1
-    for reason in sorted({"upgrade-blocked", "veto"} & u["labels"]):
+    for reason in sorted({"veto"} & u["labels"]):
         print(reason)
     if paused():
         print("paused")
     return 0
 
 
-def show_noticed(name):  # its time and the heads it announced
+def show_bodies(name, out_dir):
+    """Each of the unit's pull requests' body to <out_dir>/<repo>.pr.md - Renovate's table and release notes."""
     u = units().get(name)
     if u is None:
         print(f"NO UNIT {name}")
         return 1
-    n = noticed(name, u)
-    print(n[0].strftime("%Y-%m-%dT%H:%M:%SZ") + (f" {n[1]}" if n[1] else "") if n else "NONE")
+    for repo, body in sorted(u["bodies"].items()):
+        path = os.path.join(out_dir, f"{repo.split('/')[-1]}.pr.md")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(body)
+        print(path)
+    return 0
+
+
+def show_moves(name):
+    """What the unit moves, from its pull requests' tables: '<package> <from> <to>' a line, each once (patch, minor and
+    major rows) - the copy's inventory after the change must show production's lines of it at the new version
+    (scripts/copy-change-inventory.sh)."""
+    u = units().get(name)
+    if u is None:
+        print(f"NO UNIT {name}")
+        return 1
+    seen = []
+    for body in u.get("bodies", {}).values():
+        for row in table_rows(body):
+            values = re.findall(r"`([^`]+)`", row.get("Change", ""))
+            line = f"{package(row['Package'])} {values[0]} {values[-1]}" if len(values) >= 2 else ""
+            if row.get("Update", "") in ("major", "minor", "patch") and line and line not in seen:
+                seen.append(line)
+    print("\n".join(seen))
     return 0
 
 
 def main(argv):
-    commands = {("list",): show_list, ("pick",): show_pick}
-    unit_commands = {"held": show_held, "noticed": show_noticed}
+    commands = {("list",): show_list, ("pick",): show_pick, ("replenish",): show_replenish}
     try:
         if tuple(argv) in commands:
             return commands[tuple(argv)]()
-        if len(argv) == 2 and argv[0] in unit_commands:
-            return unit_commands[argv[0]](argv[1])
+        if len(argv) == 2 and argv[0] == "held":
+            return show_held(argv[1])
+        if len(argv) == 3 and argv[0] == "bodies":
+            return show_bodies(argv[1], argv[2])
+        if len(argv) == 2 and argv[0] == "moves":
+            return show_moves(argv[1])
     except NotRead as e:
         print(f"NOT READ: Forgejo's answer - {e}")
         return 1
-    print("usage: upgrade-units.py list | pick | noticed UNIT | held UNIT")
+    print("usage: upgrade-units.py list | pick | replenish | held UNIT | bodies UNIT DIR | moves UNIT")
     return 2
 
 

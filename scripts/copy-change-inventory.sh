@@ -10,9 +10,15 @@
 #   - the checks after it (the copy now, against the copy right after the change settled): exactly the same - what a
 #     check left behind (a Job, a pod, an image) fails, as it does after a build.
 # Each comparison must have run: inventory-diff.sh's verdict line read, or the run fails (a crash is no "no difference").
+# Given what the change was to move (a sixth argument, the unit's Renovate tables: "<package> <from> <to>" a line,
+# scripts/upgrade-units.py moves): every production line naming a package at its old version must name it at the new one
+# on the copy after the change - "moved nothing" passed a unit whose new version never reached the copy (the
+# observability review, 2026-11-25: nothing required grafana/grafana 13.3.2 running). A line the allow-list lets the
+# copy lack (a Job's image) is not required; a package production does not run (a CI image) has no line to move.
 #
 # Usage: scripts/copy-change-inventory.sh tests/ansible/copy/prod-inventory.txt .copy/vagrant-inventory-build.txt \
-#          .copy/vagrant-inventory-after-change.txt .copy/vagrant-inventory.txt tests/ansible/copy/vagrant-allowed-missing.txt
+#          .copy/vagrant-inventory-after-change.txt .copy/vagrant-inventory.txt tests/ansible/copy/vagrant-allowed-missing.txt \
+#          [the unit's moves]
 set -euo pipefail
 [ "$#" -ge 4 ] || { echo "usage: $0 <production> <built> <changed> <now> [allowed-missing]"; exit 2; }
 here=$(cd "$(dirname "$0")" && pwd)
@@ -49,6 +55,34 @@ if [ -n "$old" ]; then
   sed 's/^/  /' <<< "$old"
   echo "INVENTORY: production moved since the copy was built - rebuild it (task test:copy:build)"
   bad=1
+fi
+if [ -n "${6:-}" ]; then
+  [ -r "$6" ] || { echo "$6: the unit's moves not readable"; exit 1; }
+  unmoved=$(python3 -I - "$1" "$3" "$6" "${5:-/dev/null}" <<'MOVES'
+import re, sys
+prod, after, moves, allowed = (open(p).read().splitlines() for p in sys.argv[1:5])
+have = set(after)
+exact, anyver = set(), set()
+for a in (x.strip() for x in allowed):
+    if a and not a.startswith("#"):
+        a = a[2:] if a.startswith("? ") else a
+        (anyver.add(a[:-2]) if a.endswith(" *") else exact.add(a))
+for pkg, old, new in (m.split() for m in moves if len(m.split()) == 3):
+    at = re.compile(r"(?<![\d.])" + re.escape(old) + r"(?![\d.])")
+    left_out = lambda x: x in exact or x.rsplit(" ", 1)[0] in anyver
+    # a component the copy leaves out (its production line allowed missing) is left out at the new version too
+    for line in (x for x in prod if pkg in x and at.search(x) and not left_out(x)):
+        want = at.sub(new, line, count=1)
+        if want not in have and not left_out(want):
+            print("  NOT MOVED %s %s -> %s: the copy lacks '%s'" % (pkg, old, new, want))
+MOVES
+)
+  if [ -n "$unmoved" ]; then
+    echo "what the unit moves, not on the copy after the change:"
+    printf '%s\n' "$unmoved"
+    echo "INVENTORY: the change did not move what its unit moves"
+    bad=1
+  fi
 fi
 compare "$3" "$4"
 if [ "$cmp_rc" != 0 ]; then

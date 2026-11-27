@@ -187,6 +187,12 @@ store() {  # a store as production's, made relative to now
   # (END_MISSING: in 99, never archived - an idle database's unfinished segment), the newest still being written;
   # segments 25-27 archived
   mkdir -p "$pg/schnappy-postgres/base/20260410T140130"
+  # another cluster's server beside production's, its backup NEWER (SonarQube's 01:45 after production's 01:30): never
+  # the one restored
+  local other
+  other="$pg/schnappy-sonarqube-pg18/base/$(utc '-30 minutes' +%Y%m%dT%H%M%S)"
+  mkdir -p "$other"
+  printf 'status=DONE\nend_wal=000000010000000000000009\n' > "$other/backup.info"
   printf 'status=DONE\nend_wal=000000010000000000000001\n' > "$pg/schnappy-postgres/base/20260410T140130/backup.info"
   local b end
   for h in 3 2 1; do
@@ -255,7 +261,7 @@ run() {  # run <env...>: the script as the unit runs it (its lock held: PI_RESTO
   env "$@" > /dev/null  # (a bad env word fails here, not as a red check)
   env -i PATH="$W/bin:$(dirname "$(command -v python3)"):/usr/bin:/bin" W="$W" HOME="$W" TZ=Europe/Tallinn PI_RESTORE_PG_ROOT="$W/pgroot" STORE_ENDPOINT=http://192.168.11.5:9000 \
     AWS_ACCESS_KEY_ID=a AWS_SECRET_ACCESS_KEY=s PI_RESTORE_NAME=pi1 PI_RESTORE_PARITY=0 PI_RESTORE_ANY_DAY=1 \
-    PI_RESTORE_LOCKED=1 PI_RESTORE_PG_DATABASES="monitor admin chat chess masi" \
+    PI_RESTORE_LOCKED=1 PI_RESTORE_PG_DATABASES="monitor admin chat chess masi" PI_RESTORE_PG_SERVER=schnappy-production-postgres \
     PI_RESTORE_TIMESYNC_MARKER="$W/no-timesync-marker" PI_RESTORE_CGROUP_CONTROLLERS="$W/cgroup-controllers" \
     PI_RESTORE_PG_IMAGE_17=ghcr.io/cloudnative-pg/postgresql:17 PI_RESTORE_ETCD_IMAGE=registry.k8s.io/etcd:3.6.5-0 \
     PI_RESTORE_PG_BASE_MAX_AGE_H="$BASE_MAX" PI_RESTORE_PG_BACKUPS_LOOKED_AT=30 PI_RESTORE_PG_WAIT_POLLS=3 PI_RESTORE_ETCD_MAX_AGE_H=3 \
@@ -287,7 +293,7 @@ store
 check "every part restores: green" "$(run)" "rc=0"
 check "  last-success this run's" "$(success | grep -cE '^[0-9]{8}T[0-9]{6}Z$') $(success | grep -c 2020)" "1 0"
 check "  last-report: the three parts OK" "$(report | grep -cE '^(POSTGRES|ETCD|TIER0) OK')" 3
-check "  production's server (not the old one), its newest RESTORABLE backup (not the one still written)" \
+check "  production's server, named (not the old one, not another cluster's newer one), its newest RESTORABLE backup (not the one still written)" \
   "$(report | grep -oE 'schnappy-production-postgres/[0-9T]+' | sed 's#.*/##')" "$(utc '-2 hours' +%Y%m%dT%H0130)"
 (export END_MISSING=1; store)
 check "an idle database (the newest complete backup's end segment unarchived): the backup before it restored, green" \
@@ -297,6 +303,10 @@ check "an idle database (the newest complete backup's end segment unarchived): t
 check "a base backup without its backup.info (still uploading): the one before it restored, green" \
   "$(run NO_INFO=1) $(report | grep -oE 'schnappy-production-postgres/[0-9T]+' | sed 's#.*/##')" \
   "rc=0 $(utc '-3 hours' +%Y%m%dT%H0130)"
+store
+check "production's server named but without a base backup (a rename not followed): red, the name said - no other server's taken" \
+  "$(run PI_RESTORE_PG_SERVER=schnappy-production-postgres-pg19) $(report | grep -A1 '^POSTGRES FAILED:$' | grep -c '^  schnappy-production-postgres-pg19: no base backup') $(grep -c '^podman run.*pi-restore-pg' "$W/calls" || true)" \
+  "rc=1 1 0"
 store
 check "the registry down, the images here already: green" "$(run PULL_FAIL=1)" "rc=0"
 store
@@ -429,7 +439,11 @@ red "postgres: a database missing: red" POSTGRES DBS="postgres monitor admin cha
 red "postgres: no table in any database: red" POSTGRES TABLES=0
 # one database restored empty, the rest with tables: red, naming it (masi's was let be empty until it ran in production)
 red "postgres: one database restored with no table (masi), the rest with tables: red" POSTGRES EMPTY_DB=masi
-check "  the empty one named, every count said" "$(report | grep -oE 'no table in [a-z]+ \([^)]*\)')" \
+# not there: the report's POSTGRES line shown instead (CI pipeline 1058, 2026-11-20, read it empty once - 40 parallel runs
+# in CI's image did not repeat it)
+# on a miss, the Postgres part's whole report - its header AND the line under it that says why (2026-11-25: under load it
+# read "POSTGRES FAILED:" alone, once, its cause not shown; three reruns and six side by side passed)
+check "  the empty one named, every count said" "$(report | grep -oE 'no table in [a-z]+ \([^)]*\)' || report | grep -A1 -E '^POSTGRES')" \
   "no table in masi (monitor:7 admin:7 chat:7 chess:7 masi:0)"
 red "postgres: a database not read back whole: red" POSTGRES DUMP_FAIL=1
 store
@@ -488,17 +502,19 @@ red "tier0: psql could not run pg-globals.sql: red" TIER0 PSQL_FAIL=1
 # the playbook's wiring
 PY=python3
 "$PY" -c 'import yaml' 2> /dev/null || PY=deploy/ansible/venv/bin/python3
-check "the playbook names production's images (its Postgres and etcd now, digested; 17's for the backups made before 18)" "$(PYTHONDONTWRITEBYTECODE=1 "$PY" - <<'PY_WIRING'
+check "the playbook names production's images (its Postgres now, one of its etcd images, digested; 17's for the backups made before 18)" "$(PYTHONDONTWRITEBYTECODE=1 "$PY" - <<'PY_WIRING'
 import re, yaml
 v = yaml.safe_load(open("deploy/ansible/playbooks/setup-pi-restore-check.yml"))[0]["vars"]
 now = open("tests/ansible/copy/prod-inventory.txt").read().splitlines()
 img = lambda inv, name: [l.split()[2] for l in inv if l.startswith("image " + name + " ")]
 pg, etcd = "ghcr.io/cloudnative-pg/postgresql", "registry.k8s.io/etcd"
 digested = lambda ref, name, tags: [re.fullmatch(re.escape(name) + r":(\S+)@sha256:[0-9a-f]{64}", ref)[1]] == tags
+# etcd: one of production's - its server's (kubeadm's static pod) beside the backup Job's etcdutl, which moves alone
+etcd_one_of = lambda ref, tags: (m := re.fullmatch(re.escape(etcd) + r":(\S+)@sha256:[0-9a-f]{64}", ref)) is not None and m[1] in tags
 major = img(now, pg)[0].split(".")[0] if img(now, pg) else None
 print(v["pi_restore_check_pg_images"].get("17") == pg + ":17",
       digested(v["pi_restore_check_pg_images"].get(major, ""), pg, img(now, pg)),
-      digested(v["pi_restore_check_etcd_image"], etcd, img(now, etcd)), sorted(v["pi_restore_check_pg_images"]))
+      etcd_one_of(v["pi_restore_check_etcd_image"], img(now, etcd)) and len(img(now, etcd)) > 0, sorted(v["pi_restore_check_pg_images"]))
 PY_WIRING
 )" "True True True ['17', '18']"
 check "the two Pis on opposite days (pi1 even, pi2 odd), the store through the VIP" "$("$PY" - <<'PY_PARITY'

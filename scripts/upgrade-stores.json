@@ -1,0 +1,172 @@
+{
+  "_doc": [
+    "What a one-way change needs before it is applied to production - the upgrade cycle's one table of it (scripts/upgrade-stores.py reads it for the runner).",
+    "A one-way unit (Renovate's one-way label - renovate/upgrade-cycle.json's rules, the packages below - or its name matching a store's 'units') is one of these stores'.",
+    "units: the names Renovate gives the store's units (a major: its depName, '/' as '-', then '-<major>.x'; ScyllaDB's release lines: renovate/scylladb-<X.Y>) - examples: real ones, each matched by its own store's units alone (the harness); a group's name is a store's only when the group is that store's alone.",
+    "backups: the production tasks the runner runs before the merge (each must end well, or nothing is merged) - every part of the store the unit may change.",
+    "taken_by: the unit's own production command takes the backup itself (its playbook, first) - the runner refuses the unit when its plan has not that command.",
+    "missing: the parts that have none yet, each with why - while any is listed, the store's units are stopped before anything is built (a try - no blocked state), the message naming each; once the part exists, the table says so and the label upgrade-blocked comes off the unit's pull requests.",
+    "A test environment's unit takes no backup (its data is no store to keep), but runs only when its production twin could: a test environment ahead of production for good is no proof of anything.",
+    "upgrade-renovate's harness fails a package the preset marks one-way that no store here names (and the reverse), a store with neither, a backup that is no production task - a new kind of store is decided here, not met in a run.",
+    "Postgres' store is the CNPG image (ghcr.io/cloudnative-pg/postgresql) alone: every database runs it (production, test, Woodpecker, SonarQube, Grafana - read live 2026-11-21); the plain postgres image in these repos is the init-users Job's psql client and CI services - no data, so no store, its majors ordinary units."
+  ],
+  "stores": [
+    {
+      "store": "postgres",
+      "units": "(^|-)postgresql-[0-9]+\\.(x|[0-9]+)$",
+      "packages": [
+        "/(^|\\/)postgresql$/"
+      ],
+      "backups": [
+        "deploy:postgres:base-backup -- -e pg_namespace=schnappy-production -e cluster=schnappy-production-postgres",
+        "deploy:postgres:base-backup -- -e pg_namespace=woodpecker -e cluster=woodpecker-postgres",
+        "deploy:postgres:base-backup -- -e pg_namespace=schnappy-infra -e cluster=schnappy-sonarqube-pg",
+        "deploy:postgres:base-backup -- -e pg_namespace=schnappy-infra -e cluster=schnappy-grafana-pg"
+      ],
+      "missing": [],
+      "examples": [
+        "ghcr.io-cloudnative-pg-postgresql-19.x",
+        "postgresql-19.x"
+      ],
+      "taken_by": []
+    },
+    {
+      "store": "scylladb",
+      "units": "(^|-)(scylla|scylladb)-[0-9]+\\.(x|[0-9]+)$",
+      "packages": [
+        "/^(docker\\.io\\/)?scylladb\\/scylla$/",
+        "/scylladb\\/scylla$/"
+      ],
+      "backups": [
+        "check:production:scylla-backup"
+      ],
+      "missing": [],
+      "examples": [
+        "scylladb-2026.3",
+        "scylladb-scylla-2027.x"
+      ],
+      "taken_by": [],
+      "_why": "a release line cannot be downgraded: the way back is task deploy:scylla:way-back (the unit reverted in infra first) - the cluster's data volumes and ScyllaCluster thrown away, Argo rebuilds it at git's version, a sync started by it runs the chart's schema Job, chat's rows restored from the snapshot this table's backup took before the merge, the cluster's clients (chat, monitor) restarted. Rehearsed whole on the copy with production's tasks: test:copy:scylla-way-back, SCYLLA WAY BACK OK 2026-11-22 (100 markers back, the clients with no driver error)"
+    },
+    {
+      "store": "kafka",
+      "units": "(^|-)(kafka|strimzi|strimzi-kafka-operator)-[0-9]+\\.(x|[0-9]+)$",
+      "packages": [
+        "/(^|\\/)kafka$/",
+        "strimzi-kafka-operator",
+        "/^quay\\.io\\/strimzi\\//"
+      ],
+      "backups": [
+        "check:production:kafka-backup"
+      ],
+      "missing": [
+        "its restore not yet rehearsed on the copy - test:copy:kafka-restore restores a marker topic through production's backup and restore Jobs; the dump and restore proven locally on Kafka 4.3.1 and against a stub Kafka in platform CI"
+      ],
+      "examples": [
+        "strimzi-kafka-operator-1.x",
+        "quay.io-strimzi-kafka-1.x",
+        "apache-kafka-4.x"
+      ],
+      "taken_by": []
+    },
+    {
+      "store": "clickhouse",
+      "units": "(^|-)(clickhouse|clickhouse-server)-[0-9]+\\.(x|[0-9]+)$",
+      "packages": [
+        "/clickhouse-server$/"
+      ],
+      "backups": [
+        "check:production:clickhouse-backup"
+      ],
+      "missing": [],
+      "examples": [
+        "clickhouse-clickhouse-server-27.x"
+      ],
+      "taken_by": []
+    },
+    {
+      "store": "grafana",
+      "units": "(^|-)grafana-[0-9]+\\.(x|[0-9]+)$",
+      "packages": [
+        "grafana",
+        "grafana/grafana"
+      ],
+      "backups": [
+        "deploy:postgres:base-backup -- -e pg_namespace=schnappy-infra -e cluster=schnappy-grafana-pg"
+      ],
+      "missing": [],
+      "examples": [
+        "grafana-grafana-13.x",
+        "grafana-14.x"
+      ],
+      "taken_by": [],
+      "_why": "its database on its own CNPG cluster since stage 2 (2026-11-18): a Grafana major migrates it - that cluster's base backup first (Postgres's entry takes it too); the way back a recovery from it (CNPG bootstrap.recovery, the path the copy rehearses on production's cluster every run); its dashboards and datasources provisioned"
+    },
+    {
+      "store": "vault",
+      "units": "(^|-)vault-[0-9]+\\.(x|[0-9]+)$",
+      "packages": [
+        "/(^|\\/)vault$/"
+      ],
+      "backups": [],
+      "missing": [],
+      "examples": [
+        "hashicorp-vault-2.x"
+      ],
+      "taken_by": [
+        "deploy:vault:upgrade"
+      ],
+      "_why": "its own command takes it: upgrade-vault.yml snapshots Consul (Vault's storage) and exports vault/ before it touches a Pi - the snapshot's restore exercised by the Pi restore check"
+    },
+    {
+      "store": "consul",
+      "units": "(^|-)consul-[0-9]+\\.(x|[0-9]+)$",
+      "packages": [
+        "/(^|\\/)consul$/"
+      ],
+      "backups": [],
+      "missing": [],
+      "examples": [
+        "hashicorp-consul-2.x"
+      ],
+      "taken_by": [
+        "deploy:consul:upgrade"
+      ],
+      "_why": "its own command takes it: upgrade-consul.yml snapshots the whole state on pi1 (inspected) before any server restarts, the followers then the leader - proven on the copy by copy-unit (setup-consul.yml's version moved: upgrade-consul.yml there) and by test:consul-upgrade"
+    },
+    {
+      "store": "sonarqube",
+      "units": "(^|-)sonarqube-[0-9]+\\.(x|[0-9]+)$",
+      "packages": [
+        "sonarqube",
+        "/(^|\\/)sonarqube$/"
+      ],
+      "backups": [
+        "deploy:postgres:base-backup -- -e pg_namespace=schnappy-infra -e cluster=schnappy-sonarqube-pg"
+      ],
+      "missing": [],
+      "examples": [
+        "sonarqube-26.x"
+      ],
+      "taken_by": [],
+      "_why": "every SonarQube release migrates its database one way (api/system/migrate_db in the setup hook) - the wave-patches review of 2026-11-23 found 26.9 -> 26.10 riding in the wave, unproven (the copy leaves SonarQube out) and with no backup: its CNPG cluster's base backup first; the way back a recovery from it (CNPG bootstrap.recovery, the path the copy rehearses on production's cluster every run)"
+    },
+    {
+      "store": "keycloak",
+      "units": "(^|-)keycloak-[0-9]+\\.(x|[0-9]+)$",
+      "packages": [
+        "quay.io/keycloak/keycloak"
+      ],
+      "backups": [],
+      "missing": [
+        "nothing dumps its database right before its version moves - plan 122 part 3 (a pg_dump in tasks/keycloak-restart.yml, before any restart onto a new version); the Pis' daily pg-keycloak.dump is a day old"
+      ],
+      "examples": [
+        "keycloak-26.8",
+        "quay.io-keycloak-keycloak-27.x"
+      ],
+      "taken_by": [],
+      "_why": "Keycloak migrates its database one way (Liquibase, no downgrade) on minors too; it runs on the Pis (setup-pi-services.yml), its database on Patroni"
+    }
+  ]
+}

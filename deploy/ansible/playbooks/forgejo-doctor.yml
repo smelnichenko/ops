@@ -28,8 +28,8 @@
     _orphans_re: 'Found (\d+)/\d+ \([^)]*\) orphaned package blob'
     _none_re: 'Found \d+ \([^)]*\) package blob'
     _deleted_re: 'Deleted (\d+)/(\d+) orphaned package blob'
-    # Forgejo's own database login (the postgres account, as its config and upgrade-forgejo.yml have it)
-    _db_password: "{{ postgres_admin_password }}"
+    # Forgejo's own database login - its role, owning package_blob (its lock its own to take)
+    _db_password: "{{ forgejo_db_password }}"
   tasks:
     - name: On the Pi holding the VIP alone
       ansible.builtin.import_tasks: tasks/vip-holder-only.yml
@@ -81,7 +81,7 @@
               # for psql's \! (sh -c): the doctor, and its line with the count given
               export DOCTOR={{ _doctor | quote }}
               export WANT='Found {{ forgejo_orphans_expected | int }}/[0-9]+ \([^)]*\) orphaned package blob'
-              psql -X -q -A -t -w -v ON_ERROR_STOP=1 -h 127.0.0.1 -p 5000 -U postgres -d forgejo <<'SQL'
+              psql -X -q -A -t -w -v ON_ERROR_STOP=1 -h 127.0.0.1 -p 5000 -U forgejo -d forgejo <<'SQL'
               SET idle_in_transaction_session_timeout = 0;
               BEGIN;
               SET LOCAL lock_timeout = '5min';

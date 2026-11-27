@@ -21,6 +21,9 @@
     - name: Vagrant VMs only (fails closed on any other host)
       ansible.builtin.import_tasks: ../vagrant-only.yml
 
+    - name: An image the cluster runs already, with a shell
+      ansible.builtin.import_tasks: tasks/shell-image.yml
+
     - name: The marker, fixed once (a lookup in vars is re-evaluated at every use)
       ansible.builtin.set_fact:
         marker: "written {{ lookup('pipe', 'date +%s') }}"
@@ -52,7 +55,7 @@
               restartPolicy: Never
               containers:
                 - name: check
-                  image: busybox:1.37
+                  image: "{{ shell_image }}"
                   command: [sh, -c, 'echo "$MARKER" > /data/marker && sync && cat /data/marker']
                   env: [{ name: MARKER, value: "{{ marker }}" }]
                   volumeMounts: [{ name: data, mountPath: /data }]
@@ -102,7 +105,7 @@
             restartPolicy: Never
             containers:
               - name: check
-                image: busybox:1.37
+                image: "{{ shell_image }}"
                 command: [cat, /data/marker]
                 volumeMounts: [{ name: data, mountPath: /data }]
             volumes: [{ name: data, persistentVolumeClaim: { claimName: "{{ check_name }}" } }]

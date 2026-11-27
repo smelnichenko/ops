@@ -1,0 +1,81 @@
+---
+# One rclone command against the Kafka backups' Pi store, in a Job built from the backup CronJob's upload container (its
+# image, its store keys, its labels - its network policy reaches the store - and its annotations), waited for by the
+# clock; the Job removed once it succeeded (a failed one stays for its logs). Sets kafka_store_said (its log's last line).
+#
+# Expects: kubectl; kafka_namespace (default schnappy-production); kafka_store_cmd (sh, with STORE - rclone's remote and
+# bucket - set; it must print a last line that says what it did); kafka_store_what (the Job's name part).
+- name: The backup CronJob's pod (the store Job is built from it)
+  ansible.builtin.command: >-
+    {{ kubectl }} -n {{ kafka_namespace | default('schnappy-production') }}
+    get cronjob {{ kafka_namespace | default('schnappy-production') }}-kafka-backup -o json
+  register: _ks_cronjob
+  changed_when: false
+
+- name: The store Job
+  vars:
+    _pod: "{{ (_ks_cronjob.stdout | from_json).spec.jobTemplate.spec.template }}"
+    _upload_c: "{{ _pod.spec.containers | selectattr('name', 'eq', 'upload') | first }}"
+  ansible.builtin.set_fact:
+    _ks_name: "kafka-store-{{ kafka_store_what | mandatory }}-{{ lookup('ansible.builtin.pipe', 'date +%s') }}"
+    _ks_job:
+      apiVersion: batch/v1
+      kind: Job
+      metadata:
+        namespace: "{{ kafka_namespace | default('schnappy-production') }}"
+        labels: "{{ _pod.metadata.labels }}"
+      spec:
+        backoffLimit: 0
+        activeDeadlineSeconds: 600
+        template:
+          metadata:
+            labels: "{{ _pod.metadata.labels }}"
+            annotations: "{{ _pod.metadata.annotations | dict2items | rejectattr('key', 'match', '^checksum/') | items2dict }}"
+          spec:
+            restartPolicy: Never
+            serviceAccountName: "{{ _pod.spec.serviceAccountName | default('default') }}"
+            automountServiceAccountToken: false
+            securityContext: "{{ _pod.spec.securityContext }}"
+            # the upload container's scratch: its own mount of the CronJob's tmp volume, a small emptyDir here
+            volumes: [{name: tmp, emptyDir: {sizeLimit: 64Mi}}]
+            containers:
+              - name: store
+                image: "{{ _upload_c.image }}"
+                env: "{{ _upload_c.env }}"
+                resources: "{{ _upload_c.resources }}"
+                securityContext: "{{ _upload_c.securityContext }}"
+                volumeMounts: "{{ _upload_c.volumeMounts | selectattr('name', 'eq', 'tmp') | list }}"
+                command: [sh, -c, "set -eu\n{{ kafka_store_cmd | mandatory }}"]
+
+- name: The store Job run, waited for - its last line said
+  ansible.builtin.shell:
+    executable: /bin/bash
+    stdin: "{{ _ks_job | combine({'metadata': _ks_job.metadata | combine({'name': _ks_name})}) | to_json }}"
+    cmd: |
+      set -euo pipefail
+      k="{{ kubectl }} -n {{ kafka_namespace | default('schnappy-production') }}"
+      j={{ _ks_name }}
+      $k apply -f - > /dev/null
+      # by the clock: /proc/uptime, which nothing sets back; 660 s, past the Job's own 600
+      end=$(( $(cut -d. -f1 /proc/uptime) + 660 ))
+      s=""
+      for _ in $(seq 66); do
+        # a read that fails is tried again till the deadline - the Job runs on without it
+        s=$($k get "job/$j" -o jsonpath='{.status.succeeded}/{.status.failed}') || s=""
+        case "$s" in
+          1/*) break ;;
+          */1) $k logs "job/$j" -c store --tail=20 || echo "(its log not read)"; echo "the store Job $j failed"; exit 1 ;;
+        esac
+        [ "$(cut -d. -f1 /proc/uptime)" -lt "$end" ] || break
+        sleep 10
+      done
+      case "$s" in 1/*) ;; *) echo "the store Job $j not done 660 s after its start"; exit 1 ;; esac
+      $k logs "job/$j" -c store | tail -1
+      $k delete job "$j" --wait=false > /dev/null
+  register: _ks_run
+  changed_when: true
+  failed_when: _ks_run.rc != 0 or (_ks_run.stdout_lines | last | default('')) | length == 0
+
+- name: What the store Job said
+  ansible.builtin.set_fact:
+    kafka_store_said: "{{ _ks_run.stdout_lines | last }}"

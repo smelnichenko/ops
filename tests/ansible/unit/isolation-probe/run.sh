@@ -38,8 +38,10 @@ cat > "$W/bin/kubectl" <<'STUB'
 #!/bin/sh
 case "$1" in
   create) echo "kind: Namespace" ;;
+  # the probe pod's image recorded (the task names it from production's inventory: probe_image)
+  run) for a in "$@"; do case "$a" in --image=*) echo "${a#--image=}" >> "$W/run-images" ;; esac; done ;;
   apply) cat > /dev/null ;;
-  get) printf Running ;;
+  get) [ -n "${NO_POD:-}" ] || printf Running ;;
   exec) while [ "$1" != -- ]; do shift; done; shift; exec "$@" ;;
 esac
 STUB
@@ -58,7 +60,7 @@ W = os.environ["W"]
 tasks = {t.get("name"): t for p in yaml.safe_load(open("tests/ansible/copy/isolate-cluster.yml"))
          for t in p.get("tasks", [])}
 ctx = {"kubectl": os.path.join(W, "bin", "kubectl"), "production_vip": "192.168.11.5", "vagrant_vip": "192.168.56.5",
-       "production_public": ["84.52.11.130"]}
+       "production_public": ["84.52.11.130"], "probe_image": "alpine/k8s:1.36.5"}
 fails = 0
 def run(name, curl, public=None, addresses=("84.52.11.130",), **env):
     t = tasks[name]
@@ -127,6 +129,13 @@ for book in ("tests/ansible/isolate-pis.yml", "tests/ansible/copy/isolate-cluste
     fails += ok != (True, True, True, True)
     print(f"{'PASS' if ok == (True, True, True, True) else 'FAIL'} {book}: its guard loads before the network "
           f"(DefaultDependencies=no, Wants= and Before=network-pre.target)" + ("" if all(ok) else f" - {ok}"))
+# the pod's probe runs the image production's inventory names (probe_image, the stale PR sweeper's alpine/k8s), never a pin:
+# its pod made once (none running yet)
+run("Prove it - a pod cannot reach production's VIP nor its public addresses, and can reach the Vagrant VIP", "28 0", NO_POD="1")
+imgs = sorted(set(open(os.path.join(W, "run-images")).read().split())) if os.path.exists(os.path.join(W, "run-images")) else []
+fails += imgs != ["alpine/k8s:1.36.5"]
+print(f"{'PASS' if imgs == ['alpine/k8s:1.36.5'] else 'FAIL'} the pod's probe runs probe_image (production's inventory's "
+      f"alpine/k8s), never a pinned image" + ("" if imgs == ["alpine/k8s:1.36.5"] else f" - {imgs}"))
 print("isolation-probe: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 PY

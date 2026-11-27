@@ -27,7 +27,7 @@
   vars_files:
     - ../vars/forgejo.yml
   vars:
-    forgejo_db_password: "{{ postgres_admin_password }}"
+    forgejo_dump_password: "{{ postgres_admin_password }}"  # the dump's login: the superuser's (pg_dump -U postgres)
     forgejo_config: /var/lib/forgejo/custom/conf/app.ini
     vip: "{{ keepalived_vip }}"
     dump_dir: /var/backups/forgejo
@@ -157,7 +157,7 @@
           mv "$out.part" "$out"
           ls -1t {{ dump_dir }}/forgejo-*.sql.gz | tail -n +4 | xargs -r rm -f
           echo "$out $(du -h "$out" | cut -f1)"
-        stdin: "{{ forgejo_db_password }}"
+        stdin: "{{ forgejo_dump_password }}"
       register: _dump
       changed_when: true
       failed_when: false

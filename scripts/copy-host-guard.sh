@@ -4,7 +4,8 @@
 # radar's SDR reader got no samples and the radar died (2026-11-13 22:17). Two guards, for every Vagrant VM here:
 #   vagrant <args>  the Vagrantfile passes every vagrant command's arguments here (and holds one start at a time);
 #                   `up`, `reload` and `resume` start only when the host has, available, the memory of the VMs they
-#                   start (the Vagrantfile's v.memory) plus the part of the running VMs' memory they have not touched
+#                   start (the Vagrantfile's v.memory, a VAGRANT_*_MEMORY it reads as the guard does) plus the part of
+#                   the running VMs' memory they have not touched
 #                   yet (promised, still counted as available) plus a reserve for the radar station and the desktop -
 #                   refused, the numbers named, otherwise. Then the watcher (below). Any other command: nothing.
 #   watch           a detached watcher, one at a time (it holds .copy/host-guard.alive for its life): while a VM runs,
@@ -20,7 +21,8 @@
 # Usage: scripts/copy-host-guard.sh vagrant <vagrant's arguments> | watch | running
 # Env:   COPY_HOST_RESERVE_MB (2048), COPY_HOST_TRIP_MB (2048), COPY_HOST_PSI_FULL (25: % of 10 s), COPY_HOST_POLL (5 s),
 #        COPY_HOST_GRACE (1800 s); tests: COPY_VAGRANTFILE, COPY_HOST_MEMINFO, COPY_HOST_PSI, COPY_HOST_UPTIME,
-#        COPY_HOST_DIR, COPY_HOST_VIRSH (a stub's path: a test's watcher whose stub is gone never reaches libvirt)
+#        COPY_HOST_DIR, COPY_HOST_VIRSH (a stub's path: a test's watcher whose stub is gone never reaches libvirt),
+#        COPY_HOST_LOOP_DELAY (s: a watcher slow to start, as on a loaded host)
 set -euo pipefail
 export LC_ALL=C  # the settings' checks in ASCII ranges
 ops=$(cd "$(dirname "$0")/.." && pwd)
@@ -47,10 +49,15 @@ prefix="$(basename "$(dirname "$vagrantfile")")_"
 virsh_bin=${COPY_HOST_VIRSH:-virsh}
 virsh_() { timeout 30 "$virsh_bin" -c qemu:///system "$@"; }  # a hung libvirt never stalls the guard
 
-machines() {  # "<machine> <MB>" for each VM the Vagrantfile defines: its define's name, the v.memory inside it
+machines() {  # "<machine> <MB>" for each VM the Vagrantfile defines: its define's name, the v.memory inside it - as
+  # written, or `Integer(ENV.fetch("VAR", "<MB>"))`: the variable as this process has it (vagrant's own environment:
+  # the Vagrantfile reads the same), else its default; a value that is no number of MB is no v.memory (refused below)
   awk '/^[[:space:]]*#/ { next }
        match($0, /config\.vm\.define "[^"]+"/) { split(substr($0, RSTART, RLENGTH), q, "\""); m = q[2] }
-       m != "" && match($0, /v\.memory = [0-9]+/) { split(substr($0, RSTART, RLENGTH), w, " = "); print m, w[2]; m = "" }' \
+       m != "" && match($0, /v\.memory = [0-9]+/) { split(substr($0, RSTART, RLENGTH), w, " = "); print m, w[2]; m = ""; next }
+       m != "" && match($0, /v\.memory = Integer\(ENV\.fetch\("[A-Z_]+", "[0-9]+"\)\)/) {
+         split(substr($0, RSTART, RLENGTH), q, "\""); v = (q[2] in ENVIRON) ? ENVIRON[q[2]] : q[4]
+         if (v ~ /^[0-9]+$/) print m, v; m = "" }' \
     "$vagrantfile"
 }
 defines() { grep -cE '^[^#]*config\.vm\.define "' "$vagrantfile" || true; }
@@ -136,10 +143,13 @@ case "${1:-}" in
     env -i PATH="$PATH" HOME="$HOME" COPY_VAGRANTFILE="$vagrantfile" COPY_HOST_MEMINFO="$meminfo" COPY_HOST_PSI="$psi" \
       COPY_HOST_UPTIME="$uptime" COPY_HOST_DIR="$dir" COPY_HOST_RESERVE_MB="$reserve_mb" COPY_HOST_TRIP_MB="$trip_mb" \
       COPY_HOST_PSI_FULL="$psi_full" COPY_HOST_POLL="$poll" COPY_HOST_GRACE="$grace" COPY_HOST_VIRSH="$virsh_bin" \
-      setsid "$0" _loop 8>&- > /dev/null 2>> "$dir/host-guard.log" < /dev/null &
+      COPY_HOST_LOOP_DELAY="${COPY_HOST_LOOP_DELAY:-0}" setsid "$0" _loop 8>&- > /dev/null 2>> "$dir/host-guard.log" < /dev/null &
     child=$!
-    # the lock held until the watcher holds its own: no second caller starts another meanwhile
-    for _ in $(seq 100); do
+    # the lock held until the watcher holds its own: no second caller starts another meanwhile. Bounded by the clock (30
+    # s), not by tries: a host under load (a copy's build) started it after 5 s of tries - "did not start", and the next
+    # caller started a second one that found it running
+    end=$((SECONDS + 30))
+    while [ "$SECONDS" -lt "$end" ]; do
       flock -n "$dir/host-guard.alive" true || { echo "the host guard watches (pid $child): the biggest running VM powered off under ${trip_mb} MB available or over ${psi_full}% memory stall, two polls ${poll} s apart"; exit 0; }
       kill -0 "$child" 2> /dev/null || break
       sleep 0.05
@@ -149,6 +159,7 @@ case "${1:-}" in
     ;;
   _loop)
     set +e  # a watcher never dies on a failed command: each one checked where it matters
+    sleep "${COPY_HOST_LOOP_DELAY:-0}"  # the harness's slow start (a loaded host); 0 otherwise
     exec 7> "$dir/host-guard.alive"
     flock -n 7 || exit 0  # another watcher holds it
     echo $$ > "$dir/host-guard.pid"

@@ -1,0 +1,217 @@
+---
+# upgrade-consul.yml on the Vagrant copy's three Consul servers (pi1, pi2, ten), checked from outside the playbook:
+#   set back   every server to 1.20.5 (this test's own download, its sha256 from HashiCorp's SHA256SUMS), one at a time,
+#              each a healthy voter again before the next; the binaries and snapshots earlier runs kept removed; a key
+#              written
+#   refused    pi2's agent stopped: the run is refused (three voters needed) and nothing restarted; pi2 started again
+#   sampled    every 0.5 s from pi1, the raft's leader (/v1/status/leader) for the whole run
+#   after      every server on setup-consul.yml's consul_version; the key read back; the samples never without a leader
+#              for more than 15 s; each server kept 1.20.5's binary; pi1's snapshot this run's, taken before any restart;
+#              Vault answering on both Pis
+#   again      nothing to do (no restart); a downgrade refused
+# Vagrant only. Usage: task test:consul-upgrade
+- name: Vagrant VMs only
+  ansible.builtin.import_playbook: vagrant-only-play.yml
+
+- name: Consul set back to 1.20.5, a key written
+  hosts: pi1,pi2,target
+  become: true
+  gather_facts: true
+  gather_subset: ['!all', '!min', 'architecture']
+  serial: 1
+  vars:
+    old: "1.20.5"
+    old_sha256:
+      arm64: e6bf36bc8ae110c2a2594e7713ed7bd7828851dc869e35d042a7c36620bbbbd4
+      amd64: 75132816072b3c7da86f04153fc58fcfcf39abadee5279b3f72bec3cce01a16b
+  tasks:
+    - name: Its architecture
+      ansible.builtin.set_fact:
+        _arch: "{{ 'arm64' if ansible_architecture == 'aarch64' else 'amd64' }}"
+
+    - name: 1.20.5's release, checked
+      ansible.builtin.get_url:
+        url: "https://releases.hashicorp.com/consul/{{ old }}/consul_{{ old }}_linux_{{ _arch }}.zip"
+        dest: "/usr/local/lib/consul_{{ old }}_linux_{{ _arch }}.zip"
+        checksum: "sha256:{{ old_sha256[_arch] }}"
+        mode: '0644'
+
+    - name: The kept binaries and snapshots of earlier runs removed, then this server on 1.20.5 - a healthy voter again
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          rm -f /usr/local/bin/consul-[0-9]*
+          rm -rf /var/backups/consul-upgrade
+          d=$(mktemp -d); trap 'rm -rf "$d"' EXIT
+          python3 -c 'import sys, zipfile; zipfile.ZipFile(sys.argv[1]).extract("consul", sys.argv[2])' \
+            /usr/local/lib/consul_{{ old }}_linux_{{ _arch }}.zip "$d"
+          if [ "$(/usr/local/bin/consul version | head -1)" != "Consul v{{ old }}" ]; then
+            systemctl stop consul
+            install -m 0755 "$d/consul" /usr/local/bin/consul
+            systemctl start consul
+          fi
+          end=$(( $(cut -d. -f1 /proc/uptime) + 300 ))
+          for _ in $(seq 150); do
+            h=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8500/v1/operator/autopilot/health || true)
+            [ "$h" = 200 ] && consul version | head -1 | grep -qx "Consul v{{ old }}" && exit 0
+            [ "$(cut -d. -f1 /proc/uptime)" -lt "$end" ] || break
+            sleep 2
+          done
+          echo "{{ inventory_hostname }}: not a healthy voter on {{ old }} 300 s after its restart"; exit 1
+      changed_when: true
+
+- name: A key written, pi2 stopped - the run refused, nothing restarted
+  hosts: pi1
+  become: true
+  gather_facts: false
+  tasks:
+    - name: The key
+      ansible.builtin.command: consul kv put upgrade-test/marker "{{ lookup('ansible.builtin.pipe', 'date +%s') }}"
+      changed_when: true
+
+    - name: The key's value
+      ansible.builtin.command: consul kv get upgrade-test/marker
+      register: _marker
+      changed_when: false
+
+    - name: Pi2's agent stopped
+      ansible.builtin.systemd:
+        name: consul
+        state: stopped
+      delegate_to: pi2
+
+    - name: The upgrade with a server down
+      ansible.builtin.command:
+        chdir: "{{ playbook_dir }}/../../deploy/ansible"
+        argv: [venv/bin/ansible-playbook, -i, inventory/vagrant.yml, playbooks/upgrade-consul.yml]
+      delegate_to: localhost
+      become: false
+      register: _refused
+      changed_when: false
+      failed_when: _refused.rc == 0 or _refused.stdout is not search('REFUSED')
+
+    - name: Pi2's agent started
+      ansible.builtin.systemd:
+        name: consul
+        state: started
+      delegate_to: pi2
+
+    - name: Autopilot healthy again
+      ansible.builtin.uri:
+        url: http://127.0.0.1:8500/v1/operator/autopilot/health
+        return_content: true
+        status_code: [200, 429, 500]
+      register: _again
+      retries: 60
+      delay: 5
+      until: _again.status == 200
+
+- name: The upgrade, sampled
+  hosts: pi1
+  become: true
+  gather_facts: false
+  tasks:
+    - name: The sampler - the raft's leader every 0.5 s, from pi1, until stopped
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          rm -f /tmp/consul-leader-samples
+          nohup bash -c 'while [ ! -e /tmp/consul-sampler-stop ]; do
+            printf "%s %s\n" "$(date +%s.%N)" "$(curl -s -m 1 http://127.0.0.1:8500/v1/status/leader)" >> /tmp/consul-leader-samples
+            sleep 0.5; done' > /dev/null 2>&1 &
+          rm -f /tmp/consul-sampler-stop
+      changed_when: true
+
+    - name: The run, as production's task runs it
+      ansible.builtin.command:
+        chdir: "{{ playbook_dir }}/../../deploy/ansible"
+        argv: [venv/bin/ansible-playbook, -i, inventory/vagrant.yml, playbooks/upgrade-consul.yml]
+      delegate_to: localhost
+      become: false
+      register: _run
+      changed_when: true
+
+    - name: The sampler stopped
+      ansible.builtin.shell: touch /tmp/consul-sampler-stop; sleep 1; cat /tmp/consul-leader-samples
+      register: _samples
+      changed_when: false
+
+    - name: Never without a leader for more than 15 s
+      ansible.builtin.shell:
+        executable: /bin/bash
+        stdin: "{{ _samples.stdout }}"
+        cmd: |
+          awk 'NF < 2 || $2 == "\"\"" { if (!s) s = $1; next } { if (s && $1 - s > g) g = $1 - s; s = 0 } END { printf "%.1f\n", g }'
+      register: _gap
+      changed_when: false
+      failed_when: (_gap.stdout | float) > 15
+
+- name: After - every server on the version, the key back, 1.20.5 kept, this run's snapshot; again; a downgrade refused
+  hosts: pi1,pi2,target
+  become: true
+  gather_facts: false
+  vars:
+    target: "{{ ((lookup('ansible.builtin.file', playbook_dir ~ '/../../deploy/ansible/playbooks/setup-consul.yml') | from_yaml)[0].vars).consul_version }}"
+    old_sha256:
+      arm64: e6bf36bc8ae110c2a2594e7713ed7bd7828851dc869e35d042a7c36620bbbbd4
+      amd64: 75132816072b3c7da86f04153fc58fcfcf39abadee5279b3f72bec3cce01a16b
+  tasks:
+    - name: On the version
+      ansible.builtin.command: /usr/local/bin/consul version
+      register: _v
+      changed_when: false
+      failed_when: _v.stdout_lines[0] != 'Consul v' ~ target
+
+    - name: 1.20.5's binary kept
+      ansible.builtin.stat:
+        path: /usr/local/bin/consul-1.20.5
+      register: _kept
+      failed_when: not _kept.stat.exists
+
+    - name: The key back, pi1's snapshot this run's
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          consul kv get upgrade-test/marker
+          ls /var/backups/consul-upgrade/consul-*-1.20.5.snap | wc -l
+      register: _after
+      changed_when: false
+      failed_when: _after.stdout_lines != [hostvars['pi1']['_marker'].stdout, '1']
+      when: inventory_hostname == 'pi1'
+
+    - name: Again - nothing to do, nothing restarted
+      ansible.builtin.command:
+        chdir: "{{ playbook_dir }}/../../deploy/ansible"
+        argv: [venv/bin/ansible-playbook, -i, inventory/vagrant.yml, playbooks/upgrade-consul.yml]
+      delegate_to: localhost
+      become: false
+      run_once: true
+      register: _again_run
+      changed_when: false
+      failed_when: _again_run.rc != 0 or _again_run.stdout is not search('Nothing to do')
+
+    - name: A downgrade refused
+      ansible.builtin.command:
+        chdir: "{{ playbook_dir }}/../../deploy/ansible"
+        argv:
+          - venv/bin/ansible-playbook
+          - -i
+          - inventory/vagrant.yml
+          - playbooks/upgrade-consul.yml
+          - -e
+          - consul_version=1.20.5
+          - -e
+          - '{"consul_checksums": {"arm64": "{{ old_sha256.arm64 }}", "amd64": "{{ old_sha256.amd64 }}"}}'
+      delegate_to: localhost
+      become: false
+      run_once: true
+      register: _down
+      changed_when: false
+      failed_when: _down.rc == 0 or _down.stdout is not search('REFUSED.*newer than 1.20.5')
+
+    - name: Upgraded and checked
+      ansible.builtin.debug:
+        msg: "CONSUL UPGRADE OK: 1.20.5 -> {{ target }} on pi1, pi2, ten; the longest leaderless stretch {{ hostvars['pi1']['_gap'].stdout }} s"
+      run_once: true

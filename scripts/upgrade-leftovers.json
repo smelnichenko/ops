@@ -1,0 +1,16 @@
+{
+  "scylla-operator": [
+    {
+      "release": "scylla-operator v1.23.0",
+      "source": "https://operator.docs.scylladb.com/v1.23/upgrade/upgrade-operator.html",
+      "why": "the experimental ScyllaDBCluster, RemoteKubernetesCluster and RemoteOwner APIs dropped: the chart ships neither their CRDs nor the remote controller's ClusterRoles, and the guide removes them by hand after the upgrade",
+      "objects": [
+        {"kind": "CustomResourceDefinition", "name": "scylladbclusters.scylla.scylladb.com"},
+        {"kind": "CustomResourceDefinition", "name": "remotekubernetesclusters.scylla.scylladb.com"},
+        {"kind": "CustomResourceDefinition", "name": "remoteowners.scylla.scylladb.com"},
+        {"kind": "ClusterRole", "name": "scylladb:controller:operator-remote"},
+        {"kind": "ClusterRole", "name": "scylladb:controller:aggregate-to-operator-remote"}
+      ]
+    }
+  ]
+}

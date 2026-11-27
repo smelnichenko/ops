@@ -252,7 +252,7 @@
           --partitions 1 --replication-factor 1 > /dev/null
         seq 1 {{ messages }} | sed 's/^/m-/' | {{ kubectl }} exec -i {{ _broker.stdout }} -c kafka -- \
           /opt/kafka/bin/kafka-console-producer.sh --bootstrap-server localhost:9092 --topic {{ topic }} \
-          --producer-property acks=all > /dev/null
+          --command-property acks=all > /dev/null
         echo created
       args:
         executable: /bin/bash
@@ -295,7 +295,7 @@
             < /dev/null | awk -F: '$2 == 0 {print $3}')
           [ -n "$end" ]
           echo "run-{{ run_id }}" | $B /opt/kafka/bin/kafka-console-producer.sh --bootstrap-server "$bs" \
-            --topic {{ topic }}-live --producer-property acks=all > /dev/null
+            --topic {{ topic }}-live --command-property acks=all > /dev/null
           # the console consumer exits non-zero when its timeout ends: what it printed decides
           got=$($B /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server "$bs" --topic {{ topic }}-live \
             --partition 0 --offset "$end" --max-messages 1 --timeout-ms 30000 2> /dev/null < /dev/null || true)

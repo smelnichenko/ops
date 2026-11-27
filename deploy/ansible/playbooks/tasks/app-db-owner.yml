@@ -1,0 +1,69 @@
+---
+# Forgejo's and Keycloak's own roles owning their databases (files/app-db-owner.sql): made where missing, their passwords
+# set, everything in each database given to its role - the services log in as themselves, never as the superuser whose
+# password also opens every other database (found 2026-11-15: both logged in as postgres). Run again: nothing to give,
+# the passwords set again. On the host whose Postgres takes writes (the Patroni leader; a first install's own), as
+# postgres over its socket. The password goes in on stdin and is made a SCRAM verifier here (setup-pgbouncer.yml's way):
+# psql reads the verifier from its environment (\getenv) - no password on a command line, in the SQL, or in the server's
+# log when a statement fails. Each ALTER waits 3 s for its table at most (lock_timeout: one behind the nightly dump or a
+# long query would hold every query on that table behind it, on both Pis) - the run is tried again, the SQL going on
+# where it stopped. app_db_roles: the roles and their passwords (the copy's probe gives its own; Forgejo's and
+# Keycloak's by default); app_db_owner_sql: the SQL's path (the playbook's files/ by default).
+- name: The roles this run gives their databases
+  ansible.builtin.set_fact:
+    _app_db_roles: >-
+      {{ app_db_roles | default([{'app': 'forgejo', 'pw': forgejo_db_password | default('')},
+                                 {'app': 'keycloak', 'pw': keycloak_db_password | default('')}]) }}
+  no_log: true
+
+- name: The roles' passwords are there
+  ansible.builtin.assert:
+    that: _app_db_roles | rejectattr('pw', 'truthy') | list | length == 0
+    fail_msg: "REFUSED: a role's password empty (FORGEJO_DB_ROLE_PASSWORD, KEYCLOAK_DB_ROLE_PASSWORD in .env) - nothing written"
+    quiet: true
+  no_log: true
+
+- name: Forgejo's and Keycloak's roles own their databases
+  ansible.builtin.shell:
+    executable: /bin/bash
+    cmd: |
+      set -euo pipefail
+      APP_PW_VERIFIER=$(python3 -c 'import base64, hashlib, hmac, os, sys
+      password = sys.stdin.readline().rstrip("\n").encode()
+      salt = os.urandom(16)
+      salted = hashlib.pbkdf2_hmac("sha256", password, salt, 4096)
+      stored = hashlib.sha256(hmac.new(salted, b"Client Key", hashlib.sha256).digest()).digest()
+      server = hmac.new(salted, b"Server Key", hashlib.sha256).digest()
+      b64 = lambda x: base64.b64encode(x).decode()
+      print("SCRAM-SHA-256$4096:" + b64(salt) + "$" + b64(stored) + ":" + b64(server))')
+      export APP_PW_VERIFIER
+      psql -X -q -v ON_ERROR_STOP=1 -v app='{{ item.app }}' -d postgres <<'APPSQL'
+      \getenv pw APP_PW_VERIFIER
+      {{ lookup('ansible.builtin.file', app_db_owner_sql | default(playbook_dir ~ '/files/app-db-owner.sql')) }}
+      APPSQL
+    stdin: "{{ item.pw }}"
+  become: true
+  become_user: postgres
+  environment:
+    PGOPTIONS: "-c lock_timeout=3s"
+  loop: "{{ _app_db_roles }}"
+  loop_control:
+    label: "{{ item.app }}"
+  register: _app_db_owner
+  until: _app_db_owner.rc == 0
+  retries: 10
+  delay: 5
+  changed_when: true
+  failed_when: false
+  no_log: true  # the password went in on stdin - psql's own error below, without it
+
+- name: Each role owns its database (psql's error otherwise)
+  ansible.builtin.assert:
+    that: _app_db_owner.results | rejectattr('rc', 'equalto', 0) | list | length == 0
+    fail_msg: >-
+      a role not given its database -
+      {% for r in _app_db_owner.results if r.rc != 0 %}{{ r.item.app }}:
+      {{ ((r.stdout_lines | default([])) + (r.stderr_lines | default([])))
+         | select('search', 'ERROR|FATAL|NOT ALL OWNED') | join(' / ') | replace(r.item.pw, '<the password>') }}
+      {% endfor %}
+    quiet: true

@@ -1,0 +1,11 @@
+---
+# The Pi restart lock's helper (files/pi-restart-locked.sh): every restart of a service both Pis run (Forgejo, HAProxy,
+# Keycloak) holds Consul's lock pi-restart through it - one at a time across both Pis and every Ansible run. Imported
+# by each playbook with such a restart (setup-pi-services.yml, setup-patroni.yml) before it: one run alone - setup-patroni
+# first - found no helper and its restart failed after the config was already written. Consul is installed before them.
+- name: The Pi restart lock's helper
+  tags: [always]
+  ansible.builtin.copy:
+    dest: /usr/local/bin/pi-restart-locked
+    mode: '0755'
+    content: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/files/pi-restart-locked.sh') }}"

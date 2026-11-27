@@ -1,0 +1,21 @@
+---
+# A Kafka dump unpinned in the Pi store (tasks/kafka-unpin.yml): a restore pins its source and every complete dump newer
+# than it; once Kafka is whole again and its services run on it, each goes back to the prune. Its PINNED said (when and
+# why); a dump not pinned is said, nothing changed; one not in the store refuses.
+#
+# Usage: task deploy:kafka-backup-unpin -- -e kafka_dump=<UTC timestamp, as the store names it>
+- name: A Kafka dump unpinned
+  hosts: target
+  become: true
+  gather_facts: false
+  vars:
+    kubeconfig: /etc/kubernetes/admin.conf
+    kubectl: "kubectl --kubeconfig {{ kubeconfig }}"
+  tasks:
+    - name: Unpinned
+      ansible.builtin.include_tasks: tasks/kafka-unpin.yml
+      when: not ansible_check_mode
+
+    - name: Done
+      ansible.builtin.debug:
+        msg: "KAFKA BACKUP UNPIN: {{ kafka_store_said | default('(a preview - nothing changed)') }}"

@@ -1,0 +1,16 @@
+---
+# The image the copy's checks run a shell in (sh, echo, sync, cat): the etcd backup's upload, read from the cluster - an
+# image production runs, so the copy holds it. A pin in a check stayed behind production's when a unit moved it (Renovate
+# reads nothing under tests/: rclone in restore-check, busybox in storage-check, 2026-11-17). Needs: kubeconfig.
+# Sets: shell_image.
+- name: The shell image - the etcd backup's upload, as the cluster runs it
+  ansible.builtin.command:
+    argv: [kubectl, --kubeconfig, "{{ kubeconfig }}", -n, kube-system, get, cronjob, etcd-backup, -o,
+           'jsonpath={.spec.jobTemplate.spec.template.spec.containers[?(@.name=="upload")].image}']
+  register: _shell_image
+  changed_when: false
+  failed_when: _shell_image.rc != 0 or _shell_image.stdout is not match('^[a-z0-9][a-z0-9._/-]*:[A-Za-z0-9][A-Za-z0-9._-]*(@sha256:[a-f0-9]{64})?$')
+
+- name: The shell image as a fact
+  ansible.builtin.set_fact:
+    shell_image: "{{ _shell_image.stdout }}"

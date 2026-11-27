@@ -1,0 +1,250 @@
+---
+# The way back from a ScyllaDB release line - a release line cannot be downgraded: the cluster at the newer version
+# thrown away, a new one built at the version git now asks for, its tables filled from the backup taken before the
+# upgrade. Its schema comes as every fresh environment's does: Argo recreates the ScyllaCluster it no longer finds
+# (selfHeal), a sync started here runs the app's hooks - the chart's schema Job creates the keyspaces and tables (selfHeal
+# alone runs none) -; then Scylla Manager restores the tables' rows (tasks/scylla-restore.yml, sctool restore
+# --restore-tables) from the snapshot of the cluster replaced.
+# Used by playbooks/scylla-way-back.yml (production, by hand, after the release line's unit is reverted in infra and
+# Argo has synced the revert) and its rehearsal on the copy (tests/ansible/copy/scylla-way-back-check.yml).
+#
+# Nothing is deleted until every check before it passed: the confirmation, the version asked for already the live
+# ScyllaCluster's (git's revert synced), the snapshot one Scylla Manager holds for this cluster with every keyspace asked
+# for. Writes after that snapshot are lost - that is what going back means.
+#
+# Needs: scylla_namespace, scylla_cluster, way_back_version (the version rebuilt at), way_back_snapshot (sm_<UTC>),
+#        way_back_keyspaces (sctool's list - the chart's keyspaces), way_back_confirm (= scylla_cluster), argo_app,
+#        kubectl (kubectl with its kubeconfig), manager (the sctool command prefix), restore_location (s3:<bucket>)
+# Sets:  restore_task (the restore's task), way_back_old_id / way_back_new_id (Scylla Manager's ids, before and after),
+#        way_back_clients (the deployments restarted - the cluster's clients)
+- name: The way back asked for exactly - the cluster confirmed by name, a version, a snapshot, keyspaces (no system one)
+  ansible.builtin.assert:
+    that:
+      - way_back_confirm | default('') == scylla_cluster
+      - way_back_version is match('^[0-9]{4}\.[0-9]+\.[0-9]+$')
+      - way_back_snapshot is match('^sm_[0-9]{14}UTC$')
+      - way_back_keyspaces | length > 0
+      - way_back_keyspaces.split(',') | select('match', '^system') | list | length == 0
+    fail_msg: >-
+      REFUSED: -e confirm={{ scylla_cluster }} (this cluster's data is thrown away) -e version=<the version git now asks
+      for> -e snapshot=sm_<14 digits>UTC (taken before the upgrade) -e keyspaces=<keyspace[,...]> (no system keyspace)
+    quiet: true
+
+- name: The live ScyllaCluster - its version, its uid
+  ansible.builtin.command: >-
+    {{ kubectl }} -n {{ scylla_namespace }} get scyllaclusters.scylla.scylladb.com {{ scylla_cluster }}
+    -o 'jsonpath={.spec.version}{" "}{.metadata.uid}'
+  register: _wb_live
+  changed_when: false
+  check_mode: false
+
+- name: Its version already the one asked for - git's revert synced (never thrown away to come back at the newer one)
+  ansible.builtin.assert:
+    that: _wb_live.stdout.split(' ')[0] == way_back_version
+    fail_msg: >-
+      REFUSED: {{ scylla_cluster }} asks for {{ _wb_live.stdout.split(' ')[0] }}, not {{ way_back_version }} - revert the
+      release line's unit in infra first and let Argo sync it; nothing deleted
+    quiet: true
+
+- name: Argo's app synced to git (the revert applied, nothing else pending in it)
+  ansible.builtin.command: "{{ kubectl }} -n argocd get applications.argoproj.io {{ argo_app }} -o jsonpath={.status.sync.status}"
+  register: _wb_argo
+  changed_when: false
+  check_mode: false
+  failed_when: _wb_argo.stdout != 'Synced'
+
+- name: Scylla Manager's id for the cluster now
+  ansible.builtin.command: "{{ manager }} sctool cluster list"
+  register: _wb_clusters
+  changed_when: false
+  check_mode: false
+
+- name: The id read (one cluster of that name)
+  ansible.builtin.set_fact:
+    way_back_old_id: "{{ _wb_clusters.stdout | regex_findall('([0-9a-f-]{36}) \\| ' ~ (scylla_namespace ~ '/' ~ scylla_cluster) ~ ' ') }}"
+
+- name: Exactly one registration of it
+  ansible.builtin.assert:
+    that: way_back_old_id | length == 1
+    fail_msg: "REFUSED: Scylla Manager lists {{ way_back_old_id | length }} clusters named {{ scylla_namespace }}/{{ scylla_cluster }}"
+    quiet: true
+
+- name: The snapshot one Scylla Manager holds for this cluster
+  ansible.builtin.command: "{{ manager }} sctool backup list -c {{ way_back_old_id[0] }} -L {{ restore_location }}"
+  register: _wb_backups
+  changed_when: false
+  check_mode: false
+
+- name: The snapshot there, with every keyspace asked for
+  ansible.builtin.assert:
+    that:
+      - way_back_snapshot in _wb_backups.stdout
+      - way_back_keyspaces.split(',') | reject('in', _wb_backups.stdout | regex_findall('(?m)^\s+- ([a-z0-9_]+) \(')) | list | length == 0
+    fail_msg: >-
+      REFUSED: {{ way_back_snapshot }} or one of {{ way_back_keyspaces }} not in {{ scylla_cluster }}'s backups
+      ({{ restore_location }}) - nothing deleted
+    quiet: true
+
+- name: The data volumes and the schema Job now - what the rebuild must replace
+  ansible.builtin.command: >-
+    {{ kubectl }} -n {{ scylla_namespace }} get pvc,job -l scylla/cluster={{ scylla_cluster }}
+    -o 'jsonpath={range .items[*]}{.kind}{" "}{.metadata.name}{" "}{.metadata.uid}{"\n"}{end}'
+  register: _wb_before
+  changed_when: false
+  check_mode: false
+
+- name: The schema Job's uid now (the chart's hook - its next run is the rebuilt cluster's schema)
+  ansible.builtin.command: >-
+    {{ kubectl }} -n {{ scylla_namespace }} get job {{ scylla_cluster }}-schema --ignore-not-found -o jsonpath={.metadata.uid}
+  register: _wb_job_before
+  changed_when: false
+  check_mode: false
+
+- name: Thrown away - the data volumes first (released once their pod is gone, so the rebuilt pod never finds them),
+    then the ScyllaCluster with everything it owns
+  ansible.builtin.shell: |
+    set -euo pipefail
+    {{ kubectl }} -n {{ scylla_namespace }} delete pvc -l scylla/cluster={{ scylla_cluster }} --wait=false
+    {{ kubectl }} -n {{ scylla_namespace }} delete scyllaclusters.scylla.scylladb.com {{ scylla_cluster }} \
+      --cascade=foreground --wait=true --timeout=600s
+  args:
+    executable: /bin/bash
+  changed_when: true
+  when: not ansible_check_mode
+
+- name: The old data volumes gone
+  ansible.builtin.command: >-
+    {{ kubectl }} -n {{ scylla_namespace }} get pvc -l scylla/cluster={{ scylla_cluster }}
+    -o 'jsonpath={range .items[*]}{.metadata.uid}{"\n"}{end}'
+  register: _wb_pvcs
+  changed_when: false
+  retries: 60
+  delay: 10
+  until: _wb_pvcs.stdout_lines | select('in', _wb_before.stdout) | list | length == 0
+  when: not ansible_check_mode
+
+- name: Argo recreates the ScyllaCluster (selfHeal) - a new one, at the version asked for, every member ready
+  ansible.builtin.shell: |
+    set -euo pipefail
+    {{ kubectl }} -n {{ scylla_namespace }} get scyllaclusters.scylla.scylladb.com {{ scylla_cluster }} -o json | python3 -c '
+    import json, sys
+    c = json.load(sys.stdin)
+    s = c.get("status", {})
+    conds = {x["type"]: x["status"] for x in s.get("conditions", [])}
+    racks = list(s.get("racks", {}).values())
+    print(c["metadata"]["uid"] != sys.argv[1] and c["spec"]["version"] == sys.argv[2]
+          and s.get("observedGeneration") == c["metadata"]["generation"] and conds.get("Available") == "True"
+          and bool(racks) and all(r.get("version") == sys.argv[2] and r.get("members") == r.get("readyMembers") for r in racks))
+    ' {{ _wb_live.stdout.split(' ')[1] }} {{ way_back_version }}
+  args:
+    executable: /bin/bash
+  register: _wb_new
+  changed_when: false
+  failed_when: false
+  retries: 90
+  delay: 10
+  until: _wb_new.stdout == 'True'
+  when: not ansible_check_mode
+
+- name: Rebuilt - or said why not
+  ansible.builtin.assert:
+    that: _wb_new.stdout == 'True'
+    fail_msg: >-
+      NOT REBUILT after 15 min: {{ scylla_cluster }} {{ _wb_new.stdout or _wb_new.stderr }} - Argo recreates it from git
+      (kubectl -n argocd get application {{ argo_app }}); the snapshot {{ way_back_snapshot }} is untouched
+    quiet: true
+  when: not ansible_check_mode
+
+- name: Scylla Manager registers the new cluster (a new id under the same name)
+  ansible.builtin.command: "{{ manager }} sctool cluster list"
+  register: _wb_clusters_after
+  changed_when: false
+  retries: 60
+  delay: 10
+  until: >-
+    _wb_clusters_after.stdout | regex_findall('([0-9a-f-]{36}) \| ' ~ (scylla_namespace ~ '/' ~ scylla_cluster) ~ ' ')
+    | reject('in', way_back_old_id) | list | length == 1
+  when: not ansible_check_mode
+
+- name: The new id
+  ansible.builtin.set_fact:
+    way_back_new_id: >-
+      {{ _wb_clusters_after.stdout | regex_findall('([0-9a-f-]{36}) \| ' ~ (scylla_namespace ~ '/' ~ scylla_cluster) ~ ' ')
+         | reject('in', way_back_old_id) | first }}
+  when: not ansible_check_mode
+
+- name: No Argo operation under way on the app (the rebuild's own selfHeal sync finished)
+  ansible.builtin.command: "{{ kubectl }} -n argocd get applications.argoproj.io {{ argo_app }} -o 'jsonpath={.operation.sync}'"
+  register: _wb_op
+  changed_when: false
+  retries: 60
+  delay: 10
+  until: _wb_op.stdout | length == 0
+  when: not ansible_check_mode
+
+# selfHeal recreates what is missing but runs no hook: the schema Job stayed the old one, the rebuilt cluster empty (the
+# copy, 2026-11-22) - a sync started here runs the app's hooks, the chart's schema Job among them (prune off, as the
+# app's own policy; its sync options copied from it)
+- name: Argo syncs the app - its hooks with it, the chart's schema Job creating the rebuilt cluster's schema
+  ansible.builtin.command: >-
+    {{ kubectl }} -n argocd patch applications.argoproj.io {{ argo_app }} --type merge -p
+    '{"operation": {"initiatedBy": {"username": "scylla-way-back"}, "info": [{"name": "Reason", "value": "the rebuilt
+    ScyllaDB cluster schema - the schema Job of the chart"}], "sync": {"prune": false, "syncOptions": ["CreateNamespace=true",
+    "RespectIgnoreDifferences=true"]}}}'
+  changed_when: true
+  when: not ansible_check_mode
+
+- name: The schema created - the chart's schema Job run again by that sync and succeeded
+  ansible.builtin.command: >-
+    {{ kubectl }} -n {{ scylla_namespace }} get job {{ scylla_cluster }}-schema --ignore-not-found
+    -o 'jsonpath={.metadata.uid}{" "}{.status.succeeded}'
+  register: _wb_job
+  changed_when: false
+  retries: 120
+  delay: 10
+  until: _wb_job.stdout.split(' ') | length == 2 and _wb_job.stdout.split(' ')[0] != _wb_job_before.stdout and _wb_job.stdout.split(' ')[1] == '1'
+  when: not ansible_check_mode
+
+- name: The tables' rows from the snapshot - the cluster replaced's backup, restored into the new one
+  ansible.builtin.include_tasks: scylla-restore.yml
+  vars:
+    restore_cluster: "{{ way_back_new_id if not ansible_check_mode else way_back_old_id[0] }}"
+    restore_source_cluster: "{{ way_back_old_id[0] }}"
+    restore_snapshot: "{{ way_back_snapshot }}"
+    restore_keyspaces: "{{ way_back_keyspaces }}"
+
+# the cluster's clients: their drivers keep the address the replaced cluster's client Service had - chat retried it every
+# minute and never came back (the copy, 2026-11-22: the Service recreated with the cluster, a new ClusterIP). Each
+# deployment of the namespace whose containers name the cluster restarted, its rollout waited for (chat builds its CQL
+# session at start: ready is connected)
+- name: The cluster's clients - the deployments whose containers name it
+  ansible.builtin.shell: |
+    set -euo pipefail
+    {{ kubectl }} -n {{ scylla_namespace }} get deployments -o json | python3 -c '
+    import json, sys
+    for d in json.load(sys.stdin)["items"]:
+        envs = [e for c in d["spec"]["template"]["spec"].get("containers", []) for e in c.get("env") or []]
+        if any(sys.argv[1] in str(e.get("value", "")) for e in envs):
+            print(d["metadata"]["name"])
+    ' {{ scylla_cluster }}
+  args:
+    executable: /bin/bash
+  register: _wb_clients
+  changed_when: false
+  check_mode: false
+
+- name: The clients
+  ansible.builtin.set_fact:
+    way_back_clients: "{{ _wb_clients.stdout_lines }}"
+
+- name: Each restarted
+  ansible.builtin.command: "{{ kubectl }} -n {{ scylla_namespace }} rollout restart deployment/{{ item }}"
+  loop: "{{ way_back_clients }}"
+  changed_when: true
+  when: not ansible_check_mode
+
+- name: Each rollout finished - its new pods ready
+  ansible.builtin.command: "{{ kubectl }} -n {{ scylla_namespace }} rollout status deployment/{{ item }} --timeout=600s"
+  loop: "{{ way_back_clients }}"
+  changed_when: false
+  when: not ansible_check_mode

@@ -100,12 +100,24 @@ job_processes() {  # job_processes <pgid> <array>
   done
 }
 
+# a process's SigIgn and SigCgt masks into the variables named - empty when gone - from ONE read of
+# /proc/<pid>/status. Read line by line, each read call ended by seeking back to the line's end, and a /proc file is
+# generated anew at a seek: a line before them changing length between two reads (State: R (running) / S (sleeping),
+# a loaded host) put the next read mid-line - SigIgn missed, an ignoring process read as not ignoring, its mark lost
+# for good: it lost the TERM, ran to the grace with its handler never run, KILLed (ops CI, 2026-11-25)
+sig_masks() {  # sig_masks <pid> <SigIgn variable> <SigCgt variable>
+  local _sm_all=""
+  read -r -d '' _sm_all 2> /dev/null < "/proc/$1/status"
+  printf -v "$2" '%s' ""
+  printf -v "$3" '%s' ""
+  if [[ $_sm_all =~ SigIgn:[[:space:]]*([0-9a-f]+) ]]; then printf -v "$2" '%s' "${BASH_REMATCH[1]}"; fi
+  if [[ $_sm_all =~ SigCgt:[[:space:]]*([0-9a-f]+) ]]; then printf -v "$3" '%s' "${BASH_REMATCH[1]}"; fi
+}
+
 # the process runs with TERM at its default - neither caught nor ignored
 term_default() {  # term_default <pid>
-  local k v ign="" cgt=""
-  while read -r k v; do
-    case $k in SigIgn:) ign=$v ;; SigCgt:) cgt=$v ;; esac
-  done 2> /dev/null < "/proc/$1/status"
+  local ign cgt
+  sig_masks "$1" ign cgt
   [ -n "$ign" ] && [ -n "$cgt" ] && (( ((16#$ign | 16#$cgt) & 0x4000) == 0 ))
 }
 
@@ -119,10 +131,8 @@ term_default() {  # term_default <pid>
 # its child was never TERMed
 # the process ignores TERM (SigIgn's bit 15)
 term_ignored() {  # term_ignored <pid>
-  local k v ign=""
-  while read -r k v; do
-    [ "$k" = SigIgn: ] && ign=$v
-  done 2> /dev/null < "/proc/$1/status"
+  local ign cgt
+  sig_masks "$1" ign cgt
   [ -n "$ign" ] && (( (16#$ign & 0x4000) != 0 ))
 }
 

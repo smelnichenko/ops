@@ -35,7 +35,11 @@
         that:
           - pg_password | length > 0
           - pg_repl_password | length > 0
-        fail_msg: "REFUSED: an empty credential (KEYCLOAK_DB_PASSWORD or POSTGRES_REPLICATION_PASSWORD in .env)"
+          - forgejo_db_password | default('') | length > 0
+          - keycloak_db_password | default('') | length > 0
+        fail_msg: >-
+          REFUSED: an empty credential (KEYCLOAK_DB_PASSWORD, POSTGRES_REPLICATION_PASSWORD, FORGEJO_DB_ROLE_PASSWORD or
+          KEYCLOAK_DB_ROLE_PASSWORD in .env)
         quiet: true
       no_log: true
 
@@ -422,6 +426,15 @@
 # Must run against the Patroni primary, which is non-deterministic on a
 # fresh cluster — either pi1 or pi2 can win the first election. Discover
 # the leader first, then delegate_to it.
+# the Pi restart lock's helper before this playbook's restarts (Forgejo's when its database port moves, Keycloak's)
+- name: The Pi restart lock's helper
+  hosts: pi1,pi2
+  become: true
+  gather_facts: false
+  tasks:
+    - name: The helper
+      ansible.builtin.import_tasks: tasks/pi-restart-lock.yml
+
 - name: Discover Patroni primary
   hosts: pi1,pi2
   become: true
@@ -551,8 +564,19 @@
           ansible.builtin.fail:
             msg: "creating the forgejo and keycloak databases failed (above)"
 
+    # Forgejo's and Keycloak's own roles owning their databases - before their configs name them (setup-pi-services.yml
+    # refuses a login that cannot use its database) and before a waiting dump's restore: a first install made the roles,
+    # its dump's tables are theirs - a cluster without them failed the restore whole
+    - name: Forgejo's and Keycloak's own roles
+      ansible.builtin.include_tasks: tasks/app-db-owner.yml
+
     - name: Restore the waiting Keycloak dump
       ansible.builtin.include_tasks: tasks/patroni-keycloak-restore.yml
+      when: _keycloak_dump.stat.exists
+
+    # a dump of a database the superuser owned restores its tables as postgres's: given to the role
+    - name: Keycloak's restored tables its role's
+      ansible.builtin.include_tasks: tasks/app-db-owner.yml
       when: _keycloak_dump.stat.exists
 
 # Wait for the replica to finish its pg_basebackup + join the cluster.
@@ -690,10 +714,30 @@
       changed_when: false
       no_log: true
 
+    # this play's wait below gives a fresh install's Forgejo 10 min (its migrations, a crash loop until HAProxy is
+    # stable): the restart waits as long inside the lock; never the last serving copy down (the other Pi checked)
     - name: Restart Forgejo
-      ansible.builtin.systemd:
-        name: forgejo
-        state: restarted
+      vars:
+        peer_ip: "{{ hostvars[groups['pis'] | difference([inventory_hostname]) | first]['ansible_host'] }}"
+      ansible.builtin.shell: |
+        /usr/local/bin/pi-restart-locked forgejo <<'RESTART'
+        set -euo pipefail
+        up() { curl -sf -o /dev/null --max-time 10 "http://$1:3000/api/v1/version"; }
+        if up 127.0.0.1 && ! up {{ peer_ip }}; then
+          echo "REFUSED on {{ inventory_hostname }}: Forgejo serves here but not on the other Pi ({{ peer_ip }})" >&2; exit 1
+        fi
+        systemctl restart forgejo
+        end=$(( $(cut -d. -f1 /proc/uptime) + 600 ))
+        for _ in $(seq 300); do
+          up 127.0.0.1 && exit 0
+          [ "$(cut -d. -f1 /proc/uptime)" -lt "$end" ] || break
+          sleep 2
+        done
+        echo "Forgejo on {{ inventory_hostname }} not serving 600 s after its restart" >&2; exit 1
+        RESTART
+      args:
+        executable: /bin/bash
+      changed_when: true
 
     # recorded once restarted (tasks/forgejo-recorded.yml): setup-pi-services' next run compares with it - unrecorded,
     # it read this restart's new HOST as a restart still pending

@@ -25,16 +25,23 @@ fix = json.load(open(".claude/upgrade-agent/fix.json"))
 review = json.load(open(".claude/upgrade-agent/review.json"))
 WORK = "/home/sm/src/.upgrade-cycle-work"  # scripts/upgrade-cycle.sh's default: the clones
 runner = open("scripts/upgrade-cycle.sh").read()
+grants = lambda rules, cmd: any(r.startswith("Bash(") and fnmatch.fnmatchcase(cmd, r[5:-1]) for r in rules)  # an allow's
 check("the clones' directory the runner uses is the one the settings let Bash read",
       'work=${UPGRADE_WORK:-$(dirname "$ops")/.upgrade-cycle-work}' in runner and WORK == "/home/sm/src/.upgrade-cycle-work", True)
+# writable: the clones alone - git writes its objects there (a commit), and the sandbox protects the work directory's
+# .claude/settings*.json by mounting over them: in a read-only work directory it could not, and every Bash command
+# failed before it started ("bwrap: Can't create file .../.claude/settings.json: Read-only file system" - the fix agent's
+# first run, SHADOW run 6, 2026-11-16, could not run git at all; the real CLI 2.1.308 smoke-tested after: cd, git
+# log/diff/add/commit run, a branch rename, a push and ~/.ssh refused)
 for name, d in (("fix", fix), ("review", review)):
     sb = d.get("sandbox", {})
     check(f"{name}: the Bash sandbox on, failing closed (never unsandboxed, never auto-allowed), the whole home directory "
-          "unreadable to Bash but the clones (every credential, transcript, browser profile, other checkout)",
+          "unreadable to Bash but the clones (every credential, transcript, browser profile, other checkout), writable "
+          "there alone",
           (sb.get("enabled"), sb.get("failIfUnavailable"), sb.get("allowUnsandboxedCommands"), sb.get("autoAllowBashIfSandboxed"),
            sb.get("filesystem", {}).get("denyRead"), sb.get("filesystem", {}).get("allowRead"), sb.get("excludedCommands"),
            sorted(sb.get("filesystem", {}).get("allowWrite", []))),
-          (True, True, False, False, ["~"], [WORK], [], []))
+          (True, True, False, False, ["~"], [WORK], [], [WORK]))
 check("Bash's network none, the fix's and the review's (no command of theirs needs it - the release notes are WebFetch's)",
       (fix["sandbox"]["network"]["allowedDomains"], review["sandbox"]["network"]["allowedDomains"]), ([], []))
 # what every job denies: production, other hosts, the network, the operator's credentials, a branch, a push
@@ -56,7 +63,7 @@ for name, d in (("fix", fix), ("review", review)):
               "kubectl get secret -A", "curl https://evil", "vagrant ssh pi1", "git branch -m main", "git checkout main",
               "cat ~/.git-credentials", "python3 -c x", "python3 -I scripts/renovate-checksums.py --changed --base origin/main",
               "bash -c x", "sh -c x", "env x"]  # (git log --output: the deny list's - git log * matches its form)  # (git diff --no-index: the deny list's, git diff * matches its form)
-    granted = [p for p in probes for r in allow if r.startswith("Bash(") and fnmatch.fnmatchcase(p, r[5:-1])]
+    granted = [p for p in probes if grants(allow, p)]
     check(f"{name}: no allow grants a push (forced, through -C), a deploy, ssh, kubectl, curl, vagrant, a branch, a remote "
           "or config, a credential read, an interpreter of its own or the clone's own checksum script (one the agent "
           "may edit)", granted, [])
@@ -74,8 +81,7 @@ skill = open(".claude/skills/upgrade-fix/SKILL.md").read()
 quoted = set(re.findall(r"`((?:python3|cd|git) [^`]+)`", skill))
 literal = {q for q in quoted if "<" not in q}
 check("the skill's literal commands allowed word for word, or with their arguments (the checksum script, cd ops, git add, git commit)",
-      sorted(q for q in literal if not any(fnmatch.fnmatchcase(q, r[5:-1]) or fnmatch.fnmatchcase(q + " -m a-change", r[5:-1])
-                                           for r in fix["permissions"]["allow"] if r.startswith("Bash("))),
+      sorted(q for q in literal if not (grants(fix["permissions"]["allow"], q) or grants(fix["permissions"]["allow"], q + " -m a-change"))),
       [])
 check("the skill never tells the agent to push or to use git -C (never matched by a wildcard rule)",
       (bool(re.search(r"`git[^`]*push", skill)), bool(re.search(r"`git -C", skill))), (False, False))
@@ -86,6 +92,22 @@ required = re.search(r'REVIEW_PASSES="([^"]+)"', runner).group(1).split()
 check("the review's instructions name every pass the runner requires on its PASSES line, and its two lines",
       ([p for p in required if f"- {p} - " not in instructions], "PASSES: " + ", ".join(required) in instructions,
        "VERDICT: CLEAN" in instructions), ([], True, True))
+# what review.md tells the review holds where the review runs: the files the runner writes beside its clones, the Bash
+# forms review.json allows and the ones it does not (the 2026-11-17 review's reviewers were refused their cd-then-diff
+# and never read two repos' diffs), the fix agent's identity as the runner sets it
+diffs_fn = runner[runner.index("\ndiffs() {"):]
+diffs_fn = diffs_fn[:diffs_fn.index("\n}\n")]
+written = sorted(set(re.findall(r'"\$r(\.[a-z]+)"', diffs_fn)))
+named = sorted(set(re.findall(r"`<repo>(\.[a-z]+)`", instructions)))
+allowed = lambda cmd: grants(review["permissions"]["allow"], cmd)
+agent_name = re.search(r'"GIT_AUTHOR_NAME=([^"]+)"\s+GIT_AUTHOR_EMAIL=(\S+)', runner)
+check("the review's instructions: the files diffs() writes, Bash as review.json allows it (git -C and git grep refused, "
+      "cd/log/diff/show allowed), the fix agent named as the runner sets it",
+      (named == written, written, allowed("git -C infra diff origin/main...HEAD"), allowed("git grep -n x"),
+       all(allowed(c) for c in ("cd infra", "git log --oneline origin/main..HEAD", "git diff origin/main...HEAD", "git show HEAD"))),
+      (True, [".commits", ".diff"], False, False, True))
+check("  the fix agent's commits as review.md names them: the runner's author for them",
+      f"`{agent_name.group(1)} <{agent_name.group(2)}>`" in instructions, True)
 check("the review's reviewers: the runner's list, each an agent definition in ops",
       [n for n in re.search(r'REVIEWERS="([^"]+)"', runner).group(1).split() if not os.path.exists(f".claude/agents/{n}.md")], [])
 sys.exit(1 if fails else 0)

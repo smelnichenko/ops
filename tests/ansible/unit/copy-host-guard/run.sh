@@ -95,6 +95,14 @@ wait_for() {  # wait_for <seconds> <command...>: until it succeeds; 1 when the t
   local end=$((SECONDS + $1)); shift
   until "$@"; do [ $SECONDS -lt $end ] || return 1; sleep 0.05; done
 }
+# the readings the next polls take: the stub takes one a poll (reads the first line, then sed -i 1d) - a queue written
+# over one not yet drained loses its first line to that poll's sed (a trip short of its two low polls: the suite under
+# load, 2026-11-16 - made certain by a pause between the stub's read and its sed), so the last one drains first (the stub
+# writes the file only while it holds a line: empty, nothing races)
+queue() {
+  wait_for 10 test ! -s "$STUB/memq" || { echo "FAIL copy-host-guard: the readings queued before never drained"; fails=$((fails + 1)); }
+  printf '%s\n' "$@" > "$STUB/memq"
+}
 
 # --- vagrant up: the room it needs ---------------------------------------------------------------------------------
 ALL=$((2048 + 2048 + 18432))
@@ -161,6 +169,17 @@ printf 'config.vm.define "a" do |a|\n  # v.memory = 99999\n  v.memory = 1024\nen
 COPY_VAGRANTFILE="$W/odd/Vagrantfile" guard vagrant up; rc=$?
 check "a commented v.memory not read" "$rc $(grep -c '(a 1024 MB) + 0 MB the running ones may still take + 2048 MB kept' <<< "$out")" "0 1"
 stop_watcher
+# the memory a variable sets (VAGRANT_PI_MEMORY, test:nexus's 4 GB Pis): read as the Vagrantfile reads it - its default
+# unset, the variable set; a value that is no number of MB no v.memory (refused, as Vagrant itself would fail)
+printf 'config.vm.define "a" do |a|\n  v.memory = Integer(ENV.fetch("VAGRANT_A_MEMORY", "1024"))\nend\n' > "$W/odd/Vagrantfile"
+COPY_VAGRANTFILE="$W/odd/Vagrantfile" guard vagrant up; rc=$?
+check "a v.memory from a variable: its default when it is unset" "$rc $(grep -c '(a 1024 MB) + 0 MB the running ones may still take' <<< "$out")" "0 1"
+stop_watcher
+VAGRANT_A_MEMORY=3072 COPY_VAGRANTFILE="$W/odd/Vagrantfile" guard vagrant up; rc=$?
+check "  the variable set: its value (a test's bigger VM sized as it starts)" "$rc $(grep -c '(a 3072 MB) + 0 MB the running ones may still take' <<< "$out")" "0 1"
+stop_watcher
+VAGRANT_A_MEMORY=lots COPY_VAGRANTFILE="$W/odd/Vagrantfile" guard vagrant up; rc=$?
+check "  the variable no number: refused (no v.memory to size)" "$rc $(grep -c 'without a v.memory' <<< "$out")" "1 1"
 printf 'config.vm.define "a" do |a|\n  v.memory = 1024\nend\nconfig.vm.define "b" do |b|\nend\n' > "$W/odd/Vagrantfile"
 COPY_VAGRANTFILE="$W/odd/Vagrantfile" guard vagrant up; rc=$?
 check "a VM without a v.memory: refused (it could not be counted nor powered off)" "$rc $(grep -c 'without a v.memory' <<< "$out")" "1 1"
@@ -191,12 +210,12 @@ check "  its start logged" "$(grep -c "watcher $first started" "$COPY_HOST_DIR/h
 check "  its environment: its settings only (its virsh by path), not the caller's (a variable the caller exported absent)" \
   "$(tr '\0' '\n' < "/proc/$first/environ" | grep -c "^COPY_HOST_POLL=0.05\$\|^COPY_HOST_VIRSH=$W/bin/virsh\$") $(tr '\0' '\n' < "/proc/$first/environ" | grep -c '^STUB=')" "2 0"
 # low, high, low, high...: never two low polls running - no power-off
-printf '%s\n' 1000 9000 1000 9000 "9000 90" 9000 "9000 90" 9000 > "$STUB/memq"
+queue 1000 9000 1000 9000 "9000 90" 9000 "9000 90" 9000
 wait_for 10 test ! -s "$STUB/memq"; wait_for 10 polls_ge 10
 check "short of memory on single polls (available or stall), never two running: nothing powered off" \
   "$(grep -c destroy "$STUB/calls") $(cat "$STUB/active" | tr '\n' ' ')" "0 ops_pi1 ops_pi2 ops_kubeadm "
 # two low polls running: the biggest running VM off, once; then enough again
-printf '%s\n' 2047 2047 9000 > "$STUB/memq"
+queue 2047 2047 9000
 wait_for 10 test ! -s "$STUB/memq"
 wait_for 10 destroys_ge 1
 check "under 2048 MB on two polls running: the biggest running VM (kubeadm) powered off, the Pis left" \
@@ -205,14 +224,14 @@ wait_for 15 grep -q 'ops_kubeadm powered off' "$COPY_HOST_DIR/host-guard-tripped
 check "  recorded: the log and the trip, the numbers and the VM named" \
   "$(grep -c '2047 MB available and 0% memory stall on two polls .*: ops_kubeadm powered off' "$COPY_HOST_DIR/host-guard.log") $(grep -c 'ops_kubeadm powered off' "$COPY_HOST_DIR/host-guard-tripped")" "1 1"
 # the memory stall alone (available plenty): over 25% on two polls running - the next biggest off
-printf '%s\n' "9000 30" "9000 26" 9000 > "$STUB/memq"
+queue "9000 30" "9000 26" 9000
 wait_for 10 destroys_ge 2
 wait_for 15 grep -q '26% memory stall' "$COPY_HOST_DIR/host-guard.log"
 check "  the memory stall over 25% on two polls running, memory available: the next running VM off" \
   "$(grep destroy "$STUB/calls" | tail -1 | grep -c 'destroy ops_pi1') $(grep -c '26% memory stall.*ops_pi1 powered off' "$COPY_HOST_DIR/host-guard.log")" "1 1"
 # a power-off that fails: said as such, never "powered off"; the watcher goes on
 touch "$STUB/destroy-fails"
-printf '%s\n' 100 100 9000 > "$STUB/memq"
+queue 100 100 9000
 wait_for 10 destroys_ge 3
 wait_for 15 grep -q 'NOT powered off' "$COPY_HOST_DIR/host-guard.log"
 check "a power-off that fails: logged NOT powered off with virsh's failure, the watcher still on" \
@@ -233,7 +252,7 @@ fresh 9000 ops_pi
 mkdir -p "$W/sub/ops"
 printf 'config.vm.define "pi" do |a|\n  v.memory = 1024\nend\nconfig.vm.define "pi10" do |b|\n  v.memory = 4096\nend\n' > "$W/sub/ops/Vagrantfile"
 COPY_VAGRANTFILE="$W/sub/ops/Vagrantfile" guard watch
-printf '%s\n' 100 100 9000 > "$STUB/memq"
+queue 100 100 9000
 wait_for 10 destroys_ge 1
 check "a trip with machines named pi and pi10, pi alone running: pi powered off (never pi10, not running)" \
   "$(grep destroy "$STUB/calls" | head -1 | awk '{print $NF}')" "ops_pi"
@@ -246,6 +265,17 @@ bash scripts/copy-host-guard.sh watch > "$W/w2.out" 2>&1 & w2=$!
 wait "$w1" "$w2"
 loops=$(for e in /proc/[0-9]*/environ; do { tr '\0' '\n' < "$e"; } 2> /dev/null | grep -qxF "COPY_HOST_DIR=$COPY_HOST_DIR" && grep -q '_loop' "${e%environ}cmdline" 2> /dev/null && echo x; done | wc -l)
 check "two watch calls at once: one watcher, the other says it watches" "$loops $(cat "$W/w1.out" "$W/w2.out" | grep -c 'watches already')" "1 1"
+stop_watcher
+# a watcher slow to start (a loaded host: 6 s): its caller waits for it by the clock - never "did not start" - and the
+# second caller finds it watching, one watcher
+fresh 9000 ops_kubeadm
+COPY_HOST_LOOP_DELAY=6 bash scripts/copy-host-guard.sh watch > "$W/w1.out" 2>&1 & w1=$!
+sleep 1
+bash scripts/copy-host-guard.sh watch > "$W/w2.out" 2>&1 & w2=$!
+wait "$w1"; r1=$?; wait "$w2"
+loops=$(for e in /proc/[0-9]*/environ; do { tr '\0' '\n' < "$e"; } 2> /dev/null | grep -qxF "COPY_HOST_DIR=$COPY_HOST_DIR" && grep -q '_loop' "${e%environ}cmdline" 2> /dev/null && echo x; done | wc -l)
+check "a watcher 6 s slow to start: its caller waited (rc 0, no REFUSED), the other found it, one watcher" \
+  "$r1 $(grep -c REFUSED "$W/w1.out") $(grep -c 'watches already' "$W/w2.out") $loops" "0 0 1 1"
 p=$(watcher)
 read -r st < "/proc/$p/stat"; st=${st##*) }; set -- $st; loop_sid=$4   # after the name: state ppid pgrp session
 read -r st < "/proc/$$/stat"; st=${st##*) }; set -- $st; my_sid=$4
@@ -272,7 +302,9 @@ COPY_HOST_GRACE=10 guard watch; rc=$?
 clock 111; c=$(polls); wait_for 10 polls_ge $((c + 4))
 check "a watch while it is quiet (a vagrant up after a destroy): it says it watches, and the grace starts again" \
   "$rc $(grep -c 'watches already' <<< "$out") $(pid_on "$p" && echo on)" "0 1 on"
-echo ops_kubeadm > "$STUB/active"; clock 130; c=$(polls); wait_for 10 polls_ge $((c + 4))
+# the VMs back seen by the watcher before the clock moves: a poll reading the empty active file, then the moved clock,
+# was a whole grace with no VM - it ended (CI, 2026-11-19: "got '  <pid>', want 'on <pid>'")
+echo ops_kubeadm > "$STUB/active"; c=$(polls); wait_for 10 polls_ge $((c + 2)); clock 130; c=$(polls); wait_for 10 polls_ge $((c + 4))
 check "  the VMs back: still the same watcher, watching" "$(pid_on "$p" && echo on) $(watcher)" "on $p"
 : > "$STUB/active"; clock 150; c=$(polls); wait_for 10 polls_ge $((c + 4)); clock 161
 wait_for 10 pid_off "$p"; gone=$?

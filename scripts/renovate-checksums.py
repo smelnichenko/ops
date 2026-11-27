@@ -64,6 +64,9 @@ PINS = [
     {"name": "pytorch_cpu_wheels", "file": "deploy/ansible/playbooks/tasks/nexus-pytorch-cpu.yml", "shape": "wheels",
      "key": "pytorch_cpu_wheels", "vendor": "pytorch", "renovate": False,
      "why": "wheel files, no version var - kept in step with target-scorer's requirements/ci.txt"},
+    {"name": "insightface_buffalo_l", "file": "deploy/ansible/vars/nexus-models.yml", "version": "insightface_version",
+     "shape": "single", "key": "insightface_buffalo_l_sha256", "arches": ["noarch"], "vendor": "insightface",
+     "renovate": False, "why": "a model release masi's image pins by the same sha256 - both moved together, by hand"},
 ]
 
 # where each vendor says its hashes ({v} version, {a} arch, {p} product, {f} wheel file, {project} its project):
@@ -93,6 +96,8 @@ VENDORS = {
     "nexus": {"each": "https://download.sonatype.com/nexus/3/nexus-{v}-linux-{a}.tar.gz.sha256",
               "how": "TLS alone: Sonatype signs no Nexus tarball"},
     "pytorch": {"index": "https://download.pytorch.org/whl/cpu/{project}/", "how": "TLS alone: PyTorch signs no wheel"},
+    "insightface": {"artifact": "https://github.com/deepinsight/insightface/releases/download/v{v}/buffalo_l.zip",
+                    "how": "TLS alone: InsightFace signs no release"},
 }
 
 HASH = re.compile(r"^[0-9a-f]{64}$")

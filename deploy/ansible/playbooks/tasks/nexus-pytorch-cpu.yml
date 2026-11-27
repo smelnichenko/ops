@@ -98,58 +98,63 @@
   ansible.builtin.set_fact:
     _missing_wheels: "{{ _wheel_lookup.results | selectattr('status', 'eq', 404) | map(attribute='item') | list }}"
 
-# a private directory: a wheel planted at a fixed /var/tmp name after its check was uploaded
-- name: A private directory for the wheels
-  ansible.builtin.tempfile:
-    state: directory
-    suffix: .wheels
-  check_mode: false
-  register: _wheels_tmp
+# a private directory on root's disk, not /tmp (a RAM disk on the Pis: the wheels pinned in memory beside Nexus when an
+# upload fails) - removed whatever the upload did. Private: a wheel planted at a fixed /var/tmp name after its check was
+# uploaded
+- name: The missing wheels, downloaded and uploaded
   when: _missing_wheels | length > 0
+  block:
+    - name: A private directory for the wheels
+      ansible.builtin.tempfile:
+        state: directory
+        path: /root
+        suffix: .wheels
+      check_mode: false
+      register: _wheels_tmp
 
-- name: Download the missing wheels (checksummed)
-  ansible.builtin.get_url:
-    url: "{{ pytorch_cpu_base_url }}{{ item.file | urlencode }}"
-    dest: "{{ _wheels_tmp.path }}/{{ item.file }}"
-    checksum: "sha256:{{ item.sha256 }}"
-    mode: "0644"
-    timeout: 600
-  loop: "{{ _missing_wheels }}"
-  loop_control: { label: "{{ item.file }}" }
+    - name: Download the missing wheels (checksummed)
+      ansible.builtin.get_url:
+        url: "{{ pytorch_cpu_base_url }}{{ item.file | urlencode }}"
+        dest: "{{ _wheels_tmp.path }}/{{ item.file }}"
+        checksum: "sha256:{{ item.sha256 }}"
+        mode: "0644"
+        timeout: 600
+      loop: "{{ _missing_wheels }}"
+      loop_control: { label: "{{ item.file }}" }
 
-# curl, not uri: uri's form-multipart cannot carry a binary file intact (its
-# 7or8bit encoding rewrites line endings inside the wheel, and Nexus does not
-# decode base64), so Nexus answers "Unable to extract PyPI metadata". The
-# credentials go in on stdin as curl config, never on the command line.
-- name: Upload the missing wheels to pytorch-cpu
-  ansible.builtin.command:
-    argv:
-      - curl
-      - --silent
-      - --show-error
-      - --fail-with-body
-      - --connect-timeout
-      - "30"
-      - --speed-limit
-      - "10240"
-      - --speed-time
-      - "120"
-      - --config
-      - "-"
-      - --form
-      - "pypi.asset=@{{ _wheels_tmp.path }}/{{ item.file }}"
-      - "http://localhost:{{ nexus_port }}/service/rest/v1/components?repository=pytorch-cpu"
-    # curl config quoting: a backslash or double quote in the password is escaped
-    stdin: >-
-      user = "admin:{{ nexus_admin_password | replace('\\', '\\\\') | replace('"', '\\"') }}"
-  loop: "{{ _missing_wheels }}"
-  loop_control: { label: "{{ item.file }}" }
-  no_log: true
-  changed_when: true
-
-- name: Remove the downloaded wheels
-  ansible.builtin.file:
-    path: "{{ _wheels_tmp.path }}"
-    state: absent
-  check_mode: false
-  when: _missing_wheels | length > 0
+    # curl, not uri: uri's form-multipart cannot carry a binary file intact (its
+    # 7or8bit encoding rewrites line endings inside the wheel, and Nexus does not
+    # decode base64), so Nexus answers "Unable to extract PyPI metadata". The
+    # credentials go in on stdin as curl config, never on the command line.
+    - name: Upload the missing wheels to pytorch-cpu
+      ansible.builtin.command:
+        argv:
+          - curl
+          - --silent
+          - --show-error
+          - --fail-with-body
+          - --connect-timeout
+          - "30"
+          - --speed-limit
+          - "10240"
+          - --speed-time
+          - "120"
+          - --config
+          - "-"
+          - --form
+          - "pypi.asset=@{{ _wheels_tmp.path }}/{{ item.file }}"
+          - "http://localhost:{{ nexus_port }}/service/rest/v1/components?repository=pytorch-cpu"
+        # curl config quoting: a backslash or double quote in the password is escaped
+        stdin: >-
+          user = "admin:{{ nexus_admin_password | replace('\\', '\\\\') | replace('"', '\\"') }}"
+      loop: "{{ _missing_wheels }}"
+      loop_control: { label: "{{ item.file }}" }
+      no_log: true
+      changed_when: true
+  always:
+    - name: Remove the downloaded wheels
+      ansible.builtin.file:
+        path: "{{ _wheels_tmp.path }}"
+        state: absent
+      check_mode: false
+      when: _wheels_tmp.path is defined

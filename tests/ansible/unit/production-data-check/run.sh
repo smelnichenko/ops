@@ -1,7 +1,7 @@
 #!/bin/bash
 # deploy/ansible/playbooks/production-data-check.yml - the Vagrant copy's checks read that the data paths work, as
 # production's own would (copy-checks.sh's prod check): green when every source answers well; red on a target down, a
-# stale Mimir, no log rows, a datasource not OK, an unhealthy CNPG cluster or a replica not streaming, WAL archiving
+# stale Mimir, no log rows, a datasource not OK or provisioned and missing, an unhealthy CNPG cluster or a replica not streaming, WAL archiving
 # failing, a Kafka not Ready, a ScyllaDB node not UN, a critical alert firing - unless the inventory names what the
 # environment lacks by nature (the copy's smartctl target, its PublicEndpointDown). Read only: no kubectl verb that
 # writes. The playbook on localhost, kubectl a stub playing every source; then its wiring.
@@ -30,7 +30,12 @@ case "$a" in
   *"component=clickhouse"*) echo schnappy-clickhouse-0 ;;
   *"clickhouse-client"*) echo "${LOG_ROWS:-42}" ;;
   *"/api/datasources/uid/"*) echo "{\"status\": \"${DS:-OK}\"}" ;;
-  *"/api/datasources"*) echo '[{"uid": "prom"}, {"uid": "ch"}]' ;;
+  *"/api/datasources"*) printf '['; sep=; for u in ${DS_LISTED-prom ch}; do printf '%s{"uid": "%s"}' "$sep" "$u"; sep=', '; done; echo ']' ;;
+  # the ConfigMap read WHOLE, as the play asks: a jsonpath on the dotted key lost its backslash to the command module's
+  # split and read nothing (the copy run of 2026-11-25) - any other read of it is "unexpected" here
+  *" get configmap schnappy-grafana-datasources -o json ")
+    y='apiVersion: 1\ndatasources:\n'; for u in ${DS_PROV-prom ch}; do y="$y  - name: $u\n    uid: $u\n"; done
+    printf '{"data": {"datasources.yml": "%s"}}\n' "$y" ;;
   *" get clusters.postgresql.cnpg.io "*)
     echo "{\"items\": [{\"metadata\": {\"namespace\": \"p\", \"name\": \"pg\"}, \"spec\": {\"instances\": 2},
       \"status\": {\"phase\": \"${PG_PHASE:-Cluster in healthy state}\", \"readyInstances\": 2, \"currentPrimary\": \"pg-1\",
@@ -82,6 +87,8 @@ check "  the environment's own down target named in its inventory: green" \
 check "Mimir's newest sample 5 minutes old: red" "$(run MIMIR_AGE=300)" "rc=2"
 check "no log rows: red" "$(run LOG_ROWS=0)" "rc=2"
 check "a datasource not OK: red" "$(run DS=ERROR)" "rc=2"
+check "a datasource provisioned (the chart's ConfigMap) that Grafana does not list: red" "$(run DS_LISTED=prom)" "rc=2"
+check "  one listed and not provisioned: still checked - green when OK" "$(run 'DS_LISTED=prom ch extra')" "rc=0"
 check "a CNPG cluster not healthy: red" "$(run 'PG_PHASE=Waiting for the instances to become active')" "rc=2"
 check "a replica not streaming: red" "$(run STREAMING=0)" "rc=2"
 check "WAL archiving failing: red" "$(run ARCHIVING=False)" "rc=2"

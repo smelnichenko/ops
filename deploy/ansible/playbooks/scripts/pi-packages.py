@@ -27,7 +27,7 @@ taken for a yes.
   vip-units      keepalived's own services installed here (a unit its table names but this Pi lacks - the Vagrant
                  copy has no Nexus - is skipped by keepalived too): one a line, then "VIP UNITS <n>"
   standby        this Pi can take the VIP: keepalived running, keepalived's own check passing (its
-                 check_services.sh: Forgejo, Keycloak, Patroni, versitygw), Forgejo's database reached (its healthz -
+                 check_services.sh: Caddy, Keycloak, versitygw), Forgejo's database reached (its healthz -
                  through PgBouncer and HAProxy to Patroni's leader): "STANDBY", or what is not
   idle [UNIT...] each one not running (keepalived's own, on a Pi not holding the VIP - one running beside the holder's
                  shares its data): "IDLE <units>", or "RUNNING <unit> <state>, ..."
