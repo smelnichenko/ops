@@ -11,12 +11,16 @@ def _pi():
     return os.environ["KC_HOST"]
 
 
+def _run():
+    return os.environ["KCS"]
+
+
 def _state(name):
-    return os.path.join(os.environ["KCS"], _pi(), name)
+    return os.path.join(_run(), _pi(), name)
 
 
 def event(what):
-    with open(os.path.join(os.environ["KCS"], "events.log"), "a") as f:
+    with open(os.path.join(_run(), "events.log"), "a") as f:
         fcntl.flock(f, fcntl.LOCK_EX)
         f.write(f"{time.time():.3f} {_pi()} {what}\n")
 
@@ -38,4 +42,4 @@ def install(path):
     """/opt/keycloak-<version>[/<file>] on this Pi"""
     if not path.startswith(OPT):
         raise ValueError(f"not a Keycloak install: {path}")
-    return os.path.join(os.environ["KCS"], "installs", _pi(), path[len(OPT):])
+    return os.path.join(_run(), "installs", _pi(), path[len(OPT):])
