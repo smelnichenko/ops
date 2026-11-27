@@ -17,6 +17,7 @@ cat > "$W/bin/ssh" <<'STUB'
 [ ! -e "$W/down" ] || exit 255
 read -r u _ < "$W/uptime"; echo "$((${u%.*} + 61)).00 0.00" > "$W/uptime"
 case "$*" in
+  *"get -n argocd application.argoproj.io"*) cat "$W/apps.json" ;;  # the read of what the copy leaves out, at the hold's end
   *"get applications"*) n=$(cat "$W/looks" 2>/dev/null || echo 0)
     if [[ " $(cat "$W/bad-app-looks" 2>/dev/null) " == *" $n "* ]]; then
       if [ -e "$W/apps-bad.$n.json" ]; then cat "$W/apps-bad.$n.json"; else cat "$W/apps-bad.json"; fi
@@ -138,6 +139,18 @@ held = [re.fullmatch(r"\d\d:\d\d:\d\d quiet - (\d+) of 25 min held", l) for l in
 check("a quiet hold of 25 min: its start said with its time, then one line every 10 minutes - how far, never past the hold",
       (rc, bool(re.fullmatch(r"SETTLED at \d\d:\d\d:\d\d - the hold: 25 min", lines[0])), [int(m.group(1)) for m in held if m],
        lines[-1], len(lines)), (0, True, [12, 21], "SETTLED AND QUIET for 25 min", 4))
+# what the copy leaves out (vagrant-gitops-mirror.py's INFRA_DROP) proven here alone: each named at the hold's end, before
+# the verdict line; an app the copy runs, or one production lacks, unnamed
+W_APPS = OK_APPS + [app("woodpecker", sources=[("https://git.pmon.dev/schnappy/infra.git", "main")], revisions=["a" * 40], single=True),
+                    app("schnappy-sonarqube", op="Succeeded")]
+rc, out = run(W_APPS, OK_PODS, hold="2")
+lines = out.strip().splitlines()
+proven = [l for l in lines if l.startswith("PROVEN IN PRODUCTION ALONE")]
+check("the apps the copy leaves out named at the hold's end with their state (woodpecker, SonarQube); the copy's own unnamed; "
+      "the verdict still the last line", (rc, proven, lines[-1]),
+      (0, ["PROVEN IN PRODUCTION ALONE (the copy leaves it out): schnappy-sonarqube - Synced/Healthy at ?, its last sync Succeeded",
+           "PROVEN IN PRODUCTION ALONE (the copy leaves it out): woodpecker - Synced/Healthy at aaaaaaaa, its last sync Succeeded"],
+       "SETTLED AND QUIET for 2 min"))
 rc, out = run(OK_APPS, OK_PODS, alerts=CRIT, alert_after=1, alert_until=3, streak="3", hold="15")
 check("one firing 2 looks, then gone (a rollout's minutes): quiet", (rc, out.strip().splitlines()[-1]), (0, "SETTLED AND QUIET for 15 min"))
 rc, out = run(OK_APPS, OK_PODS, alerts=CRIT, alert_looks=(1, 2, 4, 5), streak="3", hold="15")

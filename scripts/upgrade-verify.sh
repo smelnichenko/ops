@@ -193,4 +193,26 @@ while [ "$(up)" -lt "$end" ]; do
   seen=(); for k in "${!now[@]}"; do seen[$k]=${now[$k]}; done
   unset now
 done
+# what the copy leaves out (scripts/vagrant-gitops-mirror.py's INFRA_DROP) is proven here alone: each such app named, its
+# state as read at the hold's end - Synced to its revision, Healthy, its last sync's phase (the wave-patches review,
+# 2026-11-27: "unproven" when the proof is this verify)
+HOST="$host" MIRROR="$(dirname "$0")/vagrant-gitops-mirror.py" python3 -I - <<'PY_DROPPED'
+import json, os, re, subprocess
+names = re.findall(r'"clusters/production/argocd/apps/([a-z0-9-]+)\.yaml"', open(os.environ["MIRROR"]).read())
+r = subprocess.run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15", os.environ["HOST"],
+                    "kubectl get -n argocd application.argoproj.io -o json"], stdin=subprocess.DEVNULL, capture_output=True, text=True)
+try:
+    apps = {a["metadata"]["name"]: a for a in json.loads(r.stdout)["items"]}
+except (ValueError, KeyError, TypeError):
+    print("the apps the copy leaves out: not read here - the looks above judged them")
+    apps = None
+for n in names if apps is not None else []:
+    a = apps.get(n)
+    if a is None:
+        continue  # not in production (a preview set none)
+    st = a.get("status") or {}
+    print("PROVEN IN PRODUCTION ALONE (the copy leaves it out): %s - %s/%s at %s, its last sync %s" % (
+        n, (st.get("sync") or {}).get("status"), (st.get("health") or {}).get("status"),
+        str((st.get("sync") or {}).get("revision") or "?")[:8], (st.get("operationState") or {}).get("phase") or "none"))
+PY_DROPPED
 echo "SETTLED AND QUIET for $hold min"
