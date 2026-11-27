@@ -43,16 +43,17 @@ needed):**
 - A test unit that leaves the test environment unsettled puts its production twin behind the others (a try of its own);
   its own copy proof still gates production.
 - Nothing is mailed or posted: no applied, veto, blocked or page mail, no Alertmanager route (platform's UpgradeCycle
-  route removed), no preflight probe of it. The run's terminal and log say what happened. The label `veto` still stops
-  a unit (no notice since 2026-11-21, below). A one-way failure still records a page (`scripts/upgrade-notice.sh`,
+  route removed), no preflight probe of it. The run's terminal and log say what happened. No per-unit hold: the
+  `veto` label removed 2026-11-27 (the operator's - like `upgrade-blocked` before it); the kill switch (the dashboards'
+  upgrades-paused) stops everything, a bad unit is fixed at its branch. A one-way failure still records a page (`scripts/upgrade-notice.sh`,
   local) and pauses the cycle: production may be half changed.
 **No veto notice; compatibility; steps; one version everywhere (operator 2026-11-21: no 24 h veto notice - the
 versions' compatibility is what to make sure of; an upgrade can take several steps, a 17 -> 19 major among them;
 dependencies grouped, never at different versions in different modules):**
 - A major, a one-way unit and a unit carrying the agent's fix apply in the run that proves and reviews them, as a patch
   does: no notice comment, no clock. The pick answers `test` or `prove` alone (`notice`/`apply` refused by the runner);
-  `upgrade-units.py noticed`, the runner's notice check and `upgrade-label.py --comment` are gone. The label `veto`
-  still stops a unit (read again right before the merge); `agent-fixed` and `stop-updating` stay as records, and the
+  `upgrade-units.py noticed`, the runner's notice check and `upgrade-label.py --comment` are gone. No label holds a
+  unit (the kill switch is read again right before the merge); `agent-fixed` and `stop-updating` stay as records, and the
   APPLIED line names the agent's fix.
 - Compatibility is a review pass of its own (`.claude/upgrade-agent/review.md`; the runner requires it among the passes
   named): each version the unit moves against what production runs (`tests/ansible/copy/prod-inventory.txt`), its path

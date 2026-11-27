@@ -55,7 +55,7 @@
 #               refuses the unit, nothing merged
 #   6. apply    the gates again; the backups a one-way change needs (an etcd snapshot before Kubernetes, its store's from
 #               scripts/upgrade-stores.json) - failing,
-#               nothing merged; held (a veto, the kill switch) refused; a journal written (the
+#               nothing merged; held (the kill switch) refused; a journal written (the
 #               snapshot's name, the pull requests merged, each command - a closed terminal stops nothing from here
 #               on); the unit's pull requests merged by the bot at the proven commits onto the proven bases (CD's app
 #               promotions since aside; ops' main where the gate saw it, or nothing merged; a partial or unknown merge
@@ -369,7 +369,7 @@ stop_if_one_way() {
   esac
   retry "a one-way change its store cannot take yet$([ "$judged" = "$unit" ] || echo " (its production twin $judged's)") - $(awk '{sub(/^(missing|unknown) /, ""); printf "%s%s", (NR > 1 ? "; " : ""), $0}' <<< "$need") (scripts/upgrade-stores.json - ops' to fix) - nothing applied"
 }
-held_now() {  # a veto or the kill switch set since the pick: refused, nothing merged
+held_now() {  # the kill switch set since the pick: refused, nothing merged
   local held
   held=$(scripts/upgrade-units.py held "$unit") || { stopped "whether it is held not read - nothing merged" "$log"; exit 1; }
   [ -z "$held" ] || { stopped "held since its pick ($(echo $held)) - nothing merged" "$log"; exit 1; }
