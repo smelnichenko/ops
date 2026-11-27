@@ -328,6 +328,6 @@ check("each declaration names its release, its source and why, and each object i
 check("  scylla-operator's: the three CRDs and two ClusterRoles v1.23.0 dropped",
       sorted((o["kind"], o["name"]) for e in data["scylla-operator"] for o in e["objects"]),
       sorted([("CustomResourceDefinition", c) for c in CRDS] + [("ClusterRole", r) for r in ROLES]))
-print("ALL PASS" if fails == 0 else f"{fails} FAILED")
+print("upgrade-leftovers: " + ("ALL-PASS" if fails == 0 else f"{fails} FAILED"))
 raise SystemExit(1 if fails else 0)
 PYCHECK
