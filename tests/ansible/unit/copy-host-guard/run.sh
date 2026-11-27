@@ -78,6 +78,12 @@ fresh() {  # fresh <available MB> <active domains...>: a host of its own (stub s
 clock() { echo "$1.00 0.00" > "$STUB/uptime"; }
 guard() { out=$(timeout 30 bash scripts/copy-host-guard.sh "$@" 2>&1); }  # a hang (a lock never let go) a failure, said
 watcher() { cat "$COPY_HOST_DIR/host-guard.pid" 2> /dev/null; }
+loops_now() {  # the watchers of this host (their environment names its directory)
+  for e in /proc/[0-9]*/environ; do { tr '\0' '\n' < "$e"; } 2> /dev/null | grep -qxF "COPY_HOST_DIR=$COPY_HOST_DIR" \
+    && grep -q '_loop' "${e%environ}cmdline" 2> /dev/null && echo x; done | wc -l
+}
+loop_seen() { [ "$(loops_now)" -ge 1 ]; }
+pid_file() { [ -s "$COPY_HOST_DIR/host-guard.pid" ]; }
 pid_on() {  # alive, and no zombie; /proc - CI has no ps
   local st
   read -r st 2> /dev/null < "/proc/$1/stat" || return 1
@@ -282,6 +288,18 @@ read -r st < "/proc/$$/stat"; st=${st##*) }; set -- $st; my_sid=$4
 check "  the watcher in a session of its own (its own leader)" "$([ "$loop_sid" = "$p" ] && [ "$loop_sid" != "$my_sid" ] && echo yes)" yes
 timeout 10 bash scripts/copy-host-guard.sh watch > /dev/null 2>&1; rc=$?
 check "  a caller while it lives returns at once (not held by a lock the watcher kept)" "$rc" 0
+stop_watcher
+# a probe holding the lock the moment the watcher takes it (a caller's flock -n ... true holds it a moment): the watcher
+# waits for it and watches - a take refused ended it, nothing watching (the slow-start case's CI flake, 2026-11-27). Held
+# here from its slow start (5 s) to past its take, then let go
+fresh 9000 ops_kubeadm
+COPY_HOST_LOOP_DELAY=5 bash scripts/copy-host-guard.sh watch > "$W/w1.out" 2>&1 & w1=$!
+wait_for 10 loop_seen
+flock -n "$COPY_HOST_DIR/host-guard.alive" sleep 7 & holder=$!
+wait "$w1"; wait "$holder"; held=$?
+wait_for 10 pid_file
+check "  the lock held across the watcher's take: it waited and watches (its pid written, one watcher)" \
+  "$held $([ -n "$(watcher)" ] && pid_on "$(watcher)" && echo watching) $(loops_now)" "0 watching 1"
 stop_watcher
 
 # its lifetime: on a whole grace after its VMs stopped (the clock is the test's), then ends
