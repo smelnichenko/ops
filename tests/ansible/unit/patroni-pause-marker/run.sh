@@ -353,6 +353,21 @@ for book in ("setup-consul", "setup-patroni", "upgrade-patroni"):
           r.returncode == 1 and "runs on no Pi" in r.stdout and "patronictl resume" not in r.stdout, (r.returncode, r.stdout))
     r, calls, kv = run(ck)
     check(f"{book}: not paused: passes", r.returncode == 0, (r.returncode, r.stdout))
+# restore-consul.yml pauses and never resumes (the restore replaces the DCS with the snapshot's): its pause the script
+# takes - its marker, the cluster paused - and its not-paused check the script's own
+every = [t for play in yaml.safe_load(open("deploy/ansible/playbooks/restore-consul.yml")) for t in tasks(play.get("tasks"))]
+pause = [t for t in every if "patroni-pause.py pause" in text(t)]
+checks = [t for t in every if "patroni-pause.py check" in text(t)]
+check("restore-consul: one pause, one not-paused check, no resume", (len(pause), len(checks),
+      len([t for t in every if "patroni-pause.py resume" in text(t)])), (1, 1, 0))
+r, calls, kv = run(pause[0])
+check("restore-consul: its pause accepted - its marker (consul-way-back, the time, a nonce), then every member paused",
+      r.returncode == 0 and kv is not None and kv.startswith("consul-way-back ") and len(kv.split()) == 3
+      and acts(calls)[:2] == ["consul kv put", "patronictl pause"] and dcs() == (True, [True, True]),
+      (r.returncode, r.stdout, r.stderr, calls, kv))
+r, calls, kv = run(checks[0], paused=True, marker="consul-way-back 2026-11-27T15:00:00Z ab12cd34")
+check("  a cluster it left paused (a run cut short): the check names its marker", r.returncode == 1
+      and "paused by consul-way-back 2026-11-27T15:00:00Z ab12cd34" in r.stdout, (r.returncode, r.stdout))
 print("patroni-pause-marker: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 PYCHECK

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """patroni-pause.py - Patroni's cluster paused around a run's work and resumed after it, the one way setup-consul,
-setup-patroni and upgrade-patroni do it (ansible.builtin.script, root, on a Pi with Patroni installed - running or not:
+setup-patroni and upgrade-patroni do it (restore-consul pauses alone: it stops Patroni paused, and the keys it loads after
+hold no pause or marker) (ansible.builtin.script, root, on a Pi with Patroni installed - running or not:
 it reads and writes through Consul, as patronictl does).
 
   check                 exit 1 when the cluster is paused already - someone's maintenance, or a run cut short (a
@@ -31,7 +32,9 @@ import time
 
 CONFIG = os.environ.get("PATRONI_CONFIG", "/etc/patroni/patroni.yml")
 KEY = "ansible/patroni-paused-by"
-RUNS = ("setup-consul", "setup-patroni", "upgrade-patroni")
+# consul-way-back pauses and never resumes: restore-consul.yml stops Patroni paused, and the restore replaces the DCS
+# (its marker and pause with it) with the snapshot's
+RUNS = ("setup-consul", "setup-patroni", "upgrade-patroni", "consul-way-back")
 # the shape a run writes (an older run's had no nonce): only that is echoed - Consul has no ACLs
 MARKER = re.compile(r"(%s) \d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ( [0-9a-f]{8})?" % "|".join(RUNS))
 # each member writes its state into the DCS on its loop (loop_wait 10 s): the time for all of them to show it

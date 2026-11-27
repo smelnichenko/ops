@@ -1,17 +1,19 @@
 #!/bin/bash
-# Consul's way back: restore-consul.yml - every server in its run, the snapshot it restores (the newest on pi1 by name,
-# or the one given) and the version from its name, its refusals before anything stops (no snapshot, the unit not
-# reverted, not confirmed by name, the old binary gone, a snapshot that binary cannot read, Postgres not one primary,
-# Patroni paused already, a job holding a Consul lock), the data directory set aside (its node-id and keyring carried
-# over, nothing deleted), Patroni's stale keys deleted against a stubbed consul (its leader and members alone), and the
-# order - Patroni paused then stopped, Vault stopped, Consul replaced, the snapshot restored, Patroni started on the
-# primary first, Vault unsealed; then the copy's rehearsal (the Vagrant guard, its phases, its task's sequence and cleanup).
+# Consul's way back: restore-consul.yml - every server in its run; its source (the running cluster's KV by default, the
+# pre-upgrade snapshot when asked) and a run again's (the record's, never another kind); the version gone back to and its
+# confirmation; its refusals before anything stops (no snapshot, the unit not reverted, not confirmed, the old binary
+# gone, a snapshot that binary cannot read, nothing to go back from, a reboot scheduled, Postgres not one primary, the
+# admin password not working, Patroni paused by someone else, a job holding a Consul lock); then, against stubs, what
+# each step does - the export checked, the data directory set aside on a first run and on a run again (the state before
+# always the record's), the import compared key by key, Patroni's stale keys deleted, the system id compared, exactly one
+# Vault active, Patroni healthy, Postgres kept - and the order; then the copy's rehearsal (its modes, the switchover, no
+# promotion, the task's sequence and cleanup).
 set -u
 cd "$(dirname "$0")/../../../.." || exit 1
 PY=python3
 "$PY" -c 'import ansible' 2> /dev/null || PY=deploy/ansible/venv/bin/python3
 exec "$PY" - <<'PY_CWB'
-import os, subprocess, sys, tempfile
+import json, os, shutil, subprocess, sys, tempfile
 import yaml
 sys.path.insert(0, "tests/ansible/unit")
 from templar import condition, render  # noqa: E402
@@ -22,6 +24,7 @@ def check(name, got, want):
     print(("PASS " if got == want else "FAIL ") + name + ("" if got == want else f": got {got!r}, want {want!r}"))
 work = tempfile.mkdtemp()
 RP = yaml.safe_load(open("deploy/ansible/playbooks/restore-consul.yml"))[0]
+V = RP["vars"]
 def flat(ts):
     for t in ts or []:
         yield t
@@ -29,206 +32,475 @@ def flat(ts):
             yield from flat(t.get(k))
 R = list(flat(RP["tasks"]))
 rt = lambda name: next(t for t in R if str(t.get("name", "")).startswith(name))
-idx = R.index
-blk = rt("The restore - from the first stop")
+top = RP["tasks"]
+blk = rt("The way back - from the first stop")
+B_ = blk["block"]
+bt = lambda name: next(t for t in B_ if str(t.get("name", "")).startswith(name))
+bi = B_.index
 PIS = {"pis": ["pi1", "pi2"]}
+HOSTS = ["pi1", "pi2", "target"]
+SNAP = "/var/backups/consul-upgrade/consul-20261127T010000Z-1.22.7.snap"
+KV = "/var/backups/consul-upgrade/consul-20261127T020000Z-current-2.0.4.kv.json"
+stub = os.path.join(work, "bin"); os.makedirs(stub)
+def tool(name, body):
+    p = os.path.join(stub, name)
+    open(p, "w").write("#!/bin/bash\n" + body + "\n")
+    os.chmod(p, 0o755)
+def sh(cmd, stdin="", **env):
+    return subprocess.run(["bash", "-c", cmd], input=stdin, capture_output=True, text=True,
+                          env=dict(os.environ, PATH=stub + ":" + os.environ["PATH"], W=work, **env))
 
-# ── which snapshot, and its version ──────────────────────────────────────────────────────────────────────────────
+# ── every server, the source, a run again's record ───────────────────────────────────────────────────────────────
 check("every server in the run: pi1, pi2 and ten (target) - on; one left out (--limit) - refused",
-      [condition(rt("Every server in the run")["ansible.builtin.assert"]["that"], consul_servers=["pi1", "pi2", "target"], ansible_play_hosts=h)
-       for h in (["pi1", "pi2", "target"], ["target", "pi2", "pi1"], ["pi1", "pi2"])], [True, True, False])
+      [condition(rt("Every server in the run")["ansible.builtin.assert"]["that"], consul_servers=V["consul_servers"], ansible_play_hosts=h)
+       for h in (HOSTS, ["target", "pi2", "pi1"], ["pi1", "pi2"])], [True, True, False])
 check("  its servers as upgrade-consul.yml names them, the pin read from setup-consul.yml, Patroni's scope from setup-patroni.yml",
-      (RP["vars"]["consul_servers"], yaml.safe_load(open("deploy/ansible/playbooks/upgrade-consul.yml"))[0]["vars"]["consul_servers"],
-       "setup-consul.yml" in RP["vars"]["_setup"], "setup-patroni.yml" in RP["vars"]["patroni_scope"]),
-      (["pi1", "pi2", "target"], ["pi1", "pi2", "target"], True, True))
-nw = rt("The newest snapshot on pi1")
+      (V["consul_servers"], yaml.safe_load(open("deploy/ansible/playbooks/upgrade-consul.yml"))[0]["vars"]["consul_servers"],
+       "setup-consul.yml" in V["_setup"], "setup-patroni.yml" in V["patroni_scope"]), (["pi1", "pi2", "target"],) * 2 + (True, True))
+src = rt("The source given")["ansible.builtin.assert"]["that"]
+check("the source: current by default, snapshot when asked - anything else refused",
+      [condition(src, **({} if m is None else {"consul_restore_from": m})) for m in (None, "current", "snapshot", "latest")],
+      [True, True, True, False])
+fields = rt("Its fields")["ansible.builtin.set_fact"]
+REC = f"source={SNAP}\naside=/var/lib/consul/data.pre-restore-T1\nfrom=2.0.4\nrestored={os.path.basename(SNAP)}\n"
+check("  a record's fields read (its source, the state before's directory, the version left); none - empty",
+      [tuple(render(fields[k], _record={"stdout": r}) for k in ("_rec_source", "_orig_aside", "_rec_from")) for r in (REC, "")],
+      [(SNAP, "/var/lib/consul/data.pre-restore-T1", "2.0.4"), ("", "", "")])
+one_src = rt("One source recorded across the servers")["ansible.builtin.assert"]["that"]
+hv = lambda vals: {h: {"_rec_source": v} for h, v in zip(HOSTS, vals)}
+check("  one source across the servers (or none, or some not yet written) - on; two different - refused",
+      [condition(one_src, ansible_play_hosts=HOSTS, hostvars=hv(v)) for v in ((SNAP, SNAP, SNAP), ("", "", ""), (KV, "", KV), (KV, SNAP, KV))],
+      [True, True, True, False])
+mode = rt("The source, from the record or as given")
+def mode_of(vals, given=None):
+    rec = render(mode["vars"]["_recorded_source"], ansible_play_hosts=HOSTS, hostvars=hv(vals))
+    e = {} if given is None else {"consul_restore_from": given}
+    return tuple(str(render(mode["ansible.builtin.set_fact"][k], _recorded_source=rec, **e)).strip() for k in ("_recorded", "_from_record", "_mode"))
+check("  the record's source wins (its kind from its name); none - as given, current by default",
+      [mode_of(("", "", "")), mode_of(("", "", ""), "snapshot"), mode_of((SNAP, "", SNAP)), mode_of((KV, KV, KV), "current")],
+      [("", "False", "current"), ("", "False", "snapshot"), (SNAP, "True", "snapshot"), (KV, "True", "current")])
+again = rt("A run again takes its source up")["ansible.builtin.assert"]["that"]
+check("  a run again asking for the other kind - refused; the same kind, or none asked - on",
+      [condition(again, _from_record=fr, _mode=m, **({} if g is None else {"consul_restore_from": g}))
+       for fr, m, g in ((True, "snapshot", "current"), (True, "snapshot", "snapshot"), (True, "current", None), (False, "current", "snapshot"))],
+      [False, True, True, True])
+
+# ── the snapshot source ──────────────────────────────────────────────────────────────────────────────────────────
+nw = rt("The newest snapshot on its server")
 sd = os.path.join(work, "snaps"); os.makedirs(sd)
 for n, t in (("consul-20261127T010000Z-1.22.7.snap", 1000), ("consul-20261126T010000Z-1.22.6.snap", 2000)):
     open(os.path.join(sd, n), "w").write("x"); os.utime(os.path.join(sd, n), (t, t))
-newest = lambda: subprocess.run(["bash", "-c", render(nw["ansible.builtin.shell"]["cmd"], upgrade_dir=sd)], capture_output=True, text=True).stdout.strip()
+newest = lambda: sh(render(nw["ansible.builtin.shell"]["cmd"], upgrade_dir=sd)).stdout.strip()
 got_newest = newest()
 for n in os.listdir(sd): os.remove(os.path.join(sd, n))
-check("the newest snapshot by its name (its UTC time) - never by mtime; none - nothing; read on pi1 (where upgrade-consul leaves it)",
-      (os.path.basename(got_newest), newest(), nw.get("delegate_to")), ("consul-20261127T010000Z-1.22.7.snap", "", "pi1"))
-pick = rt("The snapshot restored - the one given")
-A = "/var/backups/consul-upgrade/consul-20261127T010000Z-1.22.7.snap"
-def chosen(newest_out, given=None):
-    path = render(pick["vars"]["_snap_path"], _newest={"stdout": newest_out}, **({} if given is None else {"consul_restore_snapshot": given}))
+check("the newest snapshot by its name (its UTC time) - never by mtime; none - nothing; looked for only for a snapshot not recorded "
+      "or given", (os.path.basename(got_newest), newest(), nw.get("when")),
+      ("consul-20261127T010000Z-1.22.7.snap", "", "_mode == 'snapshot' and not _from_record | bool and consul_restore_snapshot is not defined"))
+pick = rt("The snapshot restored - recorded, given, or the newest")
+def chosen(newest_out, given=None, recorded=""):
+    e = {} if given is None else {"consul_restore_snapshot": given}
+    path = render(pick["vars"]["_snap_path"], _newest={"stdout": newest_out}, _recorded=recorded, _from_record=bool(recorded), **e)
     return (render(pick["ansible.builtin.set_fact"]["_snap"], _snap_path=path).strip(),
             render(pick["ansible.builtin.set_fact"]["_snap_version"], _snap_path=path).strip())
-check("  the newest, or the one given; its version from its name; a name not a snapshot's - no version; none - empty",
-      [chosen(A), chosen(A, "/x/consul-20261101T000000Z-1.22.5.snap"), chosen("/x/other.snap"), chosen("")],
-      [(A, "1.22.7"), ("/x/consul-20261101T000000Z-1.22.5.snap", "1.22.5"), ("/x/other.snap", ""), ("", "")])
+check("  recorded, else given, else the newest; its version from its name; a name not a snapshot's - no version",
+      [chosen(SNAP), chosen(SNAP, "/x/consul-20261101T000000Z-1.22.5.snap"), chosen(SNAP, "/x/a.snap", "/r/consul-20261102T000000Z-1.22.4.snap"),
+       chosen("/x/other.snap"), chosen("")],
+      [(SNAP, "1.22.7"), ("/x/consul-20261101T000000Z-1.22.5.snap", "1.22.5"), ("/r/consul-20261102T000000Z-1.22.4.snap", "1.22.4"),
+       ("/x/other.snap", ""), ("", "")])
 known = rt("A snapshot and its version known")["ansible.builtin.assert"]["that"]
-pin = rt("The unit reverted first")["ansible.builtin.assert"]["that"]
-conf = rt("Confirmed by naming the snapshot")["ansible.builtin.assert"]["that"]
-kept = rt("Every server has it")["ansible.builtin.assert"]["that"]
-check("refused before anything stops without a snapshot or a version, until the unit is reverted, confirmed by the snapshot's "
-      "name, and the kept binary there AND that version",
-      ([condition(known, _snap=p, _snap_version=v) for p, v in ((A, "1.22.7"), ("", "1.22.7"), (A, ""))],
-       [condition(pin, consul_version=k, _snap_version="1.22.7") for k in ("1.22.7", "2.0.4")],
-       [condition(conf, _snap=A, **({} if c is None else {"confirm": c})) for c in (os.path.basename(A), "other", None)],
-       [condition(kept, _kept=k, _snap_version="1.22.7") for k in (
-           {"rc": 0, "stdout": "Consul v1.22.7\nRevision abc", "stdout_lines": ["Consul v1.22.7", "Revision abc"]},
-           {"rc": 0, "stdout": "Consul v2.0.4\nRevision abc", "stdout_lines": ["Consul v2.0.4", "Revision abc"]},
-           {"rc": 0, "stdout": "Revision abc\nConsul v1.22.7", "stdout_lines": ["Revision abc", "Consul v1.22.7"]},
-           {"rc": 2, "stdout": "", "stdout_lines": [], "stderr": "No such file"}, {})]),
-      ([True, False, False], [True, False], [True, False, False], [True, False, False, False, False]))
+pin = rt("The unit reverted first")
+check("  refused without a snapshot or a version, until the unit is reverted - the refusal naming the override for an earlier snapshot",
+      ([condition(known, _snap=p, _snap_version=v) for p, v in ((SNAP, "1.22.7"), ("", "1.22.7"), (SNAP, ""))],
+       [condition(pin["ansible.builtin.assert"]["that"], consul_version=k, _snap_version="1.22.7") for k in ("1.22.7", "2.0.4")],
+       "consul_restore_snapshot=" in pin["ansible.builtin.assert"]["fail_msg"],
+       [t.get("when") for t in (rt("A snapshot and its version known"), pin, rt("The snapshot there and readable"))]),
+      ([True, False, False], [True, False], True, ["_mode == 'snapshot'"] * 3))
 ins = rt("The snapshot there and readable by that binary")
-check("  the snapshot read by the kept binary itself (consul snapshot inspect), on pi1, before anything stops",
-      (rt("The snapshot's version's binary kept here")["ansible.builtin.command"]["argv"], ins["ansible.builtin.command"]["argv"],
-       ins.get("delegate_to"), max(idx(rt("The snapshot's version's binary kept here")), idx(ins)) < idx(blk)),
-      (["/usr/local/bin/consul-{{ _snap_version }}", "version"],
-       ["/usr/local/bin/consul-{{ _snap_version }}", "snapshot", "inspect", "{{ _snap }}"], "pi1", True))
+check("  the snapshot read by the kept binary itself (consul snapshot inspect), on its server",
+      (ins["ansible.builtin.command"]["argv"], ins.get("delegate_to")),
+      (["/usr/local/bin/consul-{{ _to }}", "snapshot", "inspect", "{{ _snap }}"], "{{ _src_host }}"))
 
-# ── Postgres's primary, Patroni and the Consul-locked jobs - read before anything stops ──────────────────────────
+# ── the version gone back to, its confirmation, the kept binary ──────────────────────────────────────────────────
+to = rt("The version gone back to")["ansible.builtin.set_fact"]
+tv = lambda m, **k: tuple(str(render(to[x], _mode=m, consul_version="1.22.7", **k)).strip() for x in ("_to", "_src_host", "_confirm_as"))
+check("current: back to the pin, confirmed as consul-<pin>; snapshot: to its version, confirmed by its name; pi1 unless another given",
+      [tv("current"), tv("snapshot", _snap=SNAP, _snap_version="1.22.6"), tv("current", consul_restore_host="pi2")],
+      [("1.22.7", "pi1", "consul-1.22.7"), ("1.22.6", "pi1", os.path.basename(SNAP)), ("1.22.7", "pi2", "consul-1.22.7")])
+conf = rt("Confirmed (-e confirm")["ansible.builtin.assert"]
+check("  the confirmation as named - another, or none, refused; the refusal's text renders for either source",
+      ([condition(conf["that"], _confirm_as="consul-1.22.7", **({} if c is None else {"confirm": c})) for c in ("consul-1.22.7", "consul-2.0.4", None)],
+       ["Vault's secrets" in render(conf["fail_msg"], _mode="snapshot", _snap=SNAP, _to="1.22.7", _confirm_as="x"),
+        "KV carried over" in render(conf["fail_msg"], _mode="current", _to="1.22.7", _confirm_as="consul-1.22.7")]),
+      ([True, False, False], [True, True]))
+check("  the source's server one of the run's", [condition(rt("The source's server in the run")["ansible.builtin.assert"]["that"],
+      _src_host=h, ansible_play_hosts=HOSTS) for h in ("pi2", "pi3")], [True, False])
+kept = rt("Every server has it")["ansible.builtin.assert"]["that"]
+check("  the kept binary there AND the version gone back to",
+      [condition(kept, _kept=k, _to="1.22.7") for k in (
+          {"rc": 0, "stdout_lines": ["Consul v1.22.7", "Revision abc"]}, {"rc": 0, "stdout_lines": ["Consul v2.0.4", "Revision abc"]},
+          {"rc": 0, "stdout_lines": ["Revision abc", "Consul v1.22.7"]}, {"rc": 2, "stdout_lines": [], "stderr": "No such file"}, {})],
+      [True, False, False, False, False])
+
+# ── what is left, and whether there is anything to go back from ──────────────────────────────────────────────────
+fr = rt("The version being left - the record's")["ansible.builtin.set_fact"]["_from"]
+check("the version left: the record's (a run again - the agent then runs the old one), else what the agent runs; neither - none",
+      [render(fr, _rec_from=r, _agent=a).strip() for r, a in (("2.0.4", {"status": 200, "json": {"Config": {"Version": "1.22.7"}}}),
+                                                              ("", {"status": 200, "json": {"Config": {"Version": "2.0.4"}}}),
+                                                              ("", {"status": -1, "msg": "refused"}))],
+      ["2.0.4", "2.0.4", ""])
+check("  none known on a server - refused", [condition(rt("The version being left known")["ansible.builtin.assert"]["that"], _from=f)
+                                             for f in ("2.0.4", "")], [True, False])
+rd = rt("Something to go back from, its KV readable")
+tool("consul", 'echo "$*" >> "$W/consul.log"; case "$1 $2" in "kv export") [ -z "${NO_LEADER:-}" ] || { echo "No cluster leader" >&2; exit 1; }; cat "$W/kv.json" ;; esac')
+open(os.path.join(work, "kv.json"), "w").write('[{"key": "a", "flags": 0, "value": "eA=="}]')
+check("  the current source: the KV read through the leader before any stop - a cluster with no leader refused; only for a current "
+      "source not taken yet", (sh(rd["ansible.builtin.shell"]["cmd"]).stdout.strip(), sh(rd["ansible.builtin.shell"]["cmd"], NO_LEADER="1").returncode != 0,
+                               rd.get("when")), ("1", True, "_mode == 'current' and not _from_record | bool"))
+newer = rt("A newer version running somewhere")["ansible.builtin.assert"]["that"]
+fh = lambda vals: {h: {"_from": v} for h, v in zip(HOSTS, vals)}
+check("  something newer than the pin running (a partial upgrade counts) - on; every server on the pin - refused",
+      [condition(newer, ansible_play_hosts=HOSTS, hostvars=fh(v), _to="1.22.7") for v in (("2.0.4",) * 3, ("1.22.7", "1.22.7", "2.0.4"), ("1.22.7",) * 3)],
+      [True, True, False])
+hr = rt("Whether an earlier run loaded this source here")["ansible.builtin.set_fact"]["_host_restored"]
+ok_agent = {"status": 200, "json": {"Config": {"Version": "1.22.7"}}}
+check("a run again after the load and the deletion (recorded, every agent on the version gone back to) takes up after them; "
+      "not recorded, another source, or an agent elsewhere - from the start",
+      [render(hr, _from_record=f, _recorded=SNAP, _record={"stdout": r}, _agent=a, _to="1.22.7") for f, r, a in (
+          (True, REC, ok_agent), (True, REC.replace("restored=", "x="), ok_agent), (True, REC, {"status": 200, "json": {"Config": {"Version": "2.0.4"}}}),
+          (False, REC, ok_agent), (True, REC, {"status": -1}))],
+      [True, False, False, False, False])
+ra = rt("Whether it did on every server")["ansible.builtin.set_fact"]["_restored_already"]
+check("  on every server - else from the start", [render(ra, ansible_play_hosts=HOSTS, hostvars={h: {"_host_restored": v} for h, v in zip(HOSTS, vals)})
+                                                  for vals in ((True,) * 3, (True, False, True))], [True, False])
+
+# ── the rest of the refusals ─────────────────────────────────────────────────────────────────────────────────────
+check("a reboot scheduled on a server (ten's unattended-upgrades schedules one) - refused before anything stops",
+      [condition(rt("None scheduled on any server")["ansible.builtin.assert"]["that"], _scheduled={"stat": {"exists": e}}) for e in (False, True)],
+      [True, False])
 one = rt("Exactly one primary, both Postgres running")["ansible.builtin.assert"]["that"]
 roles = lambda a, b: {"pi1": {"_pg_role": a}, "pi2": {"_pg_role": b}}
 P, S, DOWN = {"rc": 0, "stdout": "t"}, {"rc": 0, "stdout": "f"}, {"rc": 2, "stdout": "", "stderr": "no socket"}
 check("Postgres named by itself: one primary and a running replica - on; two primaries, none, one down - refused",
-      [condition(one, groups=PIS, hostvars=roles(a, b)) for a, b in ((P, S), (S, P), (P, P), (S, S), (P, DOWN))],
-      [True, True, False, False, False])
-prim = rt("The primary's Pi")["ansible.builtin.set_fact"]["_pg_primary"]
+      [condition(one, groups=PIS, hostvars=roles(a, b)) for a, b in ((P, S), (S, P), (P, P), (S, S), (P, DOWN))], [True, True, False, False, False])
 check("  the primary's Pi the one out of recovery",
-      [render(prim, groups=PIS, hostvars=roles(a, b)).strip() for a, b in ((P, S), (S, P))], ["pi1", "pi2"])
-check("  read through the local socket as postgres (Patroni may be stopped by an earlier run), never failing the read itself",
-      ("runuser -u postgres -- psql -w -h /var/run/postgresql" in rt("Postgres running here")["ansible.builtin.shell"]["cmd"],
-       rt("Postgres running here").get("failed_when"), idx(rt("Exactly one primary")) < idx(blk)), (True, False, True))
+      [render(rt("The primary's Pi")["ansible.builtin.set_fact"]["_pg_primary"], groups=PIS, hostvars=roles(a, b)).strip() for a, b in ((P, S), (S, P))],
+      ["pi1", "pi2"])
+pw = rt("The admin password works on the primary now")
+tool("psql", 'echo "$*" >> "$W/psql.log"; [ "$PGPASSWORD" = right ] || { echo "password authentication failed" >&2; exit 2; }; '
+             'case "$*" in *"select 1"*) echo 1 ;; *) [ -n "${PSQL_NO:-}" ] && [[ "$*" == *"-p $PSQL_NO "* ]] && echo f || echo t ;; esac')
+check("  the admin password proven on the primary's own port (not through HAProxy - Patroni may be stopped): right - on; wrong "
+      "or empty - refused, never logged", ([sh(pw["ansible.builtin.shell"]["cmd"], p + "\n").returncode != 0 for p in ("right", "wrong", "")],
+                                           "-p 5432" in pw["ansible.builtin.shell"]["cmd"], pw.get("no_log"), pw.get("when")),
+      ([False, True, True], True, True, "inventory_hostname == _pg_primary"))
+check("  no apostrophe in the Python the shell hands over in single quotes (it would end the quoting)",
+      [n for n in ("export_ok_py", "healthy_py") if "'" in V[n]], [])
 runs = rt("Whether any Patroni runs")["ansible.builtin.set_fact"]["_patroni_runs"]
 act = lambda a, b: {"pi1": {"_patroni_active": {"stdout": a}}, "pi2": {"_patroni_active": {"stdout": b}}}
-check("Patroni running on either Pi - the pause wanted; on neither (an earlier run of this play stopped it) - no pause",
-      [render(runs, groups=PIS, hostvars=act(a, b)) for a, b in (("active", "active"), ("inactive", "active"), ("inactive", "failed"))],
-      [True, True, False])
-pchk, pause = rt("Patroni not paused already"), rt("Patroni paused - stopped next")
-check("  not paused already (someone's maintenance) checked before anything stops; the pause this run's marker; both only where it runs",
-      (pchk["ansible.builtin.script"]["cmd"].endswith("patroni-pause.py check"), idx(pchk) < idx(blk),
-       pause["ansible.builtin.script"]["cmd"].endswith("patroni-pause.py pause consul-way-back"), pchk.get("when"), pause.get("when"),
-       pchk.get("delegate_to"), pause.get("delegate_to")),
-      (True, True, True, "_patroni_runs | bool", "_patroni_runs | bool", "{{ _pg_primary }}", "{{ _pg_primary }}"))
-lj = rt("No job holding a Consul lock here now")
-check("a tier-0 backup or a restore check running (its Consul lock) - refused before anything stops; idle or failed - on",
-      ([condition(lj["failed_when"], _lock_jobs={"stdout": s}) for s in ("active", "activating", "deactivating", "inactive", "failed")],
-       RP["vars"]["consul_lock_jobs"], idx(lj) < idx(blk)),
-      ([True, True, True, False, False], ["pi-tier0-backup", "pi-restore-check"], True))
+check("Patroni running on either Pi - a pause wanted; on neither (an earlier run of this play stopped it) - none",
+      [render(runs, groups=PIS, hostvars=act(a, b)) for a, b in (("active", "active"), ("inactive", "active"), ("inactive", "failed"))], [True, True, False])
+ours = rt("Whether this play paused it")["ansible.builtin.set_fact"]["_ours_paused"]
+check("  a pause this play made (its marker) taken up - neither checked nor paused again; another's marker, or none - not ours",
+      ([render(ours, _patroni_runs=True, _marker=m) for m in ({"rc": 0, "stdout": "consul-way-back 2026-11-27T15:00:00Z ab12cd34"},
+                                                             {"rc": 0, "stdout": "setup-consul 2026-11-27T15:00:00Z ab12cd34"}, {"rc": 1, "stdout": ""})],
+       rt("Patroni not paused already").get("when"), bt("Patroni paused").get("when")),
+      ([True, False, False], "_patroni_runs | bool and not _ours_paused | bool",
+       "_patroni_runs | bool and not _ours_paused | bool and not _restored_already | bool"))
+pre_jobs = rt("None running - else nothing stopped")["ansible.builtin.assert"]["that"]
+jobs = lambda *s: {"results": [{"item": "pi-tier0-backup", "stdout": s[0]}, {"item": "pi-restore-check", "stdout": s[1]}]}
+check("a tier-0 backup or a restore check running (its Consul lock) - refused before anything stops, and read again once their "
+      "timers are stopped (one could start in between)",
+      ([condition(pre_jobs, _lock_jobs=j) for j in (jobs("inactive", "failed"), jobs("active", "inactive"), jobs("inactive", "activating"), {"results": [{"skipped": True}]})],
+       [condition(bt("The jobs read again")["failed_when"], _lock_jobs_now={"stdout": s}) for s in ("active", "deactivating", "inactive")],
+       bi(bt("Their timers stopped")) < bi(bt("The jobs read again")), V["consul_lock_jobs"]),
+      ([True, False, False, True], [True, True, False], True, ["pi-tier0-backup", "pi-restore-check"]))
+check("every read and refusal before the first stop (the block); after it only the closing message",
+      (top.index(blk), "ansible.builtin.debug" in top[-1], len(top) > 20), (len(top) - 2, True, True))
+check("  the reads that may fail (a binary gone, an agent down, Postgres down, Patroni stopped, no marker) never fail the play themselves",
+      [rt(n).get("failed_when") for n in ("An earlier run's record here", "The binary of the version gone back to", "The agent here now",
+                                          "Postgres running here", "Patroni running here", "The pause marker now")], [False] * 6)
 
-# ── the data directory set aside, nothing deleted ────────────────────────────────────────────────────────────────
-asd = rt("Its data directory set aside")["ansible.builtin.shell"]["cmd"]
-data = os.path.join(work, "consul", "data")
-def aside_run():
-    os.makedirs(os.path.join(data, "raft"), exist_ok=True); os.makedirs(os.path.join(data, "serf"), exist_ok=True)
-    for f, v in (("node-id", "id-1"), ("raft/raft.db", "raft"), ("serf/local.keyring", "k1"), ("serf/remote.keyring", "k2")):
-        open(os.path.join(data, f), "w").write(v)
-    side = data + ".pre-restore-x"
+# ── the export, the record, the set-aside ────────────────────────────────────────────────────────────────────────
+ex = bt("The whole KV exported from the running cluster")
+up = os.path.join(work, "up")
+def export_run(content):
+    open(os.path.join(work, "kv.json"), "w").write(content)
+    r = sh(render(ex["ansible.builtin.shell"]["cmd"], upgrade_dir=up, _from="2.0.4", export_ok_py=V["export_ok_py"], patroni_scope="pg"))
+    out = r.stdout.strip().splitlines()[-1:] if r.returncode == 0 else []
+    return r.returncode, [os.path.basename(o) for o in out], [oct(os.stat(o).st_mode)[-3:] for o in out]
+whole = [{"key": "service/pg/initialize", "flags": 0, "value": "MQ=="}, {"key": "vault/core/keyring", "flags": 0, "value": "eA=="},
+         {"key": "vault/core/seal-config", "flags": 0, "value": "eQ=="}]
+rc, names, modes = export_run(json.dumps(whole))
+check("the export: the whole KV into the upgrade directory, named by its time and the version left, root's alone; checked - "
+      "no keys, Vault's without its barrier, no Patroni cluster, not JSON: failed",
+      (rc, bool(names) and names[0].startswith("consul-") and names[0].endswith("-current-2.0.4.kv.json"), modes,
+       [export_run(c)[0] != 0 for c in ("[]", json.dumps(whole[:1] + whole[2:]), json.dumps(whole[1:]), "{cut")]),
+      (0, True, ["600"], [True] * 4))
+check("  taken once - not on a run again (its record's reused), not for a snapshot; on the source's server; after Vault stops, before "
+      "Patroni's pause (no pause or marker in it)",
+      (ex.get("when"), ex.get("delegate_to"), bi(bt("Neither started at a boot")) < bi(ex) < bi(bt("Patroni paused"))),
+      ("_mode == 'current' and not _from_record | bool", "{{ _src_host }}", True))
+sx = bt("The source this run loads")["ansible.builtin.set_fact"]["_src"]
+check("  the source loaded: the record's, else the snapshot, else this export",
+      [render(sx, _from_record=f, _recorded=r, _mode=m, _snap=SNAP, _export={"stdout_lines": [KV]}).strip() for f, r, m in (
+          (True, "/r/x.kv.json", "current"), (False, "", "snapshot"), (False, "", "current"))], ["/r/x.kv.json", SNAP, KV])
+fe, rec = bt("The export fetched to the controller"), bt("The source recorded")
+check("  the export fetched off its server (the controller's copy 0700/0600), the source recorded on every server before Patroni stops",
+      (fe["ansible.builtin.fetch"]["dest"], fe.get("when"), [x["mode"] for x in bt("The controller's copy")["loop"]],
+       rec["ansible.builtin.lineinfile"]["line"], rec.get("when"), "run_once" in rec, bi(rec) < bi(bt("Patroni stopped and off at a boot"))),
+      ("{{ backups_here }}/", "_mode == 'current' and not _from_record | bool", ["0700", "0600"], "source={{ _src }}", "not _from_record | bool", False, True))
+asd = bt("Its data directory set aside")["ansible.builtin.shell"]["cmd"]
+data = os.path.join(work, "consul", "data"); st = os.path.join(work, "consul", "restore-consul.state")
+def tree(d):
+    return sorted(os.path.relpath(os.path.join(p, f), d) for p, _, fs in os.walk(d) for f in fs) if os.path.isdir(d) else None
+def fill(d, files):
+    os.makedirs(d, exist_ok=True)
+    for f, v in files.items():
+        os.makedirs(os.path.dirname(os.path.join(d, f)), exist_ok=True)
+        open(os.path.join(d, f), "w").write(v)
+def aside_run(stamp):
     # not root here: the owner Consul's on the Pi, the moves the same
-    r = subprocess.run(["bash", "-c", render(asd, consul_data=data, _aside=side).replace("-o consul -g consul ", "")], capture_output=True, text=True)
-    listing = lambda d: sorted(os.path.relpath(os.path.join(p, f), d) for p, _, fs in os.walk(d) for f in fs)
-    return r.returncode, listing(data), listing(side), open(os.path.join(data, "node-id")).read() if os.path.exists(os.path.join(data, "node-id")) else None
-check("each server's data directory set aside whole (never deleted), a new one holding only its node-id and gossip keyring",
-      aside_run(), (0, ["node-id", "serf/local.keyring", "serf/remote.keyring"],
-                    ["node-id", "raft/raft.db", "serf/local.keyring", "serf/remote.keyring"], "id-1"))
-check("  no rm anywhere in it; the time it is set aside under one for every server (run_once)",
-      (" rm " not in " " + asd, rt("The time the data directories are set aside under").get("run_once")), (True, True))
+    cmd = render(asd, consul_data=data, restore_state=st, _stamp=stamp, _from="2.0.4").replace("-o consul -g consul ", "")
+    return sh(cmd)
+SERVER = {"node-id": "id-1", "raft/raft.db": "raft", "serf/local.keyring": "k1", "serf/remote.keyring": "k2"}
+fill(data, SERVER); open(st, "w").write(f"source={KV}\n")
+r1 = aside_run("T1")
+first = (r1.returncode, r1.stdout.strip() == data + ".pre-restore-T1", tree(data), tree(data + ".pre-restore-T1"), open(st).read())
+fill(data, {"raft/raft.db": "a failed run's new cluster"})
+r2 = aside_run("T2")
+second = (r2.returncode, r2.stdout.strip() == data + ".pre-restore-T1", tree(data + ".failed-restore-T2"), tree(data + ".pre-restore-T1"),
+          open(os.path.join(data, "node-id")).read() if os.path.exists(os.path.join(data, "node-id")) else None)
+check("the first set-aside: the data directory moved whole to .pre-restore-<time> and recorded (its directory, the version left), "
+      "a new one holding only the node-id and the keyrings",
+      first, (0, True, ["node-id", "serf/local.keyring", "serf/remote.keyring"], sorted(SERVER),
+              f"source={KV}\naside={data}.pre-restore-T1\nfrom=2.0.4\n"))
+check("  a run again: the failed run's new directory moved aside as a failed one, the state before still the recorded one, the node-id "
+      "carried from it", second, (0, True, ["node-id", "raft/raft.db", "serf/local.keyring", "serf/remote.keyring"], sorted(SERVER), "id-1"))
+for gone in ("node-id", "serf/local.keyring"):
+    for d in (data, data + ".pre-restore-T1", data + ".failed-restore-T2", data + ".pre-restore-T3"):
+        shutil.rmtree(d, ignore_errors=True)
+    fill(data, {k: v for k, v in SERVER.items() if k != gone}); open(st, "w").write(f"source={KV}\n")
+    r = aside_run("T3")
+    check(f"  a state before without its {gone} - failed (a new id would clash with the catalog; an empty keyring reads consul.hcl's)",
+          (r.returncode != 0, f"{gone} missing" in r.stderr), (True, True))
+check("  no rm anywhere in it; its time one for every server", (" rm " not in " " + asd, bt("The time this run sets directories aside").get("run_once")),
+      (True, True))
 
-# ── Patroni's stale keys, consul stubbed: its leader and members deleted, the rest kept ──────────────────────────
-dk = rt("Patroni's leader and member keys from the snapshot deleted")
-cbin = os.path.join(work, "cbin"); os.makedirs(cbin); clog = os.path.join(work, "consul.log")
-open(os.path.join(cbin, "consul"), "w").write(f'#!/bin/bash\necho "$*" >> {clog}\n')
-os.chmod(os.path.join(cbin, "consul"), 0o755)
-r = subprocess.run(["bash", "-c", render(dk["ansible.builtin.shell"]["cmd"], patroni_scope="schnappy-postgres")], capture_output=True, text=True,
-                   env=dict(os.environ, PATH=cbin + ":" + os.environ["PATH"]))
-check("the snapshot's Patroni leader key and member keys deleted - its initialize, config and history kept - once, on pi1",
-      (r.returncode, open(clog).read().splitlines(), dk.get("run_once"), dk.get("delegate_to")),
-      (0, ["kv delete service/schnappy-postgres/leader", "kv delete -recurse service/schnappy-postgres/members/"], True, "pi1"))
+# ── the load: the snapshot restored, or the export imported and compared ─────────────────────────────────────────
+rs, im = bt("The snapshot restored (the snapshot source)"), bt("The export imported and compared key by key")
+check("the snapshot source restores the snapshot, the current one imports the export - one or the other, never both; both on the "
+      "source's server, and not on a run again after the load",
+      (rs["ansible.builtin.command"]["argv"], rs.get("when"), im.get("when"), rs.get("delegate_to"), im.get("delegate_to")),
+      (["consul", "snapshot", "restore", "{{ _src }}"], "_mode == 'snapshot' and not _restored_already | bool",
+       "_mode == 'current' and not _restored_already | bool", "{{ _src_host }}", "{{ _src_host }}"))
+tool("consul", 'echo "$*" >> "$W/consul.log"; case "$1 $2" in '
+               '"kv import") cp "${3#@}" "$W/store.json"; [ -z "${LOSE:-}" ] || sed -i "s/MQ==/ZGlmZg==/" "$W/store.json" ;; '
+               '"kv export") cat "$W/store.json" ;; "kv delete") ;; '
+               '"kv get") [ "$3" = service/pg/initialize ] && echo "${DCS_ID:-7300}" ;; esac')
+src_file = os.path.join(work, "export.json"); open(src_file, "w").write(json.dumps(whole))
+imp = lambda **e: sh(render(im["ansible.builtin.shell"]["cmd"], _src=src_file), **e)
+check("  the import compared key by key with the export (flags and values) - a key that came out different fails, never counted as loaded",
+      (imp().stdout.strip(), imp(LOSE="1").returncode != 0), ("3", True))
+dk = bt("Patroni's leader, member and failover keys deleted")
+open(os.path.join(work, "consul.log"), "w").close()
+r = sh(render(dk["ansible.builtin.shell"]["cmd"], patroni_scope="pg"))
+check("Patroni's leader, member and failover keys deleted - its initialize, config and history kept - once, on the source's server",
+      (r.returncode, open(os.path.join(work, "consul.log")).read().splitlines(), dk.get("run_once"), dk.get("delegate_to")),
+      (0, ["kv delete service/pg/leader", "kv delete -recurse service/pg/members/", "kv delete service/pg/failover"], True, "{{ _src_host }}"))
+check("  the load and the deletion recorded after both (a run again takes up after them)",
+      (bt("The load and the deletion recorded")["ansible.builtin.lineinfile"]["line"], bi(dk) < bi(bt("The load and the deletion recorded"))),
+      ("restored={{ _src | basename }}", True))
+sid = bt("The keys' cluster the one Postgres runs")["ansible.builtin.shell"]["cmd"]
+tool("runuser", 'echo "${PG_ID:-7300}"')
+check("  the keys' cluster (initialize) the system Postgres runs - the same: on; another (a Postgres rebuilt since) - failed before "
+      "Patroni starts", ([sh(render(sid, patroni_scope="pg"), PG_ID=p).returncode for p in ("7300", "9999")],
+                         bi(bt("The keys' cluster")) < bi(bt("Patroni started on the primary's Pi first"))), ([0, 1], True))
 
-# ── the order inside the block, and its rescue ───────────────────────────────────────────────────────────────────
-B_ = blk["block"]
-bt = lambda name: next(t for t in B_ if str(t.get("name", "")).startswith(name))
-bi = B_.index
-order = ["Their timers stopped", "Patroni paused", "Patroni stopped on both Pis", "Postgres still running on both",
-         "Vault stopped on both Pis", "Neither started at a boot", "Consul stopped on every server", "Its data directory set aside",
-         "The kept binary back", "Started - a new cluster", "The new cluster - three voters", "The snapshot restored",
-         "After it - three voters", "Each agent on the snapshot's version", "Patroni's leader and member keys",
-         "Patroni started on the primary's Pi first", "It holds the leader key", "Then on the replica", "The cluster healthy",
-         "The primary answering through HAProxy", "Vault and its unseal enabled again", "Vault started", "Unsealed by the Pi's own script",
-         "Vault unsealed - active or standby", "Each Vault sees a leader", "Exactly one Vault active", "The Consul-locked jobs' timers started again"]
-check("the block: the jobs' timers off, Patroni paused THEN stopped (Postgres kept), Vault stopped and off at a boot, Consul "
-      "stopped, set aside, the kept binary, a new cluster, the snapshot, healthy, Patroni's stale keys gone, the primary's Patroni "
-      "first, the replica, the database through HAProxy, Vault unsealed, the timers back",
-      [bi(bt(n)) for n in order] == sorted(bi(bt(n)) for n in order), True)
-check("  Patroni started on the primary's Pi alone first, the replica after; the primary holding the leader key between",
-      (bt("Patroni started on the primary's Pi first").get("when"), bt("It holds the leader key").get("when"),
-       bt("Then on the replica").get("when")),
-      ("inventory_hostname == _pg_primary", "inventory_hostname == _pg_primary",
-       "inventory_hostname in groups['pis'] and inventory_hostname != _pg_primary"))
+# ── the order and what each step does ────────────────────────────────────────────────────────────────────────────
+order = ["The Consul-locked jobs' timers - enabled", "Their timers stopped", "The jobs read again", "Vault stopped on both Pis",
+         "Neither started at a boot", "The whole KV exported", "The source this run loads", "The export fetched", "The source recorded",
+         "Patroni paused", "Patroni stopped and off at a boot", "Postgres still running on both", "Consul stopped on every server",
+         "Its data directory set aside", "The kept binary back", "Started - a new cluster", "The new cluster - three voters",
+         "The snapshot restored (the snapshot source)", "The export imported", "After it - three voters", "Each agent on the version",
+         "Patroni's leader, member and failover keys", "The load and the deletion recorded", "The keys' cluster", "Vault and its unseal enabled",
+         "Vault started", "Unsealed by the Pi's own script", "Vault unsealed - active or standby", "Exactly one Vault active",
+         "The root token works", "Patroni on at a boot again", "Patroni started on the primary's Pi first", "It holds the leader key",
+         "Then on the replica", "The cluster healthy", "Not paused", "No pause marker left", "The primary answering through HAProxy",
+         "The Consul-locked jobs' timers started again", "The record removed"]
+check("the block: timers off and the jobs read again, Vault stopped (before the export), the source taken and recorded, Patroni paused "
+      "THEN stopped (Postgres kept), Consul replaced, the keys loaded, healthy, Patroni's stale keys gone, the system id, Vault back "
+      "(before Patroni - it needs nothing of it), the primary's Patroni first, not paused, the database through HAProxy, the timers, "
+      "the record gone", [bi(bt(n)) for n in order] == sorted(bi(bt(n)) for n in order), True)
+skipped = ["Vault stopped on both Pis", "Neither started at a boot", "Patroni paused", "Patroni stopped and off at a boot", "Postgres still running on both",
+           "Consul stopped on every server", "The time this run sets directories aside", "Its data directory set aside", "The kept binary back",
+           "Started - a new cluster", "The new cluster - three voters", "The snapshot restored (the snapshot source)", "The export imported",
+           "Patroni's leader, member and failover keys", "The load and the deletion recorded"]
+check("  a run again after the load: every stop, the set-aside and the load itself skipped (never a second load); the health reads, "
+      "Vault, Patroni and the checks run", ([n for n in skipped if "not _restored_already | bool" not in str(bt(n).get("when"))],
+                                            [n for n in order if n not in skipped and "_restored_already" in str(bt(n).get("when"))]), ([], []))
+units = {n: (bt(n).get("ansible.builtin.systemd") or {}) for n in (
+    "Patroni stopped and off at a boot", "Vault stopped on both Pis", "Neither started at a boot", "Consul stopped on every server",
+    "Started - a new cluster", "Patroni on at a boot again", "Patroni started on the primary's Pi first", "Then on the replica",
+    "Vault and its unseal enabled again", "Vault started", "Unsealed by the Pi's own script", "Their timers stopped",
+    "The Consul-locked jobs' timers started again")}
+check("  each unit the step names, to the state it names - and only where it runs",
+      {n: (u.get("name"), u.get("state"), u.get("enabled"), str(bt(n).get("when")).split(" and not _restored_already")[0]) for n, u in units.items()},
+      {"Patroni stopped and off at a boot": ("patroni", "stopped", False, "inventory_hostname in groups['pis']"),
+       "Vault stopped on both Pis": ("vault", "stopped", None, "inventory_hostname in groups['pis']"),
+       "Neither started at a boot": ("{{ item }}", None, False, "inventory_hostname in groups['pis']"),
+       "Consul stopped on every server": ("consul", "stopped", None, "not _restored_already | bool"),
+       "Started - a new cluster": ("consul", "started", None, "not _restored_already | bool"),
+       "Patroni on at a boot again": ("patroni", None, True, "inventory_hostname in groups['pis']"),
+       "Patroni started on the primary's Pi first": ("patroni", "started", None, "inventory_hostname == _pg_primary"),
+       "Then on the replica": ("patroni", "started", None, "inventory_hostname in groups['pis'] and inventory_hostname != _pg_primary"),
+       "Vault and its unseal enabled again": ("{{ item }}", None, True, "inventory_hostname in groups['pis']"),
+       "Vault started": ("vault", "started", None, "inventory_hostname in groups['pis']"),
+       "Unsealed by the Pi's own script": ("vault-unseal", "restarted", None, "inventory_hostname in groups['pis']"),
+       "Their timers stopped": ("{{ item }}.timer", "stopped", None, "inventory_hostname in groups['pis']"),
+       "The Consul-locked jobs' timers started again": ("{{ item.item }}.timer", "started", None, "item.stdout | default('') == 'enabled'")})
+check("  the unseal bounded (420 s); the kept binary the version gone back to, copied on the server itself; the new directory Consul's",
+      (bt("Unsealed by the Pi's own script").get("timeout"), bt("The kept binary back")["ansible.builtin.copy"]["src"],
+       bt("The kept binary back")["ansible.builtin.copy"].get("remote_src"), "install -d -o consul -g consul -m 0755 {{ consul_data }} {{ consul_data }}/serf" in asd),
+      (420, "/usr/local/bin/consul-{{ _to }}", True, True))
+check("  the timers judged by whether they are enabled (a run again after one that stopped them still starts them)",
+      (bt("The Consul-locked jobs' timers - enabled")["ansible.builtin.command"]["argv"][:2],
+       [condition(bt("The Consul-locked jobs' timers started again")["when"], item=i) for i in ({"stdout": "enabled"}, {"stdout": "disabled"}, {"skipped": True})]),
+      (["systemctl", "is-enabled"], [True, False, False]))
 lk = bt("It holds the leader key")["until"]
 check("  the leader key the primary's (its value its name); another Pi's, or none yet - not yet",
       [condition(lk, _leader_key={"status": s, "content": c}, _pg_primary="pi1") for s, c in ((200, "pi1"), (200, "pi1\n"), (200, "pi2"), (404, ""))],
       [True, True, False, False])
 fresh, after = bt("The new cluster - three voters")["until"], bt("After it - three voters")["until"]
 srv = lambda voters, leaders: [{"Voter": i < voters, "Leader": i < leaders, "Healthy": True} for i in range(3)]
-check("  the new cluster: three voters and a leader (autopilot may still call it unhealthy); after the restore, healthy as well",
+check("  the new cluster: three voters and a leader (autopilot may still call it unhealthy); after the load, healthy as well",
       ([condition(fresh, _fresh={"status": s, "json": {"Servers": srv(v, l), "Healthy": False}}) for s, v, l in ((429, 3, 1), (200, 2, 1), (200, 3, 0))],
        [condition(fresh, _fresh={"status": -1})],
        [condition(after, _after={"status": s, "json": {"Servers": srv(3, 1), "Healthy": h}}) for s, h in ((200, True), (429, False), (200, False))]),
       ([True, False, False], [False], [True, False, False]))
-check("  the kept binary the snapshot's version's; the restore and both health reads on pi1, once",
-      (bt("The kept binary back")["ansible.builtin.copy"]["src"], bt("The snapshot restored")["ansible.builtin.command"]["argv"],
-       [bt(n).get("delegate_to") for n in ("The new cluster - three voters", "The snapshot restored", "After it - three voters")]),
-      ("/usr/local/bin/consul-{{ _snap_version }}", ["consul", "snapshot", "restore", "{{ _snap }}"], ["pi1"] * 3))
+check("  each agent on the version gone back to - else failed",
+      [condition(bt("Each agent on the version")["failed_when"], _self_after={"json": {"Config": {"Version": v}}}, _to="1.22.7") for v in ("1.22.7", "2.0.4")],
+      [False, True])
 pg = bt("Postgres still running on both")["ansible.builtin.shell"]["cmd"]
-check("  after Patroni stopped: the primary still out of recovery, the replica still in it",
-      [render(pg, inventory_hostname=h, _pg_primary="pi1").count(f'= "{w}"') for h, w in (("pi1", "t"), ("pi2", "f"))], [1, 1])
-check("  Vault and its unseal off at a boot meanwhile, on again after; the timers started again only where they ran",
-      (bt("Neither started at a boot")["loop"], bt("Neither started at a boot")["ansible.builtin.systemd"]["enabled"],
-       bt("Vault and its unseal enabled again")["loop"], bt("Vault and its unseal enabled again")["ansible.builtin.systemd"]["enabled"],
-       [condition(bt("The Consul-locked jobs' timers started again")["when"], item={"stdout": s}) for s in ("active", "inactive")],
-       [condition(bt("Their timers stopped")["when"], item=i) for i in ({"stdout": "active"}, {"skipped": True})]),
-      (["vault-unseal", "vault"], False, ["vault", "vault-unseal"], True, [True, False], [True, False]))
-resc = render(blk["rescue"][0]["ansible.builtin.fail"]["msg"], ansible_failed_task={"name": "The snapshot restored"},
-              ansible_failed_result={"msg": "boom"}, _aside="/var/lib/consul/data.pre-restore-x", _snap=A, _pg_primary="pi1",
-              consul_data="/var/lib/consul/data")
-check("  the rescue: where it failed, Postgres unmanaged and which is the primary, the set-aside directories and the untouched "
-      "snapshot named, run it again with the same confirm, or forward again (put each directory back, the new binary, the "
-      "primary's Patroni first)",
-      [x in resc for x in ('"The snapshot restored"', "boom", "unmanaged", "pi1 the primary", "/var/lib/consul/data.pre-restore-x", A,
-                           "task deploy:consul:way-back again", "Forward again", "on pi1 first", "REFUSED" not in resc and "FAILED")],
-      [True] * 10)
-done = render(rt("Restored - and what to run again")["ansible.builtin.debug"]["msg"], _snap_version="1.22.7",
-              ansible_play_hosts=["pi1", "pi2", "target"], _snap=A, _aside="/var/lib/consul/data.pre-restore-x", _pg_primary="pi1",
-              groups=PIS, hostvars={"pi1": {"_vault_leader": {"json": {"leader_address": "https://10.0.0.1:8200"}}}})
-check("the end names what to run again (the rotated tokens back stale in Vault, preview environments, External Secrets, "
-      "Patroni's dynamic settings) and where the old data lies",
-      [x in done for x in ("task deploy:ci-bot", "task deploy:argocd-reader", "preview environments", "force-sync", "edit-config",
-                           "/var/lib/consul/data.pre-restore-x")], [True] * 6)
+tool("runuser", 'echo "$PG_ANSWER"')
+check("  after Patroni stopped: the primary still out of recovery and the replica in it - the other way round fails",
+      [sh(render(pg, inventory_hostname=h, _pg_primary="pi1"), PG_ANSWER=a).returncode for h, a in (("pi1", "t"), ("pi2", "f"), ("pi1", "f"), ("pi2", "t"))],
+      [0, 0, 1, 1])
+vh = bt("Vault unsealed - active or standby")
+check("Vault: unsealed (200 active, 429 standby - 503 sealed, 501 uninitialised, 500 no)",
+      [condition(vh["until"], _vault={"status": c}) for c in (200, 429, 503, 501, 500)], [True, True, False, False, False])
+oa = bt("Exactly one Vault active, both read together")
+tool("vault", '[ "$1" = status ] || exit 9; a=${VAULT_ADDR#https://}; a=${a%:8200}; case " ${ACTIVE:-} " in *" $a "*) s=true ;; *) s=false ;; esac; '
+              'echo "{\\"is_self\\": $s, \\"sealed\\": false}"')
+one_active = lambda act: sh(render(oa["ansible.builtin.shell"]["cmd"], groups=PIS, hostvars={"pi1": {"ansible_host": "10.0.0.4"}, "pi2": {"ansible_host": "10.0.0.6"}}),
+                            ACTIVE=act).returncode
+check("  exactly one Vault active, both Pis read together and again until one says so (a carried lock frees in under a minute): "
+      "one - on; none, or both - not yet", ([one_active(a) for a in ("10.0.0.4", "10.0.0.6", "", "10.0.0.4 10.0.0.6")],
+                                           oa.get("retries"), oa.get("until"), oa.get("run_once")), ([0, 0, 1, 1], 24, "_one_active.rc == 0", True))
+check("  the root token proven on Vault now (the token store carried - a snapshot's may predate it), never logged",
+      ("vault token lookup" in bt("The root token works")["ansible.builtin.shell"]["cmd"], bt("The root token works").get("no_log")), (True, True))
+hp = V["healthy_py"]
+health = lambda m: subprocess.run(["python3", "-c", hp], input=json.dumps(m), capture_output=True, text=True).returncode
+LD = {"Member": "pi1", "Role": "Leader", "State": "running"}
+check("Patroni healthy: a leader running and the replica streaming with no lag - a lagging, stopped or missing replica, no leader, "
+      "or two - not", [health(m) for m in ([LD, {"Member": "pi2", "Role": "Replica", "State": "streaming", "Replay Lag": 0}],
+                                          [LD, {"Member": "pi2", "Role": "Replica", "State": "streaming", "Replay Lag": 4096}],
+                                          [LD, {"Member": "pi2", "Role": "Replica", "State": "stopped", "Replay Lag": 0}], [LD],
+                                          [{"Member": "pi2", "Role": "Replica", "State": "streaming", "Replay Lag": 0}], [LD, dict(LD, Member="pi2")])],
+      [0, 1, 1, 1, 1, 1])
+check("  not paused after (its own check), no marker left - else failed",
+      (bt("Not paused")["ansible.builtin.script"]["cmd"].endswith("patroni-pause.py check"),
+       [condition(bt("No pause marker left")["failed_when"], _marker_after={"rc": r}) for r in (0, 1)]), (True, [True, False]))
+hx = bt("The primary answering through HAProxy")
+tool("systemctl", 'echo "${BOUNCER:-disabled}"')
+open(os.path.join(work, "psql.log"), "w").close()
+hxr = lambda **e: sh(render(hx["ansible.builtin.shell"]["cmd"], primary_through_proxies=V["primary_through_proxies"]), "right\n", **e).returncode
+r_ok = hxr(BOUNCER="enabled")
+ports_seen = sorted({l.split("-p ")[1].split()[0] for l in open(os.path.join(work, "psql.log")).read().splitlines()})
+check("  the primary through HAProxy (:5000) and PgBouncer (:6432, where enabled - a failed one is no skip) - a standby on either "
+      "fails; the password on stdin, never logged",
+      (r_ok, ports_seen, hxr(BOUNCER="enabled", PSQL_NO="6432"), hxr(PSQL_NO="5000"), hx.get("no_log"), hx["ansible.builtin.shell"].get("stdin")),
+      (0, ["5000", "6432"], 1, 1, True, "{{ postgres_admin_password }}"))
+
+# ── the rescue and the end ───────────────────────────────────────────────────────────────────────────────────────
+resc = lambda **v: render(blk["rescue"][0]["ansible.builtin.fail"]["msg"], ansible_failed_task={"name": "The export imported"},
+                          ansible_failed_result={"msg": "boom"}, _pg_primary="pi1", consul_data="/var/lib/consul/data", _from="2.0.4",
+                          _src_host="pi1", restore_state=V["restore_state"], pause_marker=V["pause_marker"], **v)
+r1 = resc(_set_aside={"stdout_lines": ["/var/lib/consul/data.pre-restore-T1"]}, _orig_aside="", _src=KV, _recorded="")
+r2 = resc(_orig_aside="/var/lib/consul/data.pre-restore-T1", _recorded=KV)
+r0 = resc(_orig_aside="", _recorded="", _snap=SNAP)
+check("the rescue: where it failed, Postgres unmanaged and the primary, the untouched source, the state before (this run's set-aside, "
+      "or the record's on a run again), run again, forward again in full (the directory back, the new binary, the pause resumed and "
+      "its marker deleted, Vault enabled, the timers), never deploy:vault-pi",
+      ([x in r1 for x in ('"The export imported"', "boom", "unmanaged", "pi1 the primary", KV, "/var/lib/consul/data.pre-restore-T1",
+                          "task deploy:consul:way-back again", "Forward again", "/usr/local/lib/consul-2.0.4/consul", "patronictl resume",
+                          "consul kv delete ansible/patroni-paused-by", "enable --now vault vault-unseal", "pi-tier0-backup.timer",
+                          "Never task deploy:vault-pi")],
+       "/var/lib/consul/data.pre-restore-T1" in r2 and KV in r2, "not set aside yet" in r0 and SNAP in r0),
+      ([True] * 14, True, True))
+done = lambda m: render(rt("Back - and what to run again")["ansible.builtin.debug"]["msg"], _to="1.22.7", _from="2.0.4", _mode=m,
+                        ansible_play_hosts=HOSTS, _src=KV if m == "current" else SNAP, _set_aside={"stdout_lines": ["/d.pre-restore-T1"]},
+                        _orig_aside="", _pg_primary="pi1", _one_active={"stdout": "active: 10.0.0.4"})
+check("the end: what was loaded and whether anything was lost; after a snapshot, what to run again (the rotated tokens back stale, "
+      "preview environments, External Secrets, Patroni's settings) - after the current KV, nothing",
+      ([x in done("snapshot") for x in ("everything written since lost", "task deploy:ci-bot", "task deploy:argocd-reader", "preview environments",
+                                         "force-sync", "edit-config", "/d.pre-restore-T1")],
+       ["nothing in the KV lost" in done("current"), "deploy:ci-bot" in done("current")]), ([True] * 7, [True, False]))
 check("  a run without every server failing everywhere (any_errors_fatal)", RP.get("any_errors_fatal"), True)
 
 # ── the copy's rehearsal ─────────────────────────────────────────────────────────────────────────────────────────
 CW = yaml.safe_load(open("tests/ansible/copy/consul-way-back-check.yml"))
 check("the rehearsal behind the Vagrant guard first (it guards every host), then the servers' play, then External Secrets' on the node",
-      (CW[0].get("ansible.builtin.import_playbook"), len(CW), CW[1].get("hosts"), CW[2].get("hosts")),
-      ("../vagrant-only-play.yml", 3, "pi1,pi2,target", "target"))
+      (CW[0].get("ansible.builtin.import_playbook"), len(CW), CW[1].get("hosts"), CW[2].get("hosts")), ("../vagrant-only-play.yml", 3, "pi1,pi2,target", "target"))
 C = CW[1]["tasks"]
 ct = lambda name: next(t for t in C if str(t.get("name", "")).startswith(name))
 first_chk = C[0]["ansible.builtin.assert"]["that"]
-check("  a phase and a marker name required (the task's, one per run)",
-      [condition(first_chk, **v) for v in ({"phase": "verify", "marker": "way-back-20261127T010000Z"}, {"phase": "x", "marker": "way-back-1Z"},
-                                          {"phase": "before"}, {"phase": "before", "marker": "{{ lookup('pipe','date') }}"})],
-      [True, False, False, False])
-check("  before: a newer target required; verify: the first marker kept with its value, the second lost; each agent on the pin",
+check("  a phase, a marker name and a mode required (the task's)",
+      [condition(first_chk, **v) for v in ({"phase": "verify", "marker": "way-back-20261127T010000Z"}, {"phase": "after", "marker": "way-back-1Z", "mode": "snapshot"},
+                                          {"phase": "x", "marker": "way-back-1Z"}, {"phase": "before"}, {"phase": "before", "marker": "way-back-1Z", "mode": "both"})],
+      [True, True, False, False, False])
+check("  each phase's tasks run in that phase alone",
+      sorted({str(t.get("when")).split(" and ")[0] for t in C[1:]}), ["phase == 'after'", "phase == 'before'", "phase == 'cleanup'", "phase == 'verify'",
+                                                                      "phase in ['before', 'verify']"])
+check("  before: a newer target required; after: the second marker written then",
       ([condition(ct("Before - a newer version")["ansible.builtin.assert"]["that"], consul_version="1.22.7", **({} if k is None else {"consul_to": k}))
-        for k in ("2.0.4", "1.22.7", None)],
-       [condition(ct("Verify - the marker from before there")["ansible.builtin.assert"]["that"], marker="way-back-1Z", _markers={"stdout_lines": m},
-                  _value={"stdout": v}) for m, v in ((["way-back/way-back-1Z-before"], "before\n"),
-                                                      (["way-back/way-back-1Z-after", "way-back/way-back-1Z-before"], "before"),
-                                                      ([], ""), (["way-back/way-back-1Z-before"], "after"))],
-       "_self.json.Config.Version == consul_version" in ct("Before and verify - each agent on the pin")["until"]),
-      ([True, False, False], [True, False, False, False], True))
-check("  verify: Patroni healthy, the database writable through each Pi's HAProxy (a transaction id), one Vault active",
-      ("patronictl" in ct("Verify - Patroni healthy")["ansible.builtin.shell"]["cmd"],
+        for k in ("2.0.4", "1.22.7", None)], ct("After - the marker from after")["ansible.builtin.command"]["argv"][-2:], ct("After - the marker from after").get("when")),
+      ([True, False, False], ["way-back/{{ marker }}-after", "after"], "phase == 'after'"))
+sw = ct("After - a switchover to the replica")["ansible.builtin.shell"]["cmd"]
+tool("patronictl", 'echo "$*" >> "$W/patronictl.log"; case "$*" in *"list -f json"*) echo \'[{"Member": "pi1", "Role": "Leader", "State": "running"}, {"Member": "pi2", "Role": "Replica", "State": "streaming"}]\' ;; esac')
+r = sh(render(sw, patronictl="patronictl -c x"))
+check("  after: a switchover from the leader to the replica (the snapshot's leader key then names a Pi no longer the primary), "
+      "waited on until the new primary serves", (r.stdout.strip(), "switchover --leader pi1 --candidate pi2 --force" in open(os.path.join(work, "patronictl.log")).read(),
+                                                 "_switched.stdout" in ct("After - the new primary serving")["ansible.builtin.shell"]["cmd"]), ("pi2", True, True))
+noted = render(ct("After - noted on the controller")["ansible.builtin.copy"]["content"], groups=PIS,
+               hostvars={"pi1": {"_pg_before": {"stdout": "f|3"}}, "pi2": {"_pg_before": {"stdout": "t|3"}}})
+same = ct("Verify - the same primary on the same timeline")
+same_now = lambda a, b: render(same["vars"]["_now"], groups=PIS, hostvars={"pi1": {"_pg_after": {"stdout": a}}, "pi2": {"_pg_after": {"stdout": b}}}).strip()
+check("  the primary and its timeline noted after the switchover, and the same wanted after the way back - a failover (another primary) "
+      "or a promotion (another timeline) fails", (noted.strip(), same_now("f|3", "t|3"), same_now("t|4", "f|4"), same_now("f|3", "t|4"),
+                                                  "lookup('ansible.builtin.file', pg_noted)" in same["ansible.builtin.assert"]["that"]),
+      ("pi2 t|3", "pi2 t|3", "pi1 t|4", "pi2 t|4", True))
+check("  the restore's confirmation: the pin's name for the current KV, the newest snapshot's for a snapshot",
+      [render(ct("After - the restore's confirmation")["ansible.builtin.copy"]["content"], mode=m, consul_version="1.22.7", _newest={"stdout": SNAP}).strip()
+       for m in ("current", "snapshot")], ["consul-1.22.7", os.path.basename(SNAP)])
+mk = ct("Verify - the marker from before there")
+want = lambda m: render(mk["vars"]["_want"], marker="way-back-1Z", mode=m)
+check("  verify: the first marker kept with its value; the second kept for the current KV, gone for the snapshot",
+      [condition(mk["ansible.builtin.assert"]["that"], marker="way-back-1Z", mode=m, _want=want(m), _markers={"stdout_lines": ms}, _value={"stdout": v})
+       for m, ms, v in (("current", ["way-back/way-back-1Z-after", "way-back/way-back-1Z-before"], "before\n"), ("current", ["way-back/way-back-1Z-before"], "before"),
+                        ("snapshot", ["way-back/way-back-1Z-before"], "before"), ("snapshot", ["way-back/way-back-1Z-after", "way-back/way-back-1Z-before"], "before"),
+                        ("snapshot", ["way-back/way-back-1Z-before"], "after"))],
+      [True, False, True, False, False])
+tm = ct("Verify - the tier-0 backup and restore-check timers")["ansible.builtin.shell"]["cmd"]
+tool("systemctl", 'case "$1 $2" in "is-enabled pi-tier0-backup.timer") echo "${E1:-enabled}" ;; "is-enabled pi-restore-check.timer") echo "${E2:-enabled}" ;; '
+                  '"is-active pi-tier0-backup.timer") echo "${A1:-active}" ;; "is-active pi-restore-check.timer") echo "${A2:-active}" ;; esac')
+check("  verify: the locked jobs' timers active again where enabled - one enabled and stopped fails; a disabled one stopped is fine",
+      [sh(tm, **e).returncode for e in ({}, {"A2": "inactive"}, {"E2": "disabled", "A2": "inactive"})], [0, 1, 0])
+check("  verify: Patroni healthy, not paused, no marker; the database writable through each Pi's HAProxy (a transaction id); one Vault active",
+      ("patronictl" in ct("Verify - Patroni healthy")["ansible.builtin.shell"]["cmd"], ct("Verify - Patroni not paused")["ansible.builtin.script"]["cmd"].endswith("patroni-pause.py check"),
+       [condition(ct("Verify - no pause marker left")["failed_when"], _marker_left={"rc": r}) for r in (0, 1)],
        "txid_current()" in ct("Verify - the database writable")["ansible.builtin.shell"]["cmd"] and "-p 5000" in ct("Verify - the database writable")["ansible.builtin.shell"]["cmd"],
        [condition(ct("Verify - exactly one Vault active")["ansible.builtin.assert"]["that"], groups=PIS,
                   hostvars={"pi1": {"_vault": {"status": a}}, "pi2": {"_vault": {"status": b}}}) for a, b in ((200, 429), (429, 429), (200, 200))]),
-      (True, True, [True, False, False]))
+      (True, True, [True, False], True, [True, False, False]))
 check("  cleanup: both markers deleted by their prefix", ct("Cleanup - both markers gone")["ansible.builtin.command"]["argv"],
       ["consul", "kv", "delete", "-recurse", "way-back/{{ marker }}-"])
 E = CW[2]["tasks"]
@@ -237,16 +509,18 @@ synced = et("Verify - refreshed after that and Ready")["until"]
 check("  External Secrets: its store Ready; an ExternalSecret force-synced now, refreshed AFTER the force and Ready",
       ([condition(synced, _since={"stdout_lines": ["2026-11-27T10:00:00Z"]}, _synced={"stdout": o})
         for o in ("2026-11-27T10:00:05Z True", "2026-11-27T09:59:00Z True", "2026-11-27T10:00:05Z False", "")],
-       all(t.get("when") == "phase == 'verify'" for t in E)),
-      ([True, False, False, False], True))
+       all(t.get("when") == "phase == 'verify'" for t in E)), ([True, False, False, False], True))
 task_cmd = open("Taskfile.yml").read().split("  test:copy:consul-way-back:")[1].split("\n\n")[0]
 seq = [l.strip() for l in task_cmd.splitlines() if l.strip().startswith("pb ")]
-check("  the task: before, production's upgrade-consul.yml to the target, after, production's restore-consul.yml with the upgrade's "
-      "snapshot confirmed, verify, cleanup - each production playbook behind the Vagrant guard, secrets kept out, cleanup on failure too",
+check("  the task: before, production's upgrade-consul.yml to the target, after, production's restore-consul.yml from the mode's source "
+      "with the confirmation the check wrote, verify, cleanup - each production playbook behind the Vagrant guard, secrets kept out, "
+      "cleanup on failure too; the mode current unless asked, nothing else taken",
       ([("phase=" + l.split("phase=")[1].split()[0]) if "phase=" in l else l.split()[2].split("/")[-1] for l in seq],
        all("vagrant-only-play.yml" in l for l in seq if "playbooks/" in l), "env -i" in task_cmd,
-       "trap 'pb \"$C\" -e phase=cleanup -e marker=\"$M\"' EXIT" in task_cmd and "trap - EXIT" in task_cmd, "consul-way-back-confirm" in task_cmd),
-      (["phase=before", "upgrade-consul.yml", "phase=after", "restore-consul.yml", "phase=verify", "phase=cleanup"], True, True, True, True))
+       "trap 'pb \"$C\" -e phase=cleanup -e marker=\"$M\"' EXIT" in task_cmd and "trap - EXIT" in task_cmd,
+       "consul_restore_from='{{.MODE}}'" in seq[3] and "consul-way-back-confirm" in seq[3], all("mode='{{.MODE}}'" in seq[i] for i in (0, 2, 4)),
+       """MODE: '{{.MODE | default "current"}}'""" in task_cmd, '[ "{{.MODE}}" = current ] || [ "{{.MODE}}" = snapshot ]' in task_cmd),
+      (["phase=before", "upgrade-consul.yml", "phase=after", "restore-consul.yml", "phase=verify", "phase=cleanup"], True, True, True, True, True, True, True))
 print("consul-way-back: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 PY_CWB

@@ -4,8 +4,10 @@
 # done - the other Pi's run, or a failed first run's retry by it. (By the VIP's holder it was none at all when the VIP
 # moved between the two firings; two runs at once both purged, the loser's purge failing after its upload.)
 #   consul.snap        `consul snapshot save` - Vault's data lives in Consul, and Patroni's cluster state; checked
-#                      with `consul snapshot inspect`. Restoring all of it rolls Patroni's state back too: pause
-#                      Patroni first, or restore it into a throwaway agent and import only vault/ from there
+#                      with `consul snapshot inspect`. Restoring all of it rolls Patroni's state back too, and a pause
+#                      does not survive it: Patroni stopped while paused, its leader and member keys deleted after,
+#                      the primary's Patroni started first (restore-consul.yml's sequence) - or restore it into a
+#                      throwaway agent and import only vault/ from there
 #   pg-<db>.dump       pg_dump --format=custom of every Patroni database (Forgejo's, Keycloak's, ...) through HAProxy
 #                      (the primary); each listed back with pg_restore --list
 #   pg-globals.sql     pg_dumpall --globals-only (roles)

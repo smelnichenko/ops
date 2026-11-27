@@ -5,6 +5,7 @@ deploy/ansible/vars/vault-pi-runtime.yml
 deploy/ansible/vars/sealed-secrets-key-backup.yaml
 deploy/ansible/vars/vault-recovery/
 deploy/ansible/vars/vault-upgrade-backups/
+deploy/ansible/vars/consul-upgrade-backups/
 deploy/ansible/venv
 # its collections, as requirements.yml pins them (deploy:install)
 deploy/ansible/collections

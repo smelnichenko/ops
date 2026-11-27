@@ -953,7 +953,7 @@ finally:
     open(TABLE, "w").write(REAL_TABLE)
 # on the REAL table: blocked until their way backs are rehearsed on the copy, even with their command in the plan -
 # clearing `missing` before a way-back check passes fails here (the one-way rule)
-for unit, plan, why in (("hashicorp-vault-2.x", VAULT_PLAN, "the kept old binary back"), ("hashicorp-consul-2.x", CONSUL_PLAN, "consul snapshot restore")):
+for unit, plan, why in (("hashicorp-vault-2.x", VAULT_PLAN, "the kept old binary back"), ("hashicorp-consul-2.x", CONSUL_PLAN, "task test:copy:consul-way-back")):
     rc, calls = night(f"prove {unit} major", plan=plan, files={"list": f"{unit} major schnappy/ops major,one-way,upgrade-cycle\n"})
     check(f"{unit} (one-way, its way back not rehearsed): blocked before anything is built, never merged, its way back named",
           (rc, merged(calls, unit), has(calls, "task test:copy"), why in blocked_why(calls)), (1, False, [], True))

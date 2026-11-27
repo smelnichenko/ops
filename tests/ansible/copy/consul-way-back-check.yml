@@ -1,17 +1,20 @@
 ---
-# Consul's way back, rehearsed on the copy with production's playbooks - task test:copy:consul-way-back runs, in turn:
-# this playbook's `before` (the three servers on setup-consul.yml's pin, healthy; a KV marker written); upgrade-consul.yml
-# to a newer version (the Consul unit's target - its snapshot taken on pi1, the old binary kept, every server moved);
-# `after` (a second marker on the new version; the newest snapshot's name for the restore's confirmation);
-# restore-consul.yml (that snapshot into a new cluster on the pin's binary, Patroni and Vault back); `verify` (the pin on
-# all three, three voters and a leader, the first marker there with its value and the second gone; Patroni healthy and the
-# database writable through each Pi's HAProxy; Vault unsealed, one active; External Secrets reading the restored Vault
-# through the VIP - its store Ready, an ExternalSecret force-synced after the restore); `cleanup` always (both markers
-# deleted). The marker's name is the task's, one per run. Only when this passes may the consul store's `missing` clear
-# (scripts/upgrade-stores.json - the one-way rule: the way back rehearsed first).
+# Consul's way back, rehearsed on the copy with production's playbooks - task test:copy:consul-way-back [MODE=snapshot]
+# runs, in turn: this playbook's `before` (the three servers on setup-consul.yml's pin, healthy; a KV marker written);
+# upgrade-consul.yml to a newer version (the Consul unit's target - its snapshot taken on pi1, the old binary kept, every
+# server moved); `after` (a second marker on the new version; a Patroni switchover, so the snapshot's leader key names the
+# Pi that is no longer the primary - the key restore-consul.yml must delete; the primary and its timeline noted; the
+# restore's confirmation); restore-consul.yml from the running cluster's KV (MODE current, the default) or that snapshot;
+# `verify` (the pin on all three, three voters and a leader; the first marker there with its value, the second there too
+# for the current KV and gone for the snapshot; the primary and its timeline as noted - no failover, no promotion; Patroni
+# healthy, not paused, no marker left, the database writable through each Pi's HAProxy; Vault unsealed, one active; the
+# tier-0 backup and restore-check timers back; External Secrets reading Vault through the VIP - its store Ready, an
+# ExternalSecret force-synced after the way back); `cleanup` always (both markers deleted). The marker's name is the
+# task's, one per run. Only when both modes pass may the consul store's `missing` clear (scripts/upgrade-stores.json -
+# the one-way rule: the way back rehearsed first).
 #
 # Usage: ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/consul-way-back-check.yml
-#          -e phase=before|after|verify|cleanup -e marker=<name> [-e consul_to=<version>]
+#          -e phase=before|after|verify|cleanup -e marker=<name> [-e mode=current|snapshot] [-e consul_to=<version>]
 # (a phase var, not tags: --tags would skip the untagged Vagrant guard play)
 - name: Vagrant VMs only
   ansible.builtin.import_playbook: ../vagrant-only-play.yml
@@ -26,13 +29,16 @@
     consul_version: "{{ _setup.consul_version }}"
     consul_http: http://127.0.0.1:8500
     upgrade_dir: /var/backups/consul-upgrade
+    patronictl: patronictl -c /etc/patroni/patroni.yml
+    pg_noted: "{{ playbook_dir }}/../../../.copy/consul-way-back-primary"
   tasks:
     - name: A phase and a marker name given (one per run - the task's)
       ansible.builtin.assert:
         that:
           - phase | default('') in ['before', 'after', 'verify', 'cleanup']
           - marker | default('') is match('^way-back-[0-9TZ]+$')
-        fail_msg: "-e phase=before|after|verify|cleanup -e marker=way-back-<UTC time> - the task gives both"
+          - mode | default('current') in ['current', 'snapshot']
+        fail_msg: "-e phase=before|after|verify|cleanup -e marker=way-back-<UTC time> [-e mode=current|snapshot] - the task gives them"
         quiet: true
       run_once: true
 
@@ -86,6 +92,65 @@
       run_once: true
       when: phase == 'after'
 
+    # the snapshot's leader key then names the Pi that is no longer the primary: the key restore-consul.yml deletes
+    - name: After - a switchover to the replica
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          m=$({{ patronictl }} list -f json)
+          leader=$(python3 -c 'import json, sys; print(next(x["Member"] for x in json.load(sys.stdin) if x["Role"] == "Leader"))' <<< "$m")
+          replica=$(python3 -c 'import json, sys; print(next(x["Member"] for x in json.load(sys.stdin) if x["Role"] != "Leader"))' <<< "$m")
+          {{ patronictl }} switchover --leader "$leader" --candidate "$replica" --force > /dev/null
+          echo "$replica"
+      register: _switched
+      changed_when: true
+      delegate_to: pi1
+      run_once: true
+      when: phase == 'after'
+
+    - name: After - the new primary serving, the old one streaming from it
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          {{ patronictl }} list -f json | python3 -c 'import json, sys
+          m = json.load(sys.stdin)
+          lead = [x["Member"] for x in m if x["Role"] == "Leader" and x["State"] == "running"]
+          ok = lead == [sys.argv[1]] and all(x["State"] == "streaming" for x in m if x["Role"] != "Leader")
+          sys.exit(0 if ok else 1)' "{{ _switched.stdout | trim }}"
+      register: _settled
+      retries: 24
+      delay: 5
+      until: _settled.rc == 0
+      changed_when: false
+      delegate_to: pi1
+      run_once: true
+      when: phase == 'after'
+
+    # the primary and its timeline before the way back: verify wants both unchanged (a promotion moves the timeline)
+    - name: After - the primary and its timeline noted
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          runuser -u postgres -- psql -w -h /var/run/postgresql -d postgres -Atc \
+            "select not pg_is_in_recovery(), (select timeline_id from pg_control_checkpoint())"
+      register: _pg_before
+      changed_when: false
+      when: phase == 'after' and inventory_hostname in groups['pis']
+
+    - name: After - noted on the controller
+      ansible.builtin.copy:
+        content: "{{ groups['pis'] | map('extract', hostvars, ['_pg_before', 'stdout']) | zip(groups['pis'])
+                     | selectattr('0', 'match', '^t[|]') | map('reverse') | map('join', ' ') | first }}\n"
+        dest: "{{ pg_noted }}"
+        mode: '0644'
+      delegate_to: localhost
+      become: false
+      run_once: true
+      when: phase == 'after'
+
     - name: After - the newest snapshot on pi1 (the upgrade's)
       ansible.builtin.shell:
         executable: /bin/bash
@@ -99,11 +164,11 @@
       changed_when: false
       delegate_to: pi1
       run_once: true
-      when: phase == 'after'
+      when: phase == 'after' and mode | default('current') == 'snapshot'
 
-    - name: After - its name for the restore's confirmation (.copy/consul-way-back-confirm)
+    - name: After - the restore's confirmation (.copy/consul-way-back-confirm - the pin's name, or the snapshot's)
       ansible.builtin.copy:
-        content: "{{ _newest.stdout | basename }}\n"
+        content: "{{ ('consul-' ~ consul_version) if mode | default('current') == 'current' else (_newest.stdout | basename) }}\n"
         dest: "{{ playbook_dir }}/../../../.copy/consul-way-back-confirm"
         mode: '0644'
       delegate_to: localhost
@@ -136,14 +201,19 @@
     - name: Verify - the marker from before there with its value, the one from after gone
       ansible.builtin.assert:
         that:
-          - _markers.stdout_lines == ['way-back/' ~ marker ~ '-before']
+          - _markers.stdout_lines == _want
           - _value.stdout | default('') | trim == 'before'
         fail_msg: >-
-          CONSUL WAY BACK FAILED: markers after the restore {{ _markers.stdout_lines }} (want
-          ['way-back/{{ marker }}-before']), its value '{{ _value.stdout | default('') | trim }}' (want 'before')
+          CONSUL WAY BACK FAILED ({{ mode | default('current') }}): markers after it {{ _markers.stdout_lines }} (want
+          {{ _want }}), the first one's value '{{ _value.stdout | default('') | trim }}' (want 'before')
         success_msg: >-
-          CONSUL WAY BACK OK: upgraded, then restored - the marker from before there, the one from after gone; Consul
-          {{ consul_version }} on {{ ansible_play_hosts | join(', ') }}, three voters, one leader
+          CONSUL WAY BACK OK ({{ mode | default('current') }}): upgraded, then back - the marker from before there, the one
+          from after {{ 'there too' if mode | default('current') == 'current' else 'gone' }}; Consul {{ consul_version }} on
+          {{ ansible_play_hosts | join(', ') }}, three voters, one leader
+      vars:
+        _want: >-
+          {{ ['way-back/' ~ marker ~ '-after', 'way-back/' ~ marker ~ '-before'] if mode | default('current') == 'current'
+             else ['way-back/' ~ marker ~ '-before'] }}
       run_once: true
       when: phase == 'verify'
 
@@ -167,6 +237,62 @@
       delegate_to: pi1
       run_once: true
       when: phase == 'verify'
+
+    - name: Verify - the primary and its timeline as noted before the way back (no failover, no promotion)
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          runuser -u postgres -- psql -w -h /var/run/postgresql -d postgres -Atc \
+            "select not pg_is_in_recovery(), (select timeline_id from pg_control_checkpoint())"
+      register: _pg_after
+      changed_when: false
+      when: phase == 'verify' and inventory_hostname in groups['pis']
+
+    - name: Verify - the same primary on the same timeline
+      ansible.builtin.assert:
+        that: _now == lookup('ansible.builtin.file', pg_noted) | trim
+        fail_msg: >-
+          CONSUL WAY BACK FAILED: the primary and its timeline now '{{ _now }}', before the way back
+          '{{ lookup('ansible.builtin.file', pg_noted) | trim }}'
+        quiet: true
+      vars:
+        _now: >-
+          {{ groups['pis'] | map('extract', hostvars, ['_pg_after', 'stdout']) | zip(groups['pis'])
+             | selectattr('0', 'match', '^t[|]') | map('reverse') | map('join', ' ') | first | default('none') }}
+      run_once: true
+      when: phase == 'verify'
+
+    - name: Verify - Patroni not paused (its own check)
+      ansible.builtin.script:
+        cmd: "{{ playbook_dir }}/../../../deploy/ansible/playbooks/scripts/patroni-pause.py check"
+        executable: python3
+      changed_when: false
+      delegate_to: pi1
+      run_once: true
+      when: phase == 'verify'
+
+    - name: Verify - no pause marker left
+      ansible.builtin.command:
+        argv: [consul, kv, get, ansible/patroni-paused-by]
+      register: _marker_left
+      changed_when: false
+      failed_when: _marker_left.rc == 0
+      delegate_to: pi1
+      run_once: true
+      when: phase == 'verify'
+
+    - name: Verify - the tier-0 backup and restore-check timers active again where enabled
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -uo pipefail
+          for t in pi-tier0-backup pi-restore-check; do
+            [ "$(systemctl is-enabled $t.timer 2> /dev/null)" != enabled ] || [ "$(systemctl is-active $t.timer)" = active ] \
+              || { echo "$t.timer enabled, not active"; exit 1; }
+          done
+      changed_when: false
+      when: phase == 'verify' and inventory_hostname in groups['pis']
 
     # a transaction id is assigned only on a writable primary (a standby refuses it): the database writable, not just up
     - name: Verify - the database writable through each Pi's HAProxy
