@@ -371,6 +371,29 @@ stop_if_one_way() {
   esac
   retry "a one-way change its store cannot take yet$([ "$judged" = "$unit" ] || echo " (its production twin $judged's)") - $(awk '{sub(/^(missing|unknown) /, ""); printf "%s%s", (NR > 1 ? "; " : ""), $0}' <<< "$need") (scripts/upgrade-stores.json - ops' to fix) - nothing applied"
 }
+# CI's own database (infra's Woodpecker Postgres, one instance): a unit moving it restarts it when Argo applies the merge,
+# and every pipeline running then is cut - the merge's own infra pipeline among them (the wave-patches review,
+# 2026-11-27). The merge waits for an idle Woodpecker (no CI step pod, wp-*, on ten - read as the verify reads), and the
+# merge's own infra pipeline is read after the verify: not green - paged, named
+CI_DB_PATHS=(clusters/production/woodpecker/manifests/postgres.yaml)
+moves_ci_db() {
+  local part head base
+  part=$(grep '^schnappy/infra ' "$heads" 2> /dev/null) || return 1
+  read -r _ _ head base <<< "$part"
+  [ -n "$(git -C "$(repo_dir schnappy/infra)" diff --name-only "$base" "$head" -- "${CI_DB_PATHS[@]}" < /dev/null 2>> "$log")" ]
+}
+ci_idle() {  # no CI step pod on ten within $1 minutes, read every UPGRADE_CI_IDLE_POLL seconds (a read that fails is no idle)
+  local end=$((SECONDS + $1 * 60)) pods
+  while :; do
+    if pods=$(ssh -o BatchMode=yes -o ConnectTimeout=15 "${UPGRADE_CI_HOST:-ten}" \
+        "kubectl -n woodpecker get pods --no-headers -o custom-columns=NAME:.metadata.name" < /dev/null 2>> "$log") \
+        && ! grep -q '^wp-' <<< "$pods"; then
+      return 0
+    fi
+    [ "$SECONDS" -lt "$end" ] || return 1
+    sleep "${UPGRADE_CI_IDLE_POLL:-30}"
+  done
+}
 held_now() {  # the kill switch set since the pick: refused, nothing merged
   local held
   held=$(scripts/upgrade-units.py held "$unit") || { stopped "whether it is held not read - nothing merged" "$log"; exit 1; }
@@ -845,6 +868,16 @@ for c in "${pre[@]}"; do
   run task --yes "${words[@]}" || { stopped "its backup before the change failed (task $c) - nothing merged" "$log"; exit 1; }
 done
 held_now
+ci_db=""
+if moves_ci_db; then
+  ci_db=1
+  if [ -n "$dry" ]; then
+    say "RUN the merge waits for an idle Woodpecker (CI's database moves with it)"
+  else
+    say "CI's database moves with it: the merge waits for an idle Woodpecker (${UPGRADE_CI_IDLE_WAIT:-60} minutes at most)"
+    ci_idle "${UPGRADE_CI_IDLE_WAIT:-60}" || { stopped "Woodpecker not idle in ${UPGRADE_CI_IDLE_WAIT:-60} minutes (pipelines running; CI's database restarts with the merge) - nothing merged, no try counted" "$log"; exit 1; }
+  fi
+fi
 start_journal
 merge
 revs=$(revisions) || { page "merged, the merge's commits not read - its production commands not run"; exit 1; }
@@ -882,6 +915,13 @@ if ! UPGRADE_VERIFY_REVISIONS="$revs" run scripts/upgrade-verify.sh; then
   exit 1
 fi
 journal "verified"
+if [ -n "$ci_db" ]; then
+  # the merge's own infra pipeline ran while CI's database restarted: green, or paged
+  infra_rev=$(sed -n 's/.*infra=\([0-9a-f]\{40\}\).*/\1/p' <<< "$revs")
+  [ -n "$infra_rev" ] || { page "applied and verified, infra's merge commit not read - its own pipeline (CI's database restarted under it) not checked"; exit 1; }
+  run scripts/upgrade-label.py --main-ci schnappy/infra "$infra_rev" 30 \
+    || { page "applied and verified, the merge's own infra pipeline not green - CI's database restarted under it: run it again in Woodpecker (see the log)"; exit 1; }
+fi
 
 # 8. record
 run task test:copy:inventory || say "the inventory not read after it - the record says so"

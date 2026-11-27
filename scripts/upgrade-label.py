@@ -137,6 +137,23 @@ def state(repo, sha):
     return st.get("state")
 
 
+def main_ci(repo, sha, minutes):
+    """A main commit's CI, waited for minutes at most: green 0; red 1; not finished, or no CI at all, 3 - said."""
+    end = time.monotonic() + minutes * 60
+    while True:
+        st = state(repo, sha)
+        if st == "success":
+            print(f"GREEN {repo} {sha}")
+            return 0
+        if st in ("failure", "error"):
+            print(f"RED {repo} {sha}: {st}")
+            return 1
+        if time.monotonic() >= end:
+            print(f"NOT FINISHED {repo} {sha}: {st or 'no CI reported'}")
+            return 3
+        time.sleep(float(os.environ.get("UPGRADE_GREEN_POLL", "60")))
+
+
 class Red(Exception):
     """A head's CI finished red: the unit breaks its own checks."""
 
@@ -348,7 +365,7 @@ def pause(text):
 
 
 USAGE = ("usage: upgrade-label.py UNIT LABEL | UNIT --heads | UNIT --green [SECONDS] | "
-         "UNIT --update | UNIT --merge --expect FILE | --pause TEXT")
+         "UNIT --update | UNIT --merge --expect FILE | --pause TEXT | --main-ci REPO SHA MINUTES")
 
 
 def unit_action(unit, args):
@@ -367,6 +384,10 @@ def unit_action(unit, args):
 
 
 def main(argv):
+    # a main commit's CI (the runner's read after a merge that restarted CI's own database)
+    if len(argv) == 4 and argv[0] == "--main-ci" and re.fullmatch(r"schnappy/[a-z0-9-]+", argv[1]) \
+            and re.fullmatch(r"[0-9a-f]{40}", argv[2]) and argv[3].isdigit():
+        return main_ci(argv[1], argv[2], int(argv[3]))
     if len(argv) == 2 and argv[0] == "--pause" and argv[1]:
         try:
             pause(argv[1])

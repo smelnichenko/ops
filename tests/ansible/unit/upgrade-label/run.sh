@@ -364,6 +364,20 @@ check("no pull request for the unit: refused", (rc, out.startswith("REFUSED"), w
 check("Forgejo unreachable: refused", run("wave-patches", "agent-fixed", url="http://127.0.0.1:1/api/v1")[0], 1)
 for args in (("wave-patches",), ("Bad/Unit", "x"), ("wave-patches", "--comment", "x"), ("wave-patches", "Bad Label")):
     check(f"usage refused: {args}", (run(*args)[0], writes()), (2, []))  # --comment: the veto notice's, gone 2026-11-21
+# a main commit's CI after a merge that restarted CI's own database (upgrade-cycle.sh): green 0, red 1, none or not
+# finished in the wait 3 - only a ci/ context counts (Renovate's status alone is no CI)
+M = "9" * 40
+outs = []
+for st, want in (("success", 0), ("failure", 1), ("error", 1), ("pending", 3), ("", 3), ("stability-only", 3)):
+    fixture(UNIT, {M: st})
+    rc, out = run("--main-ci", "schnappy/infra", M, "0")
+    outs.append((st, rc == want, out.split(" ")[0]))
+check("--main-ci: green 0, red 1, pending or no CI (Renovate's status alone) 3 - each said", outs,
+      [("success", True, "GREEN"), ("failure", True, "RED"), ("error", True, "RED"), ("pending", True, "NOT"), ("", True, "NOT"),
+       ("stability-only", True, "NOT")])
+check("  its arguments: a schnappy repo, a whole commit, minutes - else usage",
+      [run(*a_)[0] for a_ in (("--main-ci", "other/infra", M, "0"), ("--main-ci", "schnappy/infra", "abc", "0"), ("--main-ci", "schnappy/infra", M, "x"))],
+      [2, 2, 2])
 print("upgrade-label: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 PYCHECK

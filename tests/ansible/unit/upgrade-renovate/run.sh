@@ -594,8 +594,9 @@ PYSTOREMIN
 # updates out of the wave and the majors, on renovate/manual-sonarqube-<N>.x (a manual unit since 2026-11-27, the operator's:
 # the copy cannot hold SonarQube), labelled one-way. Woodpecker's own database and
 # Renovate's image stay in the cycle's units (operator 2026-11-23: a manual unit defeats the automation - never a
-# manual- unit for them): the runner waits for an idle Woodpecker before a merge that restarts its database, and the
-# copy proof smoke-runs a new Renovate image
+# manual- unit for them): the runner waits for an idle Woodpecker (no CI step pod on ten) before a merge that restarts its
+# database and reads the merge's own infra pipeline after its verify (scripts/upgrade-cycle.sh - a claim with no code
+# behind it until 2026-11-27), and the copy proof smoke-runs a new Renovate image
 check "the preset: SonarQube a one-way unit of its own, manual (operator 2026-11-27: the copy cannot hold it); Woodpecker's database and Renovate's image in the wave, no manual unit" \
   "$("$PY" - <<'PYSPLIT'
 import sys

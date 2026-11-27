@@ -275,13 +275,18 @@ stop_watcher
 # a watcher slow to start (a loaded host: 6 s): its caller waits for it by the clock - never "did not start" - and the
 # second caller finds it watching, one watcher
 fresh 9000 ops_kubeadm
+t0=$SECONDS
 COPY_HOST_LOOP_DELAY=6 bash scripts/copy-host-guard.sh watch > "$W/w1.out" 2>&1 & w1=$!
 sleep 1
 bash scripts/copy-host-guard.sh watch > "$W/w2.out" 2>&1 & w2=$!
-wait "$w1"; r1=$?; wait "$w2"
+wait "$w1"; r1=$?; waited=$((SECONDS - t0)); wait "$w2"
 loops=$(for e in /proc/[0-9]*/environ; do { tr '\0' '\n' < "$e"; } 2> /dev/null | grep -qxF "COPY_HOST_DIR=$COPY_HOST_DIR" && grep -q '_loop' "${e%environ}cmdline" 2> /dev/null && echo x; done | wc -l)
-check "a watcher 6 s slow to start: its caller waited (rc 0, no REFUSED), the other found it, one watcher" \
-  "$r1 $(grep -c REFUSED "$W/w1.out") $(grep -c 'watches already' "$W/w2.out") $loops" "0 0 1 1"
+got="$r1 $(grep -c REFUSED "$W/w1.out") $(grep -c 'watches already' "$W/w2.out") $loops"
+# it failed once in CI (2026-11-27, eight harnesses at once): what to read the next time - the first caller's wait (under
+# its 30 s bound: its watcher died; at it: the watcher slower than the bound), both callers' words, the guard's log
+[ "$got" = "0 0 1 1" ] || printf '    diagnosis: the first caller waited %s s; it said: %s; the second said: %s; the guard log: %s\n' \
+  "$waited" "$(tr '\n' ' ' < "$W/w1.out")" "$(tr '\n' ' ' < "$W/w2.out")" "$(tail -6 "$COPY_HOST_DIR/host-guard.log" 2> /dev/null | tr '\n' '|')"
+check "a watcher 6 s slow to start: its caller waited (rc 0, no REFUSED), the other found it, one watcher" "$got" "0 0 1 1"
 p=$(watcher)
 read -r st < "/proc/$p/stat"; st=${st##*) }; set -- $st; loop_sid=$4   # after the name: state ppid pgrp session
 read -r st < "/proc/$$/stat"; st=${st##*) }; set -- $st; my_sid=$4
