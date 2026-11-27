@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # copy-checks.sh - the Vagrant copy's independent checks (task test:copy:check), run at the same time instead of one
 # after the other:
-#   data       the seeded rows on every Postgres instance, a write on the primary; Kafka's and Scylla's seeded data
+#   data       the seeded rows on every Postgres instance, a write on the primary; Kafka's and Scylla's seeded data;
+#              OpenSearch and the browser doing their work (a document written and found, a page rendered)
 #   survival   the observability data a change must keep; ClickHouse's compatibility setting and users as the
 #              platform ref under test sets them (helm/schnappy-observability/files/clickhouse-users.xml)
 #   storage    a new local-path volume provisioned, written and read back
