@@ -71,7 +71,7 @@ case "$2" in
     cat "$f"; [ -e "$ST/heads.$((n + 1))" ] && echo $((n + 1)) > "$ST/heads.n"; exit 0 ;;
   --green) exit "$(cat "$ST/green.rc" 2>/dev/null || echo 0)" ;;
   --update) exit "$(cat "$ST/update.rc" 2>/dev/null || echo 0)" ;;
-  --merge) cp "$4" "$ST/merged.expect"; echo "MERGED schnappy/infra#4"
+  --merge) cp "$4" "$ST/merged.expect"; cat "$ST/merged.lines" 2>/dev/null || echo "MERGED schnappy/infra#4"
     [ ! -e "$ST/slowmerge" ] || { touch "$ST/slowmerge.started"; for _ in $(seq 50); do sleep 0.1; done; }
     exit "$(cat "$ST/merge.rc" 2>/dev/null || echo 0)" ;;
 esac
@@ -159,7 +159,9 @@ case "$args" in
     esac
     if [ -e "$ST/fix.raw$sfx" ]; then cat "$ST/fix.raw$sfx"
     else { cat "$ST/fix.files$sfx" 2>/dev/null || echo "$def"; } | while IFS= read -r f; do printf ':100644 100644 1111111 2222222 M\t%s\n' "$f"; done; fi ;;
-  *"diff --name-only "*" -- clusters/production/woodpecker/manifests/postgres.yaml"*) cat "$ST/woodpecker.diff" 2>/dev/null ;;
+  # the paths whose change restarts CI, every one asked (a path dropped falls through to the default below: a change)
+  *"diff --name-only eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee "*" -- clusters/production/woodpecker clusters/production/argocd/apps/woodpecker.yaml clusters/production/argocd/apps/cnpg.yaml clusters/production/cnpg")
+    cat "$ST/woodpecker.diff" 2>/dev/null; exit "$(cat "$ST/woodpecker.diff.rc" 2>/dev/null || echo 0)" ;;
   *" diff "*"--name-only"*) case "$dir" in
       */ops) cat "$ST/fix.files.ops" 2>/dev/null || echo deploy/ansible/vars/vault.yml ;;
       *) cat "$ST/fix.files" 2>/dev/null || echo clusters/production/istio/values.yaml ;;
@@ -218,7 +220,12 @@ esac''')
 # ssh: production's Alertmanager routing the cycle's notices (the probe), else nothing
 stub(os.path.join(BIN, "ssh"), LOG + '''
 case "$*" in *"amtool config routes test"*) cat "$ST/am" 2>/dev/null || echo email-notice ;;
-  *"kubectl -n woodpecker get pods"*) cat "$ST/wpods" 2>/dev/null; exit "$(cat "$ST/wpods.rc" 2>/dev/null || echo 0)" ;; esac''')
+  # CI's live step pods: asked bounded and filtered as the runner asks; a read a line at a time when the case gives a
+  # sequence (wpods.seq: one read's answer a line, "|" its newlines)
+  *"ServerAliveInterval=15 ten kubectl --request-timeout=30s -n woodpecker get pods --no-headers --field-selector=status.phase!=Succeeded,status.phase!=Failed -o custom-columns=NAME:.metadata.name,GONE:.metadata.deletionTimestamp")
+    if [ -s "$ST/wpods.seq" ]; then head -1 "$ST/wpods.seq" | tr '|' '\n'; [ "$(wc -l < "$ST/wpods.seq")" -le 1 ] || sed -i 1d "$ST/wpods.seq"
+    else cat "$ST/wpods" 2>/dev/null; fi
+    exit "$(cat "$ST/wpods.rc" 2>/dev/null || echo 0)" ;; esac''')
 stub(os.path.join(BIN, "vagrant"), LOG + '\nexit "$(cat "$ST/vagrant.rc" 2>/dev/null || echo 0)"')
 H1 = "schnappy/infra 4 " + "a" * 40 + " " + "e" * 40 + "\nschnappy/ops 7 " + "c" * 40 + " " + "e" * 40 + "\n"
 H2 = "schnappy/infra 4 " + "b" * 40 + " " + "e" * 40 + "\nschnappy/ops 7 " + "c" * 40 + " " + "e" * 40 + "\n"
@@ -1016,27 +1023,60 @@ check("  its plan not read (no refusal said): blocked, not labelled, nothing bui
 rc, calls = night("prove wave-patches patch", plan=PLAN, files={"plan.fail": ""})
 check("the plan's task failing (even printing steps): blocked, nothing merged",
       (rc, merged(calls, "wave-patches"), notices(calls)), (1, False, ["stopped wave-patches"]))
-# CI's own database moving with the unit (the wave-patches review, 2026-11-27): the merge waits for an idle Woodpecker,
-# the merge's own infra pipeline read after the verify
+# a merge restarting CI (the wave-patches review, 2026-11-27, and its own review): Woodpecker idle - two reads in a row, live
+# CI pods only - before the gates and the kill switch are read for the merge; infra's merge pipeline read, from its pull
+# request, after the record - not green a notice, never a page
 WPDB = {"woodpecker.diff": "clusters/production/woodpecker/manifests/postgres.yaml\n"}
+def order(calls):
+    woods = [i for i, c in enumerate(calls) if c.startswith("ssh ") and "-n woodpecker get pods" in c]
+    held = max((i for i, c in enumerate(calls) if c.startswith("upgrade-units.py held")), default=-1)
+    merge = next((i for i, c in enumerate(calls) if c.startswith("upgrade-label.py wave-patches --merge")), -1)
+    record = next((i for i, c in enumerate(calls) if c.startswith("upgrade-record.sh")), -1)
+    mainci = [(i, c) for i, c in enumerate(calls) if c.startswith("upgrade-label.py --main-ci")]
+    return woods, held, merge, record, mainci
 rc, calls = night("prove wave-patches patch", plan=PLAN, files=WPDB)
-woods = [i for i, c in enumerate(calls) if c.startswith("ssh ") and "kubectl -n woodpecker get pods" in c]
-merge_at = next((i for i, c in enumerate(calls) if c.startswith("upgrade-label.py wave-patches --merge")), -1)
-after_at = next((i for i, c in enumerate(calls) if c.startswith("upgrade-verify.sh AFTER")), -1)
-mainci = [(i, c) for i, c in enumerate(calls) if c.startswith("upgrade-label.py --main-ci")]
-check("a unit moving CI's database: Woodpecker read idle on ten before the merge; the merge's own infra pipeline read after the "
-      "verify; applied", (rc, bool(woods) and max(woods) < merge_at, [c for _, c in mainci], bool(mainci) and mainci[0][0] > after_at, notices(calls)),
-      (0, True, ["upgrade-label.py --main-ci schnappy/infra " + "f" * 40 + " 30"], True, ["applied wave-patches"]))
-for why, files in (("pipelines running", {**WPDB, "wpods": "wp-01abcdef\nwoodpecker-server-0\n"}), ("ten not read", {**WPDB, "wpods.rc": "255"})):
+woods, held, merge_at, record_at, mainci = order(calls)
+check("a unit restarting CI: Woodpecker read idle twice on ten, then the kill switch read, then the merge; infra's merge "
+      "pipeline read from its pull request after the record; applied",
+      (rc, len(woods), bool(woods) and max(woods) < held < merge_at, [c for _, c in mainci],
+       bool(mainci) and mainci[0][0] > record_at > merge_at, notices(calls)),
+      (0, 2, True, ["upgrade-label.py --main-ci schnappy/infra#4 60"], True, ["applied wave-patches"]))
+rc, calls = night("prove wave-patches patch", plan=PLAN, files={**WPDB, "merged.lines": "MERGED schnappy/infra#4\nMERGED schnappy/platform#5\nMERGED schnappy/ops#7\n"})
+check("  infra, platform and ops merged: infra's and platform's merge pipelines read - ops' merge commit is [CI SKIP]",
+      (rc, [c for _, c in order(calls)[4]]), (0, ["upgrade-label.py --main-ci schnappy/infra#4 60", "upgrade-label.py --main-ci schnappy/platform#5 60"]))
+rc, calls = night("prove wave-patches patch", plan=PLAN, files={**WPDB, "wpods.seq": "\nwp-01abc <none>\n\n\n"})
+check("  idle once, then a pipeline's next step: read again until idle twice in a row", (rc, len(order(calls)[0])), (0, 4))
+# the wait's bound in minutes: busy for three reads a second apart, then idle - within a minute's wait merged, within
+# none stopped (a bound read as seconds, or the loop gone, stops it)
+SLOW = {**WPDB, "wpods.seq": "wp-1 <none>\nwp-1 <none>\nwp-1 <none>\n\n\n"}
+rc, calls = night("prove wave-patches patch", plan=PLAN, files=SLOW, env={"UPGRADE_CI_IDLE_WAIT": "1", "UPGRADE_CI_IDLE_POLL": "1"})
+check("  busy, then idle within the wait (a minute, reads a second apart): merged after five reads", (rc, len(order(calls)[0]), merged(calls, "wave-patches")), (0, 5, True))
+rc, calls = night("prove wave-patches patch", plan=PLAN, files=SLOW, env={"UPGRADE_CI_IDLE_WAIT": "0", "UPGRADE_CI_IDLE_POLL": "1"})
+check("  the same with no wait: stopped after one read", (rc, len(order(calls)[0]), merged(calls, "wave-patches")), (1, 1, False))
+rc, calls = night("prove wave-patches patch", plan=PLAN, files=WPDB, args=("--dry",))
+check("  --dry with a merge restarting CI: no read of ten, no merge pipeline read",
+      (rc, [c for c in calls if "-n woodpecker" in c], has(calls, "upgrade-label.py --main-ci")), (0, [], []))
+rc, calls = night("prove wave-patches patch", plan=PLAN, files={**WPDB, "wpods": "wp-01gone 2026-11-28T00:00:00Z\nwoodpecker-server-0 <none>\n"})
+check("  a CI pod going (its deletion set) and Woodpecker's own pods: idle", (rc, merged(calls, "wave-patches")), (0, True))
+for why, files, said in (("a pipeline running", {**WPDB, "wpods": "wp-01abcdef <none>\nwoodpecker-server-0 <none>\n"}, "pipelines running (wp-01abcdef)"),
+                         ("ten not read", {**WPDB, "wpods.rc": "255"}, "ten not read")):
     rc, calls = night("prove wave-patches patch", plan=PLAN, files=files, env={"UPGRADE_CI_IDLE_WAIT": "0"})
-    check(f"  Woodpecker not idle in the wait ({why}): stopped before the merge - nothing merged, no try counted, said",
-          (rc, merged(calls, "wave-patches"), os.path.exists(os.path.join(OPS, ".upgrade-cycle/tries/wave-patches")),
-           any("Woodpecker not idle" in l for l in stopped_lines())), (1, False, False, True))
+    check(f"  Woodpecker not idle in the wait ({why}): stopped before the gates and the merge - nothing merged, no try "
+          "counted, what was seen said",
+          (rc, merged(calls, "wave-patches"), has(calls, "upgrade-units.py held wave-patches")[1:],
+           os.path.exists(os.path.join(OPS, ".upgrade-cycle/tries/wave-patches")),
+           any("Woodpecker not idle" in l and said in l for l in stopped_lines())), (1, False, [], False, True))
+rc, calls = night("prove wave-patches patch", plan=PLAN, files={**WPDB, "woodpecker.diff.rc": "128"})
+check("  whether it restarts CI not read (infra's diff failing): stopped - nothing merged, no wait",
+      (rc, merged(calls, "wave-patches"), order(calls)[0], any("restarts CI not read" in l for l in stopped_lines())), (1, False, [], True))
 rc, calls = night("prove wave-patches patch", plan=PLAN, files={**WPDB, "mainci.rc": "1"})
-check("  the merge's own infra pipeline not green after the verify: paged, named", (rc, notices(calls)), (1, ["page wave-patches"]))
+check("  infra's merge pipeline not green after the record: a notice to run it again - applied and recorded, never paged",
+      (rc, notices(calls), bool(has(calls, "upgrade-record.sh"))), (1, ["applied wave-patches", "stopped wave-patches"], True))
 rc, calls = night("prove wave-patches patch", plan=PLAN)
-check("  a unit not moving it: no wait, no read of the merge's pipeline",
-      ([c for c in calls if "kubectl -n woodpecker" in c], has(calls, "upgrade-label.py --main-ci"), rc), ([], [], 0))
+check("  a unit not restarting CI: no wait, no read of the merge's pipeline",
+      ([c for c in calls if "-n woodpecker" in c], has(calls, "upgrade-label.py --main-ci"), rc), ([], [], 0))
+rc, calls = night("prove wave-patches patch", plan=PLAN, env={"UPGRADE_CI_IDLE_POLL": "x"})
+check("  the wait's settings not whole numbers: refused before anything", (rc, has(calls, "upgrade-units.py")), (2, []))
 rc, calls = night("prove wave-patches patch", plan="test:copy:playbook PLAYBOOK=setup-mystery.yml ARGS=''\n")
 check("a part with no production command: refused BEFORE the merge - nothing merged, not paged",
       (rc, merged(calls, "wave-patches"), notices(calls)), (1, False, ["stopped wave-patches"]))

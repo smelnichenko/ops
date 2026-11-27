@@ -36,11 +36,14 @@ never `&&`, `;`, a second line or a loop, never `git grep` (the Grep tool instea
 
 The copy leaves part of production out (scripts/vagrant-gitops-mirror.py's INFRA_DROP: Woodpecker, SonarQube, the test
 environment, kagent, the preview environments). A unit's change to them is proven in production after the merge, by the
-runner's verify (scripts/upgrade-verify.sh), which names each of them: every Argo app Synced to the merge's commits (the
-new spec applied), Healthy (a rollout complete, a CNPG cluster's update done), its last sync Succeeded (its hooks - such
-as SonarQube's setup Job - ran), every running pod ready, no critical alert for an hour. A merge that restarts CI's own
-database first waits for an idle Woodpecker, and the merge's own infra pipeline must go green after. "Unproven because
-the copy leaves it out" is no finding on its own: name what that verify would miss.
+runner's verify (scripts/upgrade-verify.sh): every Argo app Synced to the merge's commits (the new spec applied), Healthy
+(a rollout complete, a CNPG cluster's update done), its last sync Succeeded (its hooks - such as SonarQube's setup Job -
+ran), every running pod ready, no critical alert for an hour; it names each app the copy leaves out with its state. A
+merge that restarts CI (a change under clusters/production/woodpecker, to the woodpecker or cnpg Argo app, or to
+clusters/production/cnpg - a CNPG operator upgrade rolls woodpecker-postgres too) first waits for an idle Woodpecker,
+before the gates and the kill switch are read for it; after the record, infra's and platform's merge pipelines are read
+(ops' merge commit is [CI SKIP]) - one not green is a notice to run it again, not a failure of the apply. "Unproven
+because the copy leaves it out" is no finding on its own: name what that verify would miss.
 
 Your reviewers and skills run under the same refusals. Hand each the absolute paths of the `.diff` and `.commits` files
 and of the clones, and tell it to read with Read, Grep and Glob alone - its Bash commands are refused.

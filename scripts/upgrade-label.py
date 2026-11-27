@@ -137,19 +137,59 @@ def state(repo, sha):
     return st.get("state")
 
 
-def main_ci(repo, sha, minutes):
-    """A main commit's CI, waited for minutes at most: green 0; red 1; not finished, or no CI at all, 3 - said."""
+def ci_now(repo, sha):
+    """A commit's CI now: (Forgejo's combined state, its ci/ statuses' descriptions) - (None, "") when no CI reported."""
+    st = call("GET", f"/repos/{repo}/commits/{sha}/status") or {}
+    ci = [s for s in st.get("statuses") or [] if str(s.get("context") or "").startswith("ci/")]
+    return (st.get("state"), " ".join(str(s.get("description") or "") for s in ci).strip()) if ci else (None, "")
+
+
+def merge_commit(repo, number):
+    """A merged pull request's own merge commit - None while it is not merged (or Forgejo names none)."""
+    pr = call("GET", f"/repos/{repo}/pulls/{number}") or {}
+    sha = str(pr.get("merge_commit_sha") or "")
+    return sha if pr.get("merged") and re.fullmatch(r"[0-9a-f]{40}", sha) else None
+
+
+def superseded_by(repo, sha, desc):
+    """Main's head when this commit's pipeline was canceled for a later push to main - else None (red as it is)."""
+    if "canceled" not in desc.lower():
+        return None
+    head = str(((call("GET", f"/repos/{repo}/branches/main") or {}).get("commit") or {}).get("id") or "")
+    return head if re.fullmatch(r"[0-9a-f]{40}", head) and head != sha else None
+
+
+def main_ci(repo, ref, minutes):
+    """Main's CI after a merge that restarted CI itself (upgrade-cycle.sh), waited for minutes at most: green 0; red 1; not
+    finished, no CI at all, or never read, 3 - said. The commit given, or a merged pull request's own merge commit (#N, read
+    from the pull request - main's head may be a CD commit pushed since). Its pipeline canceled - superseded by a later
+    push to main (Woodpecker cancels the older one) - main's head followed: that pipeline runs the merge too. A read that
+    fails (a 502, a timeout) is waited through, never a red (the review of 2026-11-27: one blip paged a false red)."""
     end = time.monotonic() + minutes * 60
+    sha = None if ref.startswith("#") else ref
+    st, err = None, None
     while True:
-        st = state(repo, sha)
-        if st == "success":
-            print(f"GREEN {repo} {sha}")
-            return 0
-        if st in ("failure", "error"):
-            print(f"RED {repo} {sha}: {st}")
-            return 1
+        try:
+            sha = sha or merge_commit(repo, ref[1:])
+            if sha is None:
+                print(f"NOT MERGED {repo}{ref}: no merge commit")
+                return 3
+            st, desc = ci_now(repo, sha)
+            err = None
+            if st == "success":
+                print(f"GREEN {repo} {sha}")
+                return 0
+            if st in ("failure", "error"):
+                head = superseded_by(repo, sha, desc)
+                if head is None:
+                    print(f"RED {repo} {sha}: {st}" + (f" ({desc})" if desc else ""))
+                    return 1
+                print(f"CANCELED {repo} {sha}: superseded by a later push - main's {head} followed", flush=True)
+                sha, st = head, None
+        except Refused as e:
+            err = e
         if time.monotonic() >= end:
-            print(f"NOT FINISHED {repo} {sha}: {st or 'no CI reported'}")
+            print(f"NOT FINISHED {repo} {sha or ref}: {st or 'no CI reported'}" + (f" - the last read failed: {err}" if err else ""))
             return 3
         time.sleep(float(os.environ.get("UPGRADE_GREEN_POLL", "60")))
 
@@ -365,7 +405,7 @@ def pause(text):
 
 
 USAGE = ("usage: upgrade-label.py UNIT LABEL | UNIT --heads | UNIT --green [SECONDS] | "
-         "UNIT --update | UNIT --merge --expect FILE | --pause TEXT | --main-ci REPO SHA MINUTES")
+         "UNIT --update | UNIT --merge --expect FILE | --pause TEXT | --main-ci REPO SHA MINUTES | --main-ci REPO#PR MINUTES")
 
 
 def unit_action(unit, args):
@@ -388,6 +428,9 @@ def main(argv):
     if len(argv) == 4 and argv[0] == "--main-ci" and re.fullmatch(r"schnappy/[a-z0-9-]+", argv[1]) \
             and re.fullmatch(r"[0-9a-f]{40}", argv[2]) and argv[3].isdigit():
         return main_ci(argv[1], argv[2], int(argv[3]))
+    if len(argv) == 3 and argv[0] == "--main-ci" and re.fullmatch(r"schnappy/[a-z0-9-]+#[0-9]+", argv[1]) and argv[2].isdigit():
+        repo, number = argv[1].split("#")
+        return main_ci(repo, "#" + number, int(argv[2]))
     if len(argv) == 2 and argv[0] == "--pause" and argv[1]:
         try:
             pause(argv[1])
