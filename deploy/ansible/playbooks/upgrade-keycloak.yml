@@ -212,7 +212,11 @@
       when: not _forward | bool
       ansible.builtin.include_tasks: tasks/keycloak-dump.yml
       vars:
-        keycloak_dump_running: "{{ ansible_play_hosts | map('extract', hostvars, '_running') | first }}"
+        # the version the Pis ran (one, asserted above) - on a clean stop resumed, none running, the one install they all
+        # hold: the dump's name carries a version restore-keycloak.yml can put back
+        keycloak_dump_running: >-
+          {{ (ansible_play_hosts | map('extract', hostvars, '_running') | reject('equalto', '') | list
+              + ansible_play_hosts | map('extract', hostvars, '_installed') | list) | first }}
 
     - name: Keycloak stopped on every Pi
       when: not _forward | bool

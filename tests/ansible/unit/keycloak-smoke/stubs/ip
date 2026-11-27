@@ -1,0 +1,4 @@
+#!/bin/bash
+# ip -o -4 addr show to <vip>/32: a line on the Pi holding the VIP
+[ "$KC_HOST" != "$(cat "$KCS/vip")" ] || echo "2: eth0    inet 10.9.9.9/32 scope global eth0"
+exit 0

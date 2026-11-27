@@ -1002,6 +1002,7 @@ for pb, cmd in (("upgrade-patroni.yml", "deploy:patroni:upgrade"), ("upgrade-con
                 ("upgrade-vault.yml", "deploy:vault:upgrade"),
                 ("setup-host-hardening.yml", "deploy:host-hardening"), ("setup-argocd.yml", "deploy:argocd"),
                 ("upgrade-forgejo.yml", "deploy:forgejo:upgrade"), ("setup-caddy.yml", "deploy:caddy"),
+                ("upgrade-keycloak.yml", "deploy:keycloak:upgrade"),
                 ("setup-kubeadm.yml ARGS='--tags cilium -e cilium_version=1.20.5'", "deploy:cilium:upgrade -- -e cilium_version=1.20.5"),
                 ("restart-mesh-workloads.yml ARGS='-e istio_version=1.32.0'", "deploy:mesh:restart -- -e istio_version=1.32.0")):
     rc, calls = night("prove centrifugo minor", plan=f"test:copy:playbook PLAYBOOK={pb}\n")

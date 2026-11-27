@@ -1,0 +1,3 @@
+#!/bin/bash
+# systemctl show -p MainPID --value keycloak: 41 while this Pi runs Keycloak, else 0
+[ -n "$(cat "$KCS/$KC_HOST/running" 2> /dev/null)" ] && echo 41 || echo 0

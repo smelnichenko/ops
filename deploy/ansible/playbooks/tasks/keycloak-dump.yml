@@ -44,6 +44,7 @@
   register: _dump
   changed_when: true
   failed_when: false
+  when: (_schema.stdout | default('') | trim) != ''  # never a dump named for no schema - the check below refuses
   delegate_to: "{{ _first }}"
   run_once: true
   no_log: true  # the password went in on stdin - the dump's own error below, without it

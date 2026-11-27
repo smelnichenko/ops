@@ -1,0 +1,11 @@
+#!/bin/bash
+# psql through HAProxy: each call an event (what it ran), the password checked; $KCS/psql-fail - every call refused
+[ "${PGPASSWORD:-}" = s3cret ] || { echo "psql: error: password authentication failed (stub)" >&2; exit 2; }
+case "$*" in
+  *"DROP DATABASE"*) what=drop ;; *"CREATE DATABASE"*) what=create ;; *"-d keycloak -1 -q"*) what=load ;;
+  *migration_model*) what=schema ;; *) what=other ;;
+esac
+echo "$(date +%s.%N) $KC_HOST psql $what" >> "$KCS/events.log"
+[ ! -e "$KCS/psql-fail" ] || { echo "psql: error: connection to server at 127.0.0.1 port 5000 failed (stub)" >&2; exit 2; }
+case $what in schema) echo 26.5.0 ;; load) cat > /dev/null ;; esac
+exit 0

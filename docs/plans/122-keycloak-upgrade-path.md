@@ -72,3 +72,9 @@ answers all of it is the one Forgejo and Consul already have:
    upgrade gone. Only when it passes does the store's `missing` clear.
 5. **Tests:** the playbooks' conditions as Ansible renders them, and a real-Ansible smoke of the run_once/hostvars
    paths (two local hosts, pg_dump stubbed); the review's revert table re-run.
+   Done as two harnesses: `tests/ansible/unit/keycloak-upgrade` (the conditions rendered, the scripts run on stubs)
+   and `tests/ansible/unit/keycloak-smoke` (both playbooks run by ansible-playbook against two stand-in Pis - what ran
+   on which Pi, in which order, what a `when:` skipped; the test-quality pass's smoke, taken in). Its first runs found
+   two faults now fixed: a clean stop resumed named its dump for no version (restore-keycloak.yml could not read it -
+   the dump is named for the one install both Pis hold), and a schema read that failed still let pg_dump run (the
+   dump now runs only once the schema is known).

@@ -87,6 +87,8 @@ check("taken forward: a Pi down with the target installed, the other on it; not 
       [forward(("26.8.2", ""), ("26.8.2", "26.8.2")), forward(("26.8.2", ""), ("26.8.2", "")),
        forward(("26.5.7", ""), ("26.5.7", "26.5.7")), forward(("26.8.2", ""), ("26.5.7", "26.5.7")),
        forward(("26.5.7", "26.5.7"), ("26.5.7", "26.5.7"))], [True, True, False, False, False])
+check("  a half-moved pair - one Pi down on the OLD install while the other runs the target - not taken forward",
+      forward(("26.5.7", ""), ("26.8.2", "26.8.2")), False)
 one = task("One version on both Pis before")["ansible.builtin.assert"]["that"]
 both = lambda a, b, fwd=False: condition(one, _forward=fwd, _resume=False, ansible_play_hosts=["pi1", "pi2"],
                                          hostvars={"pi1": {"_running": a}, "pi2": {"_running": b}})
@@ -133,11 +135,13 @@ D = yaml.safe_load(open("deploy/ansible/playbooks/tasks/keycloak-dump.yml"))
 dreg = lambda r: next(t for t in D if t.get("register") == r)
 dtask = lambda name: next(t for t in D if str(t.get("name", "")).startswith(name))
 inc = task("Keycloak's database dumped")
-check("the dump included (tasks/keycloak-dump.yml), skipped on a run taken forward, named for the version both Pis ran",
+dump_ver = lambda r1, r2, i="26.5.7": render(inc["vars"]["keycloak_dump_running"], ansible_play_hosts=["pi1", "pi2"],
+                                             hostvars={"pi1": {"_running": r1, "_installed": i}, "pi2": {"_running": r2, "_installed": i}}).strip()
+check("the dump included (tasks/keycloak-dump.yml), skipped on a run taken forward, named for the version both Pis ran - "
+      "on a clean stop resumed (none running) the install they hold, never an empty version restore-keycloak cannot read",
       (inc.get("ansible.builtin.include_tasks"), "not _forward | bool" in str(inc.get("when", "")),
-       render(inc["vars"]["keycloak_dump_running"], ansible_play_hosts=["pi1", "pi2"],
-              hostvars={"pi1": {"_running": "26.5.7"}, "pi2": {"_running": "26.5.7"}})),
-      ("tasks/keycloak-dump.yml", True, "26.5.7"))
+       dump_ver("26.5.7", "26.5.7", "26.8.2"), dump_ver("", "")),
+      ("tasks/keycloak-dump.yml", True, "26.5.7", "26.5.7"))
 # ── the dump, pg_dump stubbed ──────────────────────────────────────────────────────────────────────────────────
 dump = dreg("_dump")
 check("the dump: once, on the first Pi, the password on stdin (never on the command line), not logged, its failure its own",
@@ -166,11 +170,13 @@ for env, why in (({"PGD_CUT": "1"}, "cut short (no footer)"), ({"PGD_FAIL": "1"}
           (rc != 0, after == kept, open(os.path.join(ddir, kept[0]), "rb").read() == good), (True, True, True))
 for x in os.listdir(ddir):
     os.remove(os.path.join(ddir, x))
-made = []
+made = []  # the name each run says it wrote, oldest first - the listing alone cannot tell which five survived
 for _ in range(7):
-    run_dump(); made = sorted(os.listdir(ddir)); time.sleep(1.1)
+    r = subprocess.run(["bash", "-c", dcmd], input="s3cret\n", capture_output=True, text=True,
+                       env=dict(os.environ, PATH=dbin + ":" + os.environ["PATH"]))
+    made.append(os.path.basename(r.stdout.split()[0])); time.sleep(1.1)
 names = sorted(os.listdir(ddir))
-check("  the 5 newest kept - never the newest rotated away", (len(names), names == sorted(made)[-5:]), (5, True))
+check("  the 5 newest kept - never the newest rotated away", (len(set(made)), names == made[-5:]), (7, True))
 held = dtask("The dump taken")["ansible.builtin.assert"]["that"]
 check("its check: a dump that ended 0 with the schema read holds; a failed dump, no result, or no schema - refused",
       [condition(held, _dump=d, _schema=s) for d, s in (({"rc": 0}, {"stdout": "26.5.7"}), ({"rc": 1}, {"stdout": "26.5.7"}),
@@ -227,6 +233,8 @@ check("keycloak-restart (setup-patroni imports it too): running the installed ve
       [condition(ka["ansible.builtin.assert"]["that"], _keycloak_install={"stdout_lines": l})
        for l in (["26.5.7", "26.5.7"], ["26.5.7", "not-running"], ["26.8.2", "26.5.7"], ["26.8.2", "26.5.7 26.8.2"])],
       [True, True, False, False])
+check("  its version read the same as upgrade-keycloak's (stubbed and run above)",
+      next(t for t in kr if t.get("register") == "_keycloak_install")["ansible.builtin.shell"]["cmd"] == read_cmd, True)
 kn = [str(t.get("name", "")) for t in kr]
 check("  its refusal before any restart", kn.index(ka["name"]) < min(i for i, n in enumerate(kn) if n.startswith("Keycloak restarted where pending")), True)
 # ── the way back: tasks/keycloak-restore.yml, restore-keycloak.yml, the copy's rehearsal ──────────────────────────
@@ -279,6 +287,8 @@ check("  its SQL: the database dropped (connections forced off), created owned b
       (rc, [("DROP DATABASE IF EXISTS keycloak WITH (FORCE)" in c, 'CREATE DATABASE keycloak OWNER "keycloak"' in c, "-d keycloak -1 -q" in c,
              "migration_model" in c) for c in calls]),
       (0, [(True, False, False, False), (False, True, False, False), (False, False, True, False), (False, False, False, True)]))
+check("  every psql call stops on its first error (-v ON_ERROR_STOP=1): a load failing halfway is never reported restored",
+      (len(calls), all("-v ON_ERROR_STOP=1" in c for c in calls)), (4, True))
 check("  a dump that is no gzip, or missing: refused before the database is touched",
       [restore(bad_dump), restore(os.path.join(work, "missing.sql.gz"))], [(1, []), (1, [])])
 check("  the load one transaction (a failed load leaves no half database a backup could take)", any("-d keycloak -1 -q" in c for c in calls), True)
@@ -293,8 +303,9 @@ def chosen(newest, given=None):
             render(pick["ansible.builtin.set_fact"]["_dump_host"], _newest_of=of, **extra))
 A, B = "/var/backups/keycloak/keycloak-20261127T010000Z-26.5.7-schema-26.5.0.sql.gz", "/var/backups/keycloak/keycloak-20261128T010000Z-26.8.2-schema-26.8.2.sql.gz"
 check("restore-keycloak: the newest dump on either Pi, or the one given; none - empty (refused below)",
-      [chosen({"pi1": A, "pi2": ""}), chosen({"pi1": A, "pi2": B}), chosen({"pi1": A, "pi2": B}, ("/x/given.sql.gz", "pi1")), chosen({"pi1": "", "pi2": ""})],
-      [(A, "pi1"), (B, "pi2"), ("/x/given.sql.gz", "pi1"), ("", "")])
+      [chosen({"pi1": A, "pi2": ""}), chosen({"pi1": A, "pi2": B}), chosen({"pi1": B, "pi2": A}),
+       chosen({"pi1": A, "pi2": B}, ("/x/given.sql.gz", "pi1")), chosen({"pi1": "", "pi2": ""})],
+      [(A, "pi1"), (B, "pi2"), (B, "pi1"), ("/x/given.sql.gz", "pi1"), ("", "")])
 ver = lambda p: render(wt("Its version")["ansible.builtin.set_fact"]["_dump_version"], _dump_path=p)
 check("  the version a dump ran, from its name; a name not a dump's - none", [ver(A), ver(B), ver("/x/other.sql.gz")], ["26.5.7", "26.8.2", ""])
 known = wt("A dump, its Pi and its version known")["ansible.builtin.assert"]["that"]
@@ -312,7 +323,10 @@ check("  both before anything stops",
 check("  every Pi in its run, and it runs the restore tasks with the chosen dump",
       (condition(wt("Every Pi in the run")["ansible.builtin.assert"]["that"], ansible_play_hosts=["pi1"], groups={"pis": ["pi1", "pi2"]}),
        wt("Restored").get("ansible.builtin.include_tasks")), (False, "tasks/keycloak-restore.yml"))
-C = yaml.safe_load(open("tests/ansible/copy/keycloak-way-back-check.yml"))[1]["tasks"]
+CW = yaml.safe_load(open("tests/ansible/copy/keycloak-way-back-check.yml"))
+check("the copy's rehearsal behind the Vagrant guard first (its restore drops the keycloak database)",
+      (CW[0].get("ansible.builtin.import_playbook"), len(CW)), ("../vagrant-only-play.yml", 2))
+C = CW[1]["tasks"]
 phase_of = lambda t: str(t.get("when", "")).split("'")[1] if "phase ==" in str(t.get("when", "")) else None
 phases = [phase_of(t) for t in C]
 check("the copy's rehearsal: a phase var (never --tags, which would skip the Vagrant guard), each task in one phase, in order",
