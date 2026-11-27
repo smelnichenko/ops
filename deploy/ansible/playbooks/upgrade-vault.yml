@@ -3,11 +3,12 @@
 # HashiCorp's HA order: the standby first, the active last, so the failover runs from the older server to the newer,
 # never back. Each: stopped (SIGTERM - the active steps down), its binary replaced, started, unsealed by the Pi's own
 # unseal script (rewritten first: its key shares go to the API on stdin, its waits are bounded), on the new version
-# before the next. Before anything: both unsealed, one active (also checked when nothing is to do), each binary on
-# disk the one its process runs; a Consul snapshot (Vault's storage) and an export of Vault's keys alone (vault/ -
-# restoring the whole snapshot would also roll Patroni back) into /var/backups/vault-upgrade on the active Pi; the
-# running binary kept beside the new (/usr/local/bin/vault-<ver>). The way back: that binary and, if the new version
-# wrote what the old cannot read, the export (or the snapshot, Patroni paused) - by hand. Never a downgrade; a Pi
+# before the next. Before anything: both unsealed, one active (also checked when nothing is to do), the root token
+# working on each Pi (2.x's break-glass), each binary on disk the one its process runs; a Consul snapshot (Vault's
+# storage) and an export of Vault's keys alone (vault/ - restoring the whole snapshot would also roll Patroni back) into
+# /var/backups/vault-upgrade on the active Pi, both fetched to the controller (vars/vault-upgrade-backups/<inventory>/); the running
+# binary kept beside the new (/usr/local/bin/vault-<ver>). The way back: restore-vault.yml (task deploy:vault:way-back) -
+# that export into vault/, that binary back, rehearsed on the copy (task test:copy:vault-way-back). Never a downgrade; a Pi
 # already on the version is not restarted; nothing to do when both are. Any Pi failing stops the run on both (one Pi
 # upgraded alone is no HA).
 #
@@ -20,6 +21,7 @@
   vars:
     vault_api: https://127.0.0.1:8200
     upgrade_dir: /var/backups/vault-upgrade
+    backups_here: "{{ playbook_dir }}/../vars/vault-upgrade-backups/{{ inventory_file | basename | splitext | first }}"
   tasks:
     - name: Each Vault's state (200 active, 429 standby, 503 sealed)
       ansible.builtin.uri:
@@ -54,6 +56,38 @@
     - name: Nothing to do - every Pi runs {{ vault_version }}
       ansible.builtin.meta: end_play
       when: ansible_play_hosts | map('extract', hostvars, '_running') | unique | list == [vault_version]
+
+    # the break-glass from 2.0 on: sys/rekey and sys/generate-root need a token besides the key shares (HashiCorp's 2.0.0
+    # notes) - the root token kept on each Pi (setup-vault-pi writes it, backup-vault-keys copies it off) must work
+    # before any version move, or a lost one leaves a Vault that unseals but cannot be administered (operator 2026-11-27)
+    - name: The root token works here (vault token lookup)
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          export VAULT_ADDR={{ vault_api }} VAULT_CACERT=/etc/vault.d/tls/ca-cert.pem
+          # read on its own line (a failed read inside a prefix assignment would pass, empty, to the CLI's token helper)
+          T=$(cat /etc/vault-unseal/root-token)
+          [ -n "$T" ] || { echo "/etc/vault-unseal/root-token is empty" >&2; exit 1; }
+          VAULT_TOKEN=$T vault token lookup -format=json | python3 -c 'import json, sys
+          d = json.load(sys.stdin)["data"]
+          if "root" not in d["policies"] or d.get("expire_time"):
+              sys.exit("not a root token that never expires: policies %s, expire_time %s" % (d["policies"], d.get("expire_time")))'
+      register: _root_token
+      changed_when: false
+      failed_when: false
+      check_mode: false
+      no_log: true  # the token in its environment
+
+    - name: The root token works on every Pi - else nothing touched
+      ansible.builtin.assert:
+        that: _root_token.rc | default(1) == 0
+        fail_msg: >-
+          REFUSED: /etc/vault-unseal/root-token on {{ inventory_hostname }} is no working root token ({{ _root_token.stderr |
+          default('not read') | trim }}) - Vault 2.x needs one for sys/rekey and sys/generate-root: put it back
+          (backup-vault-keys.yml keeps a copy; on 1.x vault operator generate-root makes one from the key shares) - nothing
+          touched
+        quiet: true
 
     - name: The binary on disk
       ansible.builtin.command: /usr/local/bin/vault version
@@ -112,6 +146,30 @@
       register: _snapshot
       changed_when: true
       when: _active | bool
+
+    # one Pi's disk alone is no backup: both files on the controller too, before anything stops - in the gitignored
+    # vars/vault-upgrade-backups/<inventory>/ (the copy's never beside production's: its export would restore its barrier
+    # onto production), 0700/0600; a way back after that Pi is lost copies them back to a Pi (restore-vault.yml)
+    - name: Both backups fetched to the controller, before anything stops
+      ansible.builtin.fetch:
+        src: "{{ item }}"
+        dest: "{{ backups_here }}/"
+        flat: true
+        fail_on_missing: true
+      loop: ["{{ _snapshot.stdout }}", "{{ _snapshot.stdout | regex_replace('[.]snap$', '.vault-kv.json') }}"]
+      when: _active | bool
+
+    - name: The controller's copies the operator's alone (the directory 0700, the files 0600)
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        mode: "{{ item.mode }}"
+      loop:
+        - {path: "{{ backups_here }}", mode: '0700'}
+        - {path: "{{ backups_here }}/{{ _snapshot.stdout | basename }}", mode: '0600'}
+        - {path: "{{ backups_here }}/{{ _snapshot.stdout | basename | regex_replace('[.]snap$', '.vault-kv.json') }}", mode: '0600'}
+      delegate_to: localhost
+      become: false
+      when: _active | bool and not ansible_check_mode
 
     - name: The Pi's own unseal - the current script and unit, before anything restarts
       ansible.builtin.include_tasks: tasks/vault-unseal.yml

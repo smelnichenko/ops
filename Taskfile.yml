@@ -1282,6 +1282,32 @@ tasks:
           trap - EXIT
           pb "$C" -e phase=cleanup -e marker="$M"
 
+  test:copy:vault-way-back:
+    desc: "Vagrant: Vault's way back with production's playbooks - VAULT_TO=<newer> VAULT_TO_SHA256=<its amd64 zip's> (the Vault unit's target): a secret, upgrade-vault.yml to it, a second secret, restore-vault.yml (its export, the pin's binary back): the pin unsealed on both Pis, one active, the first secret there, the second gone (a readied copy, alone)"
+    dir: deploy/ansible
+    deps: [deploy:install]
+    requires:
+      vars: [VAULT_TO, VAULT_TO_SHA256]
+    cmds:
+      # the copy's VMs used: one run at a time (scripts/copy-lock.sh - a nested task shares its caller's lock)
+      - cmd: ../../scripts/copy-lock.sh
+      # each playbook behind the Vagrant guard, production's secrets kept out (env -i), the marker one per run
+      - cmd: |
+          set -euo pipefail
+          M=way-back-$(date -u +%Y%m%dT%H%M%SZ)
+          C=../../tests/ansible/copy/vault-way-back-check.yml
+          V="-e @vars/vault.yml -e @vars/vault-vagrant.yml"
+          pb() { env -i HOME="$HOME" PATH="$PATH" venv/bin/ansible-playbook -i inventory/vagrant.yml "$@"; }
+          trap 'pb "$C" $V -e phase=cleanup -e marker="$M"' EXIT
+          pb "$C" $V -e phase=before -e marker="$M" -e vault_to='{{.VAULT_TO}}'
+          pb ../../tests/ansible/vagrant-only-play.yml playbooks/upgrade-vault.yml $V -e vault_version='{{.VAULT_TO}}' -e '{"vault_checksums": {"amd64": "{{.VAULT_TO_SHA256}}"}}'
+          pb "$C" $V -e phase=after -e marker="$M"
+          pb ../../tests/ansible/vagrant-only-play.yml playbooks/restore-vault.yml $V -e confirm="$(cat ../../.copy/vault-way-back-confirm)"
+          pb "$C" $V -e phase=verify -e marker="$M"
+          # on success the cleanup a command of its own (a failing EXIT trap never fails the task); the trap for a failure
+          trap - EXIT
+          pb "$C" $V -e phase=cleanup -e marker="$M"
+
   test:pi:rerun-guards:
     desc: "Vagrant: re-running the Pi playbooks is safe - setup-patroni refuses while Patroni is stopped (its data untouched), passes while it runs and keeps the database port; setup-consul keeps the key and restarts nothing; setup-keepalived reloads a changed config (PgBouncer put in front first, as on the Pis, where missing)"
     deps: [deploy:install]
@@ -1374,6 +1400,14 @@ tasks:
     prompt: "Upgrade Vault on PRODUCTION's Pis (one failover)?"
     cmds:
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/upgrade-vault.yml -e @vars/vault.yml {{.CLI_ARGS}}
+
+  deploy:vault:way-back:
+    desc: "PRODUCTION: the way back from a Vault upgrade - after the unit is reverted (vars/vault.yml's old pin - refused otherwise), confirmed with -- -e confirm=<the export's file name>: both Vaults stopped, vault/ restored from the pre-upgrade export, the kept old binary back, each unsealed, one active (everything written to Vault since the export lost)"
+    dir: deploy/ansible
+    deps: [deploy:install]
+    prompt: "Restore Vault's keys on PRODUCTION from the pre-upgrade export (everything written since it lost)?"
+    cmds:
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/restore-vault.yml -e @vars/vault.yml {{.CLI_ARGS}}
 
   # Production's runs of the playbooks a cluster change may need once merged - each tried on the Vagrant copy first
   # (task test:copy:playbook PLAYBOOK=<it>), its variables after -- (task <name> -- -e k=v)

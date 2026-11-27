@@ -313,30 +313,29 @@ if tok and tsum:
            and mode["ansible.builtin.file"]["owner"] == "root",
            mode and [held(0, {"skipped": True}), held(1, {"content": "eA=="}), held(1, {"skipped": True}),
                      held(1, {"content": "eA=="}, True)]) == (False, True, [True, True, False, False]))
-# the root token's read on pi1: none there (purged) is an answer, any other failure fails the play; pi2's copy goes
-# when pi1 has none - never left to outlive the purge
+# the root token's read on pi1: any failure to look or read fails the play; none there is refused (never purged - the
+# root token is required on both Pis since 2026-11-27, Vault 2.x's break-glass): the step named - pi2's copied back, or
+# backup-vault-keys.yml's copy / generate-root when neither holds one; nothing removes pi2's
 if tread:
     look = next((t for t in pi2_play.get("tasks") or [] if (t.get("ansible.builtin.stat") or {}).get("path")
                  == "/etc/vault-unseal/root-token"), None)
     check("pi1's token looked for on pi1 (its failure fails the play), read only where it is (its failure too)",
           look is not None and look.get("delegate_to") == "pi1" and "failed_when" not in look
           and "failed_when" not in tread and tread.get("when") == look["register"] + ".stat.exists")
-    gone = next((t for t in pi2_play.get("tasks") or [] if (t.get("ansible.builtin.file") or {}).get("path")
-                 == "/etc/vault-unseal/root-token" and (t.get("ansible.builtin.file") or {}).get("state") == "absent"), None)
-    keep = next((t for t in pi2_play.get("tasks") or [] if "vault_root_token_purged" in str(t.get("ansible.builtin.assert", ""))), None)
-    # pi1 without a token: pi2's kept and the run refused unless the purge is said (pi1 rebuilt without it left pi2's the
-    # last copy); said - removed. pi1 with one: neither
-    def outcome(pi1, pi2_rc, purged=None):
+    gone = [t for t in pi2_play.get("tasks") or [] if (t.get("ansible.builtin.file") or {}).get("path")
+            == "/etc/vault-unseal/root-token" and (t.get("ansible.builtin.file") or {}).get("state") == "absent"]
+    need = next((t for t in pi2_play.get("tasks") or [] if str(t.get("name", "")).startswith("The root token on pi1 - required")), None)
+    def outcome(pi1, pi2_rc):
         v = {tread["register"]: pi1, tsum["register"]: {"rc": pi2_rc}}
-        if purged is not None:
-            v["vault_root_token_purged"] = purged
-        refused = condition(keep["when"], **v) and not condition(keep["ansible.builtin.assert"]["that"], **v)
-        return ("refused" if refused else "on", condition(gone["when"], **v))
-    check("pi1 without a token: pi2's kept, refused unless its purge is said; said: removed; pi1 with one: neither",
-          gone is not None and keep is not None
-          and [outcome({"skipped": True}, 0), outcome({"skipped": True}, 0, "true"), outcome({"skipped": True}, 1),
-               outcome({"content": "eA=="}, 0, "true")]
-          == [("refused", False), ("on", True), ("on", False), ("on", False)])
+        if condition(need["ansible.builtin.assert"]["that"], **v):
+            return "on"
+        msg = render(need["ansible.builtin.assert"]["fail_msg"], **v)
+        return "refused: " + ("copy pi2's" if "copy pi2's back to pi1" in msg else "neither" if "neither Pi holds one" in msg else msg)
+    check("pi1 with a token - on; without: refused, the step named (pi2's copied back; neither - the backup or generate-root); "
+          "no task removes pi2's token, no purge switch",
+          need is not None and not gone and "vault_root_token_purged" not in open("deploy/ansible/playbooks/setup-vault-pi.yml").read()
+          and [outcome({"content": "eA=="}, 0), outcome({"skipped": True}, 0), outcome({"skipped": True}, 1)]
+          == ["on", "refused: copy pi2's", "refused: neither"])
 # the verify play: a sealed or unanswering Vault on either Pi fails it (2 sealed, 1 an error), not a "ready" summary
 ver = next((p for p in book if p.get("name") == "Verify Vault cluster"), {})
 st = next((t for t in ver.get("tasks") or [] if t.get("ansible.builtin.command") == "vault status"), None)

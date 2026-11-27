@@ -119,7 +119,7 @@
       "taken_by": [
         "deploy:vault:upgrade"
       ],
-      "_why": "its own command takes it: upgrade-vault.yml snapshots Consul (Vault's storage) and exports vault/ before it touches a Pi - its way back from them by hand (the playbook's header), never run on the copy: blocked until a way-back check passes there (the one-way rule, as ScyllaDB's)"
+      "_why": "its own command takes it: upgrade-vault.yml snapshots Consul (Vault's storage) and exports vault/ before it touches a Pi - its way back from them scripted (restore-vault.yml, task deploy:vault:way-back), not yet run on the copy (task test:copy:vault-way-back): blocked until a way-back check passes there (the one-way rule, as ScyllaDB's)"
     },
     {
       "store": "consul",

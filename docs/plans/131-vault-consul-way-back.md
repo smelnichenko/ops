@@ -1,6 +1,9 @@
 # Plan 131 - Vault's and Consul's way back, rehearsed on the copy (minimum plan)
 
-**Status:** draft, 2026-11-27 - for the operator's OK before any build.
+**Status:** the operator answered the question (2026-11-27: keep the root token) - building. Vault's part (items 1-2 and
+the root token) on its own branch: restore-vault.yml, the copy check, upgrade-vault.yml's root-token check and its
+backups fetched off the Pi, backup-vault-keys.yml requiring the token; its store's `missing` clears only once
+`task test:copy:vault-way-back` passes. Consul's part (items 3-4) next.
 
 ## Why
 
@@ -42,7 +45,35 @@ way back itself):
 - or set `enable_unauthenticated_access = ["rekey", "generate-root"]` in vault.hcl (anyone who reaches the API can
   then submit key shares - HashiCorp calls it a last resort).
 
+## Vault's part, after its review (2026-11-27)
+
+The review found no Critical; its warnings fixed on the branch: vault/ as it stands set aside beside the export before
+the delete (the way forward again); from the stop on, both units off at a boot, the kept binary back first, a rescue that
+says where Vault was left and what to run (never deploy:vault-pi meanwhile - an empty vault/ reads as uninitialised and
+its init would overwrite the keys); the root-token check reads the file on its own line (a failed read in a prefix
+assignment fell through to the CLI's token helper) and requires a root token that never expires; the controller's
+backups one directory per inventory (the copy's export never beside production's), 0700/0600; the end names what to run
+again (deploy:ci-bot, deploy:argocd-reader, preview environments, External Secrets force-synced); the rehearsal reads the
+secret's value back and has External Secrets sync through the VIP after the restore; setup-vault-pi's root-token purge
+replaced by a refusal. Also: the kept binary's version and the export's seal config and keyring checked before the stop,
+the export host's Consul leader asked, the import compared key by key, the newest export by name, the root token proven
+on the restored keys.
+
+## Consul's part - its design (next)
+
+`upgrade-consul.yml` leaves a whole-state snapshot on pi1 and the old binary on all three servers. An old binary may not
+read a raft data directory the new one wrote, and `consul snapshot restore` needs a cluster on the snapshot's version, so
+the way back is: Patroni paused (scripts/patroni-pause.py, as setup-consul's restarts do), Vault stopped on both Pis;
+the three servers stopped, their data directories moved aside (never deleted), the old binary back, a fresh cluster of
+three (bootstrap_expect) with a leader, the snapshot restored, three voters healthy; Patroni resumed (its leader key as
+the snapshot holds it - the rehearsal must show Patroni takes it back cleanly), Vault started and unsealed. Its copy check:
+a KV marker and a Patroni-side write before, the upgrade, markers after, the restore; the old version on all three, the
+database writable through its leader, Vault unsealed, the before-marker there and the after-marker gone.
+
 ## Could add later (not needed to clear the gates)
+
+- A rehearsal of the likelier trigger: upgrade-vault.yml failing in the active's turn (a 2.x standby beside a 1.21
+  active), then restore-vault.yml - the review's suggestion.
 
 The rest of the vault-2.x review (plan 101 holds the list): the rehearsal starting from 1.21.4, the unit's copy step
 running the rehearsal's outside checks (two-actives sampler, leader moved, sealed-node refusal), a step-down and a KV
