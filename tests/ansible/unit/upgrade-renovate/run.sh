@@ -554,6 +554,25 @@ print([branch(c[0], c[1], version=c[2] if len(c) > 2 else "1.2.0") for c in case
       sorted(p[1:] for p in wave["matchPackageNames"]) == sorted({p for s in t["stores"] for p in s["packages"]}))
 PYWAVE
 )" "['wave-patches', 'wave-patches', 'wave-patches', 'wave-patches', 'wave-patches', 'wave-patches', 'own', 'observability', 'grafana-1.2', 'data-operators', 'data-operators', 'argocd', 'vault-1.2', 'pi-services', 'istio-1.32', 'kubernetes-1.37', 'scylladb-2026.3', 'gateway-api-1.7', 'manual-woodpecker', 'data-operators', 'clickhouse-1.2', 'grafana-1.2', 'consul-1.2', 'pi-services', 'keycloak-26.8'] test-wave-patches True"
+# The wave-patches review (2026-11-27): velero-plugin-for-aws 1.15.0 rode in the wave beside Velero 1.18.4 (off the
+# compatibility matrix - its minor follows Velero's, moved with Velero's by that unit's fix: never proposed alone, its
+# patches in the wave); fluent-bit's cr.fluentbit.io image and blackbox-exporter's prometheus-operator config-reloader
+# rode in the wave too (observability's); versitygw 1.8 -> 1.11 (three minors, a data migration among them) rode in the
+# wave and the Pis' rule named versity/versitygw alone - the cluster's and the Pis' a unit of their own
+check "the preset: Velero's plugin never moves a minor alone; fluent-bit and the prometheus-operator images in observability; versitygw a unit of its own" \
+  "$("$PY" - <<'PYREGROUP'
+import sys
+sys.path.insert(0, "tests/ansible/unit")
+from renovate_preset import branch
+print([branch(p, k, version=v) for p, k, v in (
+    ("velero/velero-plugin-for-aws", "minor", "1.15.0"), ("velero/velero-plugin-for-aws", "major", "2.0.0"),
+    ("velero/velero-plugin-for-aws", "patch", "1.14.5"), ("velero/velero", "minor", "1.19.0"),
+    ("cr.fluentbit.io/fluent/fluent-bit", "minor", "5.2.0"), ("fluent-bit", "minor", "5.2.0"),
+    ("quay.io/prometheus-operator/prometheus-config-reloader", "minor", "0.95.2"),
+    ("ghcr.io/versity/versitygw", "minor", "1.11.0"), ("versity/versitygw", "minor", "1.11.0"), ("ghcr.io/versity/versitygw", "patch", "1.8.1"),
+    ("forgejo/forgejo", "minor", "14.1.0"))])
+PYREGROUP
+)" "[None, None, 'wave-patches', 'wave-patches', 'observability', 'observability', 'observability', 'versitygw', 'versitygw', 'wave-patches', 'pi-services']"
 # The observability review (2026-11-25): Grafana's and ClickHouse's minors rode in renovate/observability, labelled
 # upgrade-cycle alone - a store's version outside its own unit, so nothing backed it up (Grafana migrates its database
 # one way on every new version from 13 on). Each its own unit now, renovate/<store>-<X.Y>, labelled one-way - its name
