@@ -61,10 +61,13 @@ check "fewer than four inventories: usage (exit 2)" "$rc" 2
 # the unit's moves (a sixth argument, upgrade-units.py moves): every production line of a package at its old version on
 # the copy at the new one after the change - "moved nothing" passed a unit whose version never reached the copy (the
 # observability review, 2026-11-25)
+# the moves' names: the harness's own (the real file's read below)
+printf '%s\n' '# a comment' 'ci/tool - the CI'"'"'s own image, outside production' > "$W/names"
+export COPY_MOVES_NAMES=$W/names
 printf '%s\n' 'a/velero v1.18.4 v1.19.0' 'velero 12.2.0 13.0.0' 'ci/tool 1.0 2.0' > "$W/moves"
 run "$W/prod" "$W/build" "$W/changed" "$W/changed" "$W/allowed" "$W/moves"; rc=$?
-check "the unit's moves on the copy after the change (image and chart; a CI tool production does not run): passed" \
-  "$rc $(grep -c 'NOT MOVED' <<< "$out")" "0 0"
+check "the unit's moves on the copy after the change (image and chart; a CI tool named as checked elsewhere): passed" \
+  "$rc $(grep -c -E 'NOT MOVED|NOT CHECKED' <<< "$out")" "0 0"
 run "$W/prod" "$W/build" "$W/build" "$W/build" "$W/allowed" "$W/moves"; rc=$?
 check "  the change moved nothing of them: failed, each line named" \
   "$rc $(grep -c "^  NOT MOVED a/velero v1.18.4 -> v1.19.0: the copy lacks 'image a/velero v1.19.0'$" <<< "$out") $(grep -c "NOT MOVED velero 12.2.0 -> 13.0.0: the copy lacks 'argo-chart velero velero@13.0.0'" <<< "$out") $(grep -c 'did not move what its unit moves' <<< "$out")" \
@@ -93,6 +96,39 @@ run "$W/prod2" "$W/prod2" "$W/prod2" "$W/prod2" /dev/null "$W/moves2"; rc_none=$
 check "a version in two places of a line: moved in both - passed; the chart alone - passed; in none - failed, named with both moved" \
   "$rc_both $rc_chart $rc_none $(grep -c "^  NOT MOVED cilium 1.20.4 -> 1.20.5: the copy lacks 'helm kube-system/cilium cilium-1.20.5 1.20.5'$" <<< "$out")" \
   "0 0 1 1"
+
+# a move production names nowhere: refused unless moves-names.txt names it (the wave-patches review, 2026-11-27:
+# forgejo/forgejo, prom/node-exporter and renovate/renovate required nothing)
+printf '%s\n' 'x/unnamed 1.0 2.0' > "$W/moves-unnamed"
+run "$W/prod" "$W/build" "$W/changed" "$W/changed" "$W/allowed" "$W/moves-unnamed"; rc=$?
+check "a move no production line names, at any version, and no entry for it: failed, said" \
+  "$rc $(grep -c '^  NOT CHECKED x/unnamed 1.0 -> 2.0: no production line names it' <<< "$out")" "1 1"
+printf '%s\n' 'b/redis 7.0 8.2' > "$W/moves-other"
+run "$W/prod" "$W/build" "$W/changed" "$W/changed" "$W/allowed" "$W/moves-other"; rc=$?
+check "  a package production names only at another version (a hook Job's image no pod runs at the old one): nothing to move, passed" \
+  "$rc $(grep -c -E 'NOT MOVED|NOT CHECKED' <<< "$out")" "0 0"
+# named another way: its lines checked too (a Pi's service under its own name)
+printf '%s\n' 'pi pi1 svc 1.0' > "$W/prod-pi"; printf '%s\n' 'pi pi1 svc 2.0' > "$W/copy-pi"
+printf '%s\n' 'org/svc = ^pi \S+ svc ' > "$W/names-pi"
+printf '%s\n' 'org/svc 1.0 2.0' > "$W/moves-pi"
+COPY_MOVES_NAMES=$W/names-pi run "$W/prod-pi" "$W/prod-pi" "$W/copy-pi" "$W/copy-pi" /dev/null "$W/moves-pi"; rc_moved=$?
+COPY_MOVES_NAMES=$W/names-pi run "$W/prod-pi" "$W/prod-pi" "$W/prod-pi" "$W/prod-pi" /dev/null "$W/moves-pi"; rc_stayed=$?
+COPY_MOVES_NAMES=$W/names run "$W/prod-pi" "$W/prod-pi" "$W/prod-pi" "$W/prod-pi" /dev/null "$W/moves-pi"; rc_unnamed=$?
+check "  named another way (org/svc = ^pi \\S+ svc): moved on the copy - passed; not moved - failed; without the entry - not checked, failed" \
+  "$rc_moved $rc_stayed $rc_unnamed $(grep -c 'NOT CHECKED org/svc' <<< "$out")" "0 1 1 1"
+printf '%s\n' 'org/svc: ^pi svc' > "$W/names-bad"
+COPY_MOVES_NAMES=$W/names-bad run "$W/prod-pi" "$W/prod-pi" "$W/copy-pi" "$W/copy-pi" /dev/null "$W/moves-pi"; rc=$?
+check "  an entry of another shape: refused, said (a typo would pass a move unchecked)" "$rc $(grep -c 'UNREAD tests/ansible/copy/moves-names.txt' <<< "$out")" "1 1"
+COPY_MOVES_NAMES=$W/missing run "$W/prod" "$W/build" "$W/changed" "$W/changed" "$W/allowed" "$W/moves"; rc=$?
+check "  the names file not readable: refused" "$rc $(grep -c 'moves. names not readable' <<< "$out")" "1 1"
+unset COPY_MOVES_NAMES
+# the real file: every entry read; forgejo's lines named, node_exporter's and Renovate's image checked elsewhere
+printf '%s\n' 'pi pi1 forgejo 15.0.11' 'pi pi2 forgejo 15.0.11' > "$W/prod-real"; sed 's/15.0.11/15.0.12/' "$W/prod-real" > "$W/copy-real"
+printf '%s\n' 'forgejo/forgejo 15.0.11 15.0.12' 'prom/node-exporter 1.12.1 1.13.1' 'renovate/renovate 44.198.3 44.264.1' > "$W/moves-real"
+run "$W/prod-real" "$W/prod-real" "$W/copy-real" "$W/copy-real" /dev/null "$W/moves-real"; rc_real=$?
+run "$W/prod-real" "$W/prod-real" "$W/prod-real" "$W/prod-real" /dev/null "$W/moves-real"; rc_real_stayed=$?
+check "  tests/ansible/copy/moves-names.txt itself: read whole; forgejo moved on both Pis - passed, not moved - failed" \
+  "$rc_real $rc_real_stayed $(grep -c 'UNREAD' <<< "$out")" "0 1 0"
 
 echo "copy-change-inventory: $([ $fails = 0 ] && echo ALL-PASS || echo "$fails FAILED")"
 [ $fails = 0 ]

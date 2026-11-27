@@ -1,0 +1,11 @@
+# The packages a unit moves that production's inventory (tests/ansible/copy/prod-inventory.txt) names another way, or
+# not at all. scripts/copy-change-inventory.sh requires each move to reach a production line - by its own name, or by an
+# entry here - unless production names it only at another version (an image no pod runs at the old one: a hook Job's).
+# A move nothing names fails: never a silent pass (the wave-patches review, 2026-11-27: forgejo/forgejo,
+# prom/node-exporter and renovate/renovate required nothing).
+#   <package> = <a regular expression over inventory lines>   those lines too (added to the ones naming it)
+#   <package> - <why>                                          checked elsewhere, never by the inventory
+forgejo/forgejo = ^pi \S+ forgejo 
+versity/versitygw = ^pi \S+ versitygw 
+prom/node-exporter - ten's own binary, outside the inventory: setup-host-hardening's check on the copy requires its node_exporter_build_info to name the pinned version
+renovate/renovate - the runner's own image (scripts/upgrade-renovate.sh), outside production: copy-unit smoke-runs the new image (task test:copy:renovate-image)

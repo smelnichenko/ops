@@ -110,6 +110,12 @@ spec:
       targetRevision: main
       ref: values
 Y
+# the charts ops restates (setup-kubeadm's cert_manager_version, cnpg_chart_version) as production's Argo apps carry them
+for c in "cert-manager cert-manager v1.21.3" "cnpg cloudnative-pg 0.29.1"; do
+  set -- $c
+  printf 'apiVersion: argoproj.io/v1alpha1\nkind: Application\nmetadata:\n  name: %s\nspec:\n  sources:\n    - repoURL: https://charts.example\n      chart: %s\n      targetRevision: %s\n' \
+    "$1" "$2" "$3" > "$W/src/infra/clusters/production/argocd/apps/$1.yaml"
+done
 for r in infra platform ops; do (cd "$W/src/$r" && g add -A && g commit -qm base && g push -q origin main 2> /dev/null); done
 # unit <repo> <unit> <sed on its files> <file>...: the unit's branch on origin, the clone left on main
 unit() {
@@ -124,6 +130,9 @@ unit ops cilium-1.21 's/"1.20.4"/"1.21.0"/' deploy/ansible/playbooks/setup-kubea
 unit ops forgejo 's/15.0.11/15.0.12/' deploy/ansible/vars/forgejo.yml
 unit ops vault 's/1.21.4/1.21.5/' deploy/ansible/vars/vault.yml
 unit ops follows 's/v1.21.3/v1.21.4/' deploy/ansible/playbooks/setup-kubeadm.yml
+unit infra cnpg-chart 's/targetRevision: 0.29.1/targetRevision: 0.29.2/' clusters/production/argocd/apps/cnpg.yaml
+unit infra cnpg-both 's/targetRevision: 0.29.1/targetRevision: 0.29.2/' clusters/production/argocd/apps/cnpg.yaml
+unit ops cnpg-both 's/cnpg_chart_version: "0.29.1"/cnpg_chart_version: "0.29.2"/' deploy/ansible/playbooks/setup-kubeadm.yml
 unit ops unknown 's/"1.0"/"1.1"/' deploy/ansible/playbooks/setup-kubeadm.yml
 unit ops bad-value 's/"1.20.4"/"1.21.0; rm -rf x"/' deploy/ansible/playbooks/setup-kubeadm.yml
 unit ops argocd 's/"10.9.7"/"10.18.0"/' deploy/ansible/playbooks/setup-argocd.yml
@@ -162,11 +171,11 @@ unit infra istio-kubeadm-alone 's/a:1/a:8/' clusters/v.yaml
 unit ops istio-kubeadm-alone 's/"1.31.1"/"1.31.4"/' deploy/ansible/playbooks/setup-kubeadm.yml
 # cut before main moves Istio (at the end, below): its tips read the old version, a move it never made (the open units
 # cut before wave-patches read 1.31.1 at their tips beside main's 1.31.4 - one planned a restart down to 1.31.1)
-unit infra stale-other 's/a:1/a:9/' clusters/v.yaml
+unit infra stale-other 's/a:1/a:9/; s/targetRevision: 0.29.1/targetRevision: 0.29.3/' clusters/v.yaml clusters/production/argocd/apps/cnpg.yaml
 unit ops stale-other 's/"0.29.1"/"0.29.3"/' deploy/ansible/playbooks/setup-kubeadm.yml
 unit infra istio-task 's/a:1/a:5/' clusters/v.yaml
 # a data operator's chart version restated in setup-kubeadm's play vars moves with infra's chart (2026-11-17)
-unit infra data-follow 's/a:1/a:7/' clusters/v.yaml
+unit infra data-follow 's/a:1/a:7/; s/targetRevision: 0.29.1/targetRevision: 0.29.2/' clusters/v.yaml clusters/production/argocd/apps/cnpg.yaml
 unit ops data-follow 's/"0.29.1"/"0.29.2"/' deploy/ansible/playbooks/setup-kubeadm.yml
 unit ops istio-task 's/"1.31.1"/"1.31.4"/; s/tasks: \[\]/tasks: [{name: x, command: id}]/' deploy/ansible/playbooks/setup-istio.yml
 unit ops istio-alone 's/"1.31.1"/"1.31.4"/' deploy/ansible/playbooks/setup-istio.yml
@@ -206,8 +215,8 @@ check "infra and platform: test:copy:change on both branches" "$(plan wave-patch
   "test:copy:change INFRA_REF=renovate/wave-patches PLATFORM_REF=renovate/wave-patches"
 check "infra alone: platform's main stands for it" "$(plan observability)" \
   "test:copy:change INFRA_REF=renovate/observability PLATFORM_REF=main"
-check "Kubernetes: upgrade-kubeadm to the version (the package's revision dropped), restarts expected" "$(plan kubernetes-1.36.7)" \
-  "test:copy:playbook PLAYBOOK=upgrade-kubeadm.yml ARGS='-e k8s_upgrade_to=1.36.7' RESTARTS_EXPECTED=true"
+check "Kubernetes: upgrade-kubeadm to the version and its pinned package revision (never the repository's newest), restarts expected" "$(plan kubernetes-1.36.7)" \
+  "test:copy:playbook PLAYBOOK=upgrade-kubeadm.yml ARGS='-e k8s_upgrade_to=1.36.7 -e k8s_upgrade_package=1.36.7-1.1' RESTARTS_EXPECTED=true"
 check "Cilium: setup-kubeadm's Cilium tasks at the version" "$(plan cilium-1.21)" \
   "test:copy:playbook PLAYBOOK=setup-kubeadm.yml ARGS='--tags cilium -e cilium_version=1.21.0'"
 out=$(plan forgejo)
@@ -236,8 +245,13 @@ check "setup-argocd's tasks changed, no value: refused" "$rc $(grep -c 'REFUSED.
 out=$(plan argocd-bad); rc=$?
 check "Argo CD's chart no version: refused" "$rc $(grep -c 'REFUSED.*no version' <<< "$out")" "1 1"
 out=$(plan follows); rc=$?
-check "a value production's Argo charts carry: no playbook for it - nothing to prove from ops, refused as such" \
-  "$rc $(grep -c 'nothing to prove' <<< "$out")" "1 1"
+check "a value production's Argo charts carry, moved in ops alone: refused - it disagrees with production's chart" \
+  "$rc $(grep -c 'cert_manager_version v1.21.4' <<< "$out")" "1 1"
+out=$(plan cnpg-chart); rc=$?
+check "an infra unit moving a chart ops restates, ops not moved with it: refused, the value and the chart named" \
+  "$rc $(grep -c 'REFUSED: ops restates' <<< "$out") $(grep -c "cnpg_chart_version 0.29.1 .*cloudnative-pg \['0.29.2'\]" <<< "$out")" "1 1 1"
+out=$(plan cnpg-both); rc=$?
+check "  both moved together: not refused for it" "$(grep -c 'REFUSED: ops restates' <<< "$out")" "0"
 out=$(plan unknown); rc=$?
 check "a changed value with no known proof: refused, named" "$rc $(grep -c 'REFUSED.*some_other_version' <<< "$out")" "1 1"
 out=$(plan bad-value); rc=$?

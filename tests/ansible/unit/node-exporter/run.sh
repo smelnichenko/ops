@@ -66,8 +66,18 @@ check("the binary replaced only on another version",
       tasks["Move node_exporter into place"]["when"], "_node_exporter_version.stdout != node_exporter_version")
 check("the unpack reads the checked file, not the URL",
       tasks["Unpack node_exporter"]["ansible.builtin.unarchive"]["src"].endswith("/{{ node_exporter_archive_name }}"), True)
-verify = tasks["Verify node_exporter serves the root filesystem"]["until"]
+verify = tasks["Verify node_exporter serves the root filesystem, on the pinned version"]["until"]
 check("the check at the end reads /'s free space", "'mountpoint=\"/\"'" in verify and "node_filesystem_avail_bytes" in verify, True)
+sys.path.insert(0, "tests/ansible/unit")
+from templar import condition  # noqa: E402
+FS = 'node_filesystem_avail_bytes{device="/dev/sda1",fstype="ext4",mountpoint="/"} 1e+10'
+BI = lambda ver: 'node_exporter_build_info{branch="HEAD",goversion="go1.24",revision="x",version="%s"} 1' % ver
+body = lambda *lines: {"status": 200, "content": "\n".join(lines)}
+check("  and the pinned version running, by its own build_info - another version, or none named, not yet (a binary left in "
+      "place served the old one)",
+      [condition(verify, _node_exporter_check=b, node_exporter_version="1.13.1") for b in (
+          body(FS, BI("1.13.1")), body(FS, BI("1.12.1")), body(FS), body(FS, BI("1.13.10")), body(FS, '# HELP x version="1.13.1"'))],
+      [True, False, False, False, False])
 svc = tasks["Enable + start node_exporter"]["ansible.builtin.systemd"]
 st = lambda b, u: env.from_string(svc["state"]).render(_node_exporter_bin={"changed": b}, _node_exporter_unit={"changed": u})
 check("restarted on a new binary or a new unit, else only started (a changed flag takes effect now)",

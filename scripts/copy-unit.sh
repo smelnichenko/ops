@@ -106,6 +106,47 @@ print(((d[0].get("vars") or {}) if isinstance(d, list) and d and isinstance(d[0]
   done
 fi
 
+# every other value ops restates from a production Argo chart (FOLLOW below) equals that chart's targetRevision at the
+# unit's refs - infra's app at its ref, ops' value at its ref: an infra unit moving a chart without ops' restatement (or
+# the other way round) builds the copy on one version and runs production on another (the wave-patches review,
+# 2026-11-27: only istio_version was held so)
+if [ "$infra_ref" != main ] || [ "$ops_ref" != main ]; then
+  follow_bad=$(INFRA="$src/infra" INFRA_REF="$infra_ref" OPS="$ops_repo" OPS_REF="$ops_ref" "$py" - <<'PY'
+import os, subprocess, yaml
+INFRA, INFRA_REF, OPS, OPS_REF = (os.environ[k] for k in ("INFRA", "INFRA_REF", "OPS", "OPS_REF"))
+APPS, KUBEADM = "clusters/production/argocd/apps", "deploy/ansible/playbooks/setup-kubeadm.yml"
+CHARTS = {"cert_manager_version": "cert-manager", "external_secrets_chart_version": "external-secrets",
+          "metrics_server_chart_version": "metrics-server", "cnpg_chart_version": "cloudnative-pg",
+          "strimzi_chart_version": "strimzi-kafka-operator", "scylla_operator_chart_version": "scylla-operator",
+          "scylla_manager_chart_version": "scylla-manager"}
+def show(repo, ref, path):
+    r = subprocess.run(["git", "-C", repo, "show", f"{ref}:{path}"], capture_output=True, text=True)
+    return r.stdout if r.returncode == 0 else ""
+names = subprocess.run(["git", "-C", INFRA, "ls-tree", "--name-only", f"{INFRA_REF}:{APPS}"], capture_output=True, text=True).stdout.split()
+revs = {}
+for n in names:
+    for doc in yaml.safe_load_all(show(INFRA, INFRA_REF, f"{APPS}/{n}")):
+        spec = (doc or {}).get("spec") or {} if isinstance(doc, dict) else {}
+        for src in spec.get("sources") or [spec.get("source") or {}]:
+            if src.get("chart"):
+                revs.setdefault(src["chart"], set()).add(str(src.get("targetRevision")))
+d = yaml.safe_load(show(OPS, OPS_REF, KUBEADM)) or []
+ops_vars = (d[0].get("vars") or {}) if isinstance(d, list) and d and isinstance(d[0], dict) else {}
+for var, chart in sorted(CHARTS.items()):
+    if var not in ops_vars:
+        continue
+    got = sorted(revs.get(chart, ()))
+    if got != [str(ops_vars[var])]:
+        print(f"{var} {ops_vars[var]} ({KUBEADM} at {OPS_REF}), production's Argo chart {chart} {got or 'not found'} (infra at {INFRA_REF})")
+PY
+  ) || { echo "REFUSED: ops' restated Argo chart versions not read"; exit 1; }
+  if [ -n "$follow_bad" ]; then
+    echo "REFUSED: ops restates production's Argo charts (defaults-follow-production) and they disagree at the unit's refs - they move together:"
+    printf '  %s\n' "$follow_bad"
+    exit 1
+  fi
+fi
+
 steps=()
 if [ "$infra_ref" != main ] || [ "$platform_ref" != main ]; then
   steps+=("test:copy:change INFRA_REF=$infra_ref PLATFORM_REF=$platform_ref")
@@ -238,7 +279,8 @@ for path in changed:
             if old.get(k) == new.get(k):
                 continue
             if k == "k8s_package_version":
-                steps.append(("upgrade-kubeadm.yml", f"-e k8s_upgrade_to={version(new[k]).split('-')[0]}", True))
+                # the pinned package revision too: the repository's newest may be another (a -1.2 proven, -1.1 pinned)
+                steps.append(("upgrade-kubeadm.yml", f"-e k8s_upgrade_to={version(new[k]).split('-')[0]} -e k8s_upgrade_package={version(new[k])}", True))
             elif k == "cilium_version":
                 steps.append(("setup-kubeadm.yml", f"--tags cilium -e cilium_version={version(new[k])}", False))
             elif k == "istio_version" and not os.environ["ISTIO_TO"] and istio_moves(path):

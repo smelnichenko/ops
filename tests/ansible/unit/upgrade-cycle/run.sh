@@ -383,7 +383,7 @@ for p in ("NOTHING", "PAUSED"):
     check(f"{p}: the pick alone, nothing readied or halted", (rc, has(calls, "task"), has(calls, "vagrant")), (0, [], []))
 # ── a unit, proven and applied ────────────────────────────────────────────────────────────────────────────────────────
 PLAN = ("test:copy:change INFRA_REF=renovate/wave-patches PLATFORM_REF=main\n"
-        "test:copy:playbook PLAYBOOK=upgrade-kubeadm.yml ARGS='-e k8s_upgrade_to=1.36.7' RESTARTS_EXPECTED=true\n"
+        "test:copy:playbook PLAYBOOK=upgrade-kubeadm.yml ARGS='-e k8s_upgrade_to=1.36.7 -e k8s_upgrade_package=1.36.7-1.1' RESTARTS_EXPECTED=true\n"
         "test:copy:playbook PLAYBOOK=upgrade-forgejo.yml ARGS='-e @/x/forgejo.yml'\n")
 REVS = "infra=" + "f" * 40
 rc, calls = night("prove wave-patches patch", plan=PLAN)
@@ -432,8 +432,8 @@ check("  the review's context: each repo the unit does not touch cloned at main,
         if c.startswith("git -c credential.helper=") and " clone " in c and "/context/" in c],
        [c.split()[:3] + [c.split()[3].startswith(WORK)] for c in has(calls, "upgrade-units.py bodies")]),
       (["-q --depth 1 platform"], [["upgrade-units.py", "bodies", "wave-patches", True]]))
-check("  Kubernetes to the proven version", has(calls, "task --yes deploy:kubeadm"),
-      ["task --yes deploy:kubeadm:upgrade -- -e k8s_upgrade_to=1.36.7"])
+check("  Kubernetes to the proven version and package revision", has(calls, "task --yes deploy:kubeadm"),
+      ["task --yes deploy:kubeadm:upgrade -- -e k8s_upgrade_to=1.36.7 -e k8s_upgrade_package=1.36.7-1.1"])
 check("  the journal of the apply gone with its record; no step that may leave a process behind (task - the copy's host "
       "guard -, vagrant, the agents) handed the run's lock",
       (inflight(), [c for c in (open(os.path.join(ST, "fd9")).read().splitlines() if os.path.exists(os.path.join(ST, "fd9")) else [])
@@ -1018,6 +1018,7 @@ check("a part with no production command: refused BEFORE the merge - nothing mer
       (rc, merged(calls, "wave-patches"), notices(calls)), (1, False, ["stopped wave-patches"]))
 for step, why in (("test:copy:playbook PLAYBOOK=upgrade-kubeadm.yml ARGS='-e k8s_version=1.36'", "no Kubernetes version"),
                   ("test:copy:playbook PLAYBOOK=upgrade-kubeadm.yml ARGS='-e k8s_upgrade_to=next'", "a Kubernetes version that is none"),
+                  ("test:copy:playbook PLAYBOOK=upgrade-kubeadm.yml ARGS='-e k8s_upgrade_to=1.36.7'", "no Kubernetes package revision"),
                   ("test:copy:playbook PLAYBOOK=setup-kubeadm.yml ARGS='--tags cilium'", "no Cilium version"),
                   ("test:copy:playbook PLAYBOOK=restart-mesh-workloads.yml ARGS=''", "no Istio version")):
     rc, calls = night("prove wave-patches patch", plan=step + "\n")

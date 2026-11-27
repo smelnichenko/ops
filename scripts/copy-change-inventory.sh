@@ -14,7 +14,10 @@
 # scripts/upgrade-units.py moves): every production line naming a package at its old version must name it at the new one
 # on the copy after the change - "moved nothing" passed a unit whose new version never reached the copy (the
 # observability review, 2026-11-25: nothing required grafana/grafana 13.3.2 running). A line the allow-list lets the
-# copy lack (a Job's image) is not required; a package production does not run (a CI image) has no line to move.
+# copy lack (a Job's image) is not required; a package production names only at another version runs nowhere at the
+# old one (a hook Job's image) - nothing to move. A package production names nowhere fails unless
+# tests/ansible/copy/moves-names.txt names it - by the lines production calls it (a Pi's service), or as checked
+# elsewhere (the runner's own image): no move passes unchecked (the wave-patches review, 2026-11-27).
 #
 # Usage: scripts/copy-change-inventory.sh tests/ansible/copy/prod-inventory.txt .copy/vagrant-inventory-build.txt \
 #          .copy/vagrant-inventory-after-change.txt .copy/vagrant-inventory.txt tests/ansible/copy/vagrant-allowed-missing.txt \
@@ -58,10 +61,26 @@ if [ -n "$old" ]; then
 fi
 if [ -n "${6:-}" ]; then
   [ -r "$6" ] || { echo "$6: the unit's moves not readable"; exit 1; }
-  unmoved=$(python3 -I - "$1" "$3" "$6" "${5:-/dev/null}" <<'MOVES'
+  names=${COPY_MOVES_NAMES:-$here/../tests/ansible/copy/moves-names.txt}
+  [ -r "$names" ] || { echo "$names: the moves' names not readable"; exit 1; }
+  unmoved=$(python3 -I - "$1" "$3" "$6" "${5:-/dev/null}" "$names" <<'MOVES'
 import re, sys
-prod, after, moves, allowed = (open(p).read().splitlines() for p in sys.argv[1:5])
+prod, after, moves, allowed, names = (open(p).read().splitlines() for p in sys.argv[1:6])
 have = set(after)
+# tests/ansible/copy/moves-names.txt: "<package> = <regex>" adds the lines it matches, "<package> - <why>" is checked
+# elsewhere; a line of another shape is refused (a typo would pass a move unchecked)
+mapped, elsewhere = {}, set()
+for n in (x.strip() for x in names):
+    if not n or n.startswith("#"):
+        continue
+    m = re.fullmatch(r"(\S+) = (.+)", n) or re.fullmatch(r"(\S+) - (.+)", n)
+    if not m:
+        print("  UNREAD tests/ansible/copy/moves-names.txt: '%s'" % n)
+        continue
+    if " = " in n:
+        mapped[m.group(1)] = re.compile(m.group(2))
+    else:
+        elsewhere.add(m.group(1))
 exact, anyver = set(), set()
 for a in (x.strip() for x in allowed):
     if a and not a.startswith("#"):
@@ -70,8 +89,16 @@ for a in (x.strip() for x in allowed):
 for pkg, old, new in (m.split() for m in moves if len(m.split()) == 3):
     at = re.compile(r"(?<![\d.])" + re.escape(old) + r"(?![\d.])")
     left_out = lambda x: x in exact or x.rsplit(" ", 1)[0] in anyver
-    # a component the copy leaves out (its production line allowed missing) is left out at the new version too
-    for line in (x for x in prod if pkg in x and at.search(x) and not left_out(x)):
+    if pkg in elsewhere:
+        continue
+    lines = [x for x in prod if (pkg in x or (pkg in mapped and mapped[pkg].search(x))) and at.search(x)]
+    if not lines and not any(pkg in x or (pkg in mapped and mapped[pkg].search(x)) for x in prod):
+        # production names it nowhere, at no version: a move nothing checks - named in moves-names.txt, or refused
+        print("  NOT CHECKED %s %s -> %s: no production line names it - name it in tests/ansible/copy/moves-names.txt" % (pkg, old, new))
+        continue
+    # a component the copy leaves out (its production line allowed missing) is left out at the new version too; a
+    # package production names only at another version runs nowhere at the old one (a hook Job's image): nothing to move
+    for line in (x for x in lines if not left_out(x)):
         # moved in any of the old version's places: a chart named for its version beside the same app version moves
         # both (Cilium: cilium-1.20.5 1.20.5), a chart bump alone the first - every subset tried, none required
         spots = [m.span() for m in at.finditer(line)][:8]
@@ -87,7 +114,7 @@ for pkg, old, new in (m.split() for m in moves if len(m.split()) == 3):
 MOVES
 )
   if [ -n "$unmoved" ]; then
-    echo "what the unit moves, not on the copy after the change:"
+    echo "what the unit moves, not on the copy after the change (or never checked):"
     printf '%s\n' "$unmoved"
     echo "INVENTORY: the change did not move what its unit moves"
     bad=1
