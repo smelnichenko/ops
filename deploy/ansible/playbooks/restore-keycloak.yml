@@ -1,0 +1,107 @@
+---
+# The way back from upgrade-keycloak.yml: Keycloak's database restored from the newest pre-upgrade dump on
+# the Pis (/var/backups/keycloak - or -e keycloak_restore_dump=<path> -e keycloak_restore_host=<pi>), the install of the
+# version it ran put back, the VIP's Pi started first (tasks/keycloak-restore.yml). Everything since the dump is lost:
+# sessions, realm edits, users made after it. First revert the unit (vars/keycloak.yml back to the old pin): refused
+# until the pin is the dump's version (setup-pi-services would refuse every later run). Confirmed by naming the dump.
+#
+# Usage: task deploy:keycloak:way-back -- -e confirm=<the dump's file name>   (production; the copy rehearses it:
+#        task test:copy:keycloak-way-back)
+- name: Keycloak's way back - its database from a dump, its old version back
+  hosts: pis
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  vars_files:
+    - ../vars/keycloak.yml
+  vars:
+    keycloak_dump_password: "{{ postgres_admin_password }}"
+    keycloak_db_user: keycloak
+    vip: "{{ keepalived_vip }}"
+  tasks:
+    - name: Every Pi in the run (one left out would keep the migrated version on the restored database)
+      ansible.builtin.assert:
+        that: ansible_play_hosts | sort == groups['pis'] | sort
+        fail_msg: "REFUSED: the run has {{ ansible_play_hosts | sort }}, Keycloak runs on {{ groups['pis'] | sort }}"
+        quiet: true
+      run_once: true
+
+    - name: The newest dump here
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          shopt -s nullglob
+          dumps=(/var/backups/keycloak/keycloak-*.sql.gz)
+          [ -z "${dumps[0]-}" ] || ls -1t "${dumps[@]}" | head -n 1
+      register: _newest
+      changed_when: false
+      check_mode: false
+      when: keycloak_restore_dump is not defined
+
+    # each name leads with its UTC time (keycloak-<time>-<version>-schema-<schema>.sql.gz): the last by path is the newest
+    - name: The dump restored - the one given, or the newest on either Pi - and the version it ran
+      ansible.builtin.set_fact:
+        _dump_path: "{{ keycloak_restore_dump | default(_newest_of.get('_newest', {}).get('stdout', '')) }}"
+        _dump_host: "{{ keycloak_restore_host | default(_newest_of.get('inventory_hostname', '')) }}"
+      vars:
+        _newest_of: >-
+          {{ ansible_play_hosts | map('extract', hostvars) | selectattr('_newest', 'defined')
+             | selectattr('_newest.stdout', 'defined') | rejectattr('_newest.stdout', 'equalto', '')
+             | sort(attribute='_newest.stdout') | last | default({}, true) }}
+      run_once: true
+
+    - name: Its version, from its name
+      ansible.builtin.set_fact:
+        _dump_version: "{{ _dump_path | basename | regex_search('^keycloak-[0-9]{8}T[0-9]{6}Z-(.+)-schema-.*[.]sql[.]gz$', '\\1')
+          | default([''], true) | first }}"
+      run_once: true
+
+    - name: A dump, its Pi and its version known - else nothing stopped
+      ansible.builtin.assert:
+        that:
+          - _dump_path | length > 0
+          - _dump_host in ansible_play_hosts
+          - _dump_version is match('^[0-9][0-9A-Za-z.-]*$')
+        fail_msg: "REFUSED: no Keycloak dump to restore (path '{{ _dump_path }}' on '{{ _dump_host }}', version '{{ _dump_version }}') - nothing stopped"
+        success_msg: "restoring {{ _dump_path }} ({{ _dump_host }}), Keycloak {{ _dump_version }}"
+      run_once: true
+
+    - name: The unit reverted first - vars/keycloak.yml pins the dump's version
+      ansible.builtin.assert:
+        that: keycloak_version == _dump_version
+        fail_msg: >-
+          REFUSED: vars/keycloak.yml pins {{ keycloak_version }}, the dump ran {{ _dump_version }} - revert the unit first
+          (setup-pi-services refuses a Keycloak installed at another version than pinned): nothing stopped
+        quiet: true
+      run_once: true
+
+    - name: Confirmed by naming the dump (-e confirm=<its file name>)
+      ansible.builtin.assert:
+        that: (confirm | default('')) == (_dump_path | basename)
+        fail_msg: >-
+          REFUSED: restoring {{ _dump_path }} on {{ _dump_host }} loses everything since it was taken - confirm with
+          -e confirm={{ _dump_path | basename }}: nothing stopped
+        quiet: true
+      run_once: true
+
+    - name: The Pi that starts first (it holds the VIP)
+      ansible.builtin.command:
+        argv: [ip, -o, -4, addr, show, to, "{{ vip }}/32"]
+      register: _addrs
+      changed_when: false
+      check_mode: false
+
+    - name: The first Pi
+      ansible.builtin.set_fact:
+        _first: >-
+          {{ (ansible_play_hosts | map('extract', hostvars) | selectattr('_addrs.stdout', '!=', '')
+              | map(attribute='inventory_hostname') | list + ansible_play_hosts) | first }}
+      run_once: true
+
+    - name: Restored
+      ansible.builtin.include_tasks: tasks/keycloak-restore.yml
+      vars:
+        keycloak_restore_dump: "{{ _dump_path }}"
+        keycloak_restore_host: "{{ _dump_host }}"
+        keycloak_restore_version: "{{ _dump_version }}"

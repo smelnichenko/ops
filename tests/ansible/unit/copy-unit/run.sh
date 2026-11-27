@@ -75,6 +75,14 @@ cat > "$W/src/ops/deploy/ansible/playbooks/setup-consul.yml" <<'Y'
     consul_datacenter: "schnappy"
   tasks: []
 Y
+cat > "$W/src/ops/deploy/ansible/playbooks/setup-pi-services.yml" <<'Y'
+- name: pi services
+  hosts: pi1,pi2
+  vars:
+    keycloak_db_user: keycloak
+  tasks: []
+Y
+printf 'keycloak_version: "26.5.7"\nkeycloak_sha256: "%s"\n' "$(printf '34%.0s' $(seq 32))" > "$W/src/ops/deploy/ansible/vars/keycloak.yml"
 cat > "$W/src/ops/deploy/ansible/playbooks/setup-istio.yml" <<'Y'
 - name: istio
   hosts: target
@@ -129,6 +137,9 @@ unit ops caddy 's/"2.10.0"/"2.10.2"/' deploy/ansible/playbooks/setup-caddy.yml
 unit ops consul 's/"1.20.6"/"1.20.7"/; s/96ba60faadde5d92f36d536818a6382159344983c79529015e5d991fd1199d4b/1111111111111111111111111111111111111111111111111111111111111111/; s/37fc6f213a44c6db3a2b912966fb1415939e9b189ce1bc1eb07b7f87449a28c2/2222222222222222222222222222222222222222222222222222222222222222/' deploy/ansible/playbooks/setup-consul.yml
 unit ops consul-dc 's/"1.20.6"/"1.20.7"/; s/"schnappy"/"other"/' deploy/ansible/playbooks/setup-consul.yml
 unit ops consul-task 's/"1.20.6"/"1.20.7"/; s/tasks: \[\]/tasks: [{name: x, command: id}]/' deploy/ansible/playbooks/setup-consul.yml
+unit ops keycloak 's/"26.5.7"/"26.8.2"/; s/: "3434[34]*"$/: "3333333333333333333333333333333333333333333333333333333333333333"/' deploy/ansible/vars/keycloak.yml
+unit ops keycloak-conn 's/^keycloak_version: "26.5.7"$/keycloak_version: "26.8.2"\nansible_ssh_common_args: "1"/' deploy/ansible/vars/keycloak.yml
+unit ops keycloak-pis 's/keycloak_db_user: keycloak/keycloak_db_user: other/' deploy/ansible/playbooks/setup-pi-services.yml
 unit ops caddy-peer 's/"2.10.0"/"2.10.2"/; s/10.0.0.2/10.0.0.3/' deploy/ansible/playbooks/setup-caddy.yml
 unit ops caddy-task 's/"2.10.0"/"2.10.2"/; s/tasks: \[\]/tasks: [{name: x, command: id}]/' deploy/ansible/playbooks/setup-caddy.yml
 unit ops caddy-bad 's/"2.10.0"/"2.10.2 -e x=y"/' deploy/ansible/playbooks/setup-caddy.yml
@@ -288,6 +299,14 @@ check "Consul's version: production's upgrade-consul on the copy (the rolling up
 for u in consul-dc consul-task; do
   out=$(plan "$u"); rc=$?
   check "  $u: another of its values, or its tasks: refused" \
+    "$rc $(grep -c '^REFUSED' <<< "$out") $(grep -c 'test:copy:playbook' <<< "$out")" "1 1 0"
+done
+out=$(plan keycloak); f=$(sed -n "s/^test:copy:playbook PLAYBOOK=upgrade-keycloak.yml ARGS='-e @\([^']*\)'$/\1/p" <<< "$out")
+check "Keycloak's version: upgrade-keycloak.yml with the branch's vars file (its version and hash)" \
+  "$( [ -n "$f" ] && awk '{ gsub(/["\047]/, "") } /keycloak_version:/ { v = $2 } /keycloak_sha256:/ { h = substr($2, 1, 4) } END { print v, h }' "$f")" "26.8.2 3333"
+for u in keycloak-conn keycloak-pis; do
+  out=$(plan "$u"); rc=$?
+  check "  $u: a connection variable smuggled into its vars file, or setup-pi-services changed (no proof): refused" \
     "$rc $(grep -c '^REFUSED' <<< "$out") $(grep -c 'test:copy:playbook' <<< "$out")" "1 1 0"
 done
 for u in caddy-peer caddy-task caddy-bad; do

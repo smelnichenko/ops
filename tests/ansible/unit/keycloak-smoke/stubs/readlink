@@ -1,0 +1,9 @@
+#!/bin/bash
+# readlink -f /opt/keycloak: the install the link names; readlink /proc/42/fd/*: a jar of each version running
+if [ "$1" = -f ]; then
+  v=$(cat "$KCS/$KC_HOST/link" 2> /dev/null); [ -z "$v" ] || echo "/opt/keycloak-$v"; exit 0
+fi
+case $1 in
+  /proc/42/fd/*) for v in $(cat "$KCS/$KC_HOST/running" 2> /dev/null); do echo "/opt/keycloak-$v/lib/quarkus-run.jar"; done ;;
+esac
+exit 0

@@ -155,6 +155,24 @@ Each a step file of its own, through a Vagrant full run and plan 100's productio
 2. Vault 1.21.4 -> 2.1.1 (or via 2.0.4): a fresh Consul snapshot right before; 2.0 makes `sys/rekey` and
    `sys/generate-root` need a token - the break-glass procedure updated (or `enable_unauthenticated_access`); canonical
    paths (check ESO's and Ansible's); ESO, hvac and Kubernetes auth proven against 2.x in Vagrant (no vendor matrix).
+   Both majors are one-way: their stores in scripts/upgrade-stores.json stay `missing` (2026-11-27) until the way back -
+   the snapshot each playbook takes restored under the kept old binary, the old version serving on it - has run green
+   on the copy (a way-back check, as scylla-way-back-check.yml); the upgrade proven alone does not clear them.
+   The cycle's first try of hashicorp-vault-2.x (2026-11-27, to 2.2.2 in one hop) stopped at its review, 17 findings.
+   Before the unit can go: (a) break-glass for 2.x - HashiCorp's 2.0.0 notes confirm `sys/rekey` and
+   `sys/generate-root` need a valid token besides the key shares unless `enable_unauthenticated_access` names them;
+   the root token is kept as optional and backup-vault-keys.yml says the keys alone recover Vault - either the setting
+   (with why) or a root token checked live (`vault token lookup`) on each Pi before upgrade-vault.yml moves anything;
+   (b) the way back above, the backups fetched off the active Pi first. Then: test-vault-upgrade.yml rehearses from
+   1.21.3 while production runs 1.21.4; the unit's copy step runs upgrade-vault.yml alone (none of the rehearsal's
+   outside checks - the both-down/two-actives sampler, the leader moving, the sealed-node refusal); the last 1.21 node
+   stopped with only a 429 from the new standby as proof (a step-down, a KV read and a Kubernetes-auth login on the new
+   active first, the ClusterSecretStore Ready after); a run failing after the standby's turn leaves a 2.x standby beside
+   a 1.21 active a restart could make active again; keepalived's check does not probe Vault while External Secrets
+   reaches it through the VIP; SonarQube's KV-v2 PATCH, hvac's list and delete, and every ExternalSecret's refresh
+   never meet 2.x on the copy; smaller: a guard that the copy's Pis run main's version first, the stopped-node uri
+   error, free space before the download, vault-backup.sh tars an almost empty /var/lib/vault, a comment naming the
+   wrong start limit, vars/vault.yml's comment, and this plan's one-hop decision.
 3. Keycloak 26.5.7 -> 26.8.x: both nodes stopped (a minor is a recreate), a database dump first; review 26.6-26.8's
    OIDC changes against our clients (clock skew, `aud`, refresh/offline token expiry, Full Scope Allowed's WARN), the
    CSS-only theme looked at, Istio's JWT validation and every app's login proven in Vagrant.

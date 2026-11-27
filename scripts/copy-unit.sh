@@ -194,11 +194,12 @@ VARS_FILES = {  # a vars file -> its playbook and the arguments production's tas
     "deploy/ansible/vars/patroni.yml": ("upgrade-patroni.yml", ""),
     "deploy/ansible/vars/vault.yml": ("upgrade-vault.yml", "-e @vars/vault-vagrant.yml"),
     "deploy/ansible/vars/forgejo.yml": ("upgrade-forgejo.yml", ""),
+    "deploy/ansible/vars/keycloak.yml": ("upgrade-keycloak.yml", ""),
 }
 # Consul before Vault: Consul is Vault's storage (and Patroni's DCS)
 ORDER = {"upgrade-kubeadm.yml": 0, "setup-kubeadm.yml": 1, "setup-argocd.yml": 2, "upgrade-patroni.yml": 3,
          "upgrade-consul.yml": 4, "upgrade-vault.yml": 5, "upgrade-forgejo.yml": 6, "setup-host-hardening.yml": 7,
-         "setup-caddy.yml": 8}
+         "setup-caddy.yml": 8, "upgrade-keycloak.yml": 9}
 # node_exporter on ten: its version and the hash that moves with it - production's setup-host-hardening.yml on the copy
 NODE_EXPORTER = {"node_exporter_version", "node_exporter_sha256"}
 # Argo CD itself (no Argo app holds it): its chart default and the image pinned on a chart - setup-argocd.yml on the copy

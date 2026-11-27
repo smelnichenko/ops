@@ -810,6 +810,7 @@ while IFS= read -r step; do
     "test:copy:playbook PLAYBOOK=upgrade-vault.yml"*) cmds+=("deploy:vault:upgrade") ;;
     "test:copy:playbook PLAYBOOK=upgrade-forgejo.yml"*) cmds+=("deploy:forgejo:upgrade") ;;
     "test:copy:playbook PLAYBOOK=setup-caddy.yml"*) cmds+=("deploy:caddy") ;;  # it installs the version pinned
+    "test:copy:playbook PLAYBOOK=upgrade-keycloak.yml"*) cmds+=("deploy:keycloak:upgrade") ;;  # its dump first, both Pis stopped, the VIP's first
     "test:copy:playbook PLAYBOOK=restart-mesh-workloads.yml"*)  # every sidecar on istiod's version - Argo applied it first
       v=$(version_of istio_version "$step") || { stopped "no Istio version in its plan ($step) - nothing merged" "$log"; exit 1; }
       cmds+=("deploy:mesh:restart -- -e istio_version=$v") ;;

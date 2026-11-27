@@ -52,7 +52,7 @@ PINNED = [
     ("patroni", "patroni_version", lambda: yaml.safe_load(open("deploy/ansible/vars/patroni.yml"))["patroni_version"]),
     ("vault", "vault_version", lambda: yaml.safe_load(open("deploy/ansible/vars/vault.yml"))["vault_version"]),
     ("consul", "consul_version", lambda: play_var(f"{pb}/setup-consul.yml", "consul_version")),
-    ("keycloak", "keycloak_version", lambda: play_var(f"{pb}/setup-pi-services.yml", "keycloak_version")),
+    ("keycloak", "keycloak_version", lambda: yaml.safe_load(open("deploy/ansible/vars/keycloak.yml"))["keycloak_version"]),
     ("versitygw", "vgw_version", vgw_default),
     ("caddy", "caddy_version", lambda: play_var(f"{pb}/setup-caddy.yml", "caddy_version")),
 ]

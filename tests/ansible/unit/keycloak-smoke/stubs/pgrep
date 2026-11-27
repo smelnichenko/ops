@@ -1,0 +1,4 @@
+#!/bin/bash
+# pgrep -P 41: the JVM, 42, while this Pi runs Keycloak
+[ -n "$(cat "$KCS/$KC_HOST/running" 2> /dev/null)" ] && echo 42
+exit 0

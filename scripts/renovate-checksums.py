@@ -45,7 +45,7 @@ PINS = [
      "key": "forgejo_checksums", "arches": ["arm64", "amd64"], "vendor": "forgejo"},
     {"name": "consul", "file": "deploy/ansible/playbooks/setup-consul.yml", "version": "consul_version", "shape": "map",
      "key": "consul_checksums", "arches": ["arm64", "amd64"], "vendor": "hashicorp", "product": "consul"},
-    {"name": "keycloak", "file": "deploy/ansible/playbooks/setup-pi-services.yml", "version": "keycloak_version",
+    {"name": "keycloak", "file": "deploy/ansible/vars/keycloak.yml", "version": "keycloak_version",
      "shape": "single", "key": "keycloak_sha256", "arches": ["noarch"], "vendor": "keycloak"},
     {"name": "gateway_api", "file": "deploy/ansible/playbooks/setup-kubeadm.yml", "version": "gateway_api_version",
      "shape": "single", "key": "gateway_api_sha256", "arches": ["noarch"], "vendor": "gateway-api"},

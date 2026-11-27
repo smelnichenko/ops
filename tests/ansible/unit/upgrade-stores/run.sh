@@ -27,10 +27,18 @@ def run(unit, labels, table=None):
 check("each store's real unit names: its own store's answer (missing, store) - none unknown",
       sorted({(s["store"], run(e, "one-way")[1]) for s in REAL["stores"] for e in s["examples"]}),
       sorted({(s["store"], "missing" if s["missing"] else "store") for s in REAL["stores"]}))
-# Keycloak stays blocked until plan 122 part 3's dump exists - a literal, not read from the table: emptying its missing
-# part without the dump fails here (delete this check deliberately when the dump lands)
-check("Keycloak's units (minor and major): missing - no dump right before its version moves yet",
-      [run(u, "one-way")[1] for u in ("keycloak-26.8", "quay.io-keycloak-keycloak-27.x")], ["missing", "missing"])
+check("Keycloak's units (minor and major): its store - its way back rehearsed green on the copy (2026-11-27), its own command takes the dump",
+      [run(u, "one-way")[1] for u in ("keycloak-26.8", "quay.io-keycloak-keycloak-27.x")], ["store", "store"])
+# Keycloak's dump is its own production command's (upgrade-keycloak.yml dumps before anything stops) - a
+# literal, not read from the table: the runner wants deploy:keycloak:upgrade in the unit's plan
+check("  its store taken by deploy:keycloak:upgrade (the playbook that dumps it)",
+      next(s for s in REAL["stores"] if s["store"] == "keycloak")["taken_by"], ["deploy:keycloak:upgrade"])
+# Vault's and Consul's own commands take their snapshots, but the way back from them has never run (by hand, the
+# playbooks' headers say): blocked until a way-back check passes on the copy - a literal, as Keycloak's
+check("Vault's and Consul's majors: missing - their way backs not yet rehearsed; their commands still the ones taking the snapshot",
+      ([run(u, "major,one-way")[1] for u in ("hashicorp-vault-2.x", "hashicorp-consul-2.x")],
+       [next(s for s in REAL["stores"] if s["store"] == x)["taken_by"] for x in ("vault", "consul")]),
+      (["missing", "missing"], [["deploy:vault:upgrade"], ["deploy:consul:upgrade"]]))
 # Postgres' store is the CNPG image alone (2026-11-21): the plain postgres image in infra and platform is the init-users
 # Job's psql client - its major, postgres-19.x, is an ordinary unit; the databases' image a store's as before
 check("postgres-19.x (the init-users Job's psql client) a unit of no store; the CNPG image's major Postgres' store",

@@ -1,0 +1,60 @@
+---
+# Keycloak's database dumped: the schema it holds read (migration_model), then pg_dump through HAProxy
+# (Patroni's primary) on {{ _first }} into {{ dump_dir }} - named for the version running (the install a way back puts
+# back) and that schema, written aside, checked, renamed; the 5 newest kept; the password on stdin; its path said, and
+# its failure refused. upgrade-keycloak.yml takes it before anything stops; the copy's way-back check takes one to
+# restore. Needs _first, dump_dir, keycloak_dump_password, keycloak_dump_running.
+# the schema the database holds - the dump is named for it, and a rerun after a migration is never mistaken for
+# the database before it
+- name: The version the database holds (migration_model)
+  ansible.builtin.shell:
+    executable: /bin/bash
+    cmd: |
+      set -euo pipefail
+      read -r PGPASSWORD; export PGPASSWORD
+      psql -w -h 127.0.0.1 -p 5000 -U postgres -d keycloak -tA \
+        -c "SELECT version FROM migration_model ORDER BY update_time DESC, id DESC LIMIT 1"
+    stdin: "{{ keycloak_dump_password }}"
+  register: _schema
+  changed_when: false
+  failed_when: false  # its error said by the check below (no_log hides it here)
+  check_mode: false
+  delegate_to: "{{ _first }}"
+  run_once: true
+  no_log: true
+
+- name: Keycloak's database dumped, before anything stops
+  ansible.builtin.shell:
+    executable: /bin/bash
+    cmd: |
+      set -euo pipefail
+      # the password on stdin, not in the environment Ansible puts on the command line
+      read -r PGPASSWORD; export PGPASSWORD
+      mkdir -p {{ dump_dir }} && chmod 0700 {{ dump_dir }}
+      schema={{ _schema.stdout | trim | regex_replace('[^0-9A-Za-z.-]', '_') }}
+      out={{ dump_dir }}/keycloak-$(date -u +%Y%m%dT%H%M%SZ)-{{ keycloak_dump_running }}-schema-$schema.sql.gz
+      trap 'rm -f "$out.part"' ERR
+      # written aside and renamed once checked: a failed dump never counts among those kept
+      pg_dump -w -h 127.0.0.1 -p 5000 -U postgres keycloak | gzip > "$out.part"
+      gzip -t "$out.part"
+      [ "$(gzip -dc "$out.part" | tail -n 5 | grep -c 'PostgreSQL database dump complete')" = 1 ]
+      mv "$out.part" "$out"
+      ls -1t {{ dump_dir }}/keycloak-*.sql.gz | tail -n +6 | xargs -r rm -f
+      echo "$out $(du -h "$out" | cut -f1)"
+    stdin: "{{ keycloak_dump_password }}"
+  register: _dump
+  changed_when: true
+  failed_when: false
+  when: (_schema.stdout | default('') | trim) != ''  # never a dump named for no schema - the check below refuses
+  delegate_to: "{{ _first }}"
+  run_once: true
+  no_log: true  # the password went in on stdin - the dump's own error below, without it
+
+- name: The dump taken (its error otherwise) - nothing stopped yet
+  ansible.builtin.assert:
+    that: _dump.rc | default(1) == 0 and (_schema.stdout | default('') | trim) != ''
+    fail_msg: >-
+      REFUSED: the Keycloak dump failed - nothing stopped:
+      {{ _dump.stderr | default('') }} {{ '' if (_schema.stdout | default('') | trim) else 'the database schema not read: ' ~ (_schema.stderr | default('')) }}
+    success_msg: "{{ _dump.stdout | default('') }}"
+  run_once: true

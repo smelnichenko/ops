@@ -1,0 +1,7 @@
+#!/bin/bash
+# pg_dump through HAProxy: an event, the password checked; $KCS/dump-fail - fails
+[ "${PGPASSWORD:-}" = s3cret ] || { echo "pg_dump: error: password authentication failed (stub)" >&2; exit 1; }
+echo "$(date +%s.%N) $KC_HOST pg_dump" >> "$KCS/events.log"
+[ ! -e "$KCS/dump-fail" ] || { echo "pg_dump: error: boom-from-stub" >&2; exit 1; }
+echo "CREATE TABLE realm();"
+echo "-- PostgreSQL database dump complete"

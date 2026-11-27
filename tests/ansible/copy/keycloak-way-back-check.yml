@@ -1,0 +1,147 @@
+---
+# Keycloak's way back, rehearsed on the copy with production's playbooks - task test:copy:keycloak-way-back
+# runs, in turn: this playbook's `before` (the copy runs vars/keycloak.yml's pin P0 on both Pis; a marker row written
+# into a table of its own); upgrade-keycloak.yml to a newer P1 (the Keycloak unit's target - its dump taken, its
+# database migrated); `after` (a second marker on the migrated database; the newest dump's name for the restore's
+# confirmation); restore-keycloak.yml (that dump, P0's install back); `verify` (P0 running and serving on both Pis, the
+# first marker there, the second gone); `cleanup` always (the marker table dropped). The marker's name is the task's,
+# one per run. Only when this passes may the keycloak store's `missing` clear (scripts/upgrade-stores.json - the
+# one-way rule: the way back rehearsed first). Logins on the copy are down while it runs: a readied copy, alone.
+#
+# Usage: ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/keycloak-way-back-check.yml
+#          -e phase=before|after|verify|cleanup -e marker=<name> [-e keycloak_to=<P1>]
+# (a phase var, not tags: --tags would skip the untagged Vagrant guard play)
+- name: Vagrant VMs only
+  ansible.builtin.import_playbook: ../vagrant-only-play.yml
+
+- name: Keycloak's way back, rehearsed
+  hosts: pis
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  vars_files:
+    - ../../../deploy/ansible/vars/keycloak.yml
+  vars:
+    keycloak_dump_password: "{{ postgres_admin_password }}"
+    db_pi: "{{ groups['pis'] | first }}"
+    psql: psql -w -h 127.0.0.1 -p 5000 -U postgres -d keycloak -v ON_ERROR_STOP=1
+  tasks:
+    - name: A phase and a marker name given (one per run - the task's)
+      ansible.builtin.assert:
+        that:
+          - phase | default('') in ['before', 'after', 'verify', 'cleanup']
+          - marker | default('') is match('^way-back-[0-9TZ]+$')
+        fail_msg: "-e phase=before|after|verify|cleanup -e marker=way-back-<UTC time> - the task gives both"
+        quiet: true
+      run_once: true
+
+    - name: Before - a newer version to go to (the unit's target)
+      ansible.builtin.assert:
+        that: (keycloak_to | default('') | length > 0) and keycloak_to is version(keycloak_version, '>')
+        fail_msg: "-e keycloak_to=<a version newer than the pin {{ keycloak_version }}> - the Keycloak unit's target"
+        quiet: true
+      run_once: true
+      when: phase == 'before'
+
+    - name: Before - every Pi runs and serves the pin
+      ansible.builtin.include_tasks: ../../../deploy/ansible/playbooks/tasks/keycloak-serves.yml
+      vars:
+        keycloak_serve_version: "{{ keycloak_version }}"
+      when: phase == 'before'
+
+    - name: Before - the marker from before the upgrade
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          read -r PGPASSWORD; export PGPASSWORD
+          {{ psql }} -c "CREATE TABLE IF NOT EXISTS keycloak_way_back_marker (name text PRIMARY KEY, phase text NOT NULL);
+            INSERT INTO keycloak_way_back_marker VALUES ('{{ marker }}-before', 'before')"
+        stdin: "{{ keycloak_dump_password }}"
+      changed_when: true
+      delegate_to: "{{ db_pi }}"
+      run_once: true
+      no_log: true
+      when: phase == 'before'
+
+    - name: After - the marker from after the upgrade (the restore must lose it)
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          read -r PGPASSWORD; export PGPASSWORD
+          {{ psql }} -c "INSERT INTO keycloak_way_back_marker VALUES ('{{ marker }}-after', 'after')"
+        stdin: "{{ keycloak_dump_password }}"
+      changed_when: true
+      delegate_to: "{{ db_pi }}"
+      run_once: true
+      no_log: true
+      when: phase == 'after'
+
+    - name: After - the newest dump on either Pi (the upgrade's)
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          shopt -s nullglob
+          dumps=(/var/backups/keycloak/keycloak-*.sql.gz)
+          [ -z "${dumps[0]-}" ] || ls -1t "${dumps[@]}" | head -n 1
+      register: _newest
+      changed_when: false
+      when: phase == 'after'
+
+    - name: After - its name for the restore's confirmation (.copy/keycloak-way-back-confirm)
+      ansible.builtin.copy:
+        content: "{{ ansible_play_hosts | map('extract', hostvars, ['_newest', 'stdout']) | reject('equalto', '') | sort | last | basename }}\n"
+        dest: "{{ playbook_dir }}/../../../.copy/keycloak-way-back-confirm"
+        mode: '0644'
+      delegate_to: localhost
+      become: false
+      run_once: true
+      when: phase == 'after'
+
+    - name: Verify - every Pi runs and serves the pin again
+      ansible.builtin.include_tasks: ../../../deploy/ansible/playbooks/tasks/keycloak-serves.yml
+      vars:
+        keycloak_serve_version: "{{ keycloak_version }}"
+      when: phase == 'verify'
+
+    - name: Verify - the markers after the restore
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          read -r PGPASSWORD; export PGPASSWORD
+          {{ psql }} -tA -c "SELECT phase FROM keycloak_way_back_marker WHERE name LIKE '{{ marker }}-%' ORDER BY phase"
+        stdin: "{{ keycloak_dump_password }}"
+      register: _markers
+      changed_when: false
+      delegate_to: "{{ db_pi }}"
+      run_once: true
+      no_log: true
+      when: phase == 'verify'
+
+    - name: Verify - the marker from before there, the one from after gone
+      ansible.builtin.assert:
+        that: _markers.stdout_lines == ['before']
+        fail_msg: "KEYCLOAK WAY BACK FAILED: markers after the restore {{ _markers.stdout_lines }} (want ['before'])"
+        success_msg: >-
+          KEYCLOAK WAY BACK OK: upgraded, then restored - the marker from before there, the one from after gone;
+          Keycloak {{ keycloak_version }} serving on {{ ansible_play_hosts | join(', ') }}
+      run_once: true
+      when: phase == 'verify'
+
+    - name: Cleanup - the marker table and the migrated database gone (the copy as the build left it)
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          read -r PGPASSWORD; export PGPASSWORD
+          {{ psql }} -c "DROP TABLE IF EXISTS keycloak_way_back_marker"
+          psql -w -h 127.0.0.1 -p 5000 -U postgres -d postgres -v ON_ERROR_STOP=1 -c "DROP DATABASE IF EXISTS keycloak_migrated WITH (FORCE)"
+        stdin: "{{ keycloak_dump_password }}"
+      changed_when: true
+      delegate_to: "{{ db_pi }}"
+      run_once: true
+      no_log: true
+      when: phase == 'cleanup'

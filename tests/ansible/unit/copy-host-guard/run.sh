@@ -288,7 +288,9 @@ stop_watcher
 fresh 9000 ops_kubeadm
 COPY_HOST_GRACE=10 guard watch; p=$(watcher)
 wait_for 10 polls_ge 2
-: > "$STUB/active"; clock 109; c=$(polls); wait_for 10 polls_ge $((c + 4))
+# the VMs gone seen by the watcher before its clock moves (each time below): a poll reading the active file before the
+# write and the clock after it took the moved clock as a VM's last sight - 2 s of a 10 s grace, no end (CI, 2026-11-27)
+: > "$STUB/active"; c=$(polls); wait_for 10 polls_ge $((c + 2)); clock 109; c=$(polls); wait_for 10 polls_ge $((c + 4))
 check "its VMs stopped: still watching within the grace (a halt before an up, a destroy before a build)" "$(pid_on "$p" && echo on)" on
 clock 111
 wait_for 10 pid_off "$p"; gone=$?
@@ -297,7 +299,7 @@ check "  a whole grace with no VM: ends" "$gone" 0
 fresh 9000 ops_kubeadm
 COPY_HOST_GRACE=10 guard watch; p=$(watcher)
 wait_for 10 polls_ge 2
-: > "$STUB/active"; clock 105
+: > "$STUB/active"; c=$(polls); wait_for 10 polls_ge $((c + 2)); clock 105
 COPY_HOST_GRACE=10 guard watch; rc=$?
 clock 111; c=$(polls); wait_for 10 polls_ge $((c + 4))
 check "a watch while it is quiet (a vagrant up after a destroy): it says it watches, and the grace starts again" \
@@ -306,7 +308,7 @@ check "a watch while it is quiet (a vagrant up after a destroy): it says it watc
 # was a whole grace with no VM - it ended (CI, 2026-11-19: "got '  <pid>', want 'on <pid>'")
 echo ops_kubeadm > "$STUB/active"; c=$(polls); wait_for 10 polls_ge $((c + 2)); clock 130; c=$(polls); wait_for 10 polls_ge $((c + 4))
 check "  the VMs back: still the same watcher, watching" "$(pid_on "$p" && echo on) $(watcher)" "on $p"
-: > "$STUB/active"; clock 150; c=$(polls); wait_for 10 polls_ge $((c + 4)); clock 161
+: > "$STUB/active"; c=$(polls); wait_for 10 polls_ge $((c + 2)); clock 150; c=$(polls); wait_for 10 polls_ge $((c + 4)); clock 161
 wait_for 10 pid_off "$p"; gone=$?
 check "  a whole grace with no VM and no caller since: ends" "$gone" 0
 # none started: on until the grace, then ends

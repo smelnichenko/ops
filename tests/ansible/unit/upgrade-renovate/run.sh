@@ -292,7 +292,6 @@ PROVEN = {  # the keys each playbook's branch in copy-unit.sh accepts, read from
 }
 VARS_FILES = set(re.findall(r'"(deploy/ansible/vars/[^"]+)": \(', cu))
 NO_PROOF = {  # tracked, with no proof path on the copy yet - such a unit is refused by the proof, after its build
-    "deploy/ansible/playbooks/setup-pi-services.yml": "Keycloak",
 }
 bad, unproven = [], set()
 for root, dirs, files in os.walk("deploy/ansible"):
@@ -323,7 +322,7 @@ for root, _, files in os.walk("tests/ansible/copy"):
                         copy_pins.add(f"{os.path.join(root, f)} {name}")
 print(bad, sorted(unproven), sorted(copy_pins - set(PIN_OK)))
 PYPROVABLE
-)" "[] ['Keycloak'] []"
+)" "[] [] []"
 # a one-way change's needs are decided in one table (scripts/upgrade-stores.json): every package the preset marks one-way
 # is a store's there and every store's package is marked; each store has its backups or names what is missing; each
 # backup is a task ops has. A new kind of store fails here when the preset starts tracking it - never first met in a run
