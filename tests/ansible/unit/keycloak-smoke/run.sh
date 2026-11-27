@@ -153,6 +153,9 @@ ck "E --limit pi1: refused, nothing done" "$(refused 'REFUSED: the run has') $(n
 new L pi2; pi pi1 26.5.7 26.5.7; pi pi2 26.5.7 26.5.7; inst pi1 26.8.2 cut; up
 ck "L a cut-short extract of the target on pi1 (skipped by creates): refused before the dump - nothing stopped" \
    "$(refused 'is incomplete') $(on unarchive) [$(on pg_dump)$(on stopped)$(on link)] $(state)" "refused pi2 [] 26.5.7/26.5.7 26.5.7/26.5.7"
+new N pi2; pi pi1 26.5.7 26.5.7; pi pi2 26.5.7 26.5.7; echo yes > "$KCS/pi1/wont-start"; up
+ck "N the other Pi not coming up on the target after its start: the run fails at the last serve check, the first serving" \
+   "$([ "$(rc)" != 0 ] && echo failed) $(on started) $(state)" "failed pi2 pi1 26.8.2/ 26.8.2/26.8.2"
 new F pi2; pi pi1 26.5.7 26.5.7; pi pi2 26.5.7 26.5.7; : > "$KCS/dump-fail"; up
 ck "F pg_dump failing: refused with its own error before anything stops - no dump kept, nothing left aside" \
    "$(refused 'REFUSED: the Keycloak dump failed') $(said boom-from-stub) [$(on stopped)$(on link)] $(ls -A "$KCS/pi2/dumps" | wc -l) $(state)" \
@@ -178,6 +181,9 @@ ck "R2 the dump given (pi1's older one): restored there, its version back" "$(rc
 two_on_target R7 pi2; inst pi1 26.5.7; inst pi2 26.5.7; dump pi1 "$NEW"; dump pi2 "$OLD"; back -e keycloak_version=26.5.7 -e confirm="$NEW"
 ck "R7 the newest dump on pi1 (first in the play), the VIP on pi2: pi1's restored, pi2 started first" \
    "$(rc) $(onset psql) $(on started)" "0 pi1 pi2 pi1"
+two_on_target R11 pi1; inst pi1 26.5.7; inst pi2 26.5.7; dump pi2 "$NEW"; echo yes > "$KCS/pi2/wont-start"; back -e keycloak_version=26.5.7 -e confirm="$NEW"
+ck "R11 the other Pi not coming up after the restore: the run fails at the last serve check, the first serving" \
+   "$([ "$(rc)" != 0 ] && echo failed) $(on started) $(state)" "failed pi1 pi2 26.5.7/26.5.7 26.5.7/"
 two_on_target R3 pi1; inst pi1 26.5.7; dump pi2 "$NEW"; back -e keycloak_version=26.5.7 -e confirm="$NEW"
 ck "R3 the dump's version's install gone on pi2: refused, nothing stopped, no SQL" "$(refused 'is gone on pi2') $(nev)" "refused 0"
 two_on_target R4 pi1; inst pi1 26.5.7; inst pi2 26.5.7; back -e keycloak_version=26.5.7 -e confirm=x

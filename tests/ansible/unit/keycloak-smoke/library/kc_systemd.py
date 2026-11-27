@@ -12,7 +12,9 @@ if state == "stopped":
     write(UNIT, "inactive")
 elif state == "started":
     event("started")
-    if not read(RUNNING):
+    if read("wont-start"):  # a Pi whose Keycloak fails to come up: its unit failed, nothing serving
+        write(UNIT, "failed")
+    elif not read(RUNNING):
         write(RUNNING, read("link"))
         write(HTTP, "200")
         write(UNIT, "active")
