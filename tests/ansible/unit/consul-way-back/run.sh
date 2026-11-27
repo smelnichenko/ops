@@ -13,7 +13,7 @@ cd "$(dirname "$0")/../../../.." || exit 1
 PY=python3
 "$PY" -c 'import ansible' 2> /dev/null || PY=deploy/ansible/venv/bin/python3
 exec "$PY" - <<'PY_CWB'
-import json, os, shutil, subprocess, sys, tempfile
+import json, os, re, shutil, subprocess, sys, tempfile
 import yaml
 sys.path.insert(0, "tests/ansible/unit")
 from templar import condition, render  # noqa: E402
@@ -738,15 +738,33 @@ check("  verify: a standby Vault an answer (429); the marker looked for the one 
        "externalsecret vault-cleanup-token" in et("Verify - an ExternalSecret force-synced")["ansible.builtin.shell"]["cmd"]
        and "vault-cleanup-token" in et("Verify - refreshed after that")["ansible.builtin.command"]["argv"]),
       ([200, 429], True, "{{ postgres_admin_password }}", "{{ pg_noted }}", True, True, True))
-def dry(*args):
-    r = subprocess.run(["task", "--dry", "--yes", *args], capture_output=True, text=True)
-    return r.returncode, r.stdout + r.stderr
+# the tasks rendered as go-task renders them (the CI image has no go-task): its required variables, the one variable form
+# used ('{{.X | default "y"}}': the value given, else the default), its preconditions in bash (go-task's interpreter is
+# bash-like), then its commands with the variables put in - a template this does not know refused, never left in
+TASKS = yaml.safe_load(open("Taskfile.yml"))["tasks"]
+def go_render(text, given):
+    out = re.sub(r"\{\{\.(\w+)\}\}", lambda m: given.get(m.group(1), ""), text)
+    assert "{{" not in out, f"a template this harness does not render: {out}"
+    return out
+def dry(name, *args):
+    t, given = TASKS[name], dict(a.split("=", 1) for a in args)
+    missing = [v for v in (t.get("requires") or {}).get("vars", []) if not given.get(v)]
+    if missing:
+        return 1, "task: Task " + name + " is missing required variables: " + ", ".join(missing)
+    for k, v in (t.get("vars") or {}).items():
+        m = re.fullmatch(r'\{\{\.(\w+) \| default "([^"]*)"\}\}', str(v))
+        assert m and m.group(1) == k, f"a variable this harness does not render: {k}: {v}"
+        given[k] = given.get(k) or m.group(2)
+    for p in t.get("preconditions") or []:
+        if subprocess.run(["bash", "-c", go_render(p["sh"], given)]).returncode != 0:
+            return 1, "task: " + p["msg"]
+    return 0, "\n".join(go_render(c if isinstance(c, str) else c["cmd"], given) for c in t["cmds"])
 rc_c, out_c = dry("test:copy:consul-way-back", "CONSUL_TO=2.0.4", "CONSUL_TO_SHA256=abc")
 rc_s, out_s = dry("test:copy:consul-way-back", "CONSUL_TO=2.0.4", "CONSUL_TO_SHA256=abc", "MODE=snapshot")
 rc_b, out_b = dry("test:copy:consul-way-back", "CONSUL_TO=2.0.4", "CONSUL_TO_SHA256=abc", "MODE=both")
 rc_n, out_n = dry("test:copy:consul-way-back", "CONSUL_TO=2.0.4")
 rc_p, out_p = dry("deploy:consul:way-back")
-check("the tasks as task renders them: the copy's from the current KV unless MODE=snapshot, anything else refused, both its inputs required, "
+check("the tasks as rendered: the copy's from the current KV unless MODE=snapshot, anything else refused, both its inputs required, "
       "set -euo pipefail, the copy's inventory, the target's checksum handed to the upgrade; production's on production's inventory and restore-consul.yml",
       (rc_c, "consul_restore_from='current'" in out_c and "-e mode='current'" in out_c, rc_s, "consul_restore_from='snapshot'" in out_s,
        rc_b != 0 and "MODE=current|snapshot" in out_b, rc_n != 0, "set -euo pipefail" in out_c, out_c.count("-i inventory/vagrant.yml") == 1 and "production.yml" not in out_c,

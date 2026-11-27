@@ -1099,9 +1099,10 @@
           ({{ 'the running cluster - nothing in the KV lost; the catalog and the sessions started afresh' if _mode == 'current'
           else 'the pre-upgrade snapshot - everything written since lost' }}); the state before set aside in
           {{ ((_set_aside.stdout_lines | default([]))[-1:] + [_orig_aside]) | select | first }} on each server; Patroni's
-          leader {{ _pg_primary }}, not paused; Vault unsealed ({{ _one_active.stdout }}).{{ "" if _mode == 'current' else
-          " Next: task deploy:ci-bot and task deploy:argocd-reader again (the Forgejo tokens they rotated since the snapshot
-          are back in Vault, deleted in Forgejo), the preview environments made since it recreated, External Secrets
+          leader {{ _pg_primary }}, not paused; Vault unsealed ({{ _one_active.stdout }}).{% if _mode != 'current' %} Next:
+          task deploy:ci-bot and task deploy:argocd-reader again (the Forgejo tokens they rotated since the snapshot are
+          back in Vault, deleted in Forgejo), the preview environments made since it recreated, External Secrets
           force-synced (each ExternalSecret annotated force-sync) so the cluster reads the restored values, and any change
-          made with patronictl edit-config since the snapshot made again (Patroni's dynamic settings are the snapshot's)" }}
+          made with patronictl edit-config since the snapshot made again (Patroni's dynamic settings are the
+          snapshot's){% endif %}
       run_once: true
