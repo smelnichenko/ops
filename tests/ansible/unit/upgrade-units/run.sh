@@ -3,7 +3,8 @@
 # local server, a process of its own, its answers from the case's fixture, paged as Forgejo pages): units grouped by
 # branch across infra, platform and ops, their kind (major by label, wave-patches a patch); the pick's order -
 # wave-patches, the family minors in order, other minors, majors - a unit with a try on record (the runner's) behind the
-# ones with none; vetoed units left out (an upgrade-blocked label holds nothing - no blocked state); every unit, a major,
+# ones with none; no per-unit hold (a veto or an upgrade-blocked label holds nothing - no blocked state, no veto since
+# 2026-11-27); every unit, a major,
 # a one-way one and one carrying the agent's fix alike, proven at once - no notice, no clock (operator 2026-11-21); STEPS:
 # a unit never goes while a lower step of its dependency is open (17 -> 18 -> 19: held, tried or unlabelled, the lower one
 # still holds the higher), test- steps their own path; bodies UNIT DIR - the pull requests' bodies; the kill switch on the dashboard issue (found by its title, on any page;
@@ -67,6 +68,9 @@ def pr(number, unit, *labels, user="renovate-bot", fork=False, renovate=True):
     labels = list(labels) + (["upgrade-cycle"] if renovate and not {"upgrade-cycle", "major", "one-way"} & set(labels) else [])
     return {"number": number, "head": {"ref": f"renovate/{unit}", "repo": "FORK" if fork else None},
             "user": {"login": user}, "labels": [{"name": x} for x in labels]}
+def tries(unit, *keys):
+    os.makedirs(TRIES, exist_ok=True)
+    open(os.path.join(TRIES, unit), "w").write("".join(f"{k} 2026-11-20T10:00:00Z a try\n" for k in keys))
 DASH_TITLE = json.load(open("renovate/upgrade-cycle.json"))["dependencyDashboardTitle"]
 DASH_NUMBER = {"infra": 44, "platform": 33, "ops": 56}
 def board(units, ticked=()):  # a dashboard's body: Renovate's pending-approval boxes for these units, one ticked or not
@@ -171,26 +175,26 @@ check("test units in their twins' order (wave-patches' first)", run("pick"), (0,
 fixture(infra=[pr(1, "test-istio-1.32", "upgrade-blocked"), pr(2, "istio-1.32"), pr(3, "observability")])
 check("an upgrade-blocked label (left from before 2026-11-20) holds nothing: the test unit picked", run("pick"),
       (0, "test test-istio-1.32 minor"))
-fixture(infra=[pr(1, "test-istio-1.32", "veto"), pr(2, "istio-1.32"), pr(3, "observability")])
-check("a production unit waits while its test unit is open - vetoed too: the next unit instead", run("pick"),
+fixture(infra=[pr(1, "test-istio-1.32"), pr(2, "istio-1.32"), pr(3, "observability")])
+tries("test-istio-1.32", "schnappy/infra#1")
+check("a production unit waits while its test unit is open - its test unit tried too: the next unit instead", run("pick"),
       (0, "prove observability minor"))
+tries("test-istio-1.32")
 fixture(infra=[pr(1, "test-grafana-k6-2.x", "major")])
 check("a major's test unit: merged as a test unit (its production twin proven after)", run("pick"),
       (0, "test test-grafana-k6-2.x major"))
 fixture(infra=[pr(1, "test-grafana-k6-2.x", "veto"), pr(2, "grafana-k6-2.x", "major")])
-check("a vetoed test unit holds its production twin too: nothing", run("pick"), (0, "NOTHING"))
+check("a veto label holds nothing (no veto since 2026-11-27): its test unit first, as any", run("pick"), (0, "test test-grafana-k6-2.x minor"))
 # no shadow mode (its pick, the test environment's units left out, gone 2026-11-20): pick takes no option
 check("pick takes no option - --shadow nor any other", (run("pick", "--shadow")[0], run("pick", "--all")[0]), (2, 2))
 fixture(infra=[pr(2, "istio-x.32"), pr(3, "istio")])
 check("a name that only looks versioned is not (istio-x.32 is no istio minor): the family's own unit first",
       run("pick"), (0, "prove istio minor"))
-fixture(infra=[pr(1, "wave-patches", "upgrade-blocked"), pr(2, "istio", "veto"), pr(3, "observability")])
-check("an upgrade-blocked label ignored (no blocked state), a vetoed unit left out", run("pick"), (0, "prove wave-patches patch"))
+fixture(infra=[pr(2, "istio", "veto"), pr(3, "observability", "upgrade-blocked")])
+check("a veto or an upgrade-blocked label holds nothing (no blocked state, no veto): istio first, in its order", run("pick"),
+      (0, "prove istio minor"))
 # no blocked state (operator 2026-11-20): a unit with a try on record (the runner's) behind the units with none - its own
 # pull requests' tries alone (another unit of the name before had other pull requests), a key with no "#" the unit's
-def tries(unit, *keys):
-    os.makedirs(TRIES, exist_ok=True)
-    open(os.path.join(TRIES, unit), "w").write("".join(f"{k} 2026-11-20T10:00:00Z a try\n" for k in keys))
 fixture(infra=[pr(1, "wave-patches"), pr(2, "observability")], ops=[pr(9, "wave-patches")])
 tries("wave-patches", "schnappy/ops#9,schnappy/infra#1")
 check("a unit with a try on record (its pull requests', in any order) behind one with none", run("pick"), (0, "prove observability minor"))
@@ -226,7 +230,7 @@ check("  majors still last: the minor first", run("pick"), (0, "prove observabil
 fixture(infra=[pr(3, "postgresql-19.x", "major"), pr(4, "postgresql-18.x", "major")])
 check("two steps of one dependency (17 -> 18 -> 19): the lower first", run("pick"), (0, "prove postgresql-18.x major"))
 fixture(infra=[pr(3, "postgresql-19.x", "major"), pr(4, "postgresql-18.x", "major", "veto")])
-check("  the lower vetoed: the higher still waits - nothing (a step never jumped)", run("pick"), (0, "NOTHING"))
+check("  a veto label on the lower holds nothing: the lower first", run("pick"), (0, "prove postgresql-18.x major"))
 fixture(infra=[pr(3, "postgresql-19.x", "major"), pr(4, "postgresql-18.x", "major"), pr(5, "observability")])
 tries("postgresql-18.x", "schnappy/infra#4")
 check("  the lower with a try on record: another unit first - never the higher", run("pick"), (0, "prove observability minor"))
@@ -259,7 +263,7 @@ check("  alone: proven (kind kept)", run("pick"), (0, "prove scylladb-2026.3 min
 fixture(infra=[pr(1, "istio-1.32", "agent-fixed"), pr(2, "observability")])
 check("a unit carrying the agent's fix: proven in its order like any - no notice", run("pick"), (0, "prove istio-1.32 minor"))
 fixture(infra=[pr(3, "postgresql-19.x", "major", "veto")])
-check("a vetoed major: never picked (the operator's hold)", run("pick"), (0, "NOTHING"))
+check("a major labelled veto: picked as any (no veto since 2026-11-27)", run("pick"), (0, "prove postgresql-19.x major"))
 fixture(infra=[pr(3, "zzz-2.x", "major"), pr(4, "aaa-3.x", "major")])
 check("two majors of different dependencies: in their order", run("pick"), (0, "prove aaa-3.x major"))
 fixture(infra=[pr(i, f"other-{i:03d}") for i in range(60)] + [pr(99, "wave-patches")])
@@ -291,8 +295,8 @@ check("  a test unit waits for the production unit of a lower step (the test env
       run("pick"), (0, "prove scylladb-2026.3 minor"))
 fixture(infra=[pr(1, "scylladb-2027.1"), pr(2, "scylladb-2026.12")])
 check("  the year rolls over: 2026.12 before 2027.1 (each part a number, the major first)", run("pick"), (0, "prove scylladb-2026.12 minor"))
-fixture(infra=[pr(1, "postgresql-17-alpine"), pr(2, "postgresql-16.x", "major", "veto")])
-check("  a name that is no step (a digest unit, postgresql-17-alpine) never waits - beside a vetoed postgresql-16.x",
+fixture(infra=[pr(1, "postgresql-17-alpine"), pr(2, "postgresql-16.x", "major")])
+check("  a name that is no step (a digest unit, postgresql-17-alpine) never waits - beside postgresql-16.x",
       run("pick"), (0, "prove postgresql-17-alpine minor"))
 fixture(infra=[tabled(5, "test-k6-1.8", [("grafana/k6", "minor", "2.4.0", "2.5.0")]), tabled(6, "k6-1.8", [("grafana/k6", "minor", "1.7.1", "1.8.0")])])
 check("  a test unit moving a package higher than its production twin (k6: 2.x in test, 1.x in production): no deadlock - the "
@@ -360,9 +364,9 @@ check("a command it does not take - noticed, apply and notes among them (no noti
       "stop a unit, operator 2026-11-25)", (run("apply")[0], run("noticed", "postgresql-19.x")[0], run("notes", "istiod-2.x")[0]),
       (2, 2, 2))
 fixture(infra=[pr(1, "wave-patches"), pr(2, "istio", "veto"), pr(3, "observability", "upgrade-blocked", "veto")])
-check("held: what holds a unit now - nothing for a free one, veto for a vetoed one (an upgrade-blocked label holds nothing)",
+check("held: nothing holds a unit by a label (no veto, no blocked state) - nothing for each; an unknown one said",
       (run("held", "wave-patches"), run("held", "istio"), run("held", "observability"), run("held", "nope")),
-      ((0, ""), (0, "veto"), (0, "veto"), (1, "NO UNIT nope")))
+      ((0, ""), (0, ""), (0, ""), (1, "NO UNIT nope")))
 fixture(infra=[pr(1, "wave-patches")], dashboard_labels=["upgrades-paused"])
 check("held: the dashboard's kill switch - paused", run("held", "wave-patches"), (0, "paused"))
 fixture(infra=[pr(1, "wave-patches")], dashboard_labels=["upgrades-paused"], others=60)
@@ -418,8 +422,8 @@ fixture(boxes={"infra": ("kubernetes-1.37", "kubernetes-1.36", "manual-woodpecke
 check("replenish: a step waits for the lower one waiting - kubernetes-1.36 asked, never 1.37 first; a manual- unit never",
       (run("replenish"), ticked("infra"), ticked("platform")), ((0, "APPROVED kubernetes-1.36 infra,platform"),
                                                                ["kubernetes-1.36"], ["kubernetes-1.36"]))
-fixture(infra=[pr(2, "kubernetes-1.36", "veto")], boxes={"infra": ("kubernetes-1.37", "observability")})
-check("replenish: a lower step open but held (veto) still holds the higher - the next unit asked instead",
+fixture(infra=[pr(2, "kubernetes-1.36", renovate=False)], boxes={"infra": ("kubernetes-1.37", "observability")})
+check("replenish: a lower step open but never picked (unlabelled) still holds the higher - the next unit asked instead",
       run("replenish"), (0, "APPROVED observability infra"))
 fixture(boxes={"infra": ("scylladb-2026.2", "test-scylladb-2026.2", "wave-patches")})
 check("replenish: a test environment's unit before its twin, before the wave", run("replenish"),

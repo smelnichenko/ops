@@ -1034,7 +1034,7 @@ rc, calls = night("prove wave-patches patch", plan=PLAN, files={"task.deploy_etc
 check("the etcd snapshot failing (before the merge): blocked, nothing merged, not paged, no journal",
       (rc, merged(calls, "wave-patches"), has(calls, "task --yes deploy:kubeadm"), notices(calls), inflight()),
       (1, False, [], ["stopped wave-patches"], False))
-for files, why in (({"held": "veto\n"}, "a veto set since the pick"), ({"held": "paused\n"}, "the kill switch set since"),
+for files, why in (({"held": "paused\n"}, "the kill switch set since the pick"),
                    ({"held.fail": ""}, "held not read")):
     rc, calls = night("prove wave-patches patch", plan=PLAN, files=files)
     check(f"{why}: nothing merged, reported, no journal", (rc, merged(calls, "wave-patches"), notices(calls), inflight()),

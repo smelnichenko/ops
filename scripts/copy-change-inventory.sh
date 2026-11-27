@@ -72,9 +72,18 @@ for pkg, old, new in (m.split() for m in moves if len(m.split()) == 3):
     left_out = lambda x: x in exact or x.rsplit(" ", 1)[0] in anyver
     # a component the copy leaves out (its production line allowed missing) is left out at the new version too
     for line in (x for x in prod if pkg in x and at.search(x) and not left_out(x)):
-        want = at.sub(new, line, count=1)
-        if want not in have and not left_out(want):
-            print("  NOT MOVED %s %s -> %s: the copy lacks '%s'" % (pkg, old, new, want))
+        # moved in any of the old version's places: a chart named for its version beside the same app version moves
+        # both (Cilium: cilium-1.20.5 1.20.5), a chart bump alone the first - every subset tried, none required
+        spots = [m.span() for m in at.finditer(line)][:8]
+        wants = set()
+        for mask in range(1, 2 ** len(spots)):
+            out, last = [], 0
+            for i, (a, b) in enumerate(spots):
+                out += [line[last:a], new if mask >> i & 1 else line[a:b]]
+                last = b
+            wants.add("".join(out) + line[last:])
+        if not any(w in have or left_out(w) for w in wants):
+            print("  NOT MOVED %s %s -> %s: the copy lacks '%s'" % (pkg, old, new, at.sub(new, line)))
 MOVES
 )
   if [ -n "$unmoved" ]; then

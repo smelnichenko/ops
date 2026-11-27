@@ -11,21 +11,21 @@ grouped by branch (renovate/<unit> - the same name in each repo).
                            passes - then applied in the same run; no notice, no waiting: operator 2026-11-21)
                  STEPS: a unit never goes while a lower step of the same dependency is open - postgres-19.x waits for
                  postgres-18.x, kubernetes-1.37 for kubernetes-1.36, scylladb-2026.3 for scylladb-2026.2 - whatever
-                 holds the lower one (a try on record, a veto, unlabelled): an upgrade that needs several steps takes
+                 holds the lower one (a try on record, unlabelled): an upgrade that needs several steps takes
                  them one at a time, the next one rebased by Renovate onto the step before. The same dependency is
                  known by its name AND by the packages in Renovate's table (a family's minors and its major are named
                  apart: scylladb-2026.3 and scylladb-scylla-2027.x move one package) - a major or minor unit waits
                  while another (the patch wave aside) moves one of its packages to a lower version; a test- unit waits
                  for the production unit of a lower step too (the test environment one step ahead at most). To skip a
                  step (not needed, or failing for good) the operator closes its pull requests - Renovate then ignores
-                 that version; a veto on it holds every higher step.
+                 that version.
                  The order: renovate/wave-patches, then the family minors (istio, gateway-api, kubernetes, cilium, observability,
                  data-operators, argocd, pi-services - the first three one minor at a time, named <family>-<X.Y>, the
                  lowest first), then any other minor (a <name>-<X.Y> one by its version), then majors - the units with
                  a try on record (the runner's .upgrade-cycle/tries) after the ones with none (no blocked state: one
                  that keeps failing never holds the queue - except the higher steps of its own dependency). Left out:
                  a manual- unit (renovate/manual-<unit>: what the copy cannot prove - Woodpecker - applied by hand),
-                 a unit labelled veto (the operator's hold, no clock), a unit any of whose pull
+                 a unit any of whose pull
                  requests lacks Renovate's own labels (upgrade-cycle, major, one-way: its kind not known - Forgejo applies
                  only labels a repo has); everything while the
                  dashboard issue carries upgrades-paused (the kill switch) - and no dashboard issue open: not read (exit 1)
@@ -39,9 +39,9 @@ grouped by branch (renovate/<unit> - the same name in each repo).
                  unit being worked on exists as pull requests (operator 2026-11-24: dozens open were noise). The
                  runner runs Renovate itself before and after (task upgrade:run); the body is written whole with the
                  one box changed, and nothing else writes the dashboard while the run holds the copy lock
-  held UNIT      what holds the unit now, one a line - veto (on any of its pull requests), paused (the
-                 dashboard's upgrades-paused); nothing when nothing does: the runner asks again right before a merge
-                 (a veto or the kill switch set during the proof and the review was not seen at the pick's time)
+  held UNIT      what holds the unit now - paused (the dashboard's upgrades-paused, the kill switch: no per-unit hold,
+                 no veto since 2026-11-27, the operator's); nothing when nothing does: the runner asks again right
+                 before a merge (the kill switch set during the proof and the review was not seen at the pick's time)
 
 A unit is the bot's own pull requests, from branches of the repositories themselves - another account's, or a fork's,
 named renovate/<unit> all the same, is no unit.
@@ -304,16 +304,16 @@ def pick():
     all_units = units()
     # unlabelled (Renovate's labels not on it): never picked - a major unlabelled read as a minor, applied with no notice
     # a manual- unit (renovate/manual-woodpecker, the preset's): what the copy cannot prove - applied by hand, never picked
-    open_units = {n: u for n, u in all_units.items() if "veto" not in u["labels"] and not u["unlabelled"]
-                  and not n.startswith("manual-")}
+    # no per-unit hold: a label (veto, upgrade-blocked) holds nothing - the kill switch stops all, a bad unit is fixed
+    open_units = {n: u for n, u in all_units.items() if not u["unlabelled"] and not n.startswith("manual-")}
     # the units with a try on record after the ones with none, each group in its order
     def queue(n):
         return (tried(n, open_units[n]), order(n, open_units[n]))
-    # a step waits for the lower steps of its dependency - against every open unit, held or not (a vetoed or failing
-    # postgres-18.x never lets postgres-19.x jump it)
+    # a step waits for the lower steps of its dependency - against every open unit, pickable or not (a failing or
+    # unlabelled postgres-18.x never lets postgres-19.x jump it)
     open_units = {n: u for n, u in open_units.items() if not lower_step_open(n, all_units)}
     tests = sorted((n for n in open_units if n.startswith("test-")), key=queue)
-    # a production unit waits while its test environment's is open - vetoed too (its twin goes first); a test
+    # a production unit waits while its test environment's is open - tried or not (its twin goes first); a test
     # unit itself is never a production one
     prod = sorted((n for n in open_units if f"test-{n}" not in all_units and not n.startswith("test-")), key=queue)
     # tests first - unless the first has a try and a production unit has none (one that keeps failing never holds the
@@ -396,8 +396,6 @@ def show_held(name):
     if u is None:
         print(f"NO UNIT {name}")
         return 1
-    for reason in sorted({"veto"} & u["labels"]):
-        print(reason)
     if paused():
         print("paused")
     return 0

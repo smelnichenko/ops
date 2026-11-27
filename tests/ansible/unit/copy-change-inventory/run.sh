@@ -80,6 +80,19 @@ run "$W/prod" "$W/build" "$W/build" "$W/build" "$W/allowed" "$W/moves-part"; rc=
 check "  a version inside a longer one (2.0 in 12.2.0) never matched" "$rc" 0
 run "$W/prod" "$W/build" "$W/changed" "$W/changed" "$W/allowed" "$W/none"; rc=$?
 check "  the moves file not readable: refused" "$rc $(grep -c 'not readable' <<< "$out")" "1 1"
+# a line carrying the version twice (a chart named for its version, its app version the same - Cilium's): moved in
+# any of its places is moved - both (the chart and its app), or the chart alone; in none - named with both moved (the
+# first place alone was required, 2026-11-27: wave-patches' try 3 failed with Cilium on 1.20.5 in both)
+printf '%s\n' 'helm kube-system/cilium cilium-1.20.4 1.20.4' 'image b/redis 8.1' > "$W/prod2"
+printf '%s\n' 'cilium 1.20.4 1.20.5' > "$W/moves2"
+printf '%s\n' 'helm kube-system/cilium cilium-1.20.5 1.20.5' 'image b/redis 8.1' > "$W/both"
+printf '%s\n' 'helm kube-system/cilium cilium-1.20.5 1.20.4' 'image b/redis 8.1' > "$W/chart"
+run "$W/prod2" "$W/prod2" "$W/both" "$W/both" /dev/null "$W/moves2"; rc_both=$?
+run "$W/prod2" "$W/prod2" "$W/chart" "$W/chart" /dev/null "$W/moves2"; rc_chart=$?
+run "$W/prod2" "$W/prod2" "$W/prod2" "$W/prod2" /dev/null "$W/moves2"; rc_none=$?
+check "a version in two places of a line: moved in both - passed; the chart alone - passed; in none - failed, named with both moved" \
+  "$rc_both $rc_chart $rc_none $(grep -c "^  NOT MOVED cilium 1.20.4 -> 1.20.5: the copy lacks 'helm kube-system/cilium cilium-1.20.5 1.20.5'$" <<< "$out")" \
+  "0 0 1 1"
 
 echo "copy-change-inventory: $([ $fails = 0 ] && echo ALL-PASS || echo "$fails FAILED")"
 [ $fails = 0 ]

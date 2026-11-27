@@ -361,7 +361,7 @@ check("pause without a dashboard issue open: one made under Renovate's own title
 fixture(UNIT, {})
 rc, out = run("nope", "--heads")
 check("no pull request for the unit: refused", (rc, out.startswith("REFUSED"), writes()), (1, True, []))
-check("Forgejo unreachable: refused", run("wave-patches", "veto", url="http://127.0.0.1:1/api/v1")[0], 1)
+check("Forgejo unreachable: refused", run("wave-patches", "agent-fixed", url="http://127.0.0.1:1/api/v1")[0], 1)
 for args in (("wave-patches",), ("Bad/Unit", "x"), ("wave-patches", "--comment", "x"), ("wave-patches", "Bad Label")):
     check(f"usage refused: {args}", (run(*args)[0], writes()), (2, []))  # --comment: the veto notice's, gone 2026-11-21
 print("upgrade-label: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
