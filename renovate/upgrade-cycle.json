@@ -380,9 +380,7 @@
         "caddy",
         "versity/versitygw",
         "sonatype/nexus-public",
-        "patroni",
-        "hashicorp/vault",
-        "hashicorp/consul"
+        "patroni"
       ],
       "groupName": "pi services",
       "groupSlug": "pi-services",
@@ -402,6 +400,40 @@
       "groupSlug": "keycloak",
       "group": {
         "branchTopic": "keycloak-{{{newMajor}}}.{{{newMinor}}}"
+      },
+      "addLabels": [
+        "one-way"
+      ]
+    },
+    {
+      "description": "Vault's minors (a store, scripts/upgrade-stores.json: HashiCorp supports no binary-only downgrade - the data goes back with the binary) - renovate/vault-<X.Y>, labelled one-way, out of the Pis' services unit (operator 2026-11-27): a store's version moves only in its own unit, blocked by the store until its way back has run on the copy; its patches stay in the wave",
+      "matchUpdateTypes": [
+        "minor"
+      ],
+      "matchPackageNames": [
+        "/(^|\\/)vault$/"
+      ],
+      "groupName": "vault",
+      "groupSlug": "vault",
+      "group": {
+        "branchTopic": "vault-{{{newMajor}}}.{{{newMinor}}}"
+      },
+      "addLabels": [
+        "one-way"
+      ]
+    },
+    {
+      "description": "Consul's minors (a store, scripts/upgrade-stores.json: HashiCorp supports no binary-only downgrade - the data goes back with the binary) - renovate/consul-<X.Y>, labelled one-way, out of the Pis' services unit (operator 2026-11-27): a store's version moves only in its own unit, blocked by the store until its way back has run on the copy; its patches stay in the wave",
+      "matchUpdateTypes": [
+        "minor"
+      ],
+      "matchPackageNames": [
+        "/(^|\\/)consul$/"
+      ],
+      "groupName": "consul",
+      "groupSlug": "consul",
+      "group": {
+        "branchTopic": "consul-{{{newMajor}}}.{{{newMinor}}}"
       },
       "addLabels": [
         "one-way"
@@ -552,13 +584,14 @@
       ]
     },
     {
-      "description": "SonarQube: every release migrates its database one way (api/system/migrate_db in the setup hook) - its patches, minors and majors a unit of their own, labelled one-way: the runner backs its CNPG cluster up first (scripts/upgrade-stores.json). It rode in the wave, unproven and with no backup (the wave-patches review, 2026-11-23)",
+      "description": "SonarQube: every release migrates its database one way (api/system/migrate_db in the setup hook) - its patches, minors and majors a unit of their own, labelled one-way: the runner backs its CNPG cluster up first (scripts/upgrade-stores.json). It rode in the wave, unproven and with no backup (the wave-patches review, 2026-11-23) - a manual unit (operator 2026-11-27), renovate/manual-sonarqube-<N>.x: the copy cannot hold SonarQube (~4 GB beside its ~24 of 30), so nothing proves it there; landed by hand - its CNPG cluster's base backup first, the pull requests merged, its migration and status UP watched, one CI scan through it",
       "matchPackageNames": [
         "sonarqube",
         "/(^|\\/)sonarqube$/"
       ],
       "groupName": "sonarqube",
       "groupSlug": "sonarqube",
+      "additionalBranchPrefix": "manual-",
       "group": {
         "branchTopic": "sonarqube-{{{newMajor}}}.x"
       },

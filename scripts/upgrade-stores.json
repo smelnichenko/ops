@@ -113,7 +113,8 @@
         "its way back not yet rehearsed on the copy - after the new version ran on Vault's storage: Vault stopped on both Pis, vault/ restored from the export upgrade-vault.yml took (or the Consul snapshot, Patroni paused), the kept old binary back, unsealed, one active, a secret written before the upgrade there and one written after gone; the Pi restore check counts restored keys, it starts no Vault"
       ],
       "examples": [
-        "hashicorp-vault-2.x"
+        "hashicorp-vault-2.x",
+        "vault-1.22"
       ],
       "taken_by": [
         "deploy:vault:upgrade"
@@ -131,7 +132,8 @@
         "its way back not yet rehearsed on the copy - after the new version ran: Vault and Patroni stopped, the snapshot upgrade-consul.yml took restored (consul snapshot restore) under the kept old binary on all three servers, three voters and one leader, Vault and Patroni back on it with nothing from after the upgrade"
       ],
       "examples": [
-        "hashicorp-consul-2.x"
+        "hashicorp-consul-2.x",
+        "consul-1.22"
       ],
       "taken_by": [
         "deploy:consul:upgrade"
@@ -150,7 +152,7 @@
       ],
       "missing": [],
       "examples": [
-        "sonarqube-26.x"
+        "manual-sonarqube-26.x"
       ],
       "taken_by": [],
       "_why": "every SonarQube release migrates its database one way (api/system/migrate_db in the setup hook) - the wave-patches review of 2026-11-23 found 26.9 -> 26.10 riding in the wave, unproven (the copy leaves SonarQube out) and with no backup: its CNPG cluster's base backup first; the way back a recovery from it (CNPG bootstrap.recovery, the path the copy rehearses on production's cluster every run)"
