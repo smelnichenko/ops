@@ -348,8 +348,15 @@ if [ "$ops_ref" != main ]; then
   ${COPY_UNIT_PINS:-python3 -I $ops/scripts/renovate-checksums.py} --check --changed --base main --ref "$branch" \
     --root "$ops_repo" --keys "$ops/renovate/keys" || { echo "REFUSED: $branch's build hashes - not proven"; exit 1; }
 fi
-for s in "${steps[@]}"; do
+# what the unit moves (COPY_UNIT_MOVES, the cycle's) judged once, by the check after the last step that changes the copy
+# - an earlier step's check would ask for a later playbook's moves (an infra change before setup-kubeadm's Cilium); an
+# image smoke runs no check
+moves=${COPY_UNIT_MOVES:-} judge=-1
+for i in "${!steps[@]}"; do case ${steps[$i]} in "test:copy:change "* | "test:copy:playbook "*) judge=$i ;; esac; done
+for i in "${!steps[@]}"; do
+  s=${steps[$i]}
   echo "=== UNIT $unit: task $s"
+  if [ "$i" = "$judge" ]; then export COPY_UNIT_MOVES="$moves"; else unset COPY_UNIT_MOVES; fi
   eval "task $s"
 done
 echo "=== UNIT $unit PROVEN"

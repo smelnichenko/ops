@@ -348,7 +348,7 @@ check "a unit changing the vendors' keys (renovate/keys): refused, never proven"
 # check that fails refuses the unit, nothing proven (task, a stub saying what it was asked)
 mkdir -p "$W/bin"
 # the task stub notes the locale's encoding as Ansible reads it at its start (it refuses any but UTF-8)
-printf '#!/bin/bash\necho "task $*" >> "$W/ran"\npython3 -c "import locale; locale.setlocale(locale.LC_ALL, \\"\\"); print(locale.getlocale()[1])" > "$W/locale" 2>&1\n' > "$W/bin/task"
+printf '#!/bin/bash\necho "task $* moves=${COPY_UNIT_MOVES-unset}" >> "$W/ran"\npython3 -c "import locale; locale.setlocale(locale.LC_ALL, \\"\\"); print(locale.getlocale()[1])" > "$W/locale" 2>&1\n' > "$W/bin/task"
 printf '#!/bin/bash\necho "pins $*" >> "$W/ran"\nexit "${PINS_RC:-0}"\n' > "$W/bin/pins"
 chmod +x "$W/bin/task" "$W/bin/pins"
 runit() { rm -f "$W/ran"; PATH="$W/bin:$PATH" W="$W" COPY_UNIT_SRC="$W/src" COPY_UNIT_PINS="$W/bin/pins" \
@@ -393,5 +393,16 @@ out=$(plan istio-follow); rc=$?
 check "  an Istio unit cut before it: its own move (its merge base's 1.31.1 to 1.31.4) - the restart to its version" \
   "$rc $(tr '\n' '|' <<< "$out")" \
   "0 test:copy:change INFRA_REF=renovate/istio-follow PLATFORM_REF=main|test:copy:playbook PLAYBOOK=restart-mesh-workloads.yml ARGS='-e istio_version=1.31.4'|"
+# what the unit moves judged by the check after its last step that changes the copy, never earlier: an earlier step's
+# check asked for a later playbook's moves (wave-patches, 2026-11-27: cilium and kube-apiserver "NOT MOVED" at the end
+# of test:copy:change, before setup-kubeadm and upgrade-kubeadm ran); a smoke step runs no check
+echo "x 1 2" > "$W/moves.txt"
+rc=$(COPY_UNIT_MOVES="$W/moves.txt" runit istio-follow)
+check "run: the unit's moves handed to its last copy-changing step alone (the change's check before the restart's has none)" \
+  "$rc | $(grep '^task' "$W/ran" | sed 's/ .* moves=/ moves=/' | tr '\n' '|')" \
+  "0 | task moves=unset|task moves=$W/moves.txt|"
+rc=$(COPY_UNIT_MOVES="$W/moves.txt" runit renovate-image)
+check "  a unit with no copy-changing step (an image smoke alone): no step handed the moves - none runs the check" \
+  "$rc $(grep -c "^task.*moves=$W/moves.txt" "$W/ran")" "0 0"
 echo "copy-unit: $([ $fails -eq 0 ] && echo ALL-PASS || echo "$fails FAILED")"
 [ $fails -eq 0 ]

@@ -699,8 +699,9 @@ fix_unit() {  # fix_unit <what it fixes> <the file the agent reads> <its name th
   run scripts/copy-snapshot.sh forget "the proof after a fix builds its base fresh" || say "THE SNAPSHOT NOT FORGOTTEN - the proof may revert it"
   build
 }
-# what the unit moves ("<package> <from> <to>", its Renovate tables): the copy's inventory after the change must show
-# production's lines of it at the new version (scripts/copy-change-inventory.sh, test:copy:check's last step)
+# what the unit moves ("<package> <from> <to>", its Renovate tables): the copy's inventory after the unit's last step
+# that changes the copy must show production's lines of it at the new version (scripts/copy-change-inventory.sh, that
+# step's test:copy:check - scripts/copy-unit.sh hands the list to it alone)
 prove() {
   local moves="$ops/.copy/unit-moves-$unit.txt"
   [ -n "$dry" ] || scripts/upgrade-units.py moves "$unit" > "$moves" 2>> "$log" \
