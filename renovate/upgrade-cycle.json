@@ -264,7 +264,7 @@
       }
     },
     {
-      "description": "Observability's minors",
+      "description": "Observability's minors - fluent-bit's image by any registry (cr.fluentbit.io/fluent/fluent-bit rode in the wave), and the prometheus-operator images (blackbox-exporter's config-reloader) with kube-prometheus-stack, the operator they reuse (the wave-patches review, 2026-11-27: the reloader a minor ahead of its operator)",
       "matchUpdateTypes": [
         "minor"
       ],
@@ -277,7 +277,9 @@
         "/^clickhouse\\//",
         "/prometheus\\/pushgateway$/",
         "/blackbox-exporter$/",
-        "/^quay\\.io\\/prometheus\\//"
+        "/^quay\\.io\\/prometheus\\//",
+        "/(^|\\/)fluent\\/fluent-bit$/",
+        "/^quay\\.io\\/prometheus-operator\\//"
       ],
       "groupName": "observability",
       "groupSlug": "observability",
@@ -378,7 +380,6 @@
       "matchPackageNames": [
         "forgejo/forgejo",
         "caddy",
-        "versity/versitygw",
         "sonatype/nexus-public",
         "patroni"
       ],
@@ -387,6 +388,31 @@
       "group": {
         "branchTopic": "pi-services"
       }
+    },
+    {
+      "description": "versitygw's minors - the cluster's S3 store (platform's chart default, ghcr.io/versity/versitygw) and the Pis' together, renovate/versitygw, a unit of its own: a minor can carry a data migration (v1.9.0's Object Lock default retention) and its review reads each one's notes. 1.8 -> 1.11 rode in the wave, and the Pis' rule named versity/versitygw alone (the wave-patches review, 2026-11-27)",
+      "matchUpdateTypes": [
+        "minor"
+      ],
+      "matchPackageNames": [
+        "/(^|\\/)versity\\/versitygw$/"
+      ],
+      "groupName": "versitygw",
+      "groupSlug": "versitygw",
+      "group": {
+        "branchTopic": "versitygw"
+      }
+    },
+    {
+      "description": "velero-plugin-for-aws: its minor follows Velero's (the compatibility matrix - Velero 1.18 pairs with 1.14.x), moved with Velero's own minor by that unit's fix, never alone; its patches stay in the wave (the wave-patches review, 2026-11-27: 1.15.0 beside Velero 1.18.4 was off the matrix on every backup and restore)",
+      "matchUpdateTypes": [
+        "minor",
+        "major"
+      ],
+      "matchPackageNames": [
+        "/(^|\\/)velero\\/velero-plugin-for-aws$/"
+      ],
+      "enabled": false
     },
     {
       "description": "Keycloak's minors (a store, scripts/upgrade-stores.json: its database migrates one way on a new version) - renovate/keycloak-<X.Y>, labelled one-way, out of the Pis' services unit: a store's version moves only in its own unit, its backup first. It rode in renovate/pi-services, which the copy could not prove (2026-11-26)",
