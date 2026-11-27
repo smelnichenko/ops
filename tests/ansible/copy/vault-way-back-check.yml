@@ -60,7 +60,9 @@
     - name: Before and verify - exactly one active
       ansible.builtin.assert:
         that: ansible_play_hosts | map('extract', hostvars, ['_health', 'status']) | select('equalto', 200) | list | length == 1
-        fail_msg: "{{ ansible_play_hosts | zip(ansible_play_hosts | map('extract', hostvars, ['_health', 'status'])) | list }}"
+        # a string: a list of pairs is no fail_msg - the module refuses it even when the assertion holds (the first rehearsal
+        # failed here, 2026-11-27, before anything was upgraded)
+        fail_msg: "{{ ansible_play_hosts | zip(ansible_play_hosts | map('extract', hostvars, ['_health', 'status'])) | list | to_json }}"
         quiet: true
       run_once: true
       when: phase in ['before', 'verify']
