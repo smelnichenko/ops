@@ -747,7 +747,7 @@ tasks:
       - cmd: docker run --rm --user "$(id -u):$(id -g)" --entrypoint renovate '{{.IMAGE}}' --version
       - cmd: docker run --rm --user "$(id -u):$(id -g)" -v "$PWD/renovate:/presets:ro" --entrypoint renovate-config-validator '{{.IMAGE}}' /presets/upgrade-cycle.json /presets/apps.json
       # the image doing its job: the three repos read, their dependencies looked up - the validator alone reads no repo
-      # and no registry (a lookup takes no runner lock: it writes nothing)
+      # and no registry (inside the runner, which holds its lock: the image smoke alone runs beside it, memory-capped)
       - cmd: UPGRADE_RENOVATE_IMAGE='{{.IMAGE}}' scripts/upgrade-renovate.sh --lookup
 
   test:copy:check:

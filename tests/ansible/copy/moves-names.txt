@@ -5,7 +5,9 @@
 # prom/node-exporter and renovate/renovate required nothing).
 #   <package> = <a regular expression over inventory lines>   those lines too (added to the ones naming it)
 #   <package> - <why>                                          checked elsewhere, never by the inventory
+#   <package>@digest - <why>                                   its digest moves alone checked elsewhere (its version moves by the inventory)
 forgejo/forgejo = ^pi \S+ forgejo 
 versity/versitygw = ^pi \S+ versitygw 
 prom/node-exporter - ten's own binary, outside the inventory: setup-host-hardening's check on the copy requires its node_exporter_build_info to name the pinned version
 renovate/renovate - the runner's own image (scripts/upgrade-renovate.sh), outside production: copy-unit smoke-runs the new image (task test:copy:renovate-image)
+registry.k8s.io/etcd@digest - the Pi restore check's etcd image (setup-pi-restore-check.yml pins it by digest): that playbook runs it on the copy; production's own etcd (kubeadm's) runs unpinned

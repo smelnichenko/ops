@@ -16,8 +16,8 @@ filter() {
 # A line ending in ` *` allows any version of it (all but its last field the same): a left-out component production
 # upgrades stays left out. A line starting `? ` is a Job's image either side may have or not (kept a day after each
 # sync: production read a quiet day later lacks it, the copy just synced has it) - missing or extra, never judged. Only the ones <actual> lacks are skipped: one that is there is compared like any other
-# An image's digest line (image-digest <name> <tag> <digest>) goes with its image line: allowed when that one is
-# (2026-10-03: a job pod's image present in the Vagrant copy - its CronJob had run - counted as an extra line).
+# (2026-10-03: a job pod's image present in the Vagrant copy - its CronJob had run - counted as an extra line). An image's
+# digest line (image-digest <name> <tag> <digest>) goes with its image line: allowed (or '? ') when that one is.
 allowed=${3:-/dev/null}
 actual=$(filter "$2")
 # the `? ` lines' matches the copy has and production does not: left out too (the other way round is the skip below)

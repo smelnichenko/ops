@@ -139,19 +139,22 @@ digest_case() {  # name, want rc, moves, the copy's lines after the change (besi
   printf '%s\n' "$3" > "$W/dm"
   { grep -v -E 'cloudnative-pg/postgresql|opensearch' "$W/dp"; printf '%s\n' "$4"; } | LC_ALL=C sort > "$W/da"
   printf '%s\n' "${5:-}" > "$W/dal"
-  out=$(COPY_MOVES_NAMES=/dev/null scripts/copy-change-inventory.sh "$W/dp" "$W/dp" "$W/da" "$W/da" "$W/dal" "$W/dm" 2>&1); rc=$?
-  if [ "$rc" = "$2" ]; then echo "PASS $1"; else echo "FAIL $1 (rc $rc, want $2)"; sed 's/^/    /' <<< "$out"; fails=$((fails + 1)); fi
+  printf '%s\n' "${DIGEST_NAMES:-}" > "$W/dn"
+  printf '%s\n' "${EXTRA_PROD:-}" | grep . >> "$W/dp"
+  out=$(COPY_MOVES_NAMES="$W/dn" scripts/copy-change-inventory.sh "$W/dp" "$W/dp" "$W/da" "$W/da" "$W/dal" "$W/dm" 2>&1); rc=$?
+  if [ "$rc" = "$2" ] && { [ -z "${WANT_OUT:-}" ] || grep -qF -- "$WANT_OUT" <<< "$out"; }; then echo "PASS $1"
+  else echo "FAIL $1 (rc $rc, want $2)"; sed 's/^/    /' <<< "$out"; fails=$((fails + 1)); fi
 }
 PG='image ghcr.io/cloudnative-pg/postgresql 18.7-standard-trixie'
 OS='image opensearchproject/opensearch 3.9.0
 image-digest opensearchproject/opensearch 3.9.0 3b55f6b'
-digest_case "a digest move on the copy: passes" 0 'ghcr.io/cloudnative-pg/postgresql b4bbd2e c437b7c' "$PG
+digest_case "a digest move on the copy: passes" 0 'ghcr.io/cloudnative-pg/postgresql b4bbd2e c437b7c digest' "$PG
 image-digest ghcr.io/cloudnative-pg/postgresql 18.7-standard-trixie c437b7c
 $OS"
-digest_case "  the old digest still on the copy: fails (NOT MOVED)" 1 'ghcr.io/cloudnative-pg/postgresql b4bbd2e c437b7c' "$PG
+digest_case "  the old digest still on the copy: fails (NOT MOVED)" 1 'ghcr.io/cloudnative-pg/postgresql b4bbd2e c437b7c digest' "$PG
 image-digest ghcr.io/cloudnative-pg/postgresql 18.7-standard-trixie b4bbd2e
 $OS"
-digest_case "  another digest than the move's: fails" 1 'ghcr.io/cloudnative-pg/postgresql b4bbd2e c437b7c' "$PG
+digest_case "  another digest than the move's: fails" 1 'ghcr.io/cloudnative-pg/postgresql b4bbd2e c437b7c digest' "$PG
 image-digest ghcr.io/cloudnative-pg/postgresql 18.7-standard-trixie 0000000
 $OS"
 PGD='image-digest ghcr.io/cloudnative-pg/postgresql 18.7-standard-trixie b4bbd2e'
@@ -168,5 +171,35 @@ image opensearchproject/opensearch 3.10.0
 image-digest opensearchproject/opensearch 3.9.0 3bf4fe2"
 digest_case "  a left-out image (allowed by name) moved: its digest line left out with it - passes" 0 'opensearchproject/opensearch 3.9.0 3.10.0' "$PG
 $PGD" 'image opensearchproject/opensearch *'
+# a digest move of an image production runs only unpinned (an ops pin - the Pi restore check's etcd): nothing here can
+# check it - refused unless moves-names.txt names its digest moves (<package>@digest), which leaves its version moves judged
+ETCD='image registry.k8s.io/etcd 3.6.8-0'
+WANT_OUT="NOT CHECKED registry.k8s.io/etcd 3971894 -> 4444444: production runs no image of it pinned by digest" \
+  EXTRA_PROD="$ETCD" digest_case "a digest move production runs no pinned image of: NOT CHECKED - fails" 1 'registry.k8s.io/etcd 3971894 4444444 digest' "$PG
+$PGD
+$OS
+$ETCD"
+DIGEST_NAMES='registry.k8s.io/etcd@digest - checked elsewhere' EXTRA_PROD="$ETCD" \
+  digest_case "  named in moves-names.txt (@digest): passes" 0 'registry.k8s.io/etcd 3971894 4444444 digest' "$PG
+$PGD
+$OS
+$ETCD"
+DIGEST_NAMES='registry.k8s.io/etcd@digest - checked elsewhere' EXTRA_PROD="$ETCD" \
+  digest_case "  an @digest entry leaves the version moves judged: its tag not moved - fails" 1 'registry.k8s.io/etcd 3.6.8-0 3.6.9-0' "$PG
+$PGD
+$OS
+$ETCD"
+EXTRA_PROD='image-digest example.io/opensearchproject/opensearch-dashboards 3.9.0 3b55f6b' \
+  digest_case "  an image named only like it (another name ending in it) is no pinned line of it" 0 'opensearchproject/opensearch 3b55f6b 3bf4fe2 digest' "$PG
+$PGD
+image opensearchproject/opensearch 3.9.0
+image-digest opensearchproject/opensearch 3.9.0 3bf4fe2
+image-digest example.io/opensearchproject/opensearch-dashboards 3.9.0 3b55f6b"
+# a version of seven digits is a version (only a marked line is a digest move); a digest move unmarked is no digest move
+EXTRA_PROD='image example.io/tool 2026112' \
+  digest_case "a version of seven digits, unmarked: judged as a version - its line moved, passes" 0 'example.io/tool 2026112 2026113' "$PG
+$PGD
+$OS
+image example.io/tool 2026113"
 echo "copy-change-inventory: $([ $fails = 0 ] && echo ALL-PASS || echo "$fails FAILED")"
 [ $fails = 0 ]

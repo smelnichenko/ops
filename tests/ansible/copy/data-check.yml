@@ -439,32 +439,34 @@
     kubeconfig: /etc/kubernetes/admin.conf
     apps_namespace: schnappy-production
     kubectl: "kubectl --kubeconfig {{ kubeconfig }} -n {{ apps_namespace }}"
+    search: statefulset/schnappy-production-opensearch
+    browser: deployment/schnappy-production-masi-browser
   tasks:
     - name: Vagrant VMs only (fails closed on any other host)
       ansible.builtin.import_tasks: ../vagrant-only.yml
 
-    - name: The OpenSearch and browser pods (a running one each)
-      ansible.builtin.command: >-
-        {{ kubectl }} get pods -l app.kubernetes.io/component={{ item }} --field-selector=status.phase=Running
-        -o jsonpath={.items[0].metadata.name}
-      loop: [opensearch, masi-browser]
-      register: _pods
+    # one restarting after the change (a node's restart rolls them): waited for until ready - five minutes at most
+    # (OpenSearch's startup probe allows 300 s)
+    - name: OpenSearch and the browser ready (a ready replica each)
+      ansible.builtin.command: "{{ kubectl }} get {{ item }} -o jsonpath={.status.readyReplicas}"
+      loop: ["{{ search }}", "{{ browser }}"]
+      register: _ready
       changed_when: false
-      # one restarting after the change (a node's restart rolls them): waited for, two minutes at most
-      retries: 12
+      retries: 30
       delay: 10
-      until: _pods.rc == 0 and _pods.stdout | length > 0
-      failed_when: _pods.rc != 0 or _pods.stdout | length == 0
+      until: _ready.rc == 0 and (_ready.stdout | int) >= 1
 
     # its readiness probe answers 200 on a red cluster too (_cluster/health answers whatever the status): the status
-    # judged here, and a document written and found - its index this run's own, deleted after
+    # judged here, and a document written and found - its index this run's own, deleted after (on a failure too). Each
+    # try execs into the workload afresh (a replaced pod found again)
     - name: OpenSearch - its cluster not red, a document of this run written and found, its index deleted
       ansible.builtin.shell:
         executable: /bin/bash
         cmd: |
           set -euo pipefail
-          E="{{ kubectl }} exec {{ _pods.results[0].stdout }} -c opensearch -- curl -fsS -m 90"
+          E="{{ kubectl }} exec {{ search }} -c opensearch -- curl -fsS -m 90"
           I=http://127.0.0.1:9200/copy-check-{{ run_id | lower }}
+          trap '$E -X DELETE "$I" > /dev/null 2>&1 || true' EXIT
           $E 'http://127.0.0.1:9200/_cluster/health?wait_for_status=yellow&timeout=60s' | python3 -c 'import json, sys; print(json.load(sys.stdin)["status"])'
           $E http://127.0.0.1:9200/ | python3 -c 'import json, sys; print(json.load(sys.stdin)["version"]["number"])'
           $E -X PUT -H 'Content-Type: application/json' -d '{"run": "{{ run_id }}"}' "$I/_doc/1?refresh=true" > /dev/null
@@ -472,31 +474,33 @@
           $E -X DELETE "$I" > /dev/null
       register: _search
       changed_when: true
-      retries: 3
+      retries: 6
       delay: 10
       until: >-
         _search.rc == 0 and _search.stdout_lines | length == 3
         and _search.stdout_lines[0] in ['green', 'yellow'] and _search.stdout_lines[2] == '1'
 
     # its probes ask /pressure, which answers while Chrome cannot start: a page of this run rendered by Chrome, its script
-    # run (6*7 written into it); and the token still required - without it browserless hands a CDP session to any page.
-    # The token stays in the pod: $TOKEN is expanded by the pod's shell, never on a command line here; the page on stdin
+    # run (6*7 written into it) - its status said (two sessions at most, none queued: a 429 while masi holds them is waited
+    # out, two minutes); and the token still required - without it browserless hands a CDP session to any page. The token
+    # stays in the pod: $TOKEN is expanded by the pod's shell, never on a command line here; the page on stdin
     - name: The browser - a page of this run rendered with its script run; refused without the token
       ansible.builtin.shell:
         executable: /bin/bash
         cmd: |
           set -euo pipefail
-          B="{{ kubectl }} exec -i {{ _pods.results[1].stdout }} -c chromium --"
-          $B sh -c 'curl -sS -m 90 -X POST -H "Content-Type: application/json" --data-binary @- "http://127.0.0.1:3000/content?token=$TOKEN"' \
-            <<< '{"html": "<p id=x>copy-check {{ run_id }}:</p><script>x.textContent += 6 * 7</script>"}' \
-            | { grep -cF 'copy-check {{ run_id }}:42</p>' || true; }
+          B="{{ kubectl }} exec -i {{ browser }} -c chromium --"
+          out=$($B sh -c 'curl -sS -m 90 -w "\n%{http_code}" -X POST -H "Content-Type: application/json" --data-binary @- "http://127.0.0.1:3000/content?token=$TOKEN"' \
+            <<< '{"html": "<p id=x>copy-check {{ run_id }}:</p><script>x.textContent += 6 * 7</script>"}')
+          echo "${out##*$'\n'}"
+          { grep -cF 'copy-check {{ run_id }}:42</p>' <<< "${out%$'\n'*}" || true; }
           $B curl -sS -m 30 -o /dev/null -w '%{http_code}\n' -X POST -H 'Content-Type: application/json' -d '{"html": "<p>x</p>"}' \
             http://127.0.0.1:3000/content < /dev/null
       register: _browser
       changed_when: false
-      retries: 3
+      retries: 12
       delay: 10
-      until: _browser.rc == 0 and _browser.stdout_lines == ['1', '401']
+      until: _browser.rc == 0 and _browser.stdout_lines == ['200', '1', '401']
 
     - name: OpenSearch and the browser working
       ansible.builtin.debug:

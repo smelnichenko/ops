@@ -246,13 +246,17 @@ exec 8>> .upgrade-cycle/lock
 flock -n 8 || { echo "the lock is held by something else - the next check cannot run"; exit 1; }
 check "Renovate beside a running runner (its lock held): refused, docker never run" \
   "$(run RENOVATE_TOKEN=$TOKEN) $([ -e "$W/argv" ] && echo ran || echo not-run) $(grep -c 'holds' "$W/out")" "1 not-run 1"
-# a lookup writes nothing: run beside the runner (the copy proof's smoke runs one while the runner holds the lock)
+# a lookup by hand beside a proof: refused too (the memory the copy's VMs hold); the proof's own smoke of a unit's new
+# image runs beside it (the runner holds the lock it runs inside), its container capped
 ARGS=(--lookup)
-check "a lookup beside a running runner (its lock held): run - it takes no lock" \
-  "$(run RENOVATE_TOKEN=$TOKEN FAKE_LOG="$LOOKUP_LOG") $([ -e "$W/argv" ] && echo ran || echo not-run) $(grep -c 'holds' "$W/out")" "0 ran 0"
-exec 8>&-
-# another image: a lookup's, one exact pin - the image is given the bot's token; a writing run never
 NEWIMG=renovate/renovate:44.258.1@sha256:$(printf 'c%.0s' {1..64})
+check "a lookup beside a running runner (its lock held): refused, docker never run; the image smoke: run, memory-capped" \
+  "$(run RENOVATE_TOKEN=$TOKEN FAKE_LOG="$LOOKUP_LOG") $([ -e "$W/argv" ] && echo ran || echo not-run) $(run RENOVATE_TOKEN=$TOKEN FAKE_LOG="$LOOKUP_LOG" UPGRADE_RENOVATE_IMAGE=$NEWIMG) $(grep -cxE -- '--memory=1536m|--memory-swap=1536m' "$W/argv")" \
+  "1 not-run 0 2"
+exec 8>&-
+check "  a lookup of the pinned image: no cap (the copy not up beside it)" \
+  "$(run RENOVATE_TOKEN=$TOKEN FAKE_LOG="$LOOKUP_LOG") $(grep -c -- '--memory' "$W/argv")" "0 0"
+# another image: a lookup's, one exact pin - the image is given the bot's token; a writing run never
 rc=$(run RENOVATE_TOKEN=$TOKEN FAKE_LOG="$LOOKUP_LOG" UPGRADE_RENOVATE_IMAGE=$NEWIMG)
 check "a lookup told another image: that image run, the pinned one not; the console names it" \
   "$rc $(grep -cx "$NEWIMG" "$W/argv") $(grep -cx "$pin" "$W/argv") $(grep -cF "($NEWIMG)" "$W/out")" "0 1 0 1"
