@@ -1,0 +1,197 @@
+---
+# The way back from upgrade-vault.yml: Vault's keys (vault/ in Consul, its storage) back from the export upgrade-vault.yml
+# took on the active Pi before it touched a Pi, and the binary it kept (/usr/local/bin/vault-<version>) back on both Pis -
+# each started and unsealed by its own script, one active, on the export's version. Patroni's keys are untouched: the
+# export is vault/ alone (the whole snapshot would roll Patroni back too). Everything written to Vault since the export
+# is lost. First revert the unit (vars/vault.yml back to the old pin): refused until the pin is the export's version
+# (setup-vault-pi and upgrade-vault would move it again). Confirmed by naming the export.
+#
+# Usage: task deploy:vault:way-back -- -e confirm=<the export's file name>   (an export kept elsewhere: copy it to a Pi,
+#        -e vault_restore_export=<path> -e vault_restore_host=<pi>; the copy rehearses it: task test:copy:vault-way-back)
+- name: Vault's way back - its keys from the pre-upgrade export, its old binary back
+  hosts: pis
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  vars:
+    vault_api: https://127.0.0.1:8200
+    upgrade_dir: /var/backups/vault-upgrade
+  tasks:
+    - name: Every Pi in the run (one left out would keep the new binary on the restored keys)
+      ansible.builtin.assert:
+        that: ansible_play_hosts | sort == groups['pis'] | sort
+        fail_msg: "REFUSED: the run has {{ ansible_play_hosts | sort }}, Vault runs on {{ groups['pis'] | sort }}"
+        quiet: true
+      run_once: true
+
+    - name: The newest export here
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          shopt -s nullglob
+          exports=({{ upgrade_dir }}/consul-*-vault-*.vault-kv.json)
+          [ -z "${exports[0]-}" ] || ls -1t "${exports[@]}" | head -n 1
+      register: _newest
+      changed_when: false
+      check_mode: false
+      when: vault_restore_export is not defined
+
+    # each name leads with its UTC time (consul-<time>-vault-<version>.vault-kv.json): the last by path is the newest
+    - name: The export restored - the one given, or the newest on either Pi - and the version it ran
+      ansible.builtin.set_fact:
+        _export_path: "{{ vault_restore_export | default(_newest_of.get('_newest', {}).get('stdout', '')) }}"
+        _export_host: "{{ vault_restore_host | default(_newest_of.get('inventory_hostname', '')) }}"
+      vars:
+        _newest_of: >-
+          {{ ansible_play_hosts | map('extract', hostvars) | selectattr('_newest', 'defined')
+             | selectattr('_newest.stdout', 'defined') | rejectattr('_newest.stdout', 'equalto', '')
+             | sort(attribute='_newest.stdout') | last | default({}, true) }}
+      run_once: true
+
+    - name: Its version, from its name
+      ansible.builtin.set_fact:
+        _export_version: >-
+          {{ _export_path | basename | regex_search('^consul-[0-9]{8}T[0-9]{6}Z-vault-(.+)[.]vault-kv[.]json$', '\1')
+             | default([''], true) | first }}
+      run_once: true
+
+    - name: An export, its Pi and its version known - else nothing stopped
+      ansible.builtin.assert:
+        that:
+          - _export_path | length > 0
+          - _export_host in ansible_play_hosts
+          - _export_version is match('^[0-9][0-9A-Za-z.+-]*$')
+        fail_msg: "REFUSED: no Vault export to restore (path '{{ _export_path }}' on '{{ _export_host }}', version '{{ _export_version }}') - nothing stopped"
+        success_msg: "restoring {{ _export_path }} ({{ _export_host }}), Vault {{ _export_version }}"
+      run_once: true
+
+    - name: The unit reverted first - vars/vault.yml pins the export's version
+      ansible.builtin.assert:
+        that: vault_version == _export_version
+        fail_msg: >-
+          REFUSED: vars/vault.yml pins {{ vault_version }}, the export ran {{ _export_version }} - revert the unit first
+          (setup-vault-pi and upgrade-vault would move it again): nothing stopped
+        quiet: true
+      run_once: true
+
+    - name: Confirmed by naming the export (-e confirm=<its file name>)
+      ansible.builtin.assert:
+        that: (confirm | default('')) == (_export_path | basename)
+        fail_msg: >-
+          REFUSED: restoring {{ _export_path }} on {{ _export_host }} loses everything written to Vault since it was taken -
+          confirm with -e confirm={{ _export_path | basename }}: nothing stopped
+        quiet: true
+      run_once: true
+
+    - name: The export's version's binary kept here (upgrade-vault.yml keeps the one it replaced)
+      ansible.builtin.stat:
+        path: "/usr/local/bin/vault-{{ _export_version }}"
+      register: _kept
+
+    - name: Every Pi has it - else nothing stopped
+      ansible.builtin.assert:
+        that: _kept.stat.executable | default(false)
+        fail_msg: "REFUSED: /usr/local/bin/vault-{{ _export_version }} is gone on {{ inventory_hostname }} - nothing stopped"
+        quiet: true
+
+    # the export checked where it lies before anything stops: there, JSON, Vault's keys alone and some of them - a
+    # missing, cut or foreign export refuses here, never after vault/ is emptied
+    - name: The export there and whole, on the Pi given - else nothing stopped
+      ansible.builtin.command:
+        argv:
+          - python3
+          - -c
+          - |
+            import json, sys
+            keys = json.load(open(sys.argv[1]))
+            if not keys or not all(str(k.get("key", "")).startswith("vault/") for k in keys):
+                sys.exit(f"{sys.argv[1]}: no Vault keys, or keys of another prefix - nothing stopped")
+            print(len(keys))
+          - "{{ _export_path }}"
+      register: _export_keys
+      changed_when: false
+      check_mode: false
+      delegate_to: "{{ _export_host }}"
+      run_once: true
+
+    - name: Vault stopped on every Pi (its unseal with it - Requires=)
+      ansible.builtin.systemd:
+        name: vault
+        state: stopped
+
+    # vault/ emptied and the export imported through the local Consul agent (no ACL guards it); the keys counted after
+    - name: Vault's keys back from the export
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          consul kv delete -recurse vault/ > /dev/null
+          consul kv import @{{ _export_path | quote }} > /dev/null
+          consul kv export vault/ | python3 -c 'import json, sys; print(len(json.load(sys.stdin)))'
+      register: _imported
+      changed_when: true
+      failed_when: false
+      delegate_to: "{{ _export_host }}"
+      run_once: true
+
+    - name: The keys restored, as many as the export holds (its error otherwise) - Vault still stopped
+      ansible.builtin.assert:
+        that:
+          - _imported.rc | default(1) == 0
+          - (_imported.stdout | default('') | trim) == (_export_keys.stdout | trim)
+        fail_msg: >-
+          REFUSED: Vault's keys not restored - Vault left stopped on every Pi ({{ _imported.stdout | default('') | trim }} keys
+          after, {{ _export_keys.stdout | trim }} in the export): {{ _imported.stderr | default('') }}
+        success_msg: "{{ _export_keys.stdout | trim }} keys restored from {{ _export_path }}"
+      run_once: true
+
+    - name: The kept binary back
+      ansible.builtin.copy:
+        src: "/usr/local/bin/vault-{{ _export_version }}"
+        dest: /usr/local/bin/vault
+        remote_src: true
+        mode: '0755'
+
+    - name: Started
+      ansible.builtin.systemd:
+        name: vault
+        state: started
+
+    - name: Unsealed by the Pi's own script (bounded - its start timeout is 360 s)
+      ansible.builtin.systemd:
+        name: vault-unseal
+        state: restarted
+      timeout: 420
+
+    - name: Unsealed, on the export's version
+      ansible.builtin.uri:
+        url: "{{ vault_api }}/v1/sys/health"
+        ca_path: /etc/vault.d/tls/ca-cert.pem  # its certificate names 127.0.0.1
+        status_code: [200, 429]
+        return_content: true
+      register: _after
+      retries: 24
+      delay: 5
+      until: _after.status in [200, 429] and _after.json.version == _export_version
+
+    - name: Each sees a leader
+      ansible.builtin.uri:
+        url: "{{ vault_api }}/v1/sys/leader"
+        ca_path: /etc/vault.d/tls/ca-cert.pem  # its certificate names 127.0.0.1
+        return_content: true
+      register: _leader
+      retries: 24
+      delay: 5
+      until: _leader.json.leader_address | length > 0
+
+    - name: Exactly one active, the same leader seen by both
+      ansible.builtin.assert:
+        that:
+          - ansible_play_hosts | map('extract', hostvars, ['_leader', 'json', 'is_self']) | select | list | length == 1
+          - ansible_play_hosts | map('extract', hostvars, ['_leader', 'json', 'leader_address']) | unique | list | length == 1
+        fail_msg: "{{ ansible_play_hosts | map('extract', hostvars, ['_leader', 'json']) | list | to_json }}"
+        success_msg: >-
+          VAULT {{ _export_version }} back on {{ ansible_play_hosts | join(', ') }} from {{ _export_path }}; active
+          {{ _leader.json.leader_address }}
+      run_once: true

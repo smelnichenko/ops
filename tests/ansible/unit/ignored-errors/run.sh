@@ -4,7 +4,8 @@
 # retired-path delete (a Forbidden or a sealed Vault passed), backup-vault-keys' lock-down (a failed chmod left the unseal
 # keys readable), create-environment's KV mount, host hardening's module unloads. Then those fixes, as Ansible
 # evaluates them (tests/ansible/unit/templar.py): an unload refused for a builtin is no failure, one in use is; the
-# root token locked down only when the fetch brought it, the unseal keys always.
+# root token and the unseal keys locked down when the fetch brought them, both required (2026-11-27: Vault 2.x needs the
+# token for a rekey or a new root token).
 set -u
 cd "$(dirname "$0")/../../../.." || exit 1
 PY=$(command -v python3)
@@ -69,7 +70,8 @@ for t in unloads:
 check("I02 the bluetooth leaves unloaded before its core, those holding it after bluetoothd ran among them",
       all(m in unloads[0]["loop"] for m in ("bnep", "rfcomm", "hidp", "hci_uart", "btusb")), True)
 
-# I03: backup-vault-keys' lock-down - the unseal keys always 0600 (no failure excused), the root token only when fetched
+# I03: backup-vault-keys' lock-down - what the fetch brought 0600 (no failure excused); the unseal keys and the root
+# token both required after the fetch (the root token no longer optional, the operator's choice of 2026-11-27)
 bk = "deploy/ansible/playbooks/backup-vault-keys.yml"
 lds = [t for t in tasks(bk) if str(t.get("name", "")).startswith("Lock down the local backup")]
 check("I03 the lock-down excuses no failure (its directory, its files)", [("failed_when" in t, "ignore_errors" in t) for t in lds], [(False, False)] * 2)
@@ -78,11 +80,12 @@ res = lambda keys, token: {"results": [{"item": "unseal-keys", "stat": {"exists"
 files = lambda keys, token: [render(lds[1]["ansible.builtin.file"]["path"], item=i) for i in render(lds[1]["loop"], _backup_files=res(keys, token))]
 check("I03 the directory 0700, the files 0600", (lds[0]["ansible.builtin.file"]["mode"], lds[1]["ansible.builtin.file"]["mode"]), ("0700", "0600"))
 check("I03 the root token fetched: the unseal keys and the root token locked down", files(True, True), ["/r/unseal-keys", "/r/root-token"])
-check("I03 no root token: the unseal keys alone", files(True, False), ["/r/unseal-keys"])
-ak = task(bk, "The unseal keys are in the local backup")["ansible.builtin.assert"]["that"]
-check("I03 no unseal keys after the fetch: failed; in check mode (the fetch brings nothing) said, not failed",
-      (condition(ak, _backup_files=res(False, False), ansible_check_mode=False), condition(ak, _backup_files=res(False, False), ansible_check_mode=True),
-       condition(ak, _backup_files=res(True, False), ansible_check_mode=False)), (False, True, True))
+check("I03 no root token (in check mode, say): the unseal keys alone locked down", files(True, False), ["/r/unseal-keys"])
+ak = task(bk, "The unseal keys and the root token are in the local backup")["ansible.builtin.assert"]["that"]
+check("I03 after the fetch both there - on; no unseal keys, or no root token - failed; in check mode (nothing fetched) said, not failed",
+      (condition(ak, _backup_files=res(True, True), ansible_check_mode=False), condition(ak, _backup_files=res(False, False), ansible_check_mode=False),
+       condition(ak, _backup_files=res(True, False), ansible_check_mode=False), condition(ak, _backup_files=res(False, False), ansible_check_mode=True)),
+      (True, False, False, True))
 
 # I04: the seed's retired-path delete and create-environment's KV mount excuse nothing
 for path, prefix in (("deploy/ansible/playbooks/seed-vault-secrets.yml", "Delete retired vault path"),

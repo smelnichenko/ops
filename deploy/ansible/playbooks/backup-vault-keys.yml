@@ -34,9 +34,10 @@
         - /etc/vault-unseal/root-token
       no_log: true
 
-    # the root token is optional (it may have been purged after setup): locked down when the fetch brought it, and
-    # nothing else excused - a failed chmod on the unseal keys would leave them readable. In check mode the fetch brings
-    # nothing: what is there is locked down, and the unseal keys' absence is said, not failed
+    # the root token required as the unseal keys are (since 2026-11-27, the operator's choice): Vault 2.x needs a token
+    # for sys/rekey and sys/generate-root besides the key shares, so the keys alone no longer recover a Vault that lost
+    # its token - upgrade-vault.yml refuses without a working one. Both locked down, nothing excused - a failed chmod
+    # would leave them readable. In check mode the fetch brings nothing: what is there is locked down, absence said
     - name: The local backup's files
       ansible.builtin.stat:
         path: "{{ vault_recovery_dir }}/{{ item }}"
@@ -45,10 +46,13 @@
       loop: [unseal-keys, root-token]
       register: _backup_files
 
-    - name: The unseal keys are in the local backup
+    - name: The unseal keys and the root token are in the local backup
       ansible.builtin.assert:
-        that: _backup_files.results[0].stat.exists or ansible_check_mode
-        fail_msg: "no {{ vault_recovery_dir }}/unseal-keys after the fetch - nothing to keep"
+        that: (_backup_files.results | map(attribute='stat.exists') | list == [true, true]) or ansible_check_mode
+        fail_msg: >-
+          {{ _backup_files.results | rejectattr('stat.exists') | map(attribute='item') | join(' and ') }} not in
+          {{ vault_recovery_dir }} after the fetch - both are needed to recover Vault (2.x: no rekey or generate-root
+          without a token)
         quiet: true
 
     - name: Lock down the local backup's directory (0700)
@@ -83,4 +87,5 @@
           Vault recovery material is now at {{ vault_recovery_dir }}
           ({{ _backed_up.files | map(attribute='path') | map('basename') | list | join(', ') }}),
           off the Pis. NEXT: move it to true-offsite custody (password manager /
-          encrypted USB). These keys are the only way to recover Vault if both Pis die.
+          encrypted USB). The keys and the root token together recover Vault if both Pis die (2.x needs the token for
+          a rekey or a new root token).

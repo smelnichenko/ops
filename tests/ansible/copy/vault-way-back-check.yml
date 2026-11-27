@@ -1,0 +1,149 @@
+---
+# Vault's way back, rehearsed on the copy with production's playbooks - task test:copy:vault-way-back runs, in turn: this
+# playbook's `before` (both Pis unsealed on vars/vault.yml's pin; a secret written); upgrade-vault.yml to a newer
+# version (the Vault unit's target - its snapshot and export taken, both Vaults moved); `after` (a second secret on the
+# new version; the newest export's name for the restore's confirmation); restore-vault.yml (that export into vault/,
+# the pin's binary back); `verify` (the pin unsealed on both Pis, one active, the first secret there, the second gone);
+# `cleanup` always (both secrets' paths deleted). The marker's name is the task's, one per run. Only when this passes
+# may the vault store's `missing` clear (scripts/upgrade-stores.json - the one-way rule: the way back rehearsed first).
+#
+# Usage: ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/vault-way-back-check.yml
+#          -e @vars/vault.yml -e phase=before|after|verify|cleanup -e marker=<name> [-e vault_to=<version>]
+# (a phase var, not tags: --tags would skip the untagged Vagrant guard play)
+- name: Vagrant VMs only
+  ansible.builtin.import_playbook: ../vagrant-only-play.yml
+
+- name: Vault's way back, rehearsed
+  hosts: pis
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  vars:
+    vault_api: https://127.0.0.1:8200
+    kv_pi: "{{ groups['pis'] | first }}"
+    # the root token the copy's Vault was initialised with (setup-vault-pi); a standby forwards to the active
+    vault_env: export VAULT_ADDR={{ vault_api }} VAULT_CACERT=/etc/vault.d/tls/ca-cert.pem VAULT_TOKEN=$(cat /etc/vault-unseal/root-token)
+  tasks:
+    - name: A phase and a marker name given (one per run - the task's)
+      ansible.builtin.assert:
+        that:
+          - phase | default('') in ['before', 'after', 'verify', 'cleanup']
+          - marker | default('') is match('^way-back-[0-9TZ]+$')
+        fail_msg: "-e phase=before|after|verify|cleanup -e marker=way-back-<UTC time> - the task gives both"
+        quiet: true
+      run_once: true
+
+    - name: Before - a newer version to go to (the unit's target)
+      ansible.builtin.assert:
+        that: (vault_to | default('') | length > 0) and vault_to is version(vault_version, '>')
+        fail_msg: "-e vault_to=<a version newer than the pin {{ vault_version }}> - the Vault unit's target"
+        quiet: true
+      run_once: true
+      when: phase == 'before'
+
+    - name: Before and verify - each Vault unsealed, on the pin
+      ansible.builtin.uri:
+        url: "{{ vault_api }}/v1/sys/health"
+        ca_path: /etc/vault.d/tls/ca-cert.pem  # its certificate names 127.0.0.1
+        status_code: [200, 429]
+        return_content: true
+      register: _health
+      retries: 12
+      delay: 5
+      until: _health.status in [200, 429] and _health.json.version == vault_version
+      when: phase in ['before', 'verify']
+
+    - name: Before and verify - exactly one active
+      ansible.builtin.assert:
+        that: ansible_play_hosts | map('extract', hostvars, ['_health', 'status']) | select('equalto', 200) | list | length == 1
+        fail_msg: "{{ ansible_play_hosts | zip(ansible_play_hosts | map('extract', hostvars, ['_health', 'status'])) | list }}"
+        quiet: true
+      run_once: true
+      when: phase in ['before', 'verify']
+
+    - name: Before - the secret from before the upgrade
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          {{ vault_env }}
+          vault kv put secret/way-back/{{ marker }}-before phase=before > /dev/null
+      changed_when: true
+      delegate_to: "{{ kv_pi }}"
+      run_once: true
+      no_log: true
+      when: phase == 'before'
+
+    - name: After - the secret from after the upgrade (the restore must lose it)
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          {{ vault_env }}
+          vault kv put secret/way-back/{{ marker }}-after phase=after > /dev/null
+      changed_when: true
+      delegate_to: "{{ kv_pi }}"
+      run_once: true
+      no_log: true
+      when: phase == 'after'
+
+    - name: After - the newest export on either Pi (the upgrade's)
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          shopt -s nullglob
+          exports=(/var/backups/vault-upgrade/consul-*-vault-*.vault-kv.json)
+          [ -z "${exports[0]-}" ] || ls -1t "${exports[@]}" | head -n 1
+      register: _newest
+      changed_when: false
+      when: phase == 'after'
+
+    - name: After - its name for the restore's confirmation (.copy/vault-way-back-confirm)
+      ansible.builtin.copy:
+        content: "{{ ansible_play_hosts | map('extract', hostvars, ['_newest', 'stdout']) | reject('equalto', '') | sort | last | basename }}\n"
+        dest: "{{ playbook_dir }}/../../../.copy/vault-way-back-confirm"
+        mode: '0644'
+      delegate_to: localhost
+      become: false
+      run_once: true
+      when: phase == 'after'
+
+    - name: Verify - the secrets after the restore
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          {{ vault_env }}
+          vault kv list -format=json secret/way-back/ | python3 -c 'import json, sys
+          print("\n".join(sorted(k for k in json.load(sys.stdin) if k.startswith(sys.argv[1]))))' "{{ marker }}-"
+      register: _secrets
+      changed_when: false
+      delegate_to: "{{ kv_pi }}"
+      run_once: true
+      no_log: true
+      when: phase == 'verify'
+
+    - name: Verify - the secret from before there, the one from after gone
+      ansible.builtin.assert:
+        that: _secrets.stdout_lines == [marker ~ '-before']
+        fail_msg: "VAULT WAY BACK FAILED: secrets after the restore {{ _secrets.stdout_lines }} (want ['{{ marker }}-before'])"
+        success_msg: >-
+          VAULT WAY BACK OK: upgraded, then restored - the secret from before there, the one from after gone;
+          Vault {{ vault_version }} unsealed on {{ ansible_play_hosts | join(', ') }}, one active
+      run_once: true
+      when: phase == 'verify'
+
+    - name: Cleanup - both secrets gone (the copy's Vault as the build left it)
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          {{ vault_env }}
+          vault kv metadata delete secret/way-back/{{ marker }}-before > /dev/null
+          vault kv metadata delete secret/way-back/{{ marker }}-after > /dev/null
+      changed_when: true
+      delegate_to: "{{ kv_pi }}"
+      run_once: true
+      no_log: true
+      when: phase == 'cleanup'

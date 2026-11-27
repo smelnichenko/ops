@@ -1,6 +1,9 @@
 # Plan 131 - Vault's and Consul's way back, rehearsed on the copy (minimum plan)
 
-**Status:** draft, 2026-11-27 - for the operator's OK before any build.
+**Status:** the operator answered the question (2026-11-27: keep the root token) - building. Vault's part (items 1-2 and
+the root token) on its own branch: restore-vault.yml, the copy check, upgrade-vault.yml's root-token check and its
+backups fetched off the Pi, backup-vault-keys.yml requiring the token; its store's `missing` clears only once
+`task test:copy:vault-way-back` passes. Consul's part (items 3-4) next.
 
 ## Why
 
