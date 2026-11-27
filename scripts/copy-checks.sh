@@ -39,10 +39,11 @@ read -r clickhouse_compat clickhouse_users <<< "$ch"
 # own_jobs, stop_groups
 source scripts/lib/process-groups.sh
 # the checks' own bound (below): above every check's own - data-check's retries alone wait up to ~3085 s (each until's
-# retries and delays, summed), its 257 tries a few seconds each besides (the slowest check of 240 took 158 s) and what
-# a try waits by its own word (a Kafka consumer's 60 s: 4850 s in all) - so it stops only what none of them bounds; a
-# value that is no number would make its sleep fail at once and leave no bound
-bound=${COPY_CHECKS_SECONDS:-5400}
+# retries and delays, summed), its tries a few seconds each besides (the slowest check of 240 took 158 s) and what a try
+# waits by its own word (a Kafka consumer's 60 s: 4850 s in all); OpenSearch's and the browser's play since 2026-11-28 -
+# both workloads ready (5 min each), the document's six tries, the page's twelve: ~6080 s - so it stops only what none
+# of them bounds; a value that is no number would make its sleep fail at once and leave no bound
+bound=${COPY_CHECKS_SECONDS:-6600}
 [[ $bound =~ ^[1-9][0-9]*$ ]] || { echo "COPY_CHECKS_SECONDS=$bound: not a whole number of seconds"; exit 1; }
 # the stop's grace too: a fraction aborted the cleanup's arithmetic - nothing KILLed, the checks left running
 [[ ${STOP_GRACE:-0} =~ ^(0|[1-9][0-9]*)$ ]] || { echo "STOP_GRACE=$STOP_GRACE: not a whole number of seconds"; exit 1; }

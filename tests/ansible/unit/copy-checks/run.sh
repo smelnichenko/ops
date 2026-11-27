@@ -172,8 +172,10 @@ for c in ("data", "survival", "storage", "metrics"):
         for t in walk(p.get("tasks")):
             if "until" in t:
                 own = sum(int(ms) / 1000 for ms in re.findall(r"--timeout-ms\s+(\d+)", str(t)))
-                total += (int(render(str(t.get("retries", 3)), **v)) + 1) * (int(render(str(t.get("delay", 5)), **v))
-                                                                              + PER_TRY + own)
+                # a loop waits its until once an item (a literal list: its length)
+                items = len(t["loop"]) if isinstance(t.get("loop"), list) else 1
+                total += items * (int(render(str(t.get("retries", 3)), **v)) + 1) * (int(render(str(t.get("delay", 5)), **v))
+                                                                                      + PER_TRY + own)
     worst = max(worst, total)
 print(int(worst))')
 default=$(grep -oP 'bound=\$\{COPY_CHECKS_SECONDS:-\K[0-9]+' "$ROOT/scripts/copy-checks.sh")
