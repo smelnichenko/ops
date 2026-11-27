@@ -918,24 +918,38 @@ finally:
 check("a test unit whose production twin's store cannot take it (a table where ScyllaDB has a gap): blocked, never merged, the twin's "
       "parts named - a test environment ahead of production for good proves nothing",
       (rc, merged(calls, "test-scylladb-2026.3"), "its production twin scylladb-2026.3's" in blocked_why(calls)), (1, False, True))
+# the Vault and Consul stores' gaps made up away (their way backs are not rehearsed - the real table blocks both, below):
+# what a store whose own command takes the backup does once its gap clears
 VAULT_PLAN = "test:copy:change INFRA_REF=main PLATFORM_REF=main\ntest:copy:playbook PLAYBOOK=upgrade-vault.yml ARGS='-e @/x/vault.yml'\n"
-rc, calls = night("prove hashicorp-vault-2.x major", plan=VAULT_PLAN,
-                  files={"list": "hashicorp-vault-2.x major schnappy/ops major,one-way,upgrade-cycle\n"})
-check("a one-way unit whose own command takes the backup (Vault: upgrade-vault.yml snapshots Consul first): its command "
-      "in the plan - merged, the command run", (rc, merged(calls, "hashicorp-vault-2.x"), has(calls, "task --yes deploy:vault:upgrade")),
-      (0, True, ["task --yes deploy:vault:upgrade"]))
-rc, calls = night("prove hashicorp-vault-2.x major", files={"list": "hashicorp-vault-2.x major schnappy/ops major,one-way,upgrade-cycle\n"})
-check("  that command not in its plan: blocked, nothing merged, the command named",
-      (rc, merged(calls, "hashicorp-vault-2.x"), "deploy:vault:upgrade" in blocked_why(calls)), (1, False, True))
 CONSUL_PLAN = "test:copy:playbook PLAYBOOK=upgrade-consul.yml ARGS='-e @/x/upgrade-consul-vars.yml'\n"
-rc, calls = night("prove hashicorp-consul-2.x major", plan=CONSUL_PLAN,
-                  files={"list": "hashicorp-consul-2.x major schnappy/ops major,one-way,upgrade-cycle\n"})
-check("a Consul unit (its own command takes the snapshot - upgrade-consul.yml): its command in the plan - merged, the command run",
-      (rc, merged(calls, "hashicorp-consul-2.x"), has(calls, "task --yes deploy:consul:upgrade")),
-      (0, True, ["task --yes deploy:consul:upgrade"]))
-rc, calls = night("prove hashicorp-consul-2.x major", files={"list": "hashicorp-consul-2.x major schnappy/ops major,one-way,upgrade-cycle\n"})
-check("  that command not in its plan: blocked, nothing merged, the command named",
-      (rc, merged(calls, "hashicorp-consul-2.x"), "deploy:consul:upgrade" in blocked_why(calls)), (1, False, True))
+try:
+    table_with(vault={"missing": []}, consul={"missing": []})
+    rc, calls = night("prove hashicorp-vault-2.x major", plan=VAULT_PLAN,
+                      files={"list": "hashicorp-vault-2.x major schnappy/ops major,one-way,upgrade-cycle\n"})
+    check("a one-way unit whose own command takes the backup (Vault: upgrade-vault.yml snapshots Consul first), its gap "
+          "cleared: its command in the plan - merged, the command run",
+          (rc, merged(calls, "hashicorp-vault-2.x"), has(calls, "task --yes deploy:vault:upgrade")),
+          (0, True, ["task --yes deploy:vault:upgrade"]))
+    rc, calls = night("prove hashicorp-vault-2.x major", files={"list": "hashicorp-vault-2.x major schnappy/ops major,one-way,upgrade-cycle\n"})
+    check("  that command not in its plan: blocked, nothing merged, the command named",
+          (rc, merged(calls, "hashicorp-vault-2.x"), "deploy:vault:upgrade" in blocked_why(calls)), (1, False, True))
+    rc, calls = night("prove hashicorp-consul-2.x major", plan=CONSUL_PLAN,
+                      files={"list": "hashicorp-consul-2.x major schnappy/ops major,one-way,upgrade-cycle\n"})
+    check("a Consul unit (its own command takes the snapshot - upgrade-consul.yml), its gap cleared: its command in the "
+          "plan - merged, the command run",
+          (rc, merged(calls, "hashicorp-consul-2.x"), has(calls, "task --yes deploy:consul:upgrade")),
+          (0, True, ["task --yes deploy:consul:upgrade"]))
+    rc, calls = night("prove hashicorp-consul-2.x major", files={"list": "hashicorp-consul-2.x major schnappy/ops major,one-way,upgrade-cycle\n"})
+    check("  that command not in its plan: blocked, nothing merged, the command named",
+          (rc, merged(calls, "hashicorp-consul-2.x"), "deploy:consul:upgrade" in blocked_why(calls)), (1, False, True))
+finally:
+    open(TABLE, "w").write(REAL_TABLE)
+# on the REAL table: blocked until their way backs are rehearsed on the copy, even with their command in the plan -
+# clearing `missing` before a way-back check passes fails here (the one-way rule)
+for unit, plan, why in (("hashicorp-vault-2.x", VAULT_PLAN, "the kept old binary back"), ("hashicorp-consul-2.x", CONSUL_PLAN, "consul snapshot restore")):
+    rc, calls = night(f"prove {unit} major", plan=plan, files={"list": f"{unit} major schnappy/ops major,one-way,upgrade-cycle\n"})
+    check(f"{unit} (one-way, its way back not rehearsed): blocked before anything is built, never merged, its way back named",
+          (rc, merged(calls, unit), has(calls, "task test:copy"), why in blocked_why(calls)), (1, False, [], True))
 rc, calls = night("prove centrifugo-6.x minor", files={"list": "centrifugo-6.x minor schnappy/infra upgrade-cycle\n",
                                                      "list.later": "centrifugo-6.x minor schnappy/infra one-way,upgrade-cycle\n"})
 check("a one-way label put on during the proof (its labels read again after it): blocked, nothing merged - the copy built",

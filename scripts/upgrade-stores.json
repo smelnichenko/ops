@@ -109,14 +109,16 @@
         "/(^|\\/)vault$/"
       ],
       "backups": [],
-      "missing": [],
+      "missing": [
+        "its way back not yet rehearsed on the copy - after the new version ran on Vault's storage: Vault stopped on both Pis, vault/ restored from the export upgrade-vault.yml took (or the Consul snapshot, Patroni paused), the kept old binary back, unsealed, one active, a secret written before the upgrade there and one written after gone; the Pi restore check counts restored keys, it starts no Vault"
+      ],
       "examples": [
         "hashicorp-vault-2.x"
       ],
       "taken_by": [
         "deploy:vault:upgrade"
       ],
-      "_why": "its own command takes it: upgrade-vault.yml snapshots Consul (Vault's storage) and exports vault/ before it touches a Pi - the snapshot's restore exercised by the Pi restore check"
+      "_why": "its own command takes it: upgrade-vault.yml snapshots Consul (Vault's storage) and exports vault/ before it touches a Pi - its way back from them by hand (the playbook's header), never run on the copy: blocked until a way-back check passes there (the one-way rule, as ScyllaDB's)"
     },
     {
       "store": "consul",
@@ -125,14 +127,16 @@
         "/(^|\\/)consul$/"
       ],
       "backups": [],
-      "missing": [],
+      "missing": [
+        "its way back not yet rehearsed on the copy - after the new version ran: Vault and Patroni stopped, the snapshot upgrade-consul.yml took restored (consul snapshot restore) under the kept old binary on all three servers, three voters and one leader, Vault and Patroni back on it with nothing from after the upgrade"
+      ],
       "examples": [
         "hashicorp-consul-2.x"
       ],
       "taken_by": [
         "deploy:consul:upgrade"
       ],
-      "_why": "its own command takes it: upgrade-consul.yml snapshots the whole state on pi1 (inspected) before any server restarts, the followers then the leader - proven on the copy by copy-unit (setup-consul.yml's version moved: upgrade-consul.yml there) and by test:consul-upgrade"
+      "_why": "its own command takes it: upgrade-consul.yml snapshots the whole state on pi1 (inspected) before any server restarts, the followers then the leader - proven on the copy by copy-unit (setup-consul.yml's version moved: upgrade-consul.yml there) and by test:consul-upgrade - the upgrade proven, its way back from the snapshot by hand (the playbook's header), never run: blocked until a way-back check passes on the copy (the one-way rule)"
     },
     {
       "store": "sonarqube",

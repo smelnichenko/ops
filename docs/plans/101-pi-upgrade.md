@@ -155,6 +155,9 @@ Each a step file of its own, through a Vagrant full run and plan 100's productio
 2. Vault 1.21.4 -> 2.1.1 (or via 2.0.4): a fresh Consul snapshot right before; 2.0 makes `sys/rekey` and
    `sys/generate-root` need a token - the break-glass procedure updated (or `enable_unauthenticated_access`); canonical
    paths (check ESO's and Ansible's); ESO, hvac and Kubernetes auth proven against 2.x in Vagrant (no vendor matrix).
+   Both majors are one-way: their stores in scripts/upgrade-stores.json stay `missing` (2026-11-27) until the way back -
+   the snapshot each playbook takes restored under the kept old binary, the old version serving on it - has run green
+   on the copy (a way-back check, as scylla-way-back-check.yml); the upgrade proven alone does not clear them.
 3. Keycloak 26.5.7 -> 26.8.x: both nodes stopped (a minor is a recreate), a database dump first; review 26.6-26.8's
    OIDC changes against our clients (clock skew, `aud`, refresh/offline token expiry, Full Scope Allowed's WARN), the
    CSS-only theme looked at, Istio's JWT validation and every app's login proven in Vagrant.
