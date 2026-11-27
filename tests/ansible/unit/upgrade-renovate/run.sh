@@ -553,12 +553,12 @@ print([branch(c[0], c[1], version=c[2] if len(c) > 2 else "1.2.0") for c in case
       branch("nginx", "minor", "clusters/production/schnappy-test/values.yaml"),
       sorted(p[1:] for p in wave["matchPackageNames"]) == sorted({p for s in t["stores"] for p in s["packages"]}))
 PYWAVE
-)" "['wave-patches', 'wave-patches', 'wave-patches', 'wave-patches', 'wave-patches', 'wave-patches', 'own', 'observability', 'grafana-1.2', 'data-operators', 'data-operators', 'argocd', 'pi-services', 'pi-services', 'istio-1.32', 'kubernetes-1.37', 'scylladb-2026.3', 'gateway-api-1.7', 'manual-woodpecker', 'data-operators', 'clickhouse-1.2', 'grafana-1.2', 'pi-services', 'pi-services', 'keycloak-26.8'] test-wave-patches True"
+)" "['wave-patches', 'wave-patches', 'wave-patches', 'wave-patches', 'wave-patches', 'wave-patches', 'own', 'observability', 'grafana-1.2', 'data-operators', 'data-operators', 'argocd', 'vault-1.2', 'pi-services', 'istio-1.32', 'kubernetes-1.37', 'scylladb-2026.3', 'gateway-api-1.7', 'manual-woodpecker', 'data-operators', 'clickhouse-1.2', 'grafana-1.2', 'consul-1.2', 'pi-services', 'keycloak-26.8'] test-wave-patches True"
 # The observability review (2026-11-25): Grafana's and ClickHouse's minors rode in renovate/observability, labelled
 # upgrade-cycle alone - a store's version outside its own unit, so nothing backed it up (Grafana migrates its database
 # one way on every new version from 13 on). Each its own unit now, renovate/<store>-<X.Y>, labelled one-way - its name
 # the store's in scripts/upgrade-stores.json; Grafana's k6 (no store) stays in observability
-check "the preset: Grafana's, ClickHouse's and Keycloak's minors each a one-way unit of its own, named for its store; k6 in observability" \
+check "the preset: Grafana's, ClickHouse's, Keycloak's, Vault's and Consul's minors each a one-way unit of its own, named for its store; k6 in observability" \
   "$("$PY" - <<'PYSTOREMIN'
 import json, re, sys
 sys.path.insert(0, "tests/ansible/unit")
@@ -566,17 +566,18 @@ from renovate_preset import branch, resolved
 t = {s["store"]: s for s in json.load(open("scripts/upgrade-stores.json"))["stores"]}
 got = [(p, branch(p, "minor", version=v), "one-way" in resolved(p, "minor").get("addLabels", []))
        for p, v in (("grafana", "13.3.2"), ("grafana/grafana", "13.3.2"), ("clickhouse/clickhouse-server", "26.8.1"),
-                    ("quay.io/keycloak/keycloak", "26.8.2"))]
-print(got, [bool(re.search(t[s]["units"], b)) for s, (_, b, _) in zip(("grafana", "grafana", "clickhouse", "keycloak"), got)],
+                    ("quay.io/keycloak/keycloak", "26.8.2"), ("hashicorp/vault", "1.22.1"), ("hashicorp/consul", "1.22.8"))]
+print(got, [bool(re.search(t[s]["units"], b)) for s, (_, b, _) in zip(("grafana", "grafana", "clickhouse", "keycloak", "vault", "consul"), got)],
       branch("grafana/k6", "minor", version="1.8.3"), "one-way" in resolved("grafana/k6", "minor").get("addLabels", []))
 PYSTOREMIN
-)" "[('grafana', 'grafana-13.3', True), ('grafana/grafana', 'grafana-13.3', True), ('clickhouse/clickhouse-server', 'clickhouse-26.8', True), ('quay.io/keycloak/keycloak', 'keycloak-26.8', True)] [True, True, True, True] observability False"
+)" "[('grafana', 'grafana-13.3', True), ('grafana/grafana', 'grafana-13.3', True), ('clickhouse/clickhouse-server', 'clickhouse-26.8', True), ('quay.io/keycloak/keycloak', 'keycloak-26.8', True), ('hashicorp/vault', 'vault-1.22', True), ('hashicorp/consul', 'consul-1.22', True)] [True, True, True, True, True, True] observability False"
 # The wave-patches review (2026-11-23): SonarQube a store of its own (every release migrates its database one way) - its
-# updates out of the wave and the majors, on renovate/sonarqube-<N>.x, labelled one-way. Woodpecker's own database and
+# updates out of the wave and the majors, on renovate/manual-sonarqube-<N>.x (a manual unit since 2026-11-27, the operator's:
+# the copy cannot hold SonarQube), labelled one-way. Woodpecker's own database and
 # Renovate's image stay in the cycle's units (operator 2026-11-23: a manual unit defeats the automation - never a
 # manual- unit for them): the runner waits for an idle Woodpecker before a merge that restarts its database, and the
 # copy proof smoke-runs a new Renovate image
-check "the preset: SonarQube a one-way unit of its own; Woodpecker's database and Renovate's image in the wave, no manual unit" \
+check "the preset: SonarQube a one-way unit of its own, manual (operator 2026-11-27: the copy cannot hold it); Woodpecker's database and Renovate's image in the wave, no manual unit" \
   "$("$PY" - <<'PYSPLIT'
 import sys
 sys.path.insert(0, "tests/ansible/unit")
@@ -587,7 +588,7 @@ print([branch("sonarqube", k, version="26.10.0") for k in ("patch", "minor", "ma
       branch("ghcr.io/cloudnative-pg/postgresql", "digest", path="clusters/production/schnappy-production-data/values.yaml"),
       [branch("renovate/renovate", k, path="scripts/upgrade-renovate.sh") for k in ("patch", "minor", "digest")])
 PYSPLIT
-)" "['sonarqube-26.x', 'sonarqube-26.x', 'sonarqube-26.x'] [True, True] wave-patches wave-patches ['wave-patches', 'wave-patches', 'wave-patches']"
+)" "['manual-sonarqube-26.x', 'manual-sonarqube-26.x', 'manual-sonarqube-26.x'] [True, True] wave-patches wave-patches ['wave-patches', 'wave-patches', 'wave-patches']"
 # The majors that can be undone in one unit too (operator 2026-11-23): renovate/wave-majors, each package's newest
 # major alone (two majors of one package in one branch collide - Renovate keeps either); a store's major (one-way,
 # backed up first) and a release line's (Kubernetes, Cilium, Istio, the Gateway API, ScyllaDB) each its own unit - the
