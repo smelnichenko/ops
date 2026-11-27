@@ -416,9 +416,9 @@ def show_bodies(name, out_dir):
 
 
 def show_moves(name):
-    """What the unit moves, from its pull requests' tables: '<package> <from> <to>' a line, each once (patch, minor and
-    major rows) - the copy's inventory after the change must show production's lines of it at the new version
-    (scripts/copy-change-inventory.sh)."""
+    """What the unit moves, from its pull requests' tables: '<package> <from> <to>' a line, each once (patch, minor,
+    major and digest rows - a digest's from and to its first 7 hex digits) - the copy's inventory after the change must
+    show production's lines of it at the new version (scripts/copy-change-inventory.sh)."""
     u = units().get(name)
     if u is None:
         print(f"NO UNIT {name}")
@@ -428,7 +428,7 @@ def show_moves(name):
         for row in table_rows(body):
             values = re.findall(r"`([^`]+)`", row.get("Change", ""))
             line = f"{package(row['Package'])} {values[0]} {values[-1]}" if len(values) >= 2 else ""
-            if row.get("Update", "") in ("major", "minor", "patch") and line and line not in seen:
+            if row.get("Update", "") in ("major", "minor", "patch", "digest") and line and line not in seen:
                 seen.append(line)
     print("\n".join(seen))
     return 0

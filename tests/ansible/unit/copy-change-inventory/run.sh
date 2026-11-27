@@ -130,5 +130,43 @@ run "$W/prod-real" "$W/prod-real" "$W/prod-real" "$W/prod-real" /dev/null "$W/mo
 check "  tests/ansible/copy/moves-names.txt itself: read whole; forgejo moved on both Pis - passed, not moved - failed" \
   "$rc_real $rc_real_stayed $(grep -c 'UNREAD' <<< "$out")" "0 1 0"
 
+# digest moves (Renovate's digest rows): judged on the image-digest lines; a version move's digest line - the new
+# version's at any digest (its pin moves with it)
+digest_case() {  # name, want rc, moves, the copy's lines after the change (beside production's others), [allowed]
+  printf '%s\n' 'image ghcr.io/cloudnative-pg/postgresql 18.7-standard-trixie' \
+    'image-digest ghcr.io/cloudnative-pg/postgresql 18.7-standard-trixie b4bbd2e' 'image opensearchproject/opensearch 3.9.0' \
+    'image-digest opensearchproject/opensearch 3.9.0 3b55f6b' 'pkg kubelet 1.34.6-1.1' > "$W/dp"
+  printf '%s\n' "$3" > "$W/dm"
+  { grep -v -E 'cloudnative-pg/postgresql|opensearch' "$W/dp"; printf '%s\n' "$4"; } | LC_ALL=C sort > "$W/da"
+  printf '%s\n' "${5:-}" > "$W/dal"
+  out=$(COPY_MOVES_NAMES=/dev/null scripts/copy-change-inventory.sh "$W/dp" "$W/dp" "$W/da" "$W/da" "$W/dal" "$W/dm" 2>&1); rc=$?
+  if [ "$rc" = "$2" ]; then echo "PASS $1"; else echo "FAIL $1 (rc $rc, want $2)"; sed 's/^/    /' <<< "$out"; fails=$((fails + 1)); fi
+}
+PG='image ghcr.io/cloudnative-pg/postgresql 18.7-standard-trixie'
+OS='image opensearchproject/opensearch 3.9.0
+image-digest opensearchproject/opensearch 3.9.0 3b55f6b'
+digest_case "a digest move on the copy: passes" 0 'ghcr.io/cloudnative-pg/postgresql b4bbd2e c437b7c' "$PG
+image-digest ghcr.io/cloudnative-pg/postgresql 18.7-standard-trixie c437b7c
+$OS"
+digest_case "  the old digest still on the copy: fails (NOT MOVED)" 1 'ghcr.io/cloudnative-pg/postgresql b4bbd2e c437b7c' "$PG
+image-digest ghcr.io/cloudnative-pg/postgresql 18.7-standard-trixie b4bbd2e
+$OS"
+digest_case "  another digest than the move's: fails" 1 'ghcr.io/cloudnative-pg/postgresql b4bbd2e c437b7c' "$PG
+image-digest ghcr.io/cloudnative-pg/postgresql 18.7-standard-trixie 0000000
+$OS"
+PGD='image-digest ghcr.io/cloudnative-pg/postgresql 18.7-standard-trixie b4bbd2e'
+digest_case "a version move: the new version's tag line and its digest line at any digest - passes" 0 'opensearchproject/opensearch 3.9.0 3.10.0' "$PG
+$PGD
+image opensearchproject/opensearch 3.10.0
+image-digest opensearchproject/opensearch 3.10.0 3bf4fe2"
+digest_case "  the new version's digest line missing: fails" 1 'opensearchproject/opensearch 3.9.0 3.10.0' "$PG
+$PGD
+image opensearchproject/opensearch 3.10.0"
+digest_case "  the old version's digest line left (the tag moved, the pin not): fails" 1 'opensearchproject/opensearch 3.9.0 3.10.0' "$PG
+$PGD
+image opensearchproject/opensearch 3.10.0
+image-digest opensearchproject/opensearch 3.9.0 3bf4fe2"
+digest_case "  a left-out image (allowed by name) moved: its digest line left out with it - passes" 0 'opensearchproject/opensearch 3.9.0 3.10.0' "$PG
+$PGD" 'image opensearchproject/opensearch *'
 echo "copy-change-inventory: $([ $fails = 0 ] && echo ALL-PASS || echo "$fails FAILED")"
 [ $fails = 0 ]

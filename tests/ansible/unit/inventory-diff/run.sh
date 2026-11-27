@@ -35,6 +35,22 @@ binary /usr/local/bin/buildkitd 3637d1b"
 case_ "a runc outside the packages fails (it runs instead of the package's)" 1 "$base
 binary /usr/local/bin/nerdctl 2.0.3
 binary /usr/local/bin/runc 1.2.4" "" "+binary /usr/local/bin/runc 1.2.4"
+# an image's digest line goes with its image line: allowed with it (exactly or by name), compared like any line
+dg='image-digest docker.io/library/redis 8.2.3 b4bbd2e'
+case_ "a digest line moved (the copy at another digest): fails" 1 "$base
+image-digest docker.io/library/redis 8.2.3 c437b7c" "" "+image-digest docker.io/library/redis 8.2.3 c437b7c"
+base_dg="$base
+$dg"
+case_dg() { local b=$base; base=$base_dg; case_ "$@"; base=$b; }
+case_dg "  production's digest line missing on the copy: fails" 1 "$base" "" "-$dg"
+case_dg "  missing with its image allowed by name: passes" 0 "$(grep -v redis <<< "$base")" "image docker.io/library/redis *"
+case_dg "  missing with its image allowed exactly: passes" 0 "$(grep -v redis <<< "$base")" "image docker.io/library/redis 8.2.3"
+case_dg "  its image allowed at another version only: fails" 1 "$(grep -v redis <<< "$base")" "image docker.io/library/redis 8.4.0"
+case_dg "  an application image's digest line ignored" 0 "$base_dg
+image-digest git.pmon.dev/schnappy/monitor abc1234 d0d0d0d"
+case_dg "  a '? ' image's digest line extra in the copy: passes" 0 "$base_dg
+image grafana/k6 1.7.1
+image-digest grafana/k6 1.7.1 4fd3a69" "? image grafana/k6 *"
 # a tag restated by hand in the two lists (production's inventory and the copy's allow-list): Woodpecker's - one list
 # left behind passed every check that reads only one of them (the test-quality review, 2026-10-12). And every line the
 # allow-list names is one production has: a left-out line production moved past leaves the copy unjudged there
