@@ -77,7 +77,7 @@
     fail_msg: >-
       REFUSED: the Keycloak restore failed - Keycloak left stopped on every Pi, its database as it was (the swap is the
       last step, one transaction): {{ _restore.stderr | default('') }}
-    success_msg: "restored {{ keycloak_restore_dump }}: schema {{ _restore.stdout | default('') | trim }}"
+    success_msg: "restored {{ keycloak_restore_dump }}: schema {{ _restore.stdout_lines | default([''], true) | last }}"
   run_once: true
 
 - name: /opt/keycloak back on the dump's version

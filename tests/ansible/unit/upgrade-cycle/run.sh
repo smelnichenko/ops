@@ -955,12 +955,16 @@ rc, calls = night("prove centrifugo-6.x minor", files={"list": "centrifugo-6.x m
 check("a one-way label put on during the proof (its labels read again after it): blocked, nothing merged - the copy built",
       (rc, merged(calls, "centrifugo-6.x"), bool(has(calls, "task test:copy:ready")), "scripts/upgrade-stores.json" in blocked_why(calls)),
       (1, False, True, True))
-# Keycloak on the REAL table: blocked until its way back is rehearsed on the copy - minor and major alike,
-# before anything is built; clearing `missing` before that fails here (the one-way rule: the way back first)
+# Keycloak on the REAL table (its way back rehearsed green on the copy, 2026-11-27): a store its own command takes - its
+# units merged with upgrade-keycloak.yml in the plan and the command run; without it, blocked, the command named
+KEYCLOAK_PLAN = "test:copy:playbook PLAYBOOK=upgrade-keycloak.yml ARGS='-e @/x/keycloak.yml'\n"
 for unit, kind in (("keycloak-26.8", "minor"), ("quay.io-keycloak-keycloak-27.x", "major")):
+    rc, calls = night(f"prove {unit} {kind}", plan=KEYCLOAK_PLAN, files={"list": f"{unit} {kind} schnappy/ops one-way,upgrade-cycle\n"})
+    check(f"{unit} (Keycloak, one-way, its command taking the dump): its command in the plan - merged, the command run",
+          (rc, merged(calls, unit), has(calls, "task --yes deploy:keycloak:upgrade")), (0, True, ["task --yes deploy:keycloak:upgrade"]))
     rc, calls = night(f"prove {unit} {kind}", files={"list": f"{unit} {kind} schnappy/ops one-way,upgrade-cycle\n"})
-    check(f"{unit} (Keycloak, one-way, its way back not rehearsed): blocked before anything is built, never merged, its way back named",
-          (rc, merged(calls, unit), has(calls, "task test:copy"), "its way back not yet rehearsed" in blocked_why(calls)), (1, False, [], True))
+    check(f"  {unit}: that command not in its plan - blocked, nothing merged, the command named",
+          (rc, merged(calls, unit), "deploy:keycloak:upgrade" in blocked_why(calls)), (1, False, True))
 rc, calls = night("prove data-operators minor", files={"list": "data-operators minor schnappy/infra one-way,upgrade-cycle\n"})
 check("a unit labelled one-way, its name no store's: blocked, never merged, the table named (a new store is decided there)",
       (rc, merged(calls, "data-operators"), "scripts/upgrade-stores.json" in blocked_why(calls)), (1, False, True))

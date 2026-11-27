@@ -162,9 +162,7 @@
         "quay.io/keycloak/keycloak"
       ],
       "backups": [],
-      "missing": [
-        "its way back not yet rehearsed on the copy - restoring the pre-upgrade dump into an emptied keycloak database, Keycloak stopped on both Pis, the old version's symlink and pin back, the old version serving with a marker from before the upgrade and none from after"
-      ],
+      "missing": [],
       "examples": [
         "keycloak-26.8",
         "quay.io-keycloak-keycloak-27.x"
@@ -172,7 +170,7 @@
       "taken_by": [
         "deploy:keycloak:upgrade"
       ],
-      "_why": "Keycloak migrates its database one way (Liquibase, no downgrade) on minors too; it runs on the Pis, its database on Patroni. Its production command takes the backup itself: upgrade-keycloak.yml dumps the keycloak database through HAProxy before anything stops (named for the schema the database holds; the last 5 kept), then both Pis stopped and the VIP's started first. Blocked until the way back - that dump restored - has run on the copy"
+      "_why": "Keycloak migrates its database one way (Liquibase, no downgrade) on minors too; it runs on the Pis, its database on Patroni. Its production command takes the backup itself: upgrade-keycloak.yml dumps the keycloak database through HAProxy before anything stops (named for the schema the database holds; the last 5 kept), then both Pis stopped and the VIP's started first. Its way back ran green on the copy on 2026-11-27 (task test:copy:keycloak-way-back: 26.5.7 to 26.8.2 by upgrade-keycloak.yml, then restore-keycloak.yml from that dump - loaded beside keycloak and swapped in, the old install back, a marker from before the upgrade there and one from after gone)"
     }
   ]
 }

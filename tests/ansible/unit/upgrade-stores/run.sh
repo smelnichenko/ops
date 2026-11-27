@@ -27,8 +27,8 @@ def run(unit, labels, table=None):
 check("each store's real unit names: its own store's answer (missing, store) - none unknown",
       sorted({(s["store"], run(e, "one-way")[1]) for s in REAL["stores"] for e in s["examples"]}),
       sorted({(s["store"], "missing" if s["missing"] else "store") for s in REAL["stores"]}))
-check("Keycloak's units (minor and major): missing - its way back not yet rehearsed (a one-way gate clears only then)",
-      [run(u, "one-way")[1] for u in ("keycloak-26.8", "quay.io-keycloak-keycloak-27.x")], ["missing", "missing"])
+check("Keycloak's units (minor and major): its store - its way back rehearsed green on the copy (2026-11-27), its own command takes the dump",
+      [run(u, "one-way")[1] for u in ("keycloak-26.8", "quay.io-keycloak-keycloak-27.x")], ["store", "store"])
 # Keycloak's dump is its own production command's (upgrade-keycloak.yml dumps before anything stops) - a
 # literal, not read from the table: the runner wants deploy:keycloak:upgrade in the unit's plan
 check("  its store taken by deploy:keycloak:upgrade (the playbook that dumps it)",

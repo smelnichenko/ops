@@ -1,6 +1,9 @@
 # Plan 122 - Keycloak's upgrade path: restarted on a new version, proven on the copy, one-way
 
-**Status:** the first build (parts 1-4 below, 2026-11-26/27) was refused by its review and replaced - see "Rework after the review of 2026-11-27" at the end: upgrade-keycloak.yml (vars/keycloak.yml, the dump first, every Pi stopped, the VIP's first), no version move in setup-pi-services or keycloak-restart, restore-keycloak.yml and its rehearsal (task test:copy:keycloak-way-back: a real upgrade, then the restore). Parts 1-4 are kept as the record of what was refused. Open: the rehearsal passing on a real copy, then the store's `missing` cleared and #79 merged.
+**Status:** the first build (parts 1-4 below, 2026-11-26/27) was refused by its review and replaced - see "Rework after the review of 2026-11-27" at the end: upgrade-keycloak.yml (vars/keycloak.yml, the dump first, every Pi stopped, the VIP's first), no version move in setup-pi-services or keycloak-restart, restore-keycloak.yml and its rehearsal (task test:copy:keycloak-way-back: a real upgrade, then the restore). Parts 1-4 are kept as the record of what was refused. The rehearsal passed on the copy on 2026-11-27 (26.5.7 to 26.8.2 by
+upgrade-keycloak.yml - its dump on the VIP's Pi, both stopped, pi1 first - then restore-keycloak.yml from that dump: loaded
+beside keycloak and swapped in, 26.5.7 back and serving on both Pis, the marker from before there and the one from after
+gone, the cleanup run); the store's `missing` cleared with it (the one-way rule: the way back ran first).
 
 ## Why
 
