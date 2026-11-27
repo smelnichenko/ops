@@ -358,8 +358,14 @@ for book in ("setup-consul", "setup-patroni", "upgrade-patroni"):
 every = [t for play in yaml.safe_load(open("deploy/ansible/playbooks/restore-consul.yml")) for t in tasks(play.get("tasks"))]
 pause = [t for t in every if "patroni-pause.py pause" in text(t)]
 checks = [t for t in every if "patroni-pause.py check" in text(t)]
-check("restore-consul: one pause, one not-paused check, no resume", (len(pause), len(checks),
-      len([t for t in every if "patroni-pause.py resume" in text(t)])), (1, 1, 0))
+counts = (len(pause), len(checks), len([t for t in every if "patroni-pause.py resume" in text(t)]))
+check("restore-consul: one pause, two not-paused checks (before the stop, and after the load - the keys loaded hold no pause), no "
+      "resume", counts == (1, 2, 0), counts)
+r, calls, kv = run(checks[-1])
+check("restore-consul: the check after the load - not paused: passes; paused (a pause the keys carried): fails, said",
+      r.returncode == 0, (r.returncode, r.stdout))
+r, calls, kv = run(checks[-1], paused=True)
+check("  paused after the load: fails", r.returncode == 1 and "REFUSED" in r.stdout, (r.returncode, r.stdout))
 r, calls, kv = run(pause[0])
 check("restore-consul: its pause accepted - its marker (consul-way-back, the time, a nonce), then every member paused",
       r.returncode == 0 and kv is not None and kv.startswith("consul-way-back ") and len(kv.split()) == 3

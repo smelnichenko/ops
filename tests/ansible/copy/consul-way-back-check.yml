@@ -134,6 +134,9 @@
         executable: /bin/bash
         cmd: |
           set -euo pipefail
+          # a checkpoint first: right after a promotion the control file's timeline lags until its end-of-recovery
+          # checkpoint completes (a standby's is a restartpoint)
+          runuser -u postgres -- psql -w -h /var/run/postgresql -d postgres -qc checkpoint > /dev/null
           runuser -u postgres -- psql -w -h /var/run/postgresql -d postgres -Atc \
             "select not pg_is_in_recovery(), (select timeline_id from pg_control_checkpoint())"
       register: _pg_before
@@ -243,6 +246,9 @@
         executable: /bin/bash
         cmd: |
           set -euo pipefail
+          # a checkpoint first: right after a promotion the control file's timeline lags until its end-of-recovery
+          # checkpoint completes (a standby's is a restartpoint)
+          runuser -u postgres -- psql -w -h /var/run/postgresql -d postgres -qc checkpoint > /dev/null
           runuser -u postgres -- psql -w -h /var/run/postgresql -d postgres -Atc \
             "select not pg_is_in_recovery(), (select timeline_id from pg_control_checkpoint())"
       register: _pg_after

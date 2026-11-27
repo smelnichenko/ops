@@ -244,10 +244,13 @@ check("  the source loaded: the record's, else the snapshot, else this export",
       [render(sx, _from_record=f, _recorded=r, _mode=m, _snap=SNAP, _export={"stdout_lines": [KV]}).strip() for f, r, m in (
           (True, "/r/x.kv.json", "current"), (False, "", "snapshot"), (False, "", "current"))], ["/r/x.kv.json", SNAP, KV])
 fe, rec = bt("The export fetched to the controller"), bt("The source recorded")
-check("  the export fetched off its server (the controller's copy 0700/0600), the source recorded on every server before Patroni stops",
-      (fe["ansible.builtin.fetch"]["dest"], fe.get("when"), [x["mode"] for x in bt("The controller's copy")["loop"]],
-       rec["ansible.builtin.lineinfile"]["line"], rec.get("when"), "run_once" in rec, bi(rec) < bi(bt("Patroni stopped and off at a boot"))),
-      ("{{ backups_here }}/", "_mode == 'current' and not _from_record | bool", ["0700", "0600"], "source={{ _src }}", "not _from_record | bool", False, True))
+cc = bt("The controller's copy")
+check("  the export fetched off its server (the controller's directory 0700, the export 0600), the source recorded - one line, root's alone - "
+      "on every server before Patroni stops",
+      (fe["ansible.builtin.fetch"]["dest"], fe.get("when"), [(render(x["path"], backups_here="/b", _src=KV), x["mode"]) for x in cc["loop"]],
+       cc.get("delegate_to"), rec["ansible.builtin.lineinfile"], rec.get("when"), "run_once" in rec, bi(rec) < bi(bt("Patroni stopped and off at a boot"))),
+      ("{{ backups_here }}/", "_mode == 'current' and not _from_record | bool", [("/b", "0700"), ("/b/" + os.path.basename(KV), "0600")], "localhost",
+       {"path": "{{ restore_state }}", "line": "source={{ _src }}", "regexp": "^source=", "create": True, "mode": "0600"}, "not _from_record | bool", False, True))
 asd = bt("Its data directory set aside")["ansible.builtin.shell"]["cmd"]
 data = os.path.join(work, "consul", "data"); st = os.path.join(work, "consul", "restore-consul.state")
 def tree(d):
@@ -275,6 +278,14 @@ check("the first set-aside: the data directory moved whole to .pre-restore-<time
               f"source={KV}\naside={data}.pre-restore-T1\nfrom=2.0.4\n"))
 check("  a run again: the failed run's new directory moved aside as a failed one, the state before still the recorded one, the node-id "
       "carried from it", second, (0, True, ["node-id", "raft/raft.db", "serf/local.keyring", "serf/remote.keyring"], sorted(SERVER), "id-1"))
+for d in (data, data + ".pre-restore-T1", data + ".failed-restore-T2"):
+    shutil.rmtree(d, ignore_errors=True)
+fill(data + ".pre-restore-T1", {k: v for k, v in SERVER.items() if k != "serf/remote.keyring"})
+open(st, "w").write(f"source={KV}\naside={data}.pre-restore-T1\nfrom=2.0.4\n")
+r3 = aside_run("T4")
+check("  a run again after one that failed with the data directory moved and none made (the node-id check): the new one made, no failed "
+      "directory; a state before without remote.keyring (a server may have none) - its node-id and local keyring alone",
+      (r3.returncode, tree(data), os.path.exists(data + ".failed-restore-T4")), (0, ["node-id", "serf/local.keyring"], False))
 for gone in ("node-id", "serf/local.keyring"):
     for d in (data, data + ".pre-restore-T1", data + ".failed-restore-T2", data + ".pre-restore-T3"):
         shutil.rmtree(d, ignore_errors=True)
@@ -293,13 +304,15 @@ check("the snapshot source restores the snapshot, the current one imports the ex
       (["consul", "snapshot", "restore", "{{ _src }}"], "_mode == 'snapshot' and not _restored_already | bool",
        "_mode == 'current' and not _restored_already | bool", "{{ _src_host }}", "{{ _src_host }}"))
 tool("consul", 'echo "$*" >> "$W/consul.log"; case "$1 $2" in '
-               '"kv import") cp "${3#@}" "$W/store.json"; [ -z "${LOSE:-}" ] || sed -i "s/MQ==/ZGlmZg==/" "$W/store.json" ;; '
+               '"kv import") [[ "$3" == @* ]] || { echo "Failed to decode data: invalid character" >&2; exit 1; }; cp "${3#@}" "$W/store.json"; '
+               '[ -z "${LOSE:-}" ] || sed -i "s/MQ==/ZGlmZg==/" "$W/store.json"; [ -z "${FLAGS:-}" ] || sed -i "s/\\"flags\\": 0/\\"flags\\": 9/" "$W/store.json" ;; '
                '"kv export") cat "$W/store.json" ;; "kv delete") ;; '
                '"kv get") [ "$3" = service/pg/initialize ] && echo "${DCS_ID:-7300}" ;; esac')
 src_file = os.path.join(work, "export.json"); open(src_file, "w").write(json.dumps(whole))
 imp = lambda **e: sh(render(im["ansible.builtin.shell"]["cmd"], _src=src_file), **e)
-check("  the import compared key by key with the export (flags and values) - a key that came out different fails, never counted as loaded",
-      (imp().stdout.strip(), imp(LOSE="1").returncode != 0), ("3", True))
+check("  the import (its file as @<path> - a bare argument is data to consul) compared key by key with the export - a value or "
+      "flags that came out different fail, never counted as loaded",
+      (imp().stdout.strip(), imp(LOSE="1").returncode != 0, imp(FLAGS="1").returncode != 0), ("3", True, True))
 dk = bt("Patroni's leader, member and failover keys deleted")
 open(os.path.join(work, "consul.log"), "w").close()
 r = sh(render(dk["ansible.builtin.shell"]["cmd"], patroni_scope="pg"))
@@ -388,15 +401,32 @@ vh = bt("Vault unsealed - active or standby")
 check("Vault: unsealed (200 active, 429 standby - 503 sealed, 501 uninitialised, 500 no)",
       [condition(vh["until"], _vault={"status": c}) for c in (200, 429, 503, 501, 500)], [True, True, False, False, False])
 oa = bt("Exactly one Vault active, both read together")
-tool("vault", '[ "$1" = status ] || exit 9; a=${VAULT_ADDR#https://}; a=${a%:8200}; case " ${ACTIVE:-} " in *" $a "*) s=true ;; *) s=false ;; esac; '
-              'echo "{\\"is_self\\": $s, \\"sealed\\": false}"')
+tool("vault", '[ -n "${VAULT_CACERT:-}" ] || { echo "x509: certificate signed by unknown authority" >&2; exit 2; }; '
+              'if [ "$1" = status ]; then a=${VAULT_ADDR#https://}; a=${a%:8200}; case " ${ACTIVE:-} " in *" $a "*) s=true ;; *) s=false ;; esac; '
+              'echo "{\\"is_self\\": $s, \\"sealed\\": false}"; exit 0; fi; '
+              '[ "$1 $2" = "token lookup" ] || exit 9; t=${VAULT_TOKEN:-$(cat "$HOME/.vault-token" 2> /dev/null)}; [ "$t" = hvs.root ] || { echo "permission denied" >&2; exit 2; }; '
+              'echo "{\\"data\\": {\\"policies\\": ${POLICIES:-[\\"root\\"]}, \\"expire_time\\": ${EXPIRE:-null}}}"')
 one_active = lambda act: sh(render(oa["ansible.builtin.shell"]["cmd"], groups=PIS, hostvars={"pi1": {"ansible_host": "10.0.0.4"}, "pi2": {"ansible_host": "10.0.0.6"}}),
                             ACTIVE=act).returncode
 check("  exactly one Vault active, both Pis read together and again until one says so (a carried lock frees in under a minute): "
       "one - on; none, or both - not yet", ([one_active(a) for a in ("10.0.0.4", "10.0.0.6", "", "10.0.0.4 10.0.0.6")],
                                            oa.get("retries"), oa.get("until"), oa.get("run_once")), ([0, 0, 1, 1], 24, "_one_active.rc == 0", True))
-check("  the root token proven on Vault now (the token store carried - a snapshot's may predate it), never logged",
-      ("vault token lookup" in bt("The root token works")["ansible.builtin.shell"]["cmd"], bt("The root token works").get("no_log")), (True, True))
+rtk = bt("The root token works")
+def token_run(content, **env):
+    tf = os.path.join(work, "root-token")
+    if os.path.exists(tf):
+        os.remove(tf)
+    if content is not None:
+        open(tf, "w").write(content)
+    cmd = render(rtk["ansible.builtin.shell"]["cmd"], vault_api="https://127.0.0.1:8200").replace("/etc/vault-unseal/root-token", tf)
+    home = os.path.join(work, "home"); os.makedirs(home, exist_ok=True)
+    open(os.path.join(home, ".vault-token"), "w").write("hvs.root")  # a token helper's file that would answer for a missing one
+    return sh(cmd, HOME=home, **env).returncode
+check("  the root token proven on Vault now (the token store carried - a snapshot's may predate it), never logged: a root token "
+      "that never expires - on; another token, not root, one that expires, an empty or missing file - failed",
+      ([token_run("hvs.root"), token_run("hvs.other") != 0, token_run("hvs.root", POLICIES='["default"]') != 0,
+        token_run("hvs.root", EXPIRE='"2026-12-01T00:00:00Z"') != 0, token_run("") != 0, token_run(None) != 0], rtk.get("no_log"),
+       "/etc/vault-unseal/root-token" in rtk["ansible.builtin.shell"]["cmd"]), ([0, True, True, True, True, True], True, True))
 hp = V["healthy_py"]
 health = lambda m: subprocess.run(["python3", "-c", hp], input=json.dumps(m), capture_output=True, text=True).returncode
 LD = {"Member": "pi1", "Role": "Leader", "State": "running"}
@@ -420,6 +450,52 @@ check("  the primary through HAProxy (:5000) and PgBouncer (:6432, where enabled
       (r_ok, ports_seen, hxr(BOUNCER="enabled", PSQL_NO="6432"), hxr(PSQL_NO="5000"), hx.get("no_log"), hx["ansible.builtin.shell"].get("stdin")),
       (0, ["5000", "6432"], 1, 1, True, "{{ postgres_admin_password }}"))
 
+# ── more of what each step does ──────────────────────────────────────────────────────────────────────────────
+hl = bt("The cluster healthy - a leader running")
+tool("patronictl", 'echo "$PATRONI_LIST"')
+def healthy_run(members):
+    return sh(render(hl["ansible.builtin.shell"]["cmd"], patronictl="patronictl -c x", healthy_py=V["healthy_py"]), PATRONI_LIST=json.dumps(members)).returncode
+check("the cluster's health read through patronictl's own list and judged - a healthy one on; a lagging replica, or none, failed",
+      [healthy_run(m) for m in ([LD, {"Member": "pi2", "Role": "Replica", "State": "streaming", "Replay Lag": 0}],
+                                [LD, {"Member": "pi2", "Role": "Replica", "State": "streaming", "Replay Lag": 9}], [LD])], [0, 1, 1])
+lkt = bt("It holds the leader key")
+check("  the leader key read raw (its value the member's name, not Consul's JSON)",
+      (lkt["ansible.builtin.uri"]["url"].endswith("/leader?raw"), lkt["ansible.builtin.uri"].get("return_content")), (True, True))
+tl = bt("The Consul-locked jobs' timers started again")
+check("  the timers started again over every timer read (enabled or not), the record removed at the end",
+      (render(tl["loop"], _lock_timers={"results": [{"item": "pi-tier0-backup", "stdout": "enabled"}, {"item": "pi-restore-check", "stdout": "disabled"}]}),
+       bt("The record removed")["ansible.builtin.file"]),
+      ([{"item": "pi-tier0-backup", "stdout": "enabled"}, {"item": "pi-restore-check", "stdout": "disabled"}], {"path": "{{ restore_state }}", "state": "absent"}))
+check("  the play on the three servers; Postgres's role the local server's own answer (not in recovery = the primary); Vault's standby "
+      "an answer (429), not a failure; the kept binary asked its version, copied over /usr/local/bin/consul; the pause on the primary's Pi",
+      (RP["hosts"], "'select not pg_is_in_recovery()'" in rt("Postgres running here")["ansible.builtin.shell"]["cmd"],
+       bt("Vault unsealed - active or standby")["ansible.builtin.uri"]["status_code"], rt("The binary of the version gone back to")["ansible.builtin.command"]["argv"],
+       bt("The kept binary back")["ansible.builtin.copy"]["dest"], bt("Patroni paused").get("delegate_to")),
+      ("pi1,pi2,target", True, [200, 429], ["/usr/local/bin/consul-{{ _to }}", "version"], "/usr/local/bin/consul", "{{ _pg_primary }}"))
+check("  a record of another source's load is no load of this one",
+      render(hr, _from_record=True, _recorded=SNAP, _record={"stdout": REC.replace(os.path.basename(SNAP), "consul-20261101T000000Z-1.22.5.snap")}, _agent=ok_agent, _to="1.22.7"),
+      False)
+# the controller's copies: upgrade-consul.yml's snapshot and this export, one directory per inventory, the operator's alone, ignored by git
+U = yaml.safe_load(open("deploy/ansible/playbooks/upgrade-consul.yml"))[0]
+UT = U["tasks"]
+ut = lambda name: next(t for t in UT if str(t.get("name", "")).startswith(name))
+uf, ul = ut("The snapshot fetched to the controller"), ut("The controller's copy the operator's alone")
+check("upgrade-consul: the snapshot fetched off pi1 to the controller after it is taken and before any server restarts, the directory "
+      "0700 and the file 0600 there",
+      (uf["ansible.builtin.fetch"], uf.get("when"), UT.index(ut("The whole state's snapshot first")) < UT.index(uf) < UT.index(ut("One at a time")),
+       [render(x["mode"]) for x in ul["loop"]], [render(x["path"], backups_here="/b", _snapshot={"stdout": "/s/consul-x-1.22.7.snap"}) for x in ul["loop"]],
+       ul.get("delegate_to"), ul.get("become"), ul.get("when")),
+      ({"src": "{{ _snapshot.stdout }}", "dest": "{{ backups_here }}/", "flat": True, "fail_on_missing": True}, "inventory_hostname == 'pi1'", True,
+       ["0700", "0600"], ["/b", "/b/consul-x-1.22.7.snap"], "localhost", False, "inventory_hostname == 'pi1' and not ansible_check_mode"))
+here = lambda vars_, inv: render(vars_["backups_here"], playbook_dir="/o/deploy/ansible/playbooks", inventory_file=inv)
+check("  both playbooks' controller directory the same, one per inventory (the copy's never beside production's); git ignores it",
+      ([here(v, "/o/deploy/ansible/inventory/production.yml") for v in (U["vars"], V)], here(V, "/o/deploy/ansible/inventory/vagrant.yml"),
+       "deploy/ansible/vars/consul-upgrade-backups/" in open(".gitignore").read().splitlines()),
+      (["/o/deploy/ansible/playbooks/../vars/consul-upgrade-backups/production"] * 2, "/o/deploy/ansible/playbooks/../vars/consul-upgrade-backups/vagrant", True))
+check("  restore-consul: the export fetched off its server, flat, failing when missing",
+      (bt("The export fetched to the controller")["ansible.builtin.fetch"], bt("The export fetched to the controller").get("delegate_to")),
+      ({"src": "{{ _src }}", "dest": "{{ backups_here }}/", "flat": True, "fail_on_missing": True}, "{{ _src_host }}"))
+
 # ── the rescue and the end ───────────────────────────────────────────────────────────────────────────────────────
 resc = lambda **v: render(blk["rescue"][0]["ansible.builtin.fail"]["msg"], ansible_failed_task={"name": "The export imported"},
                           ansible_failed_result={"msg": "boom"}, _pg_primary="pi1", consul_data="/var/lib/consul/data", _from="2.0.4",
@@ -427,6 +503,8 @@ resc = lambda **v: render(blk["rescue"][0]["ansible.builtin.fail"]["msg"], ansib
 r1 = resc(_set_aside={"stdout_lines": ["/var/lib/consul/data.pre-restore-T1"]}, _orig_aside="", _src=KV, _recorded="")
 r2 = resc(_orig_aside="/var/lib/consul/data.pre-restore-T1", _recorded=KV)
 r0 = resc(_orig_aside="", _recorded="", _snap=SNAP)
+check("  the way forward in full: the current directory moved aside (never deleted), the record deleted, the primary's Patroni first",
+      [x in r1 for x in ("move /var/lib/consul/data aside (never delete it)", "delete /var/lib/consul/restore-consul.state", "(pi1 first)")], [True] * 3)
 check("the rescue: where it failed, Postgres unmanaged and the primary, the untouched source, the state before (this run's set-aside, "
       "or the record's on a run again), run again, forward again in full (the directory back, the new binary, the pause resumed and "
       "its marker deleted, Vault enabled, the timers), never deploy:vault-pi",
@@ -439,6 +517,7 @@ check("the rescue: where it failed, Postgres unmanaged and the primary, the unto
 done = lambda m: render(rt("Back - and what to run again")["ansible.builtin.debug"]["msg"], _to="1.22.7", _from="2.0.4", _mode=m,
                         ansible_play_hosts=HOSTS, _src=KV if m == "current" else SNAP, _set_aside={"stdout_lines": ["/d.pre-restore-T1"]},
                         _orig_aside="", _pg_primary="pi1", _one_active={"stdout": "active: 10.0.0.4"})
+check("the end names the primary and Vault's active", ["Patroni's leader pi1" in done("current"), "active: 10.0.0.4" in done("current")], [True, True])
 check("the end: what was loaded and whether anything was lost; after a snapshot, what to run again (the rotated tokens back stale, "
       "preview environments, External Secrets, Patroni's settings) - after the current KV, nothing",
       ([x in done("snapshot") for x in ("everything written since lost", "task deploy:ci-bot", "task deploy:argocd-reader", "preview environments",
@@ -521,6 +600,54 @@ check("  the task: before, production's upgrade-consul.yml to the target, after,
        "consul_restore_from='{{.MODE}}'" in seq[3] and "consul-way-back-confirm" in seq[3], all("mode='{{.MODE}}'" in seq[i] for i in (0, 2, 4)),
        """MODE: '{{.MODE | default "current"}}'""" in task_cmd, '[ "{{.MODE}}" = current ] || [ "{{.MODE}}" = snapshot ]' in task_cmd),
       (["phase=before", "upgrade-consul.yml", "phase=after", "restore-consul.yml", "phase=verify", "phase=cleanup"], True, True, True, True, True, True, True))
+phases = {t["name"]: str(t.get("when")).split(" and ")[0] for t in C[1:]}
+check("  each copy-check task in its own phase",
+      {n: phases[n] for n in phases if n.split(" - ")[0] in ("Before", "After", "Verify", "Cleanup", "Before and verify")}
+      == {n: {"Before": "phase == 'before'", "After": "phase == 'after'", "Verify": "phase == 'verify'", "Cleanup": "phase == 'cleanup'",
+              "Before and verify": "phase in ['before', 'verify']"}[n.split(" - ")[0]] for n in phases}, True)
+check("  the markers: the one written before is the one verify reads, with the value it wants",
+      (ct("Before - the marker from before")["ansible.builtin.command"]["argv"], ct("Verify - the value of the one from before")["ansible.builtin.command"]["argv"]),
+      (["consul", "kv", "put", "way-back/{{ marker }}-before", "before"], ["consul", "kv", "get", "way-back/{{ marker }}-before"]))
+sql = "select not pg_is_in_recovery(), (select timeline_id from pg_control_checkpoint())"
+tlq = [ct(n)["ansible.builtin.shell"]["cmd"] for n in ("After - the primary and its timeline noted", "Verify - the primary and its timeline as noted")]
+check("  the timeline read the same way both times - a checkpoint first (a promotion's control file lags its end-of-recovery checkpoint), "
+      "then the role and the checkpoint's timeline", [("-qc checkpoint" in q and q.index("-qc checkpoint") < q.index(sql)) for q in tlq], [True, True])
+tool("patronictl", 'echo "$PATRONI_LIST"')  # the list each case hands it
+sw_wait = ct("After - the new primary serving")["ansible.builtin.shell"]["cmd"]
+def settled_run(members):
+    return sh(render(sw_wait, patronictl="patronictl -c x", _switched={"stdout": "pi2\n"}), PATRONI_LIST=json.dumps(members)).returncode
+P2 = {"Member": "pi2", "Role": "Leader", "State": "running"}
+check("  after the switchover: waited on until the new primary leads and the old one streams from it - else not yet",
+      [settled_run(m) for m in ([P2, {"Member": "pi1", "Role": "Replica", "State": "streaming"}], [LD, {"Member": "pi2", "Role": "Replica", "State": "streaming"}],
+                                [P2, {"Member": "pi1", "Role": "Replica", "State": "starting"}])], [0, 1, 1])
+vp = ct("Verify - Patroni healthy")["ansible.builtin.shell"]["cmd"]
+check("  verify: Patroni healthy read and judged - a leader running and the replica streaming on; no leader, or the replica stopped, failed",
+      [sh(render(vp, patronictl="patronictl -c x"), PATRONI_LIST=json.dumps(m)).returncode for m in (
+          [LD, {"Member": "pi2", "Role": "Replica", "State": "streaming"}], [{"Member": "pi2", "Role": "Replica", "State": "streaming"}],
+          [LD, {"Member": "pi2", "Role": "Replica", "State": "stopped"}])], [0, 1, 1])
+check("  verify: a standby Vault an answer (429); the marker looked for the one patroni-pause.py writes; the database's password on stdin; "
+      "the noted file the one verify reads; the newest snapshot by name; the ExternalSecret forced the one read",
+      (ct("Verify - Vault unsealed")["ansible.builtin.uri"]["status_code"], ct("Verify - no pause marker left")["ansible.builtin.command"]["argv"][-1] == V["pause_marker"],
+       ct("Verify - the database writable")["ansible.builtin.shell"].get("stdin"), ct("After - noted on the controller")["ansible.builtin.copy"]["dest"],
+       "pg_noted" in same["ansible.builtin.assert"]["that"], "LC_ALL=C sort" in ct("After - the newest snapshot")["ansible.builtin.shell"]["cmd"],
+       "externalsecret vault-cleanup-token" in et("Verify - an ExternalSecret force-synced")["ansible.builtin.shell"]["cmd"]
+       and "vault-cleanup-token" in et("Verify - refreshed after that")["ansible.builtin.command"]["argv"]),
+      ([200, 429], True, "{{ postgres_admin_password }}", "{{ pg_noted }}", True, True, True))
+def dry(*args):
+    r = subprocess.run(["task", "--dry", "--yes", *args], capture_output=True, text=True)
+    return r.returncode, r.stdout + r.stderr
+rc_c, out_c = dry("test:copy:consul-way-back", "CONSUL_TO=2.0.4", "CONSUL_TO_SHA256=abc")
+rc_s, out_s = dry("test:copy:consul-way-back", "CONSUL_TO=2.0.4", "CONSUL_TO_SHA256=abc", "MODE=snapshot")
+rc_b, out_b = dry("test:copy:consul-way-back", "CONSUL_TO=2.0.4", "CONSUL_TO_SHA256=abc", "MODE=both")
+rc_n, out_n = dry("test:copy:consul-way-back", "CONSUL_TO=2.0.4")
+rc_p, out_p = dry("deploy:consul:way-back")
+check("the tasks as task renders them: the copy's from the current KV unless MODE=snapshot, anything else refused, both its inputs required, "
+      "set -euo pipefail, the copy's inventory, the target's checksum handed to the upgrade; production's on production's inventory and restore-consul.yml",
+      (rc_c, "consul_restore_from='current'" in out_c and "-e mode='current'" in out_c, rc_s, "consul_restore_from='snapshot'" in out_s,
+       rc_b != 0 and "MODE=current|snapshot" in out_b, rc_n != 0, "set -euo pipefail" in out_c, out_c.count("-i inventory/vagrant.yml") == 1 and "production.yml" not in out_c,
+       """-e '{"consul_checksums": {"amd64": "abc"}}'""" in out_c, rc_p, "venv/bin/ansible-playbook -i inventory/production.yml playbooks/restore-consul.yml" in out_p,
+       "\n    prompt: " in open("Taskfile.yml").read().split("  deploy:consul:way-back:")[1].split("\n\n")[0]),
+      (0, True, 0, True, True, True, True, True, True, 0, True, True))
 print("consul-way-back: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 PY_CWB
