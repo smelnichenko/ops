@@ -1,5 +1,5 @@
 #!/bin/bash
-# Keycloak's upgrade and its way back run by ansible-playbook for real (plan 122): upgrade-keycloak.yml and
+# Keycloak's upgrade and its way back run by ansible-playbook for real: upgrade-keycloak.yml and
 # restore-keycloak.yml with their tasks, copied, against two stand-in Pis - connection local, each Pi a directory of
 # state (the version /opt/keycloak names, the version running, its unit, its HTTP answer, its installs, its dumps) and a
 # shell of its own that puts stubs first (stubs/: systemctl, pgrep, readlink, curl, ip, psql, pg_dump). The modules that
@@ -34,12 +34,37 @@ for m in ("systemd", "uri", "get_url", "unarchive", "stat", "file"):
     for f in files:
         used[m] = used.get(m, 0) + text[f].count(f"ansible.builtin.{m}:")
         text[f] = text[f].replace(f"ansible.builtin.{m}:", f"kc_{m}:")
-# a module this harness does not stand in for would touch the machine it runs on: refused, by name
-left = sorted({(os.path.basename(f), m) for f in files for m in re.findall(r"ansible\.builtin\.(\w+):", text[f])
-               if m not in ("assert", "set_fact", "shell", "command", "include_tasks", "meta", "debug")})
+# a module this harness does not stand in for would touch the machine it runs on - by any name (ansible.posix.*,
+# ansible.legacy.*, a bare one): every task's action read from the YAML, refused unless stood in for or harmless; and a
+# command by its absolute path would pass by the stubs: refused too
+import yaml
+KEYWORDS = {"name", "when", "register", "vars", "loop", "loop_control", "delegate_to", "delegate_facts", "run_once",
+            "no_log", "changed_when", "failed_when", "check_mode", "retries", "delay", "until", "become", "become_user",
+            "tags", "notify", "environment", "ignore_errors", "any_errors_fatal", "args", "listen", "throttle", "timeout"}
+ALLOWED = {f"kc_{m}" for m in ("systemd", "uri", "get_url", "unarchive", "stat", "file")} | {
+    f"ansible.builtin.{m}" for m in ("assert", "set_fact", "shell", "command", "include_tasks", "meta", "debug")}
+def walk(ts):
+    for t in ts or []:
+        if isinstance(t, dict) and "block" in t:
+            for k in ("block", "rescue", "always"):
+                yield from walk(t.get(k))
+        elif isinstance(t, dict):
+            yield t
+left = []
+for f in files:
+    for item in yaml.safe_load(text[f]) or []:
+        for t in (walk(item.get("pre_tasks", []) + item.get("tasks", []) + item.get("post_tasks", []) + item.get("handlers", []))
+                  if "hosts" in item else walk([item])):
+            acts = [k for k in t if k not in KEYWORDS]
+            body = t.get(acts[0]) if len(acts) == 1 else None
+            argv = body.get("argv") if isinstance(body, dict) else None
+            cmd = (body.get("cmd") if isinstance(body, dict) else body) if acts and acts[0].endswith(("shell", "command")) else ""
+            if len(acts) != 1 or acts[0] not in ALLOWED or (argv and str(argv[0]).startswith("/")) \
+                    or re.search(r"(^|[\s;|&(`])/(usr/)?(local/)?s?bin/", str(cmd or "")):
+                left.append((os.path.basename(f), t.get("name"), acts))
 # the serve check's wait cut to seconds; restore-keycloak's dumps read where each stand-in Pi keeps its own
 edits = [("tasks/keycloak-serves.yml", "retries: 90", "retries: 3"), ("tasks/keycloak-serves.yml", "delay: 10", "delay: 1"),
-         ("restore-keycloak.yml", "ls -1t /var/backups/keycloak/", "ls -1t dumps/")]
+         ("restore-keycloak.yml", "dumps=(/var/backups/keycloak/", "dumps=(dumps/")]
 bad = [e for e in edits if text[os.path.join(P, e[0])].count(e[1]) != 1]
 for f, a, b in edits:
     text[os.path.join(P, f)] = text[os.path.join(P, f)].replace(a, b)
@@ -75,9 +100,11 @@ SHA=$(printf 'ab%.0s' $(seq 32))
 # new <name> <the Pi holding the VIP, or none>: a fresh pair
 new() { KCS="$W/run-$1"; export KCS; mkdir -p "$KCS/pi1/dumps" "$KCS/pi2/dumps"; : > "$KCS/events.log"; printf %s "$2" > "$KCS/vip"; }
 # inst <pi> <version> [cut]: /opt/keycloak-<version> there - whole, or cut short (its runner missing)
+# (an install setup-pi-services made carries no mark; upgrade-keycloak.yml marks the one it extracted)
 inst() {
   mkdir -p "$KCS/installs/$1/$2/bin" "$KCS/installs/$1/$2/lib"; : > "$KCS/installs/$1/$2/bin/kc.sh"
   [ -n "${3:-}" ] || : > "$KCS/installs/$1/$2/lib/quarkus-run.jar"
+  [ "${3:-}" != damaged ] || : > "$KCS/installs/$1/$2/.extracted"
 }
 # pi <pi> <version linked> <version(s) running, '' when down> [unit state]: the Pi's Keycloak, its linked install whole
 pi() {
@@ -85,6 +112,8 @@ pi() {
   printf %s "${4:-$([ -n "$3" ] && echo active || echo inactive)}" > "$KCS/$1/active"
   printf %s "$([ -n "$3" ] && echo 200 || echo 000)" > "$KCS/$1/http"
 }
+# crashloop <pi>: the Pi's Keycloak cannot come up - its unit restarting for ever (Restart=always), never serving
+crashloop() { printf 000 > "$KCS/$1/http"; printf activating > "$KCS/$1/active"; echo yes > "$KCS/$1/wont-start"; }
 # dump <pi> <file name> [cut]: a dump in the Pi's dumps - whole (pg_dump's trailer), or cut short
 dump() { { echo "CREATE TABLE realm();"; [ -n "${3:-}" ] || echo "-- PostgreSQL database dump complete"; } | gzip > "$KCS/$1/dumps/$2"; }
 play() {
@@ -151,11 +180,21 @@ ck "J newer than the target (a downgrade): refused, nothing done" "$(refused 'ne
 new E pi2; pi pi1 26.5.7 26.5.7; pi pi2 26.5.7 26.5.7; up --limit pi1
 ck "E --limit pi1: refused, nothing done" "$(refused 'REFUSED: the run has') $(nev)" "refused 0"
 new L pi2; pi pi1 26.5.7 26.5.7; pi pi2 26.5.7 26.5.7; inst pi1 26.8.2 cut; up
-ck "L a cut-short extract of the target on pi1 (skipped by creates): refused before the dump - nothing stopped" \
+ck "L a cut-short extract of the target on pi1 (no mark): extracted again over it, marked, the run goes on" \
+   "$(rc) $(onset unarchive) $(grep -c ' touch .extracted' "$KCS/events.log") $(state)" "0 pi1 pi2 2 26.8.2/26.8.2 26.8.2/26.8.2"
+new L2 pi2; pi pi1 26.5.7 26.5.7; pi pi2 26.5.7 26.5.7; inst pi1 26.8.2 damaged; up
+ck "L2 a marked target install with its runner gone (damaged since): refused before the dump - nothing stopped" \
    "$(refused 'is incomplete') $(on unarchive) [$(on pg_dump)$(on stopped)$(on link)] $(state)" "refused pi2 [] 26.5.7/26.5.7 26.5.7/26.5.7"
 new N pi2; pi pi1 26.5.7 26.5.7; pi pi2 26.5.7 26.5.7; echo yes > "$KCS/pi1/wont-start"; up
-ck "N the other Pi not coming up on the target after its start: the run fails at the last serve check, the first serving" \
-   "$([ "$(rc)" != 0 ] && echo failed) $(on started) $(state)" "failed pi2 pi1 26.8.2/ 26.8.2/26.8.2"
+ck "N the other Pi not coming up on the target after its start (crash-looping): the run fails at the last serve check" \
+   "$([ "$(rc)" != 0 ] && echo failed) $(on started) $(state) $(cat "$KCS/pi1/http") $(cat "$KCS/pi2/http")" \
+   "failed pi2 pi1 26.8.2/26.8.2 26.8.2/26.8.2 000 200"
+new X1 pi2; pi pi1 26.8.2 26.8.2; pi pi2 26.8.2 26.8.2; crashloop pi1; up
+ck "X1 a rerun after N (pi1 crash-looping on the target, pi2 serving it): refused - the serving Pi never stopped" \
+   "$(refused 'up but not serving on') $(nev) $(state) $(cat "$KCS/pi2/http")" "refused 0 26.8.2/26.8.2 26.8.2/26.8.2 200"
+new X2 pi2; pi pi1 26.5.7 26.5.7; pi pi2 26.5.7 26.5.7; crashloop pi1; up
+ck "X2 a move with pi1 crash-looping on the old version: refused before the dump - nothing stopped" \
+   "$(refused 'up but not serving on') $(nev)" "refused 0"
 new F pi2; pi pi1 26.5.7 26.5.7; pi pi2 26.5.7 26.5.7; : > "$KCS/dump-fail"; up
 ck "F pg_dump failing: refused with its own error before anything stops - no dump kept, nothing left aside" \
    "$(refused 'REFUSED: the Keycloak dump failed') $(said boom-from-stub) [$(on stopped)$(on link)] $(ls -A "$KCS/pi2/dumps" | wc -l) $(state)" \
@@ -170,8 +209,8 @@ OLD=keycloak-20261126T010000Z-26.5.6-schema-26.5.0.sql.gz; NEW=keycloak-20261127
 two_on_target() { new "$1" "$2"; pi pi1 26.8.2 26.8.2; pi pi2 26.8.2 26.8.2; }
 two_on_target R1 pi1; inst pi1 26.5.7; inst pi2 26.5.7; dump pi1 "$OLD"; dump pi2 "$NEW"; back -e keycloak_version=26.5.7 -e confirm="$NEW"
 ck "R1 the newest dump (pi2's): restored, both Pis back on its version" "$(rc) $(state)" "0 26.5.7/26.5.7 26.5.7/26.5.7"
-ck "R1 its SQL once, on the Pi holding it: dropped, created, loaded, the schema read" \
-   "$(awk '$3 == "psql" {print $2 ":" $4}' "$KCS/events.log" | paste -sd' ' -)" "pi2:drop pi2:create pi2:load pi2:schema"
+ck "R1 its SQL once, on the Pi holding it: loaded beside keycloak, its schema read, then swapped in (the migrated kept)" \
+   "$(awk '$3 == "psql" {print $2 ":" $4}' "$KCS/events.log" | paste -sd' ' -)" "pi2:drop pi2:create pi2:load pi2:schema pi2:drop-old pi2:terminate pi2:swap"
 ck "R1 every Pi stopped before the drop, the database back before any link, the VIP's Pi started first" \
    "$(before stopped psql) $(before psql link) $(on started)" "yes yes pi1 pi2"
 two_on_target R2 pi1; inst pi1 26.5.6; inst pi2 26.5.6; dump pi1 "$OLD"; dump pi2 "$NEW"
@@ -182,8 +221,9 @@ two_on_target R7 pi2; inst pi1 26.5.7; inst pi2 26.5.7; dump pi1 "$NEW"; dump pi
 ck "R7 the newest dump on pi1 (first in the play), the VIP on pi2: pi1's restored, pi2 started first" \
    "$(rc) $(onset psql) $(on started)" "0 pi1 pi2 pi1"
 two_on_target R11 pi1; inst pi1 26.5.7; inst pi2 26.5.7; dump pi2 "$NEW"; echo yes > "$KCS/pi2/wont-start"; back -e keycloak_version=26.5.7 -e confirm="$NEW"
-ck "R11 the other Pi not coming up after the restore: the run fails at the last serve check, the first serving" \
-   "$([ "$(rc)" != 0 ] && echo failed) $(on started) $(state)" "failed pi1 pi2 26.5.7/26.5.7 26.5.7/"
+ck "R11 the other Pi not coming up after the restore (crash-looping): the run fails at the last serve check" \
+   "$([ "$(rc)" != 0 ] && echo failed) $(on started) $(state) $(cat "$KCS/pi1/http") $(cat "$KCS/pi2/http")" \
+   "failed pi1 pi2 26.5.7/26.5.7 26.5.7/26.5.7 200 000"
 two_on_target R3 pi1; inst pi1 26.5.7; dump pi2 "$NEW"; back -e keycloak_version=26.5.7 -e confirm="$NEW"
 ck "R3 the dump's version's install gone on pi2: refused, nothing stopped, no SQL" "$(refused 'is gone on pi2') $(nev)" "refused 0"
 two_on_target R4 pi1; inst pi1 26.5.7; inst pi2 26.5.7; back -e keycloak_version=26.5.7 -e confirm=x

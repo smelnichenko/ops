@@ -1,3 +1,6 @@
 #!/bin/bash
-# curl -w '%{http_code}' .../realms/master: this Pi's answer
-cat "$KCS/$KC_HOST/http" 2> /dev/null || echo 000
+# curl -w '%{http_code}' http://127.0.0.1:8080/realms/master: this Pi's answer - another URL refused, as nothing listens
+case " $* " in
+  *" http://127.0.0.1:8080/realms/master "*) cat "$KCS/$KC_HOST/http" 2> /dev/null || echo 000 ;;
+  *) echo 000; exit 7 ;;
+esac

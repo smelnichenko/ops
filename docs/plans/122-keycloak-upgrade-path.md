@@ -78,3 +78,13 @@ answers all of it is the one Forgejo and Consul already have:
    two faults now fixed: a clean stop resumed named its dump for no version (restore-keycloak.yml could not read it -
    the dump is named for the one install both Pis hold), and a schema read that failed still let pg_dump run (the
    dump now runs only once the schema is known).
+   The re-review of those commits (2026-11-27) found, and this branch fixes: a rerun with one Pi up but not serving
+   (its unit Restart=always - a Keycloak that cannot come up restarts for ever, never "failed") stopped the serving Pi
+   and started the broken one first, leaving none - now refused before anything stops unless the run is taken forward;
+   a cut-short extract could hold both sentinel files and pass - `creates` is now a mark written only after the extract,
+   so the next run extracts again; the restore dropped keycloak before loading - it now loads into keycloak_restore,
+   reads its schema, then renames both in one statement (the migrated database kept as keycloak_migrated; keycloak never
+   empty); the newest-dump read no longer hides an `ls` error behind `|| true`; the rehearsal's cleanup on success is a
+   command of its own (a failing EXIT trap never fails a task); no plan numbers in file content. The smoke harness's
+   stand-ins are stricter (a wrong unit name or URL fails, the crash loop modelled as systemd does it) and its module
+   guard reads every task's action from the YAML.

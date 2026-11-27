@@ -1,5 +1,5 @@
 ---
-# Keycloak's way back, rehearsed on the copy with production's playbooks (plan 122) - task test:copy:keycloak-way-back
+# Keycloak's way back, rehearsed on the copy with production's playbooks - task test:copy:keycloak-way-back
 # runs, in turn: this playbook's `before` (the copy runs vars/keycloak.yml's pin P0 on both Pis; a marker row written
 # into a table of its own); upgrade-keycloak.yml to a newer P1 (the Keycloak unit's target - its dump taken, its
 # database migrated); `after` (a second marker on the migrated database; the newest dump's name for the restore's
@@ -82,8 +82,10 @@
       ansible.builtin.shell:
         executable: /bin/bash
         cmd: |
-          set -o pipefail
-          ls -1t /var/backups/keycloak/keycloak-*.sql.gz 2> /dev/null | head -n 1 || true
+          set -euo pipefail
+          shopt -s nullglob
+          dumps=(/var/backups/keycloak/keycloak-*.sql.gz)
+          [ -z "${dumps[0]-}" ] || ls -1t "${dumps[@]}" | head -n 1
       register: _newest
       changed_when: false
       when: phase == 'after'
@@ -129,13 +131,14 @@
       run_once: true
       when: phase == 'verify'
 
-    - name: Cleanup - the marker table gone (the copy's database as the build left it)
+    - name: Cleanup - the marker table and the migrated database gone (the copy as the build left it)
       ansible.builtin.shell:
         executable: /bin/bash
         cmd: |
           set -euo pipefail
           read -r PGPASSWORD; export PGPASSWORD
           {{ psql }} -c "DROP TABLE IF EXISTS keycloak_way_back_marker"
+          psql -w -h 127.0.0.1 -p 5000 -U postgres -d postgres -v ON_ERROR_STOP=1 -c "DROP DATABASE IF EXISTS keycloak_migrated WITH (FORCE)"
         stdin: "{{ keycloak_dump_password }}"
       changed_when: true
       delegate_to: "{{ db_pi }}"

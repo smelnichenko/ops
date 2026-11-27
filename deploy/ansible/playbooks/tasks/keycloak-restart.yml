@@ -20,7 +20,7 @@
   when: not ansible_check_mode
 
 # a new version moves only through upgrade-keycloak.yml (its database dumped first, both Pis stopped, the VIP's started
-# first - plan 122): a Keycloak running another version than the one /opt/keycloak names here is never restarted onto
+# first): a Keycloak running another version than the one /opt/keycloak names here is never restarted onto
 # it - refused, the command named (setup-patroni imports these too: no version moves there)
 - name: Keycloak's install - the one it runs against the one /opt/keycloak names
   ansible.builtin.shell:

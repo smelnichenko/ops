@@ -1,5 +1,5 @@
 ---
-# Keycloak on both Pis to one version (plan 122) - as upgrade-forgejo.yml: its database migrates one way (Liquibase, no
+# Keycloak on both Pis to one version - as upgrade-forgejo.yml: its database migrates one way (Liquibase, no
 # downgrade) on a new version's first start, so the two never run different versions on it - every Pi stopped, the
 # VIP's Pi started first (it migrates), serving the target, then the other. Logins are down while the first migrates.
 #
@@ -116,6 +116,18 @@
              and ansible_play_hosts | map('extract', hostvars, '_installed') | unique | list | length == 1 }}
       run_once: true
 
+    # a Pi up but not serving (its unit Restart=always: one that cannot come up restarts for ever, never "failed") -
+    # outside a run taken forward, stopping the serving Pi and starting that one first would leave none serving
+    - name: No Pi up but not serving, unless a run taken forward
+      ansible.builtin.assert:
+        that: _forward | bool or ansible_play_hosts | map('extract', hostvars) | selectattr('_starting') | list | length == 0
+        fail_msg: >-
+          REFUSED: Keycloak is up but not serving on {{ ansible_play_hosts | map('extract', hostvars) | selectattr('_starting')
+          | map(attribute='inventory_hostname') | list }} (its unit restarting, or still starting) - see to it (its journal),
+          then run again: nothing stopped
+        quiet: true
+      run_once: true
+
     - name: Every Pi running, unless taken forward or a clean stop resumed
       ansible.builtin.assert:
         that: _forward | bool or _resume | bool or _running != ''
@@ -157,8 +169,8 @@
       changed_when: false
       check_mode: false
 
-    # the Pi already starting (a cut-short run's, maybe migrating) is the first whatever holds the VIP now; else the
-    # VIP's holder; else the first in the play
+    # the Pi already starting (a cut-short run's, maybe migrating - one starting passes the refusal above only in a run
+    # taken forward) is the first whatever holds the VIP now; else the VIP's holder; else the first in the play
     - name: The first Pi
       ansible.builtin.set_fact:
         _first: >-
@@ -186,20 +198,29 @@
         src: "/opt/keycloak-{{ keycloak_version }}.tar.gz"
         dest: /opt
         remote_src: true
-        creates: "/opt/keycloak-{{ keycloak_version }}"
+        creates: "/opt/keycloak-{{ keycloak_version }}/.extracted"
 
-    # a cut-short extract left a half install that `creates:` would skip: whole, or nothing stops
-    - name: The target's install whole (its launcher and runner there)
+    # marked only once the extract ended: a cut-short extract has no mark, so the next run extracts again over it
+    - name: The target's extract marked whole
+      when: not _forward | bool
+      ansible.builtin.file:
+        path: "/opt/keycloak-{{ keycloak_version }}/.extracted"
+        state: touch
+        mode: '0644'
+        modification_time: preserve
+        access_time: preserve
+
+    - name: The target's install whole (its mark, launcher and runner there)
       when: not _forward | bool
       ansible.builtin.stat:
         path: "/opt/keycloak-{{ keycloak_version }}/{{ item }}"
-      loop: [bin/kc.sh, lib/quarkus-run.jar]
+      loop: [.extracted, bin/kc.sh, lib/quarkus-run.jar]
       register: _target_files
 
     - name: The target's install whole - else nothing stopped
       when: not _forward | bool
       ansible.builtin.assert:
-        that: _target_files.results | map(attribute='stat.exists') | list == [true, true]
+        that: _target_files.results | map(attribute='stat.exists') | list == [true, true, true]
         fail_msg: >-
           REFUSED: /opt/keycloak-{{ keycloak_version }} on {{ inventory_hostname }} is incomplete (a cut-short extract?) -
           remove it and run again: nothing stopped

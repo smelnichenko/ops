@@ -391,7 +391,7 @@
       }
     },
     {
-      "description": "Keycloak's minors (a store, scripts/upgrade-stores.json: its database migrates one way on a new version) - renovate/keycloak-<X.Y>, labelled one-way, out of the Pis' services unit: a store's version moves only in its own unit, its backup first (plan 122). It rode in renovate/pi-services, which the copy could not prove (2026-11-26)",
+      "description": "Keycloak's minors (a store, scripts/upgrade-stores.json: its database migrates one way on a new version) - renovate/keycloak-<X.Y>, labelled one-way, out of the Pis' services unit: a store's version moves only in its own unit, its backup first. It rode in renovate/pi-services, which the copy could not prove (2026-11-26)",
       "matchUpdateTypes": [
         "minor"
       ],

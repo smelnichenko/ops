@@ -1240,7 +1240,7 @@ tasks:
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/upgrade-forgejo.yml {{.CLI_ARGS}}
 
   deploy:keycloak:upgrade:
-    desc: "PRODUCTION: Keycloak on both Pis to vars/keycloak.yml's version - a pg_dump first (named for the database's schema), both stopped, the VIP's Pi started first (it migrates), then the other (logins down while it migrates; plan 122)"
+    desc: "PRODUCTION: Keycloak on both Pis to vars/keycloak.yml's version - a pg_dump first (named for the database's schema), both stopped, the VIP's Pi started first (it migrates), then the other (logins down while it migrates)"
     dir: deploy/ansible
     deps: [deploy:install]
     dotenv: ['../../.env']
@@ -1249,7 +1249,7 @@ tasks:
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/upgrade-keycloak.yml {{.CLI_ARGS}}
 
   deploy:keycloak:way-back:
-    desc: "PRODUCTION: the way back from a Keycloak upgrade - after the unit is reverted (vars/keycloak.yml's old pin - refused otherwise), confirmed with -- -e confirm=<the dump's file name>: both Pis stopped, the keycloak database restored from the newest pre-upgrade dump (or -e keycloak_restore_dump=<path> -e keycloak_restore_host=<pi>), the old version's install back, the VIP's Pi started first (everything since the dump lost; plan 122)"
+    desc: "PRODUCTION: the way back from a Keycloak upgrade - after the unit is reverted (vars/keycloak.yml's old pin - refused otherwise), confirmed with -- -e confirm=<the dump's file name>: both Pis stopped, the keycloak database restored from the newest pre-upgrade dump (or -e keycloak_restore_dump=<path> -e keycloak_restore_host=<pi>), the old version's install back, the VIP's Pi started first (everything since the dump lost)"
     dir: deploy/ansible
     deps: [deploy:install]
     dotenv: ['../../.env']
@@ -1258,7 +1258,7 @@ tasks:
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/restore-keycloak.yml {{.CLI_ARGS}}
 
   test:copy:keycloak-way-back:
-    desc: "Vagrant: Keycloak's way back with production's playbooks - KEYCLOAK_TO=<newer> KEYCLOAK_TO_SHA256=<its tarball's> (the Keycloak unit's target): a marker, upgrade-keycloak.yml to it, a second marker, restore-keycloak.yml (its dump, the pin's install back): the pin serving on both Pis, the first marker there, the second gone (plan 122; logins down meanwhile - a readied copy, alone)"
+    desc: "Vagrant: Keycloak's way back with production's playbooks - KEYCLOAK_TO=<newer> KEYCLOAK_TO_SHA256=<its tarball's> (the Keycloak unit's target): a marker, upgrade-keycloak.yml to it, a second marker, restore-keycloak.yml (its dump, the pin's install back): the pin serving on both Pis, the first marker there, the second gone (logins down meanwhile - a readied copy, alone)"
     dir: deploy/ansible
     deps: [deploy:install]
     requires:
@@ -1272,12 +1272,15 @@ tasks:
           M=way-back-$(date -u +%Y%m%dT%H%M%SZ)
           C=../../tests/ansible/copy/keycloak-way-back-check.yml
           pb() { env -i HOME="$HOME" PATH="$PATH" venv/bin/ansible-playbook -i inventory/vagrant.yml "$@"; }
-          trap 'pb "$C" -e phase=cleanup -e marker="$M" || true' EXIT
+          trap 'pb "$C" -e phase=cleanup -e marker="$M"' EXIT
           pb "$C" -e phase=before -e marker="$M" -e keycloak_to='{{.KEYCLOAK_TO}}'
           pb ../../tests/ansible/vagrant-only-play.yml playbooks/upgrade-keycloak.yml -e keycloak_version='{{.KEYCLOAK_TO}}' -e keycloak_sha256='{{.KEYCLOAK_TO_SHA256}}'
           pb "$C" -e phase=after -e marker="$M"
           pb ../../tests/ansible/vagrant-only-play.yml playbooks/restore-keycloak.yml -e confirm="$(cat ../../.copy/keycloak-way-back-confirm)"
           pb "$C" -e phase=verify -e marker="$M"
+          # on success the cleanup a command of its own (a failing EXIT trap never fails the task); the trap for a failure
+          trap - EXIT
+          pb "$C" -e phase=cleanup -e marker="$M"
 
   test:pi:rerun-guards:
     desc: "Vagrant: re-running the Pi playbooks is safe - setup-patroni refuses while Patroni is stopped (its data untouched), passes while it runs and keeps the database port; setup-consul keeps the key and restarts nothing; setup-keepalived reloads a changed config (PgBouncer put in front first, as on the Pis, where missing)"

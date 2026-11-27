@@ -1,5 +1,5 @@
 #!/bin/bash
-# Keycloak's upgrade path (plan 122): upgrade-keycloak.yml - every Pi in the run, its decisions (a run taken forward or
+# Keycloak's upgrade path: upgrade-keycloak.yml - every Pi in the run, its decisions (a run taken forward or
 # refused, one version on both Pis, never a downgrade, nothing to do, the Pi that starts first) as Ansible renders them,
 # the version read against stubbed systemctl/pgrep/readlink, the dump against a stubbed pg_dump (named for the schema
 # the database holds, the 5 newest kept, a failed one leaving nothing counted), and the order: the dump before anything
@@ -115,14 +115,28 @@ def resume(pi1, pi2, fwd=False):
 check("a clean stop resumed: every Pi down on one install - yes; one running, mixed installs, or a run taken forward - no",
       [resume(("26.5.7", ""), ("26.5.7", "")), resume(("26.5.7", "26.5.7"), ("26.5.7", "")),
        resume(("26.5.7", ""), ("26.8.2", "")), resume(("26.8.2", ""), ("26.8.2", ""), True)], [True, False, False, False])
+ns = task("No Pi up but not serving")["ansible.builtin.assert"]["that"]
+upns = lambda fwd, starting: condition(ns, _forward=fwd, ansible_play_hosts=["pi1", "pi2"],
+                                       hostvars={h: {"_starting": h in starting} for h in ("pi1", "pi2")})
+check("a Pi up but not serving (Restart=always: one that cannot come up restarts for ever) - refused unless a run taken "
+      "forward; none starting - on",
+      [upns(False, ()), upns(False, ("pi1",)), upns(True, ("pi1",))], [True, False, True])
+check("  before anything is decided done or changed (nothing to do, the dump)",
+      idx(task("No Pi up but not serving")) < min(idx(task("Nothing to do")), idx(task("Keycloak's database dumped"))), True)
 er = task("Every Pi running, unless")["ansible.builtin.assert"]["that"]
 check("  every Pi running unless taken forward or a clean stop - a Pi down otherwise refused",
       [condition(er, _forward=f, _resume=r, _running=x) for f, r, x in ((False, False, "26.5.7"), (False, False, ""), (True, False, ""), (False, True, ""))],
       [True, False, True, True])
 tw = task("The target's install whole - else")["ansible.builtin.assert"]["that"]
 check("the target's install whole (kc.sh and quarkus-run.jar) - else refused before anything stops",
-      [condition(tw, _target_files={"results": [{"stat": {"exists": a}}, {"stat": {"exists": b}}]}) for a, b in ((True, True), (True, False), (False, True))],
-      [True, False, False])
+      [condition(tw, _target_files={"results": [{"stat": {"exists": x}} for x in r]})
+       for r in ((True, True, True), (True, True, False), (False, True, True))], [True, False, False])
+ex, mk = task("The target extracted"), task("The target's extract marked whole")
+check("  a cut-short extract redone: `creates` is the mark, written only after the extract (then checked with the files)",
+      (ex["ansible.builtin.unarchive"]["creates"], mk["ansible.builtin.file"]["path"], mk["ansible.builtin.file"]["state"],
+       idx(ex) < idx(mk) < idx(task("The target's install whole (")),
+       task("The target's install whole (")["loop"][0]),
+      ("/opt/keycloak-{{ keycloak_version }}/.extracted", "/opt/keycloak-{{ keycloak_version }}/.extracted", "touch", True, ".extracted"))
 check("  checked before the dump", idx(task("The target's install whole - else")) < idx(task("Keycloak's database dumped")), True)
 first = task("The first Pi")["ansible.builtin.set_fact"]["_first"]
 def pick(starting, vip):
@@ -192,7 +206,7 @@ check("the order: schema read, dump and its check before anything stops; every P
        idx(inc) < idx(stop) < idx(link) < idx(s1) < idx(task("The first Pi runs and serves")) < idx(s2)), (True, True))
 check("  the steps that change anything skipped on a run taken forward",
       all("not _forward | bool" in str(t.get("when", "")) for t in (task("The target's tarball"), task("The target extracted"),
-          inc, stop, link)), True)
+          task("The target's extract marked whole"), inc, stop, link)), True)
 check("  the symlink replaced, not nested (force: true on a link)", (link["ansible.builtin.file"]["state"], link["ansible.builtin.file"].get("force")), ("link", True))
 check("  a run without every Pi failing everywhere (any_errors_fatal)", play.get("any_errors_fatal"), True)
 
@@ -248,10 +262,11 @@ def dumpcheck(path):
     cmd = render(dc["ansible.builtin.shell"]["cmd"], keycloak_restore_dump=path, keycloak_restore_host="pi1")
     return subprocess.run(["bash", "-c", cmd], capture_output=True, text=True).returncode
 cut_dump = os.path.join(work, "cut.sql.gz"); subprocess.run(f"echo 'CREATE TABLE realm();' | gzip > {cut_dump}", shell=True, check=True)
+bad_dump = os.path.join(work, "bad.sql.gz"); open(bad_dump, "w").write("not gzip")
 whole_dump = os.path.join(work, "whole.sql.gz")
 subprocess.run(f"printf 'CREATE TABLE realm();\\n-- PostgreSQL database dump complete\\n' | gzip > {whole_dump}", shell=True, check=True)
 check("  whole - on; missing, not gzip, or cut short (no trailer) - refused",
-      [dumpcheck(whole_dump), dumpcheck(os.path.join(work, "nope.sql.gz")), dumpcheck(bad_dump if "bad_dump" in dir() else cut_dump), dumpcheck(cut_dump)],
+      [dumpcheck(whole_dump), dumpcheck(os.path.join(work, "nope.sql.gz")), dumpcheck(bad_dump), dumpcheck(cut_dump)],
       [0, 1, 1, 1])
 check("the restore: the dump's version's install checked, then every Pi stopped, then the database, then /opt/keycloak back, "
       "the first Pi started and serving before the other",
@@ -271,27 +286,39 @@ check("  the dump's version's install present - on; gone - refused before anythi
 pbin = os.path.join(work, "pbin"); os.makedirs(pbin); plog = os.path.join(work, "psql.log")
 with open(os.path.join(pbin, "psql"), "w") as f:
     f.write(f'#!/bin/bash\n[ "$PGPASSWORD" = s3cret ] || exit 9\necho "$*" >> {plog}\n'
-            'case "$*" in *migration_model*) echo 26.5.0 ;; *"-q"*) cat > /dev/null ;; esac\n')
+            'case "$*" in *migration_model*) echo "${SCHEMA-26.5.0}" ;; *"-q"*) cat > /dev/null ;; esac\n')
 os.chmod(os.path.join(pbin, "psql"), 0o755)
 good_dump = os.path.join(work, "keycloak-20261127T010000Z-26.5.7-schema-26.5.0.sql.gz")
 subprocess.run(f"echo 'CREATE TABLE realm();' | gzip > {good_dump}", shell=True, check=True)
-bad_dump = os.path.join(work, "bad.sql.gz"); open(bad_dump, "w").write("not gzip")
-def restore(dump):
+def restore(dump, **env):
     if os.path.exists(plog):
         os.remove(plog)
     cmd = render(rr["ansible.builtin.shell"]["cmd"], keycloak_restore_dump=dump, keycloak_db_user="keycloak")
-    r = subprocess.run(["bash", "-c", cmd], input="s3cret\n", capture_output=True, text=True, env=dict(os.environ, PATH=pbin + ":" + os.environ["PATH"]))
+    r = subprocess.run(["bash", "-c", cmd], input="s3cret\n", capture_output=True, text=True, env=dict(os.environ, PATH=pbin + ":" + os.environ["PATH"], **env))
     return r.returncode, open(plog).read().splitlines() if os.path.exists(plog) else []
 rc, calls = restore(good_dump)
-check("  its SQL: the database dropped (connections forced off), created owned by keycloak's user, the dump loaded, the schema read",
-      (rc, [("DROP DATABASE IF EXISTS keycloak WITH (FORCE)" in c, 'CREATE DATABASE keycloak OWNER "keycloak"' in c, "-d keycloak -1 -q" in c,
-             "migration_model" in c) for c in calls]),
-      (0, [(True, False, False, False), (False, True, False, False), (False, False, True, False), (False, False, False, True)]))
+def sql(c):  # what a psql call ran
+    for what, mark in (("drop keycloak_restore", "DROP DATABASE IF EXISTS keycloak_restore WITH (FORCE)"),
+                       ("create keycloak_restore", 'CREATE DATABASE keycloak_restore OWNER "keycloak"'),
+                       ("load", "-d keycloak_restore -1 -q"), ("schema", "-d keycloak_restore -tA -c SELECT version FROM migration_model"),
+                       ("drop keycloak_migrated", "DROP DATABASE IF EXISTS keycloak_migrated WITH (FORCE)"),
+                       ("terminate", "pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = 'keycloak'"),
+                       ("swap", "ALTER DATABASE keycloak RENAME TO keycloak_migrated; ALTER DATABASE keycloak_restore RENAME TO keycloak")):
+        if mark in c:
+            return what
+    return c
+check("  its SQL: loaded beside keycloak (keycloak_restore, owned by keycloak's user), its schema read, the migrated one kept "
+      "aside, keycloak's sessions ended, then both renamed in one statement - keycloak never dropped, never empty",
+      (rc, [sql(c) for c in calls], any("DROP DATABASE IF EXISTS keycloak WITH" in c for c in calls)),
+      (0, ["drop keycloak_restore", "create keycloak_restore", "load", "schema", "drop keycloak_migrated", "terminate", "swap"], False))
+rc_e, calls_e = restore(good_dump, SCHEMA="")
+check("  a dump that loaded no Keycloak schema: failed before keycloak is touched (no swap)",
+      (rc_e != 0, [sql(c) for c in calls_e]), (True, ["drop keycloak_restore", "create keycloak_restore", "load", "schema"]))
 check("  every psql call stops on its first error (-v ON_ERROR_STOP=1): a load failing halfway is never reported restored",
-      (len(calls), all("-v ON_ERROR_STOP=1" in c for c in calls)), (4, True))
+      (len(calls), all("-v ON_ERROR_STOP=1" in c for c in calls)), (7, True))
 check("  a dump that is no gzip, or missing: refused before the database is touched",
       [restore(bad_dump), restore(os.path.join(work, "missing.sql.gz"))], [(1, []), (1, [])])
-check("  the load one transaction (a failed load leaves no half database a backup could take)", any("-d keycloak -1 -q" in c for c in calls), True)
+check("  the load one transaction (a failed load leaves no half database a backup could take)", any("-d keycloak_restore -1 -q" in c for c in calls), True)
 W_ = yaml.safe_load(open("deploy/ansible/playbooks/restore-keycloak.yml"))[0]["tasks"]
 wt = lambda name: next(t for t in W_ if str(t.get("name", "")).startswith(name))
 pick = wt("The dump restored")
@@ -345,14 +372,18 @@ check("  before: a newer target required, the pin serving on both Pis; verify: t
        ct("Before - every Pi runs and serves the pin")["vars"]["keycloak_serve_version"], ct("Verify - every Pi runs and serves the pin again")["vars"]["keycloak_serve_version"],
        [condition(ct("Verify - the marker from before there")["ansible.builtin.assert"]["that"], _markers={"stdout_lines": m}) for m in (["before"], ["after", "before"], [])]),
       ([True, False, False], "{{ keycloak_version }}", "{{ keycloak_version }}", [True, False, False]))
+check("  cleanup: the marker table and the restore's kept migrated database dropped (the copy as the build left it)",
+      [x in ct("Cleanup")["ansible.builtin.shell"]["cmd"] for x in ("DROP TABLE IF EXISTS keycloak_way_back_marker",
+                                                                  "DROP DATABASE IF EXISTS keycloak_migrated")], [True, True])
 task_cmd = open("Taskfile.yml").read().split("  test:copy:keycloak-way-back:")[1].split("\n\n")[0]
 seq = [l.strip() for l in task_cmd.splitlines() if l.strip().startswith("pb ")]
 check("  the task: before, production's upgrade-keycloak.yml to the target, after, production's restore-keycloak.yml with the "
       "upgrade's dump confirmed, verify - each production playbook behind the Vagrant guard, secrets kept out, cleanup always",
       ([("phase=" + l.split("phase=")[1].split()[0]) if "phase=" in l else l.split()[2].split("/")[-1] for l in seq],
        all("vagrant-only-play.yml" in l for l in seq if "playbooks/" in l), "env -i" in task_cmd,
-       "trap 'pb \"$C\" -e phase=cleanup" in task_cmd, "keycloak-way-back-confirm" in task_cmd),
-      (["phase=before", "upgrade-keycloak.yml", "phase=after", "restore-keycloak.yml", "phase=verify"], True, True, True, True))
+       "trap 'pb \"$C\" -e phase=cleanup -e marker=\"$M\"' EXIT" in task_cmd and "trap - EXIT" in task_cmd and "|| true" not in task_cmd,
+       "keycloak-way-back-confirm" in task_cmd),
+      (["phase=before", "upgrade-keycloak.yml", "phase=after", "restore-keycloak.yml", "phase=verify", "phase=cleanup"], True, True, True, True))
 print("keycloak-upgrade: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 PY_KU

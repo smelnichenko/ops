@@ -1,5 +1,5 @@
 ---
-# Keycloak's database dumped (plan 122): the schema it holds read (migration_model), then pg_dump through HAProxy
+# Keycloak's database dumped: the schema it holds read (migration_model), then pg_dump through HAProxy
 # (Patroni's primary) on {{ _first }} into {{ dump_dir }} - named for the version running (the install a way back puts
 # back) and that schema, written aside, checked, renamed; the 5 newest kept; the password on stdin; its path said, and
 # its failure refused. upgrade-keycloak.yml takes it before anything stops; the copy's way-back check takes one to
