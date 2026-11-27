@@ -802,7 +802,9 @@ while IFS= read -r step; do
   case "$step" in
     "test:copy:playbook PLAYBOOK=upgrade-kubeadm.yml"*)
       v=$(version_of k8s_upgrade_to "$step") || { stopped "no Kubernetes version in its plan ($step) - nothing merged" "$log"; exit 1; }
-      pre+=("deploy:etcd:backup"); cmds+=("deploy:kubeadm:upgrade -- -e k8s_upgrade_to=$v") ;;
+      # the package revision proven, not the repository's newest at production's run
+      p=$(version_of k8s_upgrade_package "$step") || { stopped "no Kubernetes package revision in its plan ($step) - nothing merged" "$log"; exit 1; }
+      pre+=("deploy:etcd:backup"); cmds+=("deploy:kubeadm:upgrade -- -e k8s_upgrade_to=$v -e k8s_upgrade_package=$p") ;;
     "test:copy:playbook PLAYBOOK=setup-kubeadm.yml"*)
       v=$(version_of cilium_version "$step") || { stopped "no Cilium version in its plan ($step) - nothing merged" "$log"; exit 1; }
       cmds+=("deploy:cilium:upgrade -- -e cilium_version=$v") ;;

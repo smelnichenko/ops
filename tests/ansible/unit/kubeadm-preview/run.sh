@@ -61,5 +61,35 @@ case_() {  # case_ <name> <the version running> <want in the output>
 case_ "the cluster before the target: the preview says what it would do, and ends" v1.33.5 "PREVIEW: would upgrade"
 case_ "at the target already (a run cut short after the kubelet's restart): the preview ends before the proofs" \
   v1.34.12 "PREVIEW: Kubernetes at v1.34.12 already"
+# the package revision given: the target's passes, another refused before anything runs
+out=$(ANSIBLE_NOCOLOR=1 "$AP" --check -i "$W/hosts.yml" "$W/play.yml" -e k8s_upgrade_to=1.34.12 -e k8s_upgrade_package=1.34.12-1.1 \
+  -e preview_running=v1.33.5 2>&1); rc=$?
+if [ $rc = 0 ] && grep -qF "PREVIEW: would upgrade" <<< "$out"; then echo "PASS the target's own package revision given: on"
+else echo "FAIL the target's own package revision given (rc $rc)"; fails=$((fails + 1)); fi
+out=$(ANSIBLE_NOCOLOR=1 "$AP" --check -i "$W/hosts.yml" "$W/play.yml" -e k8s_upgrade_to=1.34.12 -e k8s_upgrade_package=1.34.11-1.1 \
+  -e preview_running=v1.33.5 2>&1); rc=$?
+if [ $rc != 0 ] && grep -qF "is not a revision of 1.34.12" <<< "$out"; then echo "PASS another version's package revision: refused"
+else echo "FAIL another version's package revision (rc $rc)"; fails=$((fails + 1)); fi
+# the selection itself, against the repository's index (curl stubbed): the given revision exactly, else the newest
+r=$(W=$W "$PY" - <<'PYSEL'
+import os, subprocess, sys, yaml
+sys.path.insert(0, "tests/ansible/unit")
+from templar import render
+W = os.environ["W"]
+play = yaml.safe_load(open("deploy/ansible/playbooks/upgrade-kubeadm.yml"))[0]
+flat = lambda ts: [x for t in ts for x in [t] + flat(t.get("block", []) + t.get("rescue", []) + t.get("always", []))]
+sel = next(t for t in flat(play["tasks"]) if t.get("register") == "_package")
+os.makedirs(os.path.join(W, "bin"), exist_ok=True)
+open(os.path.join(W, "bin", "curl"), "w").write("#!/bin/bash\nprintf 'Package: kubeadm\\nVersion: 1.34.12-1.1\\n\\nPackage: kubeadm\\nVersion: 1.34.12-1.2\\n\\nPackage: kubelet\\nVersion: 1.34.12-1.9\\n'\n")
+os.chmod(os.path.join(W, "bin", "curl"), 0o755)
+def pick(pkg):
+    cmd = render(sel["ansible.builtin.shell"], target="1.34.12", target_minor="1.34", target_package=pkg)
+    r = subprocess.run(["bash", "-c", cmd], capture_output=True, text=True, env=dict(os.environ, PATH=os.path.join(W, "bin") + ":" + os.environ["PATH"]))
+    return r.stdout.strip()
+print([pick("1.34.12-1.1"), pick(""), pick("1.34.12-1.3")])
+PYSEL
+)
+if [ "$r" = "['1.34.12-1.1', '1.34.12-1.2', '']" ]; then echo "PASS the package: the given revision exactly (not the newest), the newest when none is given, none when it is gone (failed)"
+else echo "FAIL the package selection: $r"; fails=$((fails + 1)); fi
 echo "kubeadm-preview: $([ $fails = 0 ] && echo ALL-PASS || echo "$fails FAILED")"
 [ $fails = 0 ]

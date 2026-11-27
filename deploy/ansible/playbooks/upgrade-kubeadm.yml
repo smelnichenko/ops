@@ -27,6 +27,10 @@
     kubeconfig: /etc/kubernetes/admin.conf
     kubectl: "kubectl --kubeconfig {{ kubeconfig }}"
     target: "{{ k8s_upgrade_to | default('') }}"
+    # the package revision to install (setup-kubeadm.yml's k8s_package_version, X.Y.Z-R - what a rebuild installs): the
+    # copy's proof and production's run install that one, never the repository's newest revision (the wave-patches
+    # review, 2026-11-27: a newer -1.2 would be proven while -1.1 stays pinned); none given - the newest
+    target_package: "{{ k8s_upgrade_package | default('') }}"
     target_minor: "{{ target.split('.')[:2] | join('.') }}"
     # pkgs.k8s.io's signing key, every minor's repository (read 2026-10-09: 1.34, 1.35, 1.36)
     k8s_apt_key_fingerprint: DE15B14486CD377B9E876E1A234654DA9A296436
@@ -49,6 +53,12 @@
       ansible.builtin.assert:
         that: target is match('^[0-9]+\.[0-9]+\.[0-9]+$')
         fail_msg: "-e k8s_upgrade_to=X.Y.Z, e.g. 1.34.12"
+
+    - name: The package revision, when given, the target's (-e k8s_upgrade_package=X.Y.Z-R)
+      ansible.builtin.assert:
+        that: target_package == '' or target_package is match('^' ~ (target | regex_escape) ~ '-[0-9][0-9A-Za-z.+~]*$')
+        fail_msg: "-e k8s_upgrade_package={{ target_package }} is not a revision of {{ target }} (X.Y.Z-R)"
+        quiet: true
 
     - name: The version the cluster runs
       check_mode: false
@@ -155,7 +165,7 @@
             set -o pipefail
             curl -fsSL --max-time 120 https://pkgs.k8s.io/core:/stable:/v{{ target_minor }}/deb/Packages \
               | awk '/^Package: /{p=$2} /^Version: /{if (p=="kubeadm") print $2}' \
-              | grep -E '^{{ target | regex_escape }}-' | sort -V | tail -1
+              {% if target_package %}| grep -Fx '{{ target_package }}'{% else %}| grep -E '^{{ target | regex_escape }}-' | sort -V | tail -1{% endif %}
           args:
             executable: /bin/bash
           register: _package
