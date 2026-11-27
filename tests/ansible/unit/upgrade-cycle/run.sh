@@ -15,11 +15,12 @@
 #   repository of the runner's, kept inside the unit's own files, pushed to Forgejo's URL as the bot, labelled
 #   stop-updating and agent-fixed, read until Forgejo shows it, proven again, reviewed - then applied in that run (no
 #   notice: operator 2026-11-21), a major or one-way unit too; the review handed Renovate's pull request bodies and the
-#   repos the unit does not touch, its compatibility pass required; no fix: blocked (labelled on the agent's NO FIX
-#   alone), no rebuild
+#   repos the unit does not touch, its compatibility pass required; no fix (the agent's NO FIX): a try, its reason
+#   said, never labelled, no rebuild
 #   a refused merge: the journal gone; a partial one, a failed command, a stop after (or during) the merge: paged and
 #   paused; a stop before it: nothing; a closed terminal after the journal: nothing stops; --dry runs and writes
-#   nothing; one run at a time; no step holds the run's lock
+#   nothing; one run at a time; no step holds the run's lock; no run leaves its reads of its pull requests (heads-*)
+#   in .upgrade-cycle, however it ends
 set -u
 cd "$(dirname "$0")/../../../.." || exit 1
 REAL=$PWD
@@ -268,11 +269,16 @@ def environ(env=None):
 def calls_now():
     p = os.path.join(ST, "calls")
     return open(p).read().splitlines() if os.path.exists(p) else []
+LEFT = []  # each run's reads of its pull requests (heads-*) still in .upgrade-cycle after it ended - checked at the end
+def left(pick, args):
+    d = os.path.join(OPS, ".upgrade-cycle")
+    LEFT.extend(f"{' '.join((pick, *args))}: {f}" for f in sorted(os.listdir(d)) if f.startswith("heads-"))
 def night(pick, args=(), env=None, **kw):
     setup(pick, **kw)
     r = subprocess.run(["bash", os.path.join(OPS, "scripts/upgrade-cycle.sh"), *args], capture_output=True, text=True,
                        env=environ(env), timeout=120)
     night.out = r.stdout
+    left(pick, args)
     return r.returncode, calls_now()
 def has(calls, prefix):
     return [c for c in calls if c.startswith(prefix)]
@@ -323,6 +329,7 @@ def stopped(sig, flag_file, pick="prove wave-patches patch", **kw):
         time.sleep(0.05)
     p.send_signal(sig)
     p.wait(timeout=60)
+    left(pick, (sig.name,))
     return p.returncode, calls_now()
 # ── the gates ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 rc, calls = night("prove wave-patches patch", files={"open": "scylla-2026.3\n"})
@@ -1240,6 +1247,8 @@ holder.kill()
 holder.wait()
 check("a second run while one holds the lock: refused, nothing read", (r.returncode, "another upgrade run" in r.stdout, calls_now()),
       (1, True, []))
+check("no run leaves its reads of its pull requests (heads-*: .key, .after, .expected) in .upgrade-cycle - a try, a stop, "
+      "--dry, applied: each removed however the run ends", LEFT, [])
 print("upgrade-cycle: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 PYCHECK

@@ -246,10 +246,12 @@ heads=$state/heads-$unit-$$
 dirs=(); built=""
 cleanup() {  # however the run ends: the copy halted when it was readied (the radar may start; its base snapshot kept
   # for the next run) and marked used - its Argo layer and this unit on it: no change or check until a run readies it -
-  # the clones gone
+  # the clones gone; the run's own reads of its pull requests gone in every mode (--dry writes them empty) - $heads and
+  # each $heads.<suffix> (.key, .after, .expected), so a read added later is never left behind
   [ -z "$built" ] || run scripts/copy-snapshot.sh used || say "THE COPY NOT MARKED USED - task test:copy:drop by hand"
   [ -z "$built" ] || run vagrant halt || say "THE COPY NOT HALTED - the radar stays off: vagrant halt by hand"
-  [ -n "$dry" ] || { chmod -R u+w "${dirs[@]}" 2> /dev/null; rm -rf "${dirs[@]}" "$heads" "$heads.after" "$heads.expected"; }
+  rm -f -- "$heads" "$heads".*
+  [ -n "$dry" ] || { chmod -R u+w "${dirs[@]}" 2> /dev/null; rm -rf "${dirs[@]}"; }
 }
 trap 'rc=$?; cleanup; console_end "$rc"' EXIT
 tries_key=""
