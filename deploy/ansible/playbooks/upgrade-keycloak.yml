@@ -106,17 +106,29 @@
         _up: "{{ ansible_play_hosts | map('extract', hostvars) | rejectattr('_running', 'equalto', '') | map(attribute='inventory_hostname') | list }}"
       run_once: true
 
-    - name: Every Pi running, unless taken forward
+    # a run cut short after the stop, before /opt/keycloak moved: every Pi down on one install - resumed (the database
+    # untouched: dumped again, the links moved, the VIP's started first)
+    - name: A clean stop to resume - every Pi down, one install on all
+      ansible.builtin.set_fact:
+        _resume: >-
+          {{ not (_forward | bool)
+             and ansible_play_hosts | map('extract', hostvars, '_running') | reject('equalto', '') | list | length == 0
+             and ansible_play_hosts | map('extract', hostvars, '_installed') | unique | list | length == 1 }}
+      run_once: true
+
+    - name: Every Pi running, unless taken forward or a clean stop resumed
       ansible.builtin.assert:
-        that: _forward | bool or _running != ''
+        that: _forward | bool or _resume | bool or _running != ''
         fail_msg: >-
-          REFUSED: {{ inventory_hostname }}'s Keycloak is down with {{ _installed }} installed - not a run to take forward
-          to {{ keycloak_version }} (every Pi on it or down with it installed): by hand
+          REFUSED: {{ inventory_hostname }}'s Keycloak is down with {{ _installed }} installed - neither a run to take
+          forward to {{ keycloak_version }} nor a clean stop (the Pis' installs {{ ansible_play_hosts
+          | map('extract', hostvars, '_installed') | unique | list }}). The database's schema says which version it
+          holds (migration_model): start that version on both Pis by hand
         quiet: true
 
     - name: One version on both Pis before (two would already share a database)
       ansible.builtin.assert:
-        that: _forward | bool or ansible_play_hosts | map('extract', hostvars, '_running') | unique | list | length == 1
+        that: _forward | bool or _resume | bool or ansible_play_hosts | map('extract', hostvars, '_running') | unique | list | length == 1
         fail_msg: >-
           REFUSED: the Pis run Keycloak {{ ansible_play_hosts | map('extract', hostvars, '_running') | unique | list }}
           - two versions on one database: by hand
@@ -125,13 +137,15 @@
 
     - name: Never a downgrade
       ansible.builtin.assert:
-        that: _forward | bool or _running is version(keycloak_version, '<=')
+        that: _forward | bool or (_running == '' and _installed is version(keycloak_version, '<=')) or (_running != '' and _running is version(keycloak_version, '<='))
         fail_msg: "REFUSED: {{ inventory_hostname }} runs Keycloak {{ _running }}, newer than {{ keycloak_version }}"
         quiet: true
 
     - name: Nothing to do - every Pi runs {{ keycloak_version }}
       ansible.builtin.meta: end_play
-      when: ansible_play_hosts | map('extract', hostvars, '_running') | unique | list == [keycloak_version]
+      when: >-
+        ansible_play_hosts | map('extract', hostvars, '_running') | unique | list == [keycloak_version]
+        and ansible_play_hosts | map('extract', hostvars, ['_serves', 'status']) | unique | list == [200]
 
     - name: The Pi that starts first (it holds the VIP)
       ansible.builtin.command:
@@ -170,6 +184,21 @@
         dest: /opt
         remote_src: true
         creates: "/opt/keycloak-{{ keycloak_version }}"
+
+    # a cut-short extract left a half install that `creates:` would skip: whole, or nothing stops
+    - name: The target's install whole (its launcher and runner there)
+      when: not _forward | bool
+      ansible.builtin.stat:
+        path: "/opt/keycloak-{{ keycloak_version }}/{{ item }}"
+      loop: [bin/kc.sh, lib/quarkus-run.jar]
+      register: _target_files
+
+    - name: The target's install whole - else nothing stopped
+      when: not _forward | bool
+      ansible.builtin.assert:
+        that: _target_files.results | map(attribute='stat.exists') | list == [true, true]
+        fail_msg: "REFUSED: /opt/keycloak-{{ keycloak_version }} on {{ inventory_hostname }} is incomplete (a cut-short extract?) - remove it and run again: nothing stopped"
+        quiet: true
 
     - name: The target owned by the keycloak user (its first start builds into it)
       when: not _forward | bool

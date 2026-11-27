@@ -88,7 +88,7 @@ check("taken forward: a Pi down with the target installed, the other on it; not 
        forward(("26.5.7", ""), ("26.5.7", "26.5.7")), forward(("26.8.2", ""), ("26.5.7", "26.5.7")),
        forward(("26.5.7", "26.5.7"), ("26.5.7", "26.5.7"))], [True, True, False, False, False])
 one = task("One version on both Pis before")["ansible.builtin.assert"]["that"]
-both = lambda a, b, fwd=False: condition(one, _forward=fwd, ansible_play_hosts=["pi1", "pi2"],
+both = lambda a, b, fwd=False: condition(one, _forward=fwd, _resume=False, ansible_play_hosts=["pi1", "pi2"],
                                          hostvars={"pi1": {"_running": a}, "pi2": {"_running": b}})
 check("one version on both Pis: the same - on; two - refused (unless taken forward)",
       [both("26.5.7", "26.5.7"), both("26.5.7", "26.8.2"), both("26.8.2", "", True)], [True, False, True])
@@ -96,12 +96,32 @@ two = task("One version running here")["ansible.builtin.assert"]["that"]
 check("one version running here: one - on; two at once (a stale process) - refused",
       [condition(two, _running="26.5.7"), condition(two, _running="26.5.7 26.8.2")], [True, False])
 down = task("Never a downgrade")["ansible.builtin.assert"]["that"]
-check("never a downgrade: older or the target - on; newer - refused",
-      [condition(down, _forward=False, _running=r, keycloak_version="26.8.2") for r in ("26.5.7", "26.8.2", "27.0.1")], [True, True, False])
+check("never a downgrade: older or the target - on; newer - refused; down, judged by its install",
+      [condition(down, _forward=False, _running=r, _installed=i, keycloak_version="26.8.2")
+       for r, i in (("26.5.7", "26.5.7"), ("26.8.2", "26.8.2"), ("27.0.1", "27.0.1"), ("", "26.5.7"), ("", "27.0.1"))],
+      [True, True, False, True, False])
 end = task("Nothing to do")["when"]
-check("nothing to do when every Pi runs the target - not when one runs another or is down",
-      [condition(end, keycloak_version="26.8.2", ansible_play_hosts=["pi1", "pi2"], hostvars={"pi1": {"_running": a}, "pi2": {"_running": b}})
-       for a, b in (("26.8.2", "26.8.2"), ("26.5.7", "26.8.2"), ("26.8.2", ""))], [True, False, False])
+check("nothing to do when every Pi runs AND serves the target - not when one runs another, is down, or still starting",
+      [condition(end, keycloak_version="26.8.2", ansible_play_hosts=["pi1", "pi2"],
+                 hostvars={"pi1": {"_running": a, "_serves": {"status": sa}}, "pi2": {"_running": b, "_serves": {"status": sb}}})
+       for a, b, sa, sb in (("26.8.2", "26.8.2", 200, 200), ("26.5.7", "26.8.2", 200, 200), ("26.8.2", "", 200, -1),
+                            ("26.8.2", "26.8.2", 200, -1))], [True, False, False, False])
+rs = task("A clean stop to resume")["ansible.builtin.set_fact"]["_resume"]
+def resume(pi1, pi2, fwd=False):
+    hv = {"pi1": {"_installed": pi1[0], "_running": pi1[1]}, "pi2": {"_installed": pi2[0], "_running": pi2[1]}}
+    return render(rs, _forward=fwd, ansible_play_hosts=["pi1", "pi2"], hostvars=hv)
+check("a clean stop resumed: every Pi down on one install - yes; one running, mixed installs, or a run taken forward - no",
+      [resume(("26.5.7", ""), ("26.5.7", "")), resume(("26.5.7", "26.5.7"), ("26.5.7", "")),
+       resume(("26.5.7", ""), ("26.8.2", "")), resume(("26.8.2", ""), ("26.8.2", ""), True)], [True, False, False, False])
+er = task("Every Pi running, unless")["ansible.builtin.assert"]["that"]
+check("  every Pi running unless taken forward or a clean stop - a Pi down otherwise refused",
+      [condition(er, _forward=f, _resume=r, _running=x) for f, r, x in ((False, False, "26.5.7"), (False, False, ""), (True, False, ""), (False, True, ""))],
+      [True, False, True, True])
+tw = task("The target's install whole - else")["ansible.builtin.assert"]["that"]
+check("the target's install whole (kc.sh and quarkus-run.jar) - else refused before anything stops",
+      [condition(tw, _target_files={"results": [{"stat": {"exists": a}}, {"stat": {"exists": b}}]}) for a, b in ((True, True), (True, False), (False, True))],
+      [True, False, False])
+check("  checked before the dump", idx(task("The target's install whole - else")) < idx(task("Keycloak's database dumped")), True)
 first = task("The first Pi")["ansible.builtin.set_fact"]["_first"]
 def pick(starting, vip):
     hv = {h: {"inventory_hostname": h, "_starting": h == starting, "_addrs": {"stdout": "x" if h == vip else ""}} for h in ("pi1", "pi2")}
@@ -173,9 +193,22 @@ check("  a run without every Pi failing everywhere (any_errors_fatal)", play.get
 # ── the refusals elsewhere ─────────────────────────────────────────────────────────────────────────────────────
 sps = yaml.safe_load(open("deploy/ansible/playbooks/setup-pi-services.yml"))[0]["tasks"]
 g = next(t for t in sps if str(t.get("name", "")).startswith("Keycloak installed where missing"))
-check("setup-pi-services: installed where missing or the same version - on; another, or one it cannot read - refused",
-      [condition(g["ansible.builtin.assert"]["that"], _keycloak_installed={"stdout": s}, keycloak_version="26.5.7")
-       for s in ("missing", "26.5.7", "26.8.2", "unknown")], [True, True, False, False])
+G2 = {"pis": ["pi1", "pi2"]}
+kc_ok = lambda here, peer: condition(g["ansible.builtin.assert"]["that"], _keycloak_installed={"stdout": here},
+                                     _keycloak_peer_installed={"stdout": peer}, keycloak_version="26.5.7", groups=G2)
+check("setup-pi-services: the same version - on; missing beside none or the same version - installed; missing beside "
+      "another (a rebuilt Pi, the pin ahead), another here, or one it cannot read - refused",
+      [kc_ok("26.5.7", "x"), kc_ok("missing", "missing"), kc_ok("missing", "26.5.7"), kc_ok("missing", "26.4.0"),
+       kc_ok("26.8.2", "x"), kc_ok("unknown", "x")], [True, True, True, False, False, False])
+fp = next(t for t in sps if str(t.get("name", "")).startswith("A fresh Forgejo only beside the same version"))
+fj = lambda exists, peer: condition(fp["ansible.builtin.assert"]["that"], _forgejo_bin={"stat": {"exists": exists}},
+                                    _forgejo_peer={"stdout": peer}, forgejo_version="15.0.11", groups=G2)
+check("  Forgejo's sibling: installed already - on; fresh beside none or the same version - on; fresh beside another - refused",
+      [fj(True, "x"), fj(False, "missing"), fj(False, "15.0.11"), fj(False, "15.0.10")], [True, True, True, False])
+check("  each read of the other Pi delegated to it (it works under --limit) and only for a fresh install",
+      [(t.get("delegate_to"), "missing" in str(t.get("when")) or "not _forgejo_bin" in str(t.get("when")))
+       for t in sps if t.get("register") in ("_keycloak_peer_installed", "_forgejo_peer")],
+      [("{{ groups['pis'] | difference([inventory_hostname]) | first }}", True)] * 2)
 names_sps = [str(t.get("name", "")) for t in sps]
 check("  its refusal before the tarball, the extract and the symlink",
       names_sps.index(g["name"]) < min(names_sps.index(n) for n in names_sps if n.startswith(("Download Keycloak", "Extract Keycloak", "Symlink Keycloak"))), True)
@@ -200,6 +233,18 @@ check("  its refusal before any restart", kn.index(ka["name"]) < min(i for i, n 
 R = yaml.safe_load(open("deploy/ansible/playbooks/tasks/keycloak-restore.yml"))
 rt = lambda name: next(t for t in R if str(t.get("name", "")).startswith(name))
 rr = next(t for t in R if t.get("register") == "_restore")
+dc = rt("The dump there and whole")
+check("the restore: the dump checked where it lies (there, gzip, its trailer) once, before anything stops",
+      (dc.get("delegate_to"), dc.get("run_once"), R.index(dc) < R.index(rt("Keycloak stopped on every Pi"))), ("{{ keycloak_restore_host }}", True, True))
+def dumpcheck(path):
+    cmd = render(dc["ansible.builtin.shell"]["cmd"], keycloak_restore_dump=path, keycloak_restore_host="pi1")
+    return subprocess.run(["bash", "-c", cmd], capture_output=True, text=True).returncode
+cut_dump = os.path.join(work, "cut.sql.gz"); subprocess.run(f"echo 'CREATE TABLE realm();' | gzip > {cut_dump}", shell=True, check=True)
+whole_dump = os.path.join(work, "whole.sql.gz")
+subprocess.run(f"printf 'CREATE TABLE realm();\\n-- PostgreSQL database dump complete\\n' | gzip > {whole_dump}", shell=True, check=True)
+check("  whole - on; missing, not gzip, or cut short (no trailer) - refused",
+      [dumpcheck(whole_dump), dumpcheck(os.path.join(work, "nope.sql.gz")), dumpcheck(bad_dump if "bad_dump" in dir() else cut_dump), dumpcheck(cut_dump)],
+      [0, 1, 1, 1])
 check("the restore: the dump's version's install checked, then every Pi stopped, then the database, then /opt/keycloak back, "
       "the first Pi started and serving before the other",
       R.index(rt("Every Pi has the dump's version's install")) < R.index(rt("Keycloak stopped on every Pi")) < R.index(rr)
@@ -231,10 +276,12 @@ def restore(dump):
     return r.returncode, open(plog).read().splitlines() if os.path.exists(plog) else []
 rc, calls = restore(good_dump)
 check("  its SQL: the database dropped (connections forced off), created owned by keycloak's user, the dump loaded, the schema read",
-      (rc, [("DROP DATABASE IF EXISTS keycloak WITH (FORCE)" in c, 'CREATE DATABASE keycloak OWNER "keycloak"' in c, "-d keycloak -q" in c,
+      (rc, [("DROP DATABASE IF EXISTS keycloak WITH (FORCE)" in c, 'CREATE DATABASE keycloak OWNER "keycloak"' in c, "-d keycloak -1 -q" in c,
              "migration_model" in c) for c in calls]),
       (0, [(True, False, False, False), (False, True, False, False), (False, False, True, False), (False, False, False, True)]))
-check("  a dump that is no gzip: refused before the database is touched", restore(bad_dump), (1, []))
+check("  a dump that is no gzip, or missing: refused before the database is touched",
+      [restore(bad_dump), restore(os.path.join(work, "missing.sql.gz"))], [(1, []), (1, [])])
+check("  the load one transaction (a failed load leaves no half database a backup could take)", any("-d keycloak -1 -q" in c for c in calls), True)
 W_ = yaml.safe_load(open("deploy/ansible/playbooks/restore-keycloak.yml"))[0]["tasks"]
 wt = lambda name: next(t for t in W_ if str(t.get("name", "")).startswith(name))
 pick = wt("The dump restored")
@@ -254,18 +301,44 @@ known = wt("A dump, its Pi and its version known")["ansible.builtin.assert"]["th
 check("  refused before anything stops without a dump, its Pi among the play's, or a version",
       [condition(known, _dump_path=p, _dump_host=h, _dump_version=v, ansible_play_hosts=["pi1", "pi2"])
        for p, h, v in ((A, "pi1", "26.5.7"), ("", "pi1", "26.5.7"), (A, "pi3", "26.5.7"), (A, "pi1", ""))], [True, False, False, False])
+pin = wt("The unit reverted first")["ansible.builtin.assert"]["that"]
+conf = wt("Confirmed by naming the dump")["ansible.builtin.assert"]["that"]
+check("  refused until the unit is reverted (the pin the dump's version), and until confirmed by the dump's file name",
+      ([condition(pin, keycloak_version=k, _dump_version="26.5.7") for k in ("26.5.7", "26.8.2")],
+       [condition(conf, _dump_path=A, **({} if c is None else {"confirm": c})) for c in (A.split("/")[-1], "other", None)]),
+      ([True, False], [True, False, False]))
+check("  both before anything stops",
+      max(W_.index(wt("The unit reverted first")), W_.index(wt("Confirmed by naming"))) < W_.index(wt("Restored")), True)
 check("  every Pi in its run, and it runs the restore tasks with the chosen dump",
       (condition(wt("Every Pi in the run")["ansible.builtin.assert"]["that"], ansible_play_hosts=["pi1"], groups={"pis": ["pi1", "pi2"]}),
        wt("Restored").get("ansible.builtin.include_tasks")), (False, "tasks/keycloak-restore.yml"))
 C = yaml.safe_load(open("tests/ansible/copy/keycloak-way-back-check.yml"))[1]["tasks"]
+phase_of = lambda t: str(t.get("when", "")).split("'")[1] if "phase ==" in str(t.get("when", "")) else None
+phases = [phase_of(t) for t in C]
+check("the copy's rehearsal: a phase var (never --tags, which would skip the Vagrant guard), each task in one phase, in order",
+      ([p for p in phases if p] == sorted([p for p in phases if p], key=["before", "after", "verify", "cleanup"].index),
+       "--tags" not in open("Taskfile.yml").read().split("test:copy:keycloak-way-back:")[1].split("\n  test:")[0]),
+      (True, True))
+first_chk = C[0]["ansible.builtin.assert"]["that"]
+check("  a phase and a marker name required (the task's, one per run - never a lookup re-templated per use)",
+      [condition(first_chk, **v) for v in ({"phase": "before", "marker": "way-back-20261127T010000Z"}, {"phase": "x", "marker": "way-back-1Z"},
+                                          {"phase": "before"}, {"phase": "before", "marker": "{{ lookup('pipe','date') }}"})],
+      [True, False, False, False])
 ct = lambda name: next(t for t in C if str(t.get("name", "")).startswith(name))
-check("the copy's rehearsal: production's dump and restore tasks, a marker before the dump and one after, the first kept and the second lost",
-      (os.path.normpath(os.path.join("tests/ansible/copy", ct("The dump, as upgrade-keycloak").get("ansible.builtin.include_tasks"))),
-       os.path.normpath(os.path.join("tests/ansible/copy", ct("The way back, as restore-keycloak").get("ansible.builtin.include_tasks"))),
-       C.index(ct("The marker from before")) < C.index(ct("The dump, as")) < C.index(ct("The marker from after")) < C.index(ct("The way back")),
-       [condition(ct("The marker from before there")["ansible.builtin.assert"]["that"], _markers={"stdout_lines": m})
-        for m in (["before"], ["after", "before"], [])]),
-      ("deploy/ansible/playbooks/tasks/keycloak-dump.yml", "deploy/ansible/playbooks/tasks/keycloak-restore.yml", True, [True, False, False]))
+check("  before: a newer target required, the pin serving on both Pis; verify: the pin serving again, the first marker kept and the second lost",
+      ([condition(ct("Before - a newer version")["ansible.builtin.assert"]["that"], keycloak_version="26.5.7", **({} if k is None else {"keycloak_to": k}))
+        for k in ("26.8.2", "26.5.7", None)],
+       ct("Before - every Pi runs and serves the pin")["vars"]["keycloak_serve_version"], ct("Verify - every Pi runs and serves the pin again")["vars"]["keycloak_serve_version"],
+       [condition(ct("Verify - the marker from before there")["ansible.builtin.assert"]["that"], _markers={"stdout_lines": m}) for m in (["before"], ["after", "before"], [])]),
+      ([True, False, False], "{{ keycloak_version }}", "{{ keycloak_version }}", [True, False, False]))
+task_cmd = open("Taskfile.yml").read().split("  test:copy:keycloak-way-back:")[1].split("\n\n")[0]
+seq = [l.strip() for l in task_cmd.splitlines() if l.strip().startswith("pb ")]
+check("  the task: before, production's upgrade-keycloak.yml to the target, after, production's restore-keycloak.yml with the "
+      "upgrade's dump confirmed, verify - each production playbook behind the Vagrant guard, secrets kept out, cleanup always",
+      ([("phase=" + l.split("phase=")[1].split()[0]) if "phase=" in l else l.split()[2].split("/")[-1] for l in seq],
+       all("vagrant-only-play.yml" in l for l in seq if "playbooks/" in l), "env -i" in task_cmd,
+       "trap 'pb \"$C\" -e phase=cleanup" in task_cmd, "keycloak-way-back-confirm" in task_cmd),
+      (["phase=before", "upgrade-keycloak.yml", "phase=after", "restore-keycloak.yml", "phase=verify"], True, True, True, True))
 print("keycloak-upgrade: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 PY_KU

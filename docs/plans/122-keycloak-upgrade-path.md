@@ -1,6 +1,6 @@
 # Plan 122 - Keycloak's upgrade path: restarted on a new version, proven on the copy, one-way
 
-**Status:** parts 1-4 built 2026-11-26/27 (ops, stacked on the Keycloak unit split #78): the version-aware restart, the copy's proof, the dump before a version moves, the store taken by deploy:pi-services. Part 5 open: the full review, then the first real proof - the cycle proving renovate/keycloak-26.8 (26.5.7 -> 26.8.2) on the copy, before any production apply.
+**Status:** the first build (parts 1-4 below, 2026-11-26/27) was refused by its review and replaced - see "Rework after the review of 2026-11-27" at the end: upgrade-keycloak.yml (vars/keycloak.yml, the dump first, every Pi stopped, the VIP's first), no version move in setup-pi-services or keycloak-restart, restore-keycloak.yml and its rehearsal (task test:copy:keycloak-way-back: a real upgrade, then the restore). Parts 1-4 are kept as the record of what was refused. Open: the rehearsal passing on a real copy, then the store's `missing` cleared and #79 merged.
 
 ## Why
 

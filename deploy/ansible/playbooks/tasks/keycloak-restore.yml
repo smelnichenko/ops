@@ -18,6 +18,23 @@
     fail_msg: "REFUSED: /opt/keycloak-{{ keycloak_restore_version }} is gone on {{ inventory_hostname }} - nothing stopped"
     quiet: true
 
+# the dump checked where it lies before anything stops: there, whole (gzip and pg_dump's own trailer) - a missing,
+# empty or cut dump refuses here, never after the database is dropped
+- name: The dump there and whole, on the Pi given - else nothing stopped
+  ansible.builtin.shell:
+    executable: /bin/bash
+    cmd: |
+      set -euo pipefail
+      dump={{ keycloak_restore_dump | quote }}
+      [ -s "$dump" ] || { echo "REFUSED: $dump missing or empty on {{ keycloak_restore_host }} - nothing stopped" >&2; exit 1; }
+      gzip -t "$dump"
+      [ "$(gzip -dc "$dump" | tail -n 5 | grep -c 'PostgreSQL database dump complete')" = 1 ] \
+        || { echo "REFUSED: $dump is cut short (no dump trailer) - nothing stopped" >&2; exit 1; }
+  changed_when: false
+  check_mode: false
+  delegate_to: "{{ keycloak_restore_host }}"
+  run_once: true
+
 - name: Keycloak stopped on every Pi
   ansible.builtin.systemd:
     name: keycloak
@@ -32,10 +49,12 @@
       read -r PGPASSWORD; export PGPASSWORD
       q() { psql -w -h 127.0.0.1 -p 5000 -U postgres -v ON_ERROR_STOP=1 "$@"; }
       dump={{ keycloak_restore_dump | quote }}
-      [ -s "$dump" ] && gzip -t "$dump"
+      [ -s "$dump" ] || { echo "REFUSED: $dump missing here - nothing dropped" >&2; exit 1; }
+      gzip -t "$dump"
       q -d postgres -c "DROP DATABASE IF EXISTS keycloak WITH (FORCE)"
       q -d postgres -c 'CREATE DATABASE keycloak OWNER "{{ keycloak_db_user }}"'
-      gzip -dc "$dump" | q -d keycloak -q > /dev/null
+      # one transaction: a load that fails leaves an empty database, never a half-loaded one a backup could take as good
+      gzip -dc "$dump" | q -d keycloak -1 -q > /dev/null
       q -d keycloak -tA -c "SELECT version FROM migration_model ORDER BY update_time DESC, id DESC LIMIT 1"
     stdin: "{{ keycloak_dump_password }}"
   register: _restore

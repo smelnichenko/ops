@@ -321,6 +321,30 @@
         path: /usr/local/bin/forgejo
       register: _forgejo_bin
 
+    # a fresh install beside the other Pi's: never another version on their one database (a rebuilt Pi while the pin is
+    # ahead of production - its first start would migrate the database under the other's older Forgejo)
+    - name: The other Pi's Forgejo (a fresh install here starts only beside the same version, or none)
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          if [ -x /usr/local/bin/forgejo ]; then
+            /usr/local/bin/forgejo --version | grep -o '[0-9][0-9]*[.][0-9][0-9]*[.][0-9][0-9]*' | head -n 1
+          else echo missing; fi
+      register: _forgejo_peer
+      delegate_to: "{{ groups['pis'] | difference([inventory_hostname]) | first }}"
+      changed_when: false
+      check_mode: false
+      when: not _forgejo_bin.stat.exists and groups['pis'] | length > 1
+
+    - name: A fresh Forgejo only beside the same version (or none) - another moves through task deploy:forgejo:upgrade
+      ansible.builtin.assert:
+        that: _forgejo_bin.stat.exists or groups['pis'] | length < 2 or _forgejo_peer.stdout in ['missing', forgejo_version]
+        fail_msg: >-
+          REFUSED: the other Pi runs Forgejo {{ _forgejo_peer.stdout | default('?') }}, vars/forgejo.yml pins {{ forgejo_version }}
+          - a fresh install here would put two versions on one database: task deploy:forgejo:upgrade first
+        quiet: true
+
     - name: Download Forgejo (a fresh install), its sha256 checked
       ansible.builtin.get_url:
         url: "https://code.forgejo.org/forgejo/forgejo/releases/download/v{{ forgejo_version }}/forgejo-{{ forgejo_version }}-linux-{{ forgejo_arch }}"
@@ -720,12 +744,30 @@
       changed_when: false
       check_mode: false  # a read
 
+    - name: The other Pi's Keycloak install (a fresh one here starts only beside the same version, or none)
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          if [ ! -e /opt/keycloak ]; then echo missing; exit 0; fi
+          v=$(readlink -f /opt/keycloak | sed -n 's|^/opt/keycloak-\([^/]*\)/*$|\1|p')
+          echo "${v:-unknown}"
+      register: _keycloak_peer_installed
+      delegate_to: "{{ groups['pis'] | difference([inventory_hostname]) | first }}"
+      changed_when: false
+      check_mode: false
+      when: _keycloak_installed.stdout == 'missing' and groups['pis'] | length > 1
+
     - name: Keycloak installed where missing - another version moves through task deploy:keycloak:upgrade
       ansible.builtin.assert:
-        that: _keycloak_installed.stdout in ['missing', keycloak_version]
+        that: >-
+          _keycloak_installed.stdout == keycloak_version
+          or (_keycloak_installed.stdout == 'missing'
+              and (groups['pis'] | length < 2 or _keycloak_peer_installed.stdout in ['missing', keycloak_version]))
         fail_msg: >-
-          REFUSED: Keycloak {{ _keycloak_installed.stdout }} is installed on {{ inventory_hostname }}, vars/keycloak.yml
-          pins {{ keycloak_version }} - task deploy:keycloak:upgrade moves it (its dump first, both Pis stopped)
+          REFUSED: Keycloak {{ _keycloak_installed.stdout }} is installed on {{ inventory_hostname }} (the other Pi
+          {{ (_keycloak_peer_installed | default({})).stdout | default('not read') }}), vars/keycloak.yml pins
+          {{ keycloak_version }} - task deploy:keycloak:upgrade moves it (its dump first, both Pis stopped)
         quiet: true
 
     - name: Download Keycloak tarball (retry — github.com is flaky from vagrant NAT)

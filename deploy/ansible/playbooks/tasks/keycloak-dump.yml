@@ -17,6 +17,7 @@
     stdin: "{{ keycloak_dump_password }}"
   register: _schema
   changed_when: false
+  failed_when: false  # its error said by the check below (no_log hides it here)
   check_mode: false
   delegate_to: "{{ _first }}"
   run_once: true
@@ -52,6 +53,6 @@
     that: _dump.rc | default(1) == 0 and (_schema.stdout | default('') | trim) != ''
     fail_msg: >-
       REFUSED: the Keycloak dump failed - nothing stopped:
-      {{ _dump.stderr | default('') }} {{ '' if (_schema.stdout | default('') | trim) else 'the database schema not read' }}
+      {{ _dump.stderr | default('') }} {{ '' if (_schema.stdout | default('') | trim) else 'the database schema not read: ' ~ (_schema.stderr | default('')) }}
     success_msg: "{{ _dump.stdout | default('') }}"
   run_once: true
