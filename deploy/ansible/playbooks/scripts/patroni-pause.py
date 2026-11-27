@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """patroni-pause.py - Patroni's cluster paused around a run's work and resumed after it, the one way setup-consul,
-setup-patroni and upgrade-patroni do it (ansible.builtin.script, root, on a Pi with Patroni installed - running or not:
+setup-patroni and upgrade-patroni do it (restore-consul pauses alone: it stops Patroni paused, and the keys it loads after
+hold no pause or marker) (ansible.builtin.script, root, on a Pi with Patroni installed - running or not:
 it reads and writes through Consul, as patronictl does).
 
   check                 exit 1 when the cluster is paused already - someone's maintenance, or a run cut short (a
@@ -9,6 +10,10 @@ it reads and writes through Consul, as patronictl does).
                         then the pause; "MARKER <index>" once the config and every member show it paused. A failure
                         after the marker (a DCS unread after the request among them) undoes what this run's pause may
                         have done, then deletes the marker
+  paused <run>          exit 0 when the cluster is paused - its config and every member - under a marker of <run>'s (a
+                        pause that run made and still holds, taken up by a run of it again: never paused twice); else
+                        1, said - a marker not its own or none, or something not paused (a stale marker: stopping
+                        Patroni then would stop Postgres)
   resume <run>          this run's marker read, by its index (the "MARKER <index>" line of its pause's output, in
                         PAUSED_OUT: ansible.builtin.script runs under ssh -tt, its lines end CR LF) - a marker not its
                         own, or none, means the pause is not its own: refused, nothing resumed - then the resume,
@@ -31,7 +36,9 @@ import time
 
 CONFIG = os.environ.get("PATRONI_CONFIG", "/etc/patroni/patroni.yml")
 KEY = "ansible/patroni-paused-by"
-RUNS = ("setup-consul", "setup-patroni", "upgrade-patroni")
+# consul-way-back pauses and never resumes: restore-consul.yml stops Patroni paused, and the restore replaces the DCS
+# (its marker and pause with it) with the snapshot's
+RUNS = ("setup-consul", "setup-patroni", "upgrade-patroni", "consul-way-back")
 # the shape a run writes (an older run's had no nonce): only that is echoed - Consul has no ACLs
 MARKER = re.compile(r"(%s) \d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ( [0-9a-f]{8})?" % "|".join(RUNS))
 # each member writes its state into the DCS on its loop (loop_wait 10 s): the time for all of them to show it
@@ -135,6 +142,21 @@ def delete_marker(idx):
         return f"the pause marker is not this run's any more ({value!r})"
     d = run("consul", "kv", "delete", "-cas", f"-modify-index={idx}", KEY)
     return None if d.returncode == 0 else f"its marker not deleted: {d.stderr.strip()}"
+
+
+def paused_by(pre, who):
+    """0 when the config and every member are paused under a marker of `who`'s - else 1, said."""
+    by, _ = read_marker()
+    paused, members = state(pre)
+    if not (by and MARKER.fullmatch(by) and by.split()[0] == who):
+        print(f"NOT {who}'s PAUSE: the marker is {by!r} ({said(paused, members)})")
+        return 1
+    if not (paused and all(members.values())):
+        print(f"REFUSED: {who}'s marker ({by}), not everything paused ({said(paused, members)}) - look (patronictl list), "
+              f"then consul kv delete {KEY}")
+        return 1
+    print(f"PAUSED BY {by}: {said(paused, members)}")
+    return 0
 
 
 def check(pre):
@@ -264,6 +286,8 @@ def main(argv):
         act = lambda pre: check(pre)  # noqa: E731
     elif argv[:1] == ["pause"] and len(argv) == 2 and argv[1] in RUNS:
         act = lambda pre: pause(pre, argv[1])  # noqa: E731
+    elif argv[:1] == ["paused"] and len(argv) == 2 and argv[1] in RUNS:
+        act = lambda pre: paused_by(pre, argv[1])  # noqa: E731
     elif argv[:1] == ["resume"] and len(argv) == 2 and argv[1] in RUNS:
         idx = re.search(r"^MARKER (.*?)\r?$", os.environ.get("PAUSED_OUT", ""), re.M)
         act = lambda pre: resume(pre, idx.group(1) if idx else "")  # noqa: E731

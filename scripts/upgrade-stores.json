@@ -129,7 +129,7 @@
       ],
       "backups": [],
       "missing": [
-        "its way back not yet rehearsed on the copy - after the new version ran: Vault and Patroni stopped, the snapshot upgrade-consul.yml took restored (consul snapshot restore) under the kept old binary on all three servers, three voters and one leader, Vault and Patroni back on it with nothing from after the upgrade"
+        "its way back not yet rehearsed on the copy (task test:copy:consul-way-back, MODE=current and MODE=snapshot) - after the new version ran, restore-consul.yml: Vault stopped, the running cluster's whole KV exported (or the snapshot upgrade-consul.yml took), Patroni paused and stopped (Postgres kept running), the three servers a new cluster on the kept old binary, the keys loaded, three voters and one leader, Vault unsealed and Patroni back on the primary first with no promotion; a marker written after the upgrade kept by the current KV and gone with the snapshot"
       ],
       "examples": [
         "hashicorp-consul-2.x",
@@ -138,7 +138,7 @@
       "taken_by": [
         "deploy:consul:upgrade"
       ],
-      "_why": "its own command takes it: upgrade-consul.yml snapshots the whole state on pi1 (inspected) before any server restarts, the followers then the leader - proven on the copy by copy-unit (setup-consul.yml's version moved: upgrade-consul.yml there) and by test:consul-upgrade - the upgrade proven, its way back from the snapshot by hand (the playbook's header), never run: blocked until a way-back check passes on the copy (the one-way rule)"
+      "_why": "its own command takes it: upgrade-consul.yml snapshots the whole state on pi1 (inspected) before any server restarts, the followers then the leader - proven on the copy by copy-unit (setup-consul.yml's version moved: upgrade-consul.yml there) and by test:consul-upgrade - the upgrade proven; its way back scripted (restore-consul.yml, task deploy:consul:way-back - the running cluster's KV carried over, the snapshot only for a cluster that cannot be read), not yet run on the copy (task test:copy:consul-way-back, both sources): blocked until a way-back check passes there (the one-way rule)"
     },
     {
       "store": "sonarqube",

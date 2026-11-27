@@ -1,0 +1,1108 @@
+---
+# The way back from upgrade-consul.yml: Consul's three servers (pi1, pi2, ten) back on the binary upgrade-consul.yml kept
+# (/usr/local/bin/consul-<version>), with Consul's keys (Vault's storage, Patroni's keys, the locks) carried over. An old
+# binary may not read a raft directory the new one wrote, so the servers start again as a new cluster on the old binary,
+# and the keys go into it from one of two sources:
+#   current (the default) - the whole KV exported from the running cluster once Vault is stopped, imported and compared
+#            key by key: nothing in the KV is lost (the catalog and the sessions start afresh - agents register again,
+#            locks free themselves);
+#   snapshot (-e consul_restore_from=snapshot) - the snapshot upgrade-consul.yml took on pi1 before it touched a server,
+#            for a cluster that cannot be read: everything written since is lost, Vault's secrets too.
+# Around that: the tier-0 backup and the restore check kept off (both hold Consul locks); Vault stopped and off at a boot
+# (before the export: nothing of Vault's written after it); Patroni paused, then stopped on both Pis and off at a boot -
+# paused, it leaves Postgres running and serving (unmanaged: no failover, and HAProxy's check marks the primary down
+# without Patroni's REST - the database away through it until Patroni is back). Each server's data directory is set
+# aside, never deleted (its node-id and gossip keyring carried: the catalog names each node by its id, and the keyring is
+# the one the servers use); a record beside it (/var/lib/consul/restore-consul.state) names the source, that directory
+# and the version left, so a run again reuses the same source and never mistakes a failed run's new directory for the
+# state before. Then Patroni's leader, member and failover keys are deleted - their sessions died with the old cluster,
+# and a leader key naming the other Pi would demote the running primary; Vault started and unsealed (it needs nothing of
+# Patroni), one active, its root token working; Patroni on the primary's Pi first, the replica after, not paused.
+# First revert the unit (setup-consul.yml's consul_version back to the old pin): the version gone back to is the pin, and
+# a snapshot must be of it. Confirmed by -e confirm: consul-<the pin> (current), or the snapshot's file name. From the
+# first stop on, a failure says where everything was left, how to run again, and how to go forward instead.
+#
+# Usage: task deploy:consul:way-back -- -e confirm=consul-<pin>
+#        task deploy:consul:way-back -- -e consul_restore_from=snapshot -e confirm=<the snapshot's file name>
+#          (the newest on pi1 by name; another, or the controller's copy - vars/consul-upgrade-backups/production/ - put
+#          back on a server: -e consul_restore_snapshot=<path> [-e consul_restore_host=<server>])
+#        the copy rehearses both: task test:copy:consul-way-back [MODE=snapshot]
+- name: Consul's way back - its old binary back, its keys carried over
+  hosts: pi1,pi2,target
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  vars:
+    _setup: "{{ (lookup('ansible.builtin.file', playbook_dir ~ '/setup-consul.yml') | from_yaml)[0].vars }}"
+    consul_version: "{{ _setup.consul_version }}"
+    patroni_scope: "{{ (lookup('ansible.builtin.file', playbook_dir ~ '/setup-patroni.yml') | from_yaml)[0].vars.patroni_scope }}"
+    consul_servers: [pi1, pi2, target]
+    upgrade_dir: /var/backups/consul-upgrade
+    consul_http: http://127.0.0.1:8500
+    consul_data: /var/lib/consul/data
+    restore_state: /var/lib/consul/restore-consul.state
+    pause_marker: ansible/patroni-paused-by  # scripts/patroni-pause.py's KEY
+    vault_api: https://127.0.0.1:8200
+    patronictl: patronictl -c /etc/patroni/patroni.yml
+    # the export's copy on the controller, beside upgrade-consul.yml's snapshot (one directory per inventory)
+    backups_here: "{{ playbook_dir }}/../vars/consul-upgrade-backups/{{ inventory_file | basename | splitext | first }}"
+    # Consul locks the Pis' own jobs take (setup-pi-backups, setup-pi-restore-check): kept off while Consul is replaced
+    consul_lock_jobs: [pi-tier0-backup, pi-restore-check]
+    # a KV export Consul would load: JSON, Vault's barrier, Patroni's cluster named - and no pause in it (a pause marker, or
+    # Patroni's config paused, carried over would leave Patroni paused after the load). No apostrophe in it: the shell
+    # hands it to python3 -c in single quotes
+    export_ok_py: |
+      import base64, json, sys
+      keys = json.load(open(sys.argv[1]))
+      rows = {str(k.get("key", "")): k.get("value") or "" for k in keys}
+      if not keys:
+          sys.exit(f"{sys.argv[1]}: no keys")
+      if not {"vault/core/seal-config", "vault/core/keyring"} <= set(rows):
+          sys.exit(f"{sys.argv[1]}: no vault/core/seal-config or vault/core/keyring - not a whole Vault")
+      if f"service/{sys.argv[2]}/initialize" not in rows:
+          sys.exit(f"{sys.argv[1]}: no service/{sys.argv[2]}/initialize - not the Patroni cluster")
+      if "ansible/patroni-paused-by" in rows:
+          sys.exit(f"{sys.argv[1]}: a Patroni pause marker in it - it would be carried over")
+      config = rows.get(f"service/{sys.argv[2]}/config")
+      if config and json.loads(base64.b64decode(config) or b"{}").get("pause"):
+          sys.exit(f"{sys.argv[1]}: Patroni paused in it - the pause would be carried over")
+      print(len(keys))
+    # a leader running, every other member streaming with no lag left (upgrade-patroni.yml's)
+    healthy_py: |
+      import json, sys
+      m = json.load(sys.stdin)
+      leaders = [x for x in m if x["Role"] == "Leader" and x["State"] == "running"]
+      others = [x for x in m if x["Role"] != "Leader"]
+      ok = len(leaders) == 1 and others and all(x["State"] == "streaming" and x.get("Replay Lag", 1) == 0 for x in others)
+      print(("HEALTHY " if ok else "NOT HEALTHY ") + ", ".join("%s %s %s" % (x["Member"], x["Role"], x["State"]) for x in m))
+      sys.exit(0 if ok else 1)
+    # the primary through this Pi's HAProxy (:5000) and, where it is enabled, PgBouncer (:6432 - Forgejo's and Keycloak's)
+    primary_through_proxies: |
+      set -euo pipefail
+      # the password on stdin, not in the environment Ansible puts on the command line
+      read -r PGPASSWORD; export PGPASSWORD
+      ports=5000
+      [ "$(systemctl is-enabled pgbouncer 2>/dev/null)" != enabled ] || ports="5000 6432"
+      for p in $ports; do
+        [ "$(psql -w -h 127.0.0.1 -p "$p" -U postgres -d postgres -Atc 'select not pg_is_in_recovery()')" = t ]
+      done
+  tasks:
+    - name: Every server in the run (one left out would keep the new binary beside the carried keys)
+      ansible.builtin.assert:
+        that: consul_servers | difference(ansible_play_hosts) | length == 0
+        fail_msg: "REFUSED: Consul's servers {{ consul_servers }}, the run has {{ ansible_play_hosts }} - nothing stopped"
+        quiet: true
+      run_once: true
+
+    - name: The source given - current (the running cluster's KV) or snapshot
+      ansible.builtin.assert:
+        that: consul_restore_from | default('current') in ['current', 'snapshot']
+        fail_msg: "REFUSED: -e consul_restore_from=current|snapshot, not '{{ consul_restore_from }}' - nothing stopped"
+        quiet: true
+      run_once: true
+
+    # an earlier run of this play left a record: its source is this run's (the running cluster it exported from is gone
+    # by then), the state before the way back is the directory it names, the version left the one it names
+    - name: An earlier run's record here
+      ansible.builtin.command:
+        argv: [cat, "{{ restore_state }}"]
+      register: _record
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Its fields
+      ansible.builtin.set_fact:
+        _rec_source: "{{ _record.stdout | default('') | regex_search('(?m)^source=(.+)$', '\\1') | default([''], true) | first }}"
+        _orig_aside: "{{ _record.stdout | default('') | regex_search('(?m)^aside=(.+)$', '\\1') | default([''], true) | first }}"
+        _rec_from: "{{ _record.stdout | default('') | regex_search('(?m)^from=(.+)$', '\\1') | default([''], true) | first }}"
+        _rec_host: "{{ _record.stdout | default('') | regex_search('(?m)^host=(.+)$', '\\1') | default([''], true) | first }}"
+
+    - name: One source recorded across the servers (or none yet) - else nothing stopped
+      ansible.builtin.assert:
+        that: ansible_play_hosts | map('extract', hostvars, '_rec_source') | select | unique | list | length <= 1
+        fail_msg: >-
+          REFUSED: the servers' records ({{ restore_state }}) name different sources {{ ansible_play_hosts
+          | map('extract', hostvars, '_rec_source') | select | unique | list }} - look first: nothing stopped
+        quiet: true
+      run_once: true
+
+    # a recorded snapshot is a file that never changes: taken up as it is. A recorded export is taken up only once the
+    # cluster it came from is gone (a directory set aside): before that the running cluster may hold writes made since -
+    # it is exported afresh, its record replaced
+    - name: The source, from the record or as given
+      ansible.builtin.set_fact:
+        _recorded: "{{ _recorded_source if _take_up | bool else '' }}"
+        _from_record: "{{ _take_up | bool }}"
+        _mode: >-
+          {{ ('snapshot' if _recorded_source is match('.*[.]snap$') else 'current') if _take_up | bool
+             else consul_restore_from | default('current') }}
+        _recorded_host: "{{ ansible_play_hosts | map('extract', hostvars, '_rec_host') | select | first | default('') }}"
+      vars:
+        _recorded_source: "{{ ansible_play_hosts | map('extract', hostvars, '_rec_source') | select | first | default('') }}"
+        _set_aside_any: "{{ ansible_play_hosts | map('extract', hostvars, '_orig_aside') | select | list | length > 0 }}"
+        _take_up: "{{ _recorded_source | length > 0 and (_recorded_source is match('.*[.]snap$') or _set_aside_any | bool) }}"
+      run_once: true
+
+    - name: A run again takes its source up - never a source of another kind
+      ansible.builtin.assert:
+        that: not _from_record | bool or consul_restore_from is not defined or consul_restore_from == _mode
+        fail_msg: >-
+          REFUSED: an earlier run recorded {{ _recorded }} ({{ _mode }}) as its source - run again with it, or go forward
+          first (its failure message says how): nothing stopped
+        quiet: true
+      run_once: true
+
+    # by name, which leads with its UTC time - never by a file's mtime
+    - name: The newest snapshot on its server
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          shopt -s nullglob
+          snaps=({{ upgrade_dir }}/consul-*.snap)
+          [ -z "${snaps[0]-}" ] || printf '%s\n' "${snaps[@]}" | LC_ALL=C sort | tail -n 1
+      register: _newest
+      changed_when: false
+      check_mode: false
+      delegate_to: "{{ consul_restore_host | default('pi1') }}"
+      run_once: true
+      when: _mode == 'snapshot' and not _from_record | bool and consul_restore_snapshot is not defined
+
+    - name: The snapshot restored - recorded, given, or the newest - its server, and the version it ran
+      ansible.builtin.set_fact:
+        _snap: "{{ _snap_path }}"
+        _snap_version: >-
+          {{ _snap_path | basename | regex_search('^consul-[0-9]{8}T[0-9]{6}Z-(.+)[.]snap$', '\1') | default([''], true) | first }}
+      vars:
+        _snap_path: "{{ _recorded if _from_record | bool else consul_restore_snapshot | default(_newest.stdout | default('')) }}"
+      run_once: true
+      when: _mode == 'snapshot'
+
+    - name: A snapshot and its version known - else nothing stopped
+      ansible.builtin.assert:
+        that:
+          - _snap | length > 0
+          - _snap_version is match('^[0-9][0-9A-Za-z.+-]*$')
+        fail_msg: "REFUSED: no Consul snapshot to restore (path '{{ _snap }}', version '{{ _snap_version }}') - nothing stopped"
+        success_msg: "restoring {{ _snap }}, Consul {{ _snap_version }}"
+      run_once: true
+      when: _mode == 'snapshot'
+
+    # a retried upgrade names its snapshot by the version pi1 ran then - an earlier one may be the pre-upgrade state
+    - name: The unit reverted first - setup-consul.yml pins the snapshot's version
+      ansible.builtin.assert:
+        that: consul_version == _snap_version
+        fail_msg: >-
+          REFUSED: setup-consul.yml pins {{ consul_version }}, the snapshot {{ _snap }} ran {{ _snap_version }} - revert the
+          unit first (setup-consul and upgrade-consul would move it again); if an earlier snapshot is the state before the
+          upgrade (a retried upgrade names its snapshot by the version pi1 ran then), name it: -e
+          consul_restore_snapshot=<its path> - nothing stopped
+        quiet: true
+      run_once: true
+      when: _mode == 'snapshot'
+
+    - name: The version gone back to, the source's server, and the confirmation it takes
+      ansible.builtin.set_fact:
+        _to: "{{ _snap_version if _mode == 'snapshot' else consul_version }}"
+        _src_host: "{{ (_recorded_host or consul_restore_host | default('pi1')) if _from_record | bool else consul_restore_host | default('pi1') }}"
+        _confirm_as: "{{ (_snap | basename) if _mode == 'snapshot' else 'consul-' ~ consul_version }}"
+      run_once: true
+
+    - name: Confirmed (-e confirm=consul-<the pin> for the current KV, the snapshot's file name for a snapshot)
+      ansible.builtin.assert:
+        that: (confirm | default('')) == _confirm_as
+        fail_msg: >-
+          REFUSED: {{ ("restoring " ~ _snap ~ " loses everything written to Consul since it was taken - Vault's secrets and
+          Patroni's settings among it") if _mode == 'snapshot' else ("the three servers go back to Consul " ~ _to ~ " as a
+          new cluster, the KV carried over (the catalog and the sessions start afresh)") }} - confirm with
+          -e confirm={{ _confirm_as }}: nothing stopped
+        quiet: true
+      run_once: true
+
+    - name: The source's server in the run, the recorded one on a run again - else nothing stopped
+      ansible.builtin.assert:
+        that:
+          - _src_host in ansible_play_hosts
+          - not _from_record | bool or consul_restore_host is not defined or consul_restore_host == _src_host
+        fail_msg: >-
+          REFUSED: the source's server {{ _src_host }}{{ (' (recorded; -e consul_restore_host=' ~ consul_restore_host ~ ' given)')
+          if consul_restore_host is defined else '' }}, the run's servers {{ ansible_play_hosts }} - nothing stopped
+        quiet: true
+      run_once: true
+
+    # a recorded export checked where it lies before anything stops, and refused when it belongs to an earlier way back
+    # (older than the newest upgrade snapshot: a record a way forward left behind)
+    - name: A recorded export there and whole, and of this way back - else nothing stopped
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          python3 -c '{{ export_ok_py }}' {{ _recorded | quote }} {{ patroni_scope }}
+          shopt -s nullglob
+          snaps=({{ upgrade_dir }}/consul-*.snap)
+          newest=$([ -z "${snaps[0]-}" ] || printf '%s\n' "${snaps[@]##*/}" | LC_ALL=C sort | tail -n 1)
+          mine=$(basename {{ _recorded | quote }})
+          [ -z "$newest" ] || [[ "${mine:7:16}" > "${newest:7:16}" ]] \
+            || { echo "$mine is older than the newest upgrade snapshot $newest - a record of an earlier way back:" \
+                   "delete {{ restore_state }} on every server" >&2; exit 1; }
+      changed_when: false
+      check_mode: false
+      delegate_to: "{{ _src_host }}"
+      run_once: true
+      when: _mode == 'current' and _from_record | bool
+
+    # the binary upgrade-consul.yml kept, of the version gone back to; a rebuilt server has none - the refusal names the step
+    - name: The binary of the version gone back to, kept here - its version
+      ansible.builtin.command:
+        argv: ["/usr/local/bin/consul-{{ _to }}", version]
+      register: _kept
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Every server has it - else nothing stopped
+      ansible.builtin.assert:
+        that: >-
+          _kept.rc | default(1) == 0
+          and ((_kept.stdout_lines + [''])[0].split() + ['', ''])[1] | regex_replace('^v', '') == _to
+        fail_msg: >-
+          REFUSED: /usr/local/bin/consul-{{ _to }} on {{ inventory_hostname }} is gone or not that version
+          ({{ _kept.stdout | default('') }}{{ _kept.stderr | default('') }}) - copy it from another server, or put Consul
+          {{ _to }}'s release there checked against setup-consul.yml's checksums: nothing stopped
+        quiet: true
+
+    # read by the binary that will restore it - a cut or foreign file refuses here, never after the servers stop
+    - name: The snapshot there and readable by that binary - else nothing stopped
+      ansible.builtin.command:
+        argv: ["/usr/local/bin/consul-{{ _to }}", snapshot, inspect, "{{ _snap }}"]
+      changed_when: false
+      check_mode: false
+      delegate_to: "{{ _src_host }}"
+      run_once: true
+      when: _mode == 'snapshot'
+
+    - name: The agent here now
+      ansible.builtin.uri:
+        url: "{{ consul_http }}/v1/agent/self"
+        return_content: true
+      register: _agent
+      failed_when: false
+      check_mode: false
+
+    - name: The version being left - the record's, or what the agent runs
+      ansible.builtin.set_fact:
+        _from: "{{ _rec_from or (_agent.json.Config.Version | default('') if _agent.status | default(0) == 200 else '') }}"
+
+    - name: The version being left known on every server - else nothing stopped
+      ansible.builtin.assert:
+        that: _from | length > 0
+        fail_msg: >-
+          REFUSED: Consul's agent on {{ inventory_hostname }} not answering ({{ _agent.msg | default(_agent.status | default('')) }})
+          and no record of an earlier run ({{ restore_state }}) - the version this would go back from is not known: nothing
+          stopped
+        quiet: true
+
+    # the current KV needs a cluster that answers, on a version to go back from
+    - name: Something to go back from, its KV readable (the current source, before a first stop) - else nothing stopped
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          # a default-consistency read: it needs the leader; a key the import would rename (consul kv import cleans each
+          # path - a double or trailing slash, a dot segment) refused here, never after the cluster is replaced
+          consul kv export | python3 -c 'import json, posixpath, sys
+          keys = [k["key"] for k in json.load(sys.stdin)]
+          odd = [k for k in keys if posixpath.normpath(k) != k]
+          if odd:
+              sys.exit("keys consul kv import would rename: %s - rename or delete them first" % odd[:10])
+          print(len(keys))'
+      register: _readable
+      changed_when: false
+      check_mode: false
+      delegate_to: "{{ _src_host }}"
+      run_once: true
+      when: _mode == 'current' and not _from_record | bool
+
+    - name: A newer version running somewhere (the current source, before a first stop) - else nothing stopped
+      ansible.builtin.assert:
+        that: ansible_play_hosts | map('extract', hostvars, '_from') | select('version', _to, '>') | list | length > 0
+        fail_msg: >-
+          REFUSED: every server runs Consul {{ ansible_play_hosts | map('extract', hostvars, '_from') | unique | join(', ') }}
+          - nothing newer than {{ _to }} to go back from: nothing stopped
+        quiet: true
+      run_once: true
+      when: _mode == 'current' and not _from_record | bool
+
+    # an earlier run got as far as loading the keys and deleting Patroni's stale ones (its record says so), and every
+    # agent runs the version gone back to: this run takes up after them - never a second load
+    - name: Whether an earlier run loaded this source here
+      ansible.builtin.set_fact:
+        _host_restored: >-
+          {{ _from_record | bool and ('restored=' ~ (_recorded | basename)) in (_record.stdout | default('')).splitlines()
+             and _agent.status | default(0) == 200 and _agent.json.Config.Version | default('') == _to }}
+
+    - name: Whether it did on every server
+      ansible.builtin.set_fact:
+        _restored_already: "{{ ansible_play_hosts | map('extract', hostvars, '_host_restored') | select | list | length == ansible_play_hosts | length }}"
+        _restored_recorded: >-
+          {{ _from_record | bool and ansible_play_hosts | map('extract', hostvars, ['_record', 'stdout'])
+             | select('search', '(?m)^restored=' ~ (_recorded | basename | regex_escape) ~ '$') | list | length == ansible_play_hosts | length }}
+      run_once: true
+
+    # every record says the keys were loaded, an agent not answering on the version gone back to: never a second load
+    # (it would stop what has served since, and lose what was written) - that agent first
+    - name: A load every record names taken up only with every agent answering - else nothing stopped
+      ansible.builtin.assert:
+        that: not _restored_recorded | bool or _restored_already | bool
+        fail_msg: >-
+          REFUSED: every server's record says {{ _recorded | basename }} was loaded, but Consul {{ _to }} is not answering on
+          {{ ansible_play_hosts | zip(ansible_play_hosts | map('extract', hostvars, '_host_restored')) | rejectattr('1')
+          | map(attribute='0') | join(', ') }} - start Consul there (systemctl start consul), then run again: nothing stopped
+        quiet: true
+      run_once: true
+
+    # a reboot already scheduled (ten's unattended-upgrades schedules one with shutdown -r) would cut the run mid-way,
+    # where no rescue says where it stopped
+    - name: No reboot scheduled here
+      ansible.builtin.stat:
+        path: /run/systemd/shutdown/scheduled
+      register: _scheduled
+      check_mode: false
+
+    - name: None scheduled on any server - else nothing stopped
+      ansible.builtin.assert:
+        that: not _scheduled.stat.exists
+        fail_msg: >-
+          REFUSED: a shutdown or reboot is scheduled on {{ inventory_hostname }} (/run/systemd/shutdown/scheduled) - let it
+          happen, or cancel it (shutdown -c), first: nothing stopped
+        quiet: true
+
+    # the primary named by Postgres itself (Patroni may be stopped by an earlier run of this play): exactly one Pi's
+    # Postgres out of recovery - none, or two, is a look first
+    - name: Postgres running here, and whether it is the primary
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          runuser -u postgres -- psql -w -h /var/run/postgresql -d postgres -Atc 'select not pg_is_in_recovery()'
+      register: _pg_role
+      changed_when: false
+      failed_when: false
+      check_mode: false
+      when: inventory_hostname in groups['pis']
+
+    - name: Exactly one primary, both Postgres running - else nothing stopped
+      ansible.builtin.assert:
+        that:
+          - groups['pis'] | map('extract', hostvars, ['_pg_role', 'rc']) | list == [0] * (groups['pis'] | length)
+          - groups['pis'] | map('extract', hostvars, ['_pg_role', 'stdout']) | select('equalto', 't') | list | length == 1
+        fail_msg: >-
+          REFUSED: Postgres on the Pis is not one primary and running replicas - {{ groups['pis'] | zip(groups['pis']
+          | map('extract', hostvars, ['_pg_role', 'stdout'])) | list }} ({{ groups['pis'] | map('extract', hostvars,
+          ['_pg_role', 'stderr']) | select | join('; ') }}) - look first: nothing stopped
+        quiet: true
+      run_once: true
+
+    - name: The primary's Pi
+      ansible.builtin.set_fact:
+        _pg_primary: >-
+          {{ groups['pis'] | zip(groups['pis'] | map('extract', hostvars, ['_pg_role', 'stdout'])) | selectattr('1', 'equalto', 't')
+             | map(attribute='0') | first }}
+      run_once: true
+
+    # the password the end checks with, proven on the primary's own port while it serves (a wrong or empty one found
+    # after the load would fail the run there); not through HAProxy - it follows Patroni's REST, which an earlier run
+    # of this play may have stopped
+    - name: The admin password works on the primary now - else nothing stopped
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          read -r PGPASSWORD; export PGPASSWORD
+          [ -n "$PGPASSWORD" ] || { echo "postgres_admin_password is empty" >&2; exit 1; }
+          [ "$(psql -w -h 127.0.0.1 -p 5432 -U postgres -d postgres -Atc 'select 1')" = 1 ]
+        stdin: "{{ postgres_admin_password }}"
+      changed_when: false
+      check_mode: false
+      no_log: true  # the password goes in on stdin
+      when: inventory_hostname == _pg_primary
+
+    - name: Patroni running here (an earlier run of this play may have stopped it)
+      ansible.builtin.command:
+        argv: [systemctl, is-active, patroni]
+      register: _patroni_active
+      changed_when: false
+      failed_when: false
+      check_mode: false
+      when: inventory_hostname in groups['pis']
+
+    - name: Whether any Patroni runs
+      ansible.builtin.set_fact:
+        _patroni_runs: "{{ groups['pis'] | map('extract', hostvars, ['_patroni_active', 'stdout']) | select('equalto', 'active') | list | length > 0 }}"
+      run_once: true
+
+    # a pause this play made (a run cut short with Patroni still up on a Pi) is taken up, not refused
+    - name: The pause marker now
+      ansible.builtin.command:
+        argv: [consul, kv, get, "{{ pause_marker }}"]
+      register: _marker
+      changed_when: false
+      failed_when: false
+      check_mode: false
+      delegate_to: "{{ _pg_primary }}"
+      run_once: true
+      when: _patroni_runs | bool
+
+    - name: Whether this play paused it
+      ansible.builtin.set_fact:
+        _ours_paused: "{{ _patroni_runs | bool and _marker.rc | default(1) == 0 and _marker.stdout is match('consul-way-back ') }}"
+        _other_marker: "{{ _patroni_runs | bool and _marker.rc | default(1) == 0 and _marker.stdout is not match('consul-way-back ') }}"
+      run_once: true
+
+    # a marker of this play's taken up only while it holds the config and every member paused: a stale one (a pause that
+    # failed, a resume whose marker stayed) would have Patroni stopped unpaused - and Postgres with it
+    - name: This play's pause still holding (config and every member) - else nothing stopped
+      ansible.builtin.script:
+        cmd: "{{ playbook_dir }}/scripts/patroni-pause.py paused consul-way-back"
+        executable: python3
+      changed_when: false
+      check_mode: false
+      delegate_to: "{{ _pg_primary }}"
+      run_once: true
+      when: _ours_paused | bool
+
+    - name: No pause marker of another run's - else nothing stopped
+      ansible.builtin.assert:
+        that: not _other_marker | bool
+        fail_msg: >-
+          REFUSED: a Patroni pause marker of another run's ({{ _marker.stdout | default('') }}) - that run, or one cut short:
+          patronictl list; if nothing runs, patronictl resume and consul kv delete {{ pause_marker }}: nothing stopped
+        quiet: true
+      run_once: true
+
+    # someone's maintenance (or another run) has it paused: this run would end it - refused
+    - name: Patroni not paused already, where it runs
+      ansible.builtin.script:
+        cmd: "{{ playbook_dir }}/scripts/patroni-pause.py check"
+        executable: python3
+      changed_when: false
+      check_mode: false
+      delegate_to: "{{ _pg_primary }}"
+      run_once: true
+      when: _patroni_runs | bool and not _ours_paused | bool
+
+    # a backup or a restore check holding its Consul lock would die with the servers mid-way - wait for it, run again
+    # (read again once their timers are stopped: one could start in between)
+    - name: The jobs holding Consul locks here
+      ansible.builtin.command:
+        argv: [systemctl, is-active, "{{ item }}.service"]
+      register: _lock_jobs
+      changed_when: false
+      failed_when: false
+      check_mode: false
+      loop: "{{ consul_lock_jobs }}"
+      when: inventory_hostname in groups['pis']
+
+    - name: None running - else nothing stopped
+      ansible.builtin.assert:
+        that: _lock_jobs.results | default([]) | selectattr('stdout', 'defined') | map(attribute='stdout')
+              | select('in', ['active', 'activating', 'deactivating']) | list | length == 0
+        fail_msg: >-
+          REFUSED: {{ _lock_jobs.results | default([]) | selectattr('stdout', 'defined') | selectattr('stdout', 'in', ['active',
+          'activating', 'deactivating']) | map(attribute='item') | join(', ') }} running on {{ inventory_hostname }} (it
+          holds a Consul lock) - wait for it to end, then run again: nothing stopped
+        quiet: true
+
+    # a lock another job holds (pi-restart-locked's restarts, caddy-turn, the backup or restore check) would die with the
+    # servers and its child with it: every key held by a session must be Patroni's (leader, members) or Vault's
+    - name: The keys held by sessions
+      ansible.builtin.uri:
+        url: "{{ consul_http }}/v1/kv/?recurse"
+        return_content: true
+      register: _held
+      check_mode: false
+      delegate_to: "{{ _src_host }}"
+      run_once: true
+      when: not _restored_already | bool
+
+    - name: None but Patroni's and Vault's - else nothing stopped
+      ansible.builtin.assert:
+        that: _held_others | length == 0
+        fail_msg: "REFUSED: keys held by a session that is not Patroni's or Vault's: {{ _held_others }} - wait for that job, then run again: nothing stopped"
+        quiet: true
+      vars:
+        _held_others: >-
+          {{ _held.json | default([]) | selectattr('Session', 'defined') | rejectattr('Session', 'equalto', '')
+             | rejectattr('Key', 'match', '^(service/' ~ patroni_scope ~ '/(leader|members/)|vault/)')
+             | map(attribute='Key') | list }}
+      run_once: true
+      when: not _restored_already | bool
+
+    # ten's unattended-upgrades reboots it at its set time once it has run: held for the run (a reboot mid-way leaves no
+    # rescue to say where it stopped) - refused while it runs, its timer stopped in the block, started again at the end
+    - name: Unattended-upgrades not running on ten now - else nothing stopped
+      ansible.builtin.command:
+        argv: [systemctl, is-active, apt-daily-upgrade.service]
+      register: _apt_upgrade
+      changed_when: false
+      failed_when: _apt_upgrade.stdout in ['active', 'activating']
+      check_mode: false
+      when: inventory_hostname not in groups['pis']
+
+    # from the first stop on, nothing is undone by this play: a failure lands in the rescue below, which says where
+    # everything was left, how to run again and how to go forward instead
+    - name: The way back - from the first stop to everything serving
+      block:
+        # judged by whether they are enabled (setup-pi-backups and setup-pi-restore-check enable them; this play never
+        # disables them): a run again after one that stopped them still starts them at its end
+        - name: The Consul-locked jobs' timers - enabled here or not
+          ansible.builtin.command:
+            argv: [systemctl, is-enabled, "{{ item }}.timer"]
+          register: _lock_timers
+          changed_when: false
+          failed_when: false
+          loop: "{{ consul_lock_jobs }}"
+          when: inventory_hostname in groups['pis']
+
+        - name: Their timers stopped (started again at the end where enabled)
+          ansible.builtin.systemd:
+            name: "{{ item }}.timer"
+            state: stopped
+          loop: "{{ consul_lock_jobs }}"
+          when: inventory_hostname in groups['pis']
+
+        - name: Unattended-upgrades' timer on ten - enabled or not
+          ansible.builtin.command:
+            argv: [systemctl, is-enabled, apt-daily-upgrade.timer]
+          register: _apt_timer
+          changed_when: false
+          failed_when: false
+          when: inventory_hostname not in groups['pis']
+
+        - name: Its timer stopped for the run (started again at the end where enabled)
+          ansible.builtin.systemd:
+            name: apt-daily-upgrade.timer
+            state: stopped
+          when: inventory_hostname not in groups['pis']
+
+        - name: The jobs read again, their timers stopped
+          ansible.builtin.command:
+            argv: [systemctl, is-active, "{{ item }}.service"]
+          register: _lock_jobs_now
+          changed_when: false
+          failed_when: _lock_jobs_now.stdout in ['active', 'activating', 'deactivating']
+          loop: "{{ consul_lock_jobs }}"
+          when: inventory_hostname in groups['pis']
+
+        # first of the writers: nothing of Vault's written after the export
+        - name: Vault stopped on both Pis (its unseal with it - Requires=)
+          ansible.builtin.systemd:
+            name: vault
+            state: stopped
+          when: inventory_hostname in groups['pis'] and not _restored_already | bool
+
+        # its unseal too - it would pull vault in at a boot (Requires=); both enabled again once Consul is back
+        - name: Neither started at a boot meanwhile (a Vault on a half-built Consul never starts by itself)
+          ansible.builtin.systemd:
+            name: "{{ item }}"
+            enabled: false
+          loop: [vault-unseal, vault]
+          when: inventory_hostname in groups['pis'] and not _restored_already | bool
+
+        # before Patroni's pause: the export holds no pause and no marker of this run's
+        - name: The whole KV exported from the running cluster, checked (the current source; once - a run again reuses it)
+          ansible.builtin.shell:
+            executable: /bin/bash
+            cmd: |
+              set -euo pipefail
+              umask 077
+              mkdir -p {{ upgrade_dir }}
+              out={{ upgrade_dir }}/consul-$(date -u +%Y%m%dT%H%M%SZ)-current-{{ _from }}.kv.json
+              consul kv export > "$out"
+              python3 -c '{{ export_ok_py }}' "$out" {{ patroni_scope }} > /dev/null
+              echo "$out"
+          register: _export
+          changed_when: true
+          delegate_to: "{{ _src_host }}"
+          run_once: true
+          when: _mode == 'current' and not _from_record | bool
+
+        - name: The source this run loads
+          ansible.builtin.set_fact:
+            _src: "{{ _recorded if _from_record | bool else (_snap if _mode == 'snapshot' else _export.stdout_lines | last) }}"
+          run_once: true
+
+        # one server's disk alone is no backup: the export fetched off it, beside upgrade-consul.yml's snapshot
+        - name: The export fetched to the controller
+          ansible.builtin.fetch:
+            src: "{{ _src }}"
+            dest: "{{ backups_here }}/"
+            flat: true
+            fail_on_missing: true
+          delegate_to: "{{ _src_host }}"
+          run_once: true
+          when: _mode == 'current' and not _from_record | bool
+
+        - name: The controller's copy the operator's alone (the directory 0700, the file 0600)
+          ansible.builtin.file:
+            path: "{{ item.path }}"
+            mode: "{{ item.mode }}"
+          loop:
+            - {path: "{{ backups_here }}", mode: '0700'}
+            - {path: "{{ backups_here }}/{{ _src | basename }}", mode: '0600'}
+          delegate_to: localhost
+          become: false
+          run_once: true
+          when: _mode == 'current' and not _from_record | bool
+
+        # on every server: a run again takes it up from any of them
+        # its server and the version left with it, before any server stops (a run again with Consul down reads them here)
+        - name: The source recorded
+          ansible.builtin.lineinfile:
+            path: "{{ restore_state }}"
+            line: "{{ item.line }}"
+            regexp: "{{ item.regexp }}"
+            create: true
+            mode: '0600'
+          loop:
+            - {line: "source={{ _src }}", regexp: '^source='}
+            - {line: "host={{ _src_host }}", regexp: '^host='}
+            - {line: "from={{ _from }}", regexp: '^from='}
+          loop_control:
+            label: "{{ item.line }}"
+          when: not _from_record | bool
+
+        - name: Patroni paused - stopped next, it leaves Postgres running
+          # the marker names this run; the keys loaded later hold no pause (the export was taken before it; upgrade-consul
+          # snapshots before any) - nothing resumes it: Patroni starts again unpaused
+          ansible.builtin.script:
+            cmd: "{{ playbook_dir }}/scripts/patroni-pause.py pause consul-way-back"
+            executable: python3
+          register: _paused
+          changed_when: true
+          delegate_to: "{{ _pg_primary }}"
+          run_once: true
+          when: _patroni_runs | bool and not _ours_paused | bool and not _restored_already | bool
+
+        # proven right before the stop: stopped unpaused, Patroni would stop Postgres
+        - name: Paused - the config and every member - right before Patroni stops
+          ansible.builtin.script:
+            cmd: "{{ playbook_dir }}/scripts/patroni-pause.py paused consul-way-back"
+            executable: python3
+          changed_when: false
+          delegate_to: "{{ _pg_primary }}"
+          run_once: true
+          when: _patroni_runs | bool and not _restored_already | bool
+
+        # off at a boot too: a Pi booting mid-way would start Patroni on an empty or half-built DCS, where the replica,
+        # finding no leader, could promote itself
+        - name: Patroni stopped and off at a boot on both Pis (paused - Postgres is not touched)
+          ansible.builtin.systemd:
+            name: patroni
+            state: stopped
+            enabled: false
+          when: inventory_hostname in groups['pis'] and not _restored_already | bool
+
+        - name: Postgres still running on both, the primary still the primary
+          ansible.builtin.shell:
+            executable: /bin/bash
+            cmd: |
+              set -euo pipefail
+              [ "$(runuser -u postgres -- psql -w -h /var/run/postgresql -d postgres -Atc 'select not pg_is_in_recovery()')" \
+                = "{{ 't' if inventory_hostname == _pg_primary else 'f' }}" ]
+          changed_when: false
+          when: inventory_hostname in groups['pis'] and not _restored_already | bool
+
+        - name: The keys held by sessions, right before Consul stops
+          ansible.builtin.uri:
+            url: "{{ consul_http }}/v1/kv/?recurse"
+            return_content: true
+          register: _held_now
+          delegate_to: "{{ _src_host }}"
+          run_once: true
+          when: not _restored_already | bool
+
+        - name: None but Patroni's and Vault's (a lock taken since the first look dies with the servers)
+          ansible.builtin.assert:
+            that: _held_now_others | length == 0
+            fail_msg: "keys held by a session that is not Patroni's or Vault's: {{ _held_now_others }} - wait for that job, then run again"
+            quiet: true
+          vars:
+            _held_now_others: >-
+              {{ _held_now.json | default([]) | selectattr('Session', 'defined') | rejectattr('Session', 'equalto', '')
+                 | rejectattr('Key', 'match', '^(service/' ~ patroni_scope ~ '/(leader|members/)|vault/)')
+                 | map(attribute='Key') | list }}
+          run_once: true
+          when: not _restored_already | bool
+
+        - name: Consul stopped on every server
+          ansible.builtin.systemd:
+            name: consul
+            state: stopped
+          when: not _restored_already | bool
+
+        - name: The time this run sets directories aside under
+          ansible.builtin.set_fact:
+            _stamp: "{{ lookup('ansible.builtin.pipe', 'date -u +%Y%m%dT%H%M%SZ') }}"
+          run_once: true
+          when: not _restored_already | bool
+
+        # never deleted. The first set-aside moves the state before the way back aside and records it (the directory and
+        # the version left); a run again moves the directory a failed run made aside as a failed one and keeps the record
+        # - the state before is always the one it names. The new directory gets the node's node-id (the catalog's name for
+        # the node) and gossip keyring (the key the servers use - consul.hcl's is read only by an empty keyring)
+        - name: Its data directory set aside (the state before recorded), a new one with the node's id and keyring
+          ansible.builtin.shell:
+            executable: /bin/bash
+            cmd: |
+              set -euo pipefail
+              st={{ restore_state }}
+              aside=$(sed -n 's/^aside=//p' "$st" 2> /dev/null || true)
+              # recorded before the move: a run cut short between the two moves it on a run again
+              if [ -z "$aside" ]; then
+                aside={{ consul_data }}.pre-restore-{{ _stamp }}
+                printf 'aside=%s\n' "$aside" >> "$st"
+              fi
+              if [ -d "$aside" ]; then
+                # a run again: what is there now is a failed run's new cluster
+                [ ! -e {{ consul_data }} ] || mv {{ consul_data }} {{ consul_data }}.failed-restore-{{ _stamp }}
+              else
+                mv {{ consul_data }} "$aside"
+              fi
+              # required: a new node-id would clash with the catalog, an empty keyring read consul.hcl's key
+              for f in node-id serf/local.keyring; do
+                [ -f "$aside/$f" ] || { echo "$aside/$f missing - not a server's data directory" >&2; exit 1; }
+              done
+              install -d -o consul -g consul -m 0755 {{ consul_data }} {{ consul_data }}/serf
+              install -o consul -g consul -m 0600 "$aside/node-id" {{ consul_data }}/node-id
+              install -o consul -g consul -m 0600 "$aside/serf/local.keyring" {{ consul_data }}/serf/local.keyring
+              [ ! -f "$aside/serf/remote.keyring" ] || install -o consul -g consul -m 0600 "$aside/serf/remote.keyring" {{ consul_data }}/serf/remote.keyring
+              echo "$aside"
+          register: _set_aside
+          changed_when: true
+          when: not _restored_already | bool
+
+        - name: The kept binary back
+          ansible.builtin.copy:
+            src: "/usr/local/bin/consul-{{ _to }}"
+            dest: /usr/local/bin/consul
+            remote_src: true
+            mode: '0755'
+          when: not _restored_already | bool
+
+        - name: Started - a new cluster of three (bootstrap_expect)
+          ansible.builtin.systemd:
+            name: consul
+            state: started
+          when: not _restored_already | bool
+
+        - name: The new cluster - three voters, one leader
+          ansible.builtin.uri:
+            url: "{{ consul_http }}/v1/operator/autopilot/health"
+            return_content: true
+            status_code: [200, 429]
+          register: _fresh
+          retries: 30
+          delay: 5
+          until: >-
+            _fresh.status in [200, 429]
+            and _fresh.json.Servers | selectattr('Voter') | list | length == 3
+            and _fresh.json.Servers | selectattr('Leader') | list | length == 1
+          delegate_to: "{{ _src_host }}"
+          run_once: true
+          when: not _restored_already | bool
+
+        - name: The snapshot restored (the snapshot source)
+          ansible.builtin.command:
+            argv: [consul, snapshot, restore, "{{ _src }}"]
+          register: _restored
+          changed_when: true
+          delegate_to: "{{ _src_host }}"
+          run_once: true
+          when: _mode == 'snapshot' and not _restored_already | bool
+
+        # the new cluster holds no keys of its own yet (Vault, Patroni and the locked jobs are stopped): after the import
+        # the KV is the export, key by key - flags and values too
+        - name: The export imported and compared key by key (the current source)
+          ansible.builtin.shell:
+            executable: /bin/bash
+            cmd: |
+              set -euo pipefail
+              consul kv import @{{ _src | quote }} > /dev/null
+              consul kv export | python3 -c 'import json, sys
+              rows = lambda doc: sorted((k["key"], k.get("flags", 0), k.get("value") or "") for k in doc)
+              want, got = rows(json.load(open(sys.argv[1]))), rows(json.load(sys.stdin))
+              if got != want:
+                  sys.exit(f"the KV after the import is not the export: {len(got)} keys, {len(want)} in it")
+              print(len(got))' {{ _src | quote }}
+          register: _imported
+          changed_when: true
+          delegate_to: "{{ _src_host }}"
+          run_once: true
+          when: _mode == 'current' and not _restored_already | bool
+
+        - name: After it - three voters, one leader, autopilot healthy
+          ansible.builtin.uri:
+            url: "{{ consul_http }}/v1/operator/autopilot/health"
+            return_content: true
+            status_code: [200, 429]
+          register: _after
+          retries: 30
+          delay: 5
+          until: >-
+            _after.status == 200 and _after.json.Healthy
+            and _after.json.Servers | selectattr('Voter') | list | length == 3
+            and _after.json.Servers | selectattr('Leader') | list | length == 1
+          delegate_to: "{{ _src_host }}"
+          run_once: true
+
+        - name: Each agent on the version gone back to
+          ansible.builtin.uri:
+            url: "{{ consul_http }}/v1/agent/self"
+            return_content: true
+          register: _self_after
+          failed_when: _self_after.json.Config.Version | default('') != _to
+
+        # their sessions died with the old cluster (an export carries them as plain keys); a leader key naming the other
+        # Pi would demote the running primary, a switchover caught in flight would be carried out by the new leader
+        - name: Patroni's leader, member and failover keys deleted
+          ansible.builtin.shell:
+            executable: /bin/bash
+            cmd: |
+              set -euo pipefail
+              consul kv delete service/{{ patroni_scope }}/leader > /dev/null
+              consul kv delete -recurse service/{{ patroni_scope }}/members/ > /dev/null
+              consul kv delete service/{{ patroni_scope }}/failover > /dev/null
+          changed_when: true
+          delegate_to: "{{ _src_host }}"
+          run_once: true
+          when: not _restored_already | bool
+
+        # a run again from here on takes up after the load (never a second one)
+        - name: The load and the deletion recorded
+          ansible.builtin.lineinfile:
+            path: "{{ restore_state }}"
+            line: "restored={{ _src | basename }}"
+          when: not _restored_already | bool
+
+        # the cluster the keys name (its initialize key) the one Postgres runs: a Postgres rebuilt since a snapshot would
+        # stop Patroni on a system id mismatch - and, unpaused, its shutdown would stop the primary
+        - name: The keys' cluster the one Postgres runs (its system id)
+          ansible.builtin.shell:
+            executable: /bin/bash
+            cmd: |
+              set -euo pipefail
+              dcs=$(consul kv get service/{{ patroni_scope }}/initialize)
+              pg=$(runuser -u postgres -- psql -w -h /var/run/postgresql -d postgres -Atc 'select system_identifier from pg_control_system()')
+              [ "$dcs" = "$pg" ] || { echo "the keys' initialize $dcs, Postgres runs system $pg" >&2; exit 1; }
+          changed_when: false
+          delegate_to: "{{ _pg_primary }}"
+          run_once: true
+
+        # Vault needs nothing of Patroni: back as soon as its storage is
+        - name: Vault and its unseal enabled again, as setup-vault-pi leaves them
+          ansible.builtin.systemd:
+            name: "{{ item }}"
+            enabled: true
+          loop: [vault, vault-unseal]
+          when: inventory_hostname in groups['pis']
+
+        - name: Vault started
+          ansible.builtin.systemd:
+            name: vault
+            state: started
+          when: inventory_hostname in groups['pis']
+
+        - name: Unsealed by the Pi's own script (bounded - its start timeout is 360 s)
+          ansible.builtin.systemd:
+            name: vault-unseal
+            state: restarted
+          timeout: 420
+          when: inventory_hostname in groups['pis']
+
+        - name: Vault unsealed - active or standby
+          ansible.builtin.uri:
+            url: "{{ vault_api }}/v1/sys/health"
+            ca_path: /etc/vault.d/tls/ca-cert.pem  # its certificate names 127.0.0.1
+            status_code: [200, 429]
+          register: _vault
+          retries: 24
+          delay: 5
+          until: _vault.status in [200, 429]
+          when: inventory_hostname in groups['pis']
+
+        # both Pis read together until exactly one says it is active: the keys carry Vault's lock (a snapshot under a
+        # session that died with the old cluster, an export as a plain key), and both may stand by until it frees
+        - name: Exactly one Vault active, both read together
+          ansible.builtin.shell:
+            executable: /bin/bash
+            cmd: |
+              set -uo pipefail
+              export VAULT_CACERT=/etc/vault.d/tls/ca-cert.pem VAULT_CLIENT_TIMEOUT=5 VAULT_MAX_RETRIES=0
+              active=""
+              for a in {{ groups['pis'] | map('extract', hostvars, 'ansible_host') | join(' ') }}; do
+                s=$(VAULT_ADDR=https://$a:8200 vault status -format=json 2> /dev/null \
+                  | python3 -c 'import json, sys; print(json.load(sys.stdin).get("is_self"))' 2> /dev/null)
+                [ "$s" != True ] || active="$active $a"
+              done
+              echo "active:${active:- none}"
+              [ "$(wc -w <<< "$active")" = 1 ]
+          register: _one_active
+          retries: 24
+          delay: 5
+          until: _one_active.rc == 0
+          changed_when: false
+          delegate_to: "{{ _pg_primary }}"
+          run_once: true
+
+        # the break-glass on the carried token store (the token file the Pis keep, a root token that never expires)
+        - name: The root token works on Vault now
+          ansible.builtin.shell:
+            executable: /bin/bash
+            cmd: |
+              set -euo pipefail
+              export VAULT_ADDR={{ vault_api }} VAULT_CACERT=/etc/vault.d/tls/ca-cert.pem
+              T=$(cat /etc/vault-unseal/root-token)
+              [ -n "$T" ] || { echo "/etc/vault-unseal/root-token is empty" >&2; exit 1; }
+              VAULT_TOKEN=$T vault token lookup -format=json | python3 -c 'import json, sys
+              d = json.load(sys.stdin)["data"]
+              if "root" not in d["policies"] or d.get("expire_time"):
+                  sys.exit("not a root token that never expires: policies %s, expire_time %s" % (d["policies"], d.get("expire_time")))'
+          changed_when: false
+          no_log: true  # the token in its environment
+          delegate_to: "{{ _pg_primary }}"
+          run_once: true
+
+        - name: Patroni on at a boot again
+          ansible.builtin.systemd:
+            name: patroni
+            enabled: true
+          when: inventory_hostname in groups['pis']
+
+        - name: Patroni started on the primary's Pi first
+          ansible.builtin.systemd:
+            name: patroni
+            state: started
+          when: inventory_hostname == _pg_primary
+
+        - name: It holds the leader key, Postgres still the primary
+          ansible.builtin.uri:
+            url: "{{ consul_http }}/v1/kv/service/{{ patroni_scope }}/leader?raw"
+            return_content: true
+            status_code: [200, 404]
+          register: _leader_key
+          retries: 30
+          delay: 5
+          until: _leader_key.status == 200 and _leader_key.content | trim == _pg_primary
+          when: inventory_hostname == _pg_primary
+
+        - name: Then on the replica
+          ansible.builtin.systemd:
+            name: patroni
+            state: started
+          when: inventory_hostname in groups['pis'] and inventory_hostname != _pg_primary
+
+        - name: The cluster healthy - a leader running, the replica streaming
+          ansible.builtin.shell:
+            executable: /bin/bash
+            cmd: |
+              set -euo pipefail
+              {{ patronictl }} list -f json | python3 -c '{{ healthy_py }}'
+          register: _healthy
+          retries: 24
+          delay: 5
+          until: _healthy.rc == 0
+          changed_when: false
+          delegate_to: "{{ _pg_primary }}"
+          run_once: true
+
+        # the keys loaded hold no pause (taken before it): proven, and no marker left
+        - name: Not paused
+          ansible.builtin.script:
+            cmd: "{{ playbook_dir }}/scripts/patroni-pause.py check"
+            executable: python3
+          changed_when: false
+          delegate_to: "{{ _pg_primary }}"
+          run_once: true
+
+        - name: No pause marker left
+          ansible.builtin.command:
+            argv: [consul, kv, get, "{{ pause_marker }}"]
+          register: _marker_after
+          changed_when: false
+          failed_when: _marker_after.rc == 0
+          delegate_to: "{{ _pg_primary }}"
+          run_once: true
+
+        - name: The primary answering through HAProxy and PgBouncer, on every Pi
+          ansible.builtin.shell:
+            executable: /bin/bash
+            cmd: "{{ primary_through_proxies }}"
+            stdin: "{{ postgres_admin_password }}"
+          register: _primary
+          retries: 12
+          delay: 5
+          until: _primary.rc == 0
+          changed_when: false
+          no_log: true  # the password went in on stdin
+          when: inventory_hostname in groups['pis']
+
+        - name: The Consul-locked jobs' timers started again where enabled
+          ansible.builtin.systemd:
+            name: "{{ item.item }}.timer"
+            state: started
+          loop: "{{ _lock_timers.results | default([]) }}"
+          loop_control:
+            label: "{{ item.item }}"
+          when: item.stdout | default('') == 'enabled'
+
+        - name: Unattended-upgrades' timer on ten started again where enabled
+          ansible.builtin.systemd:
+            name: apt-daily-upgrade.timer
+            state: started
+          when: inventory_hostname not in groups['pis'] and _apt_timer.stdout | default('') == 'enabled'
+
+        # done: a later way back reads the data then as its own state before
+        - name: The record removed (the directory it named stays, named below)
+          ansible.builtin.file:
+            path: "{{ restore_state }}"
+            state: absent
+      rescue:
+        - name: Where the way back stopped, and what to run
+          ansible.builtin.fail:
+            msg: >-
+              FAILED after the first stop, at "{{ ansible_failed_task.name | default('?') }}"
+              ({{ ansible_failed_result.msg | default(ansible_failed_result.stderr | default('')) }}) - nothing is undone by
+              this play. Patroni may be stopped and off at a boot on both Pis, Postgres running unmanaged on them
+              ({{ _pg_primary }} the primary at the start - patronictl list says which now; no failover, the database away
+              through HAProxy); Vault may be stopped and off at a boot - do not start it before running again (an export
+              taken up would lose what it wrote meanwhile), or delete {{ restore_state }} on every server first; the tier-0
+              backup and restore-check timers, and ten's apt-daily-upgrade.timer, may be stopped; the source {{ _src | default(_recorded or
+              (_snap | default('(not taken yet)'))) }} ({{ _src_host }}) is untouched; Consul's state before the way back:
+              {{ ((_set_aside.stdout_lines | default([]))[-1:] + [_orig_aside]) | select | first
+                 | default('not set aside yet (the failure came before it) - ' ~ consul_data ~ ' as it was') }} on each server
+              (Consul {{ _from }}; {{ restore_state }} records it). Run task deploy:consul:way-back again with the same confirm
+              (it takes up where this stopped, with the same source). Forward again instead, on each server: stop Consul, move
+              {{ consul_data }} aside (never delete it) and put that directory back as {{ consul_data }}, put
+              /usr/local/lib/consul-{{ _from }}/consul back as /usr/local/bin/consul, delete {{ restore_state }}, start Consul;
+              then on the Pis: systemctl enable patroni and start it ({{ _pg_primary }} first), patronictl resume and consul kv
+              delete {{ pause_marker }} (that state holds this run's pause), systemctl enable --now vault vault-unseal, and
+              start pi-tier0-backup.timer and pi-restore-check.timer, and on ten apt-daily-upgrade.timer. Never task
+              deploy:vault-pi meanwhile - Vault on an empty or half-built Consul reads as uninitialised, and its init would
+              overwrite the unseal keys and the root token
+
+    - name: Back - and what to run again
+      ansible.builtin.debug:
+        msg: >-
+          CONSUL {{ _to }} back on {{ ansible_play_hosts | join(', ') }} (from {{ _from }}), its keys from {{ _src }}
+          ({{ 'the running cluster - nothing in the KV lost; the catalog and the sessions started afresh' if _mode == 'current'
+          else 'the pre-upgrade snapshot - everything written since lost' }}); the state before set aside in
+          {{ ((_set_aside.stdout_lines | default([]))[-1:] + [_orig_aside]) | select | first }} on each server; Patroni's
+          leader {{ _pg_primary }}, not paused; Vault unsealed ({{ _one_active.stdout }}).{% if _mode != 'current' %} Next:
+          task deploy:ci-bot and task deploy:argocd-reader again (the Forgejo tokens they rotated since the snapshot are
+          back in Vault, deleted in Forgejo), the preview environments made since it recreated, External Secrets
+          force-synced (each ExternalSecret annotated force-sync) so the cluster reads the restored values, and any change
+          made with patronictl edit-config since the snapshot made again (Patroni's dynamic settings are the
+          snapshot's){% endif %}
+      run_once: true

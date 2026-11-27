@@ -161,7 +161,10 @@ case "${1:-}" in
     set +e  # a watcher never dies on a failed command: each one checked where it matters
     sleep "${COPY_HOST_LOOP_DELAY:-0}"  # the harness's slow start (a loaded host); 0 otherwise
     exec 7> "$dir/host-guard.alive"
-    flock -n 7 || exit 0  # another watcher holds it
+    # waited for, never taken at once: a caller's probe (flock -n ... true, below and in watch) holds it a moment, and
+    # a take meeting one ended this watcher - its caller said it did not start, the next caller started another (8 in
+    # 300 takes, measured 2026-11-27; the CI flake of the slow-start case). Another watcher's: held past the wait
+    flock -w 10 7 || exit 0  # another watcher holds it
     echo $$ > "$dir/host-guard.pid"
     log "watcher $$ started: trip under ${trip_mb} MB available or over ${psi_full}% memory stall, two polls ${poll} s apart"
     trap 'log "watcher $$ ended"' EXIT

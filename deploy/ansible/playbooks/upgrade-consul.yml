@@ -1,15 +1,16 @@
 ---
-# Consul on its three servers (pi1, pi2, ten) to setup-consul.yml's consul_version, its release checked against its pinned
-# SHA256 (consul_checksums - Renovate moves both, scripts/renovate-checksums.py) - in HashiCorp's order: the followers
-# first, the leader last, one at a time, each back as a healthy voter before the next. Each: stopped (SIGTERM - a server
-# does not leave the raft on it), its binary replaced, started. Before anything: three voters, one leader, autopilot
-# healthy (also checked when nothing is to do), each binary on disk the one its agent runs; a snapshot of the whole
-# state (Vault's storage, Patroni's leader keys) into /var/backups/consul-upgrade on pi1, inspected; the running binary
-# kept beside the new (/usr/local/bin/consul-<ver>). After: every server on the version, three voters, one leader,
-# autopilot healthy - and Vault (its storage) answering on both Pis. The way back: that binary, and if the new version
-# wrote what the old cannot read, the snapshot (consul snapshot restore - Vault and Patroni stopped) - by hand. Never a
-# downgrade; a server already on the version is not restarted; nothing to do when all are. Any server failing stops the
-# run (any_errors_fatal).
+# Consul on its three servers (pi1, pi2, ten) to setup-consul.yml's consul_version, its release checked against its
+# pinned SHA256 (consul_checksums - Renovate moves both, scripts/renovate-checksums.py) - in HashiCorp's order: the
+# followers first, the leader last, one at a time, each back as a healthy voter before the next. Each: stopped (SIGTERM
+# - a server does not leave the raft on it), its binary replaced, started. Before anything: three voters, one leader,
+# autopilot healthy (also checked when nothing is to do), each binary on disk the one its agent runs; a snapshot of the
+# whole state (Vault's storage, Patroni's leader keys) into /var/backups/consul-upgrade on pi1, inspected, and fetched
+# to the controller (vars/consul-upgrade-backups/<inventory>/); the running binary kept beside the new
+# (/usr/local/bin/consul-<ver>). After: every server on the version, three voters, one leader, autopilot healthy - and
+# Vault (its storage) answering on both Pis. The way back: that binary and the snapshot together - an old binary may not
+# read what the new one wrote - by restore-consul.yml (task deploy:consul:way-back, rehearsed by task
+# test:copy:consul-way-back). Never a downgrade; a server already on the version is not restarted; nothing to do when
+# all are. Any server failing stops the run (any_errors_fatal).
 #
 # The version comes from setup-consul.yml's play vars (one place - what a new install installs), or -e consul_version
 # with consul_checksums (the copy's proof of a Renovate unit hands its branch's values so).
@@ -28,6 +29,8 @@
     consul_servers: [pi1, pi2, target]
     upgrade_dir: /var/backups/consul-upgrade
     consul_http: http://127.0.0.1:8500
+    # the snapshot's copy on the controller, one directory per inventory (the copy's never beside production's)
+    backups_here: "{{ playbook_dir }}/../vars/consul-upgrade-backups/{{ inventory_file | basename | splitext | first }}"
   tasks:
     - name: Every server in the run (three voters - one left out is no rolling upgrade)
       ansible.builtin.assert:
@@ -144,6 +147,28 @@
       register: _snapshot
       changed_when: true
       when: inventory_hostname == 'pi1'
+
+    # one Pi's disk alone is no backup: the snapshot fetched to the controller before any server restarts,
+    # vars/consul-upgrade-backups/<inventory>/, 0700/0600; a way back after pi1 is lost copies it back to a server
+    # (restore-consul.yml -e consul_restore_snapshot=<path> -e consul_restore_host=<server>)
+    - name: The snapshot fetched to the controller, before any server restarts
+      ansible.builtin.fetch:
+        src: "{{ _snapshot.stdout }}"
+        dest: "{{ backups_here }}/"
+        flat: true
+        fail_on_missing: true
+      when: inventory_hostname == 'pi1'
+
+    - name: The controller's copy the operator's alone (the directory 0700, the file 0600)
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        mode: "{{ item.mode }}"
+      loop:
+        - {path: "{{ backups_here }}", mode: '0700'}
+        - {path: "{{ backups_here }}/{{ _snapshot.stdout | basename }}", mode: '0600'}
+      delegate_to: localhost
+      become: false
+      when: inventory_hostname == 'pi1' and not ansible_check_mode
 
     - name: The upgrade order - the followers, then the leader
       ansible.builtin.set_fact:

@@ -38,6 +38,8 @@ clone:
         securityContext: &nonroot { runAsNonRoot: true, runAsUser: 1000, runAsGroup: 1000 }
 
 steps:
+  # 1Gi: at 512Mi the 103rd playbook (restore-consul.yml) had the step killed (exit 137, 2026-11-27); the whole set
+  # peaked at 794 MiB in this image (memory.peak, read 2026-11-27)
   - name: ansible-lint
     image: git.pmon.dev/schnappy/ansible-lint:latest
     commands:
@@ -47,7 +49,7 @@ steps:
         securityContext: *nonroot
         resources:
           requests: { memory: 256Mi }
-          limits: { memory: 512Mi }
+          limits: { memory: 1Gi }
 
   # 8 CPUs and 8 harnesses at once (operator 2026-11-25): at the namespace's default 4 it was CPU-bound (3982m and 4000m
   # of 4000m on two builds), ~23 min a run - infra's woodpecker LimitRange admits 8 for this step alone. Memory doubled
