@@ -17,7 +17,9 @@
 # hyperfoil - their PRs never merge themselves but ci-tools'): the bot has write on each (it pushes renovate/* branches).
 #
 # Usage: scripts/upgrade-renovate.sh [--apps] [--lookup]   --lookup: the repos and registries read, nothing changed
-# Env:   RENOVATE_TOKEN (required), RENOVATE_GITHUB_TOKEN, UPGRADE_DOCKER (the harness's docker, default docker)
+# Env:   RENOVATE_TOKEN (required), RENOVATE_GITHUB_TOKEN, UPGRADE_DOCKER (the harness's docker, default docker),
+#        UPGRADE_RENOVATE_IMAGE (a lookup only: another renovate/renovate:x.y.z@sha256 pin - the copy proof's smoke of a
+#        unit's new image, task test:copy:renovate-image)
 set -euo pipefail
 ops=$(cd "$(dirname "$0")/.." && pwd)
 image=renovate/renovate:44.198.3@sha256:bf344aa39d5b592ec728e1db5c3e1d940a5093a89a4598073efcb18d592d121c
@@ -31,10 +33,21 @@ for a in "$@"; do
   esac
 done
 [ -n "${RENOVATE_TOKEN:-}" ] || { echo "REFUSED: RENOVATE_TOKEN is empty (ops/.env) - Renovate not run" >&2; exit 1; }
-# never beside a runner (its lock): Renovate rebasing a unit's branches mid-proof throws the proof away
-mkdir -p "$ops/.upgrade-cycle"
-exec 9>> "$ops/.upgrade-cycle/lock"
-flock -n 9 || { echo "REFUSED: an upgrade run holds $ops/.upgrade-cycle/lock - Renovate not run beside it" >&2; exit 1; }
+# another image only for a lookup (it writes nothing), and only one exact pin - the image is given the bot's token
+if [ -n "${UPGRADE_RENOVATE_IMAGE:-}" ]; then
+  [ "$dry" = lookup ] || { echo "REFUSED: UPGRADE_RENOVATE_IMAGE is for a lookup only - a writing run uses the pinned image" >&2; exit 2; }
+  [[ $UPGRADE_RENOVATE_IMAGE =~ ^renovate/renovate:[0-9]+\.[0-9]+\.[0-9]+@sha256:[0-9a-f]{64}$ ]] ||
+    { echo "REFUSED: UPGRADE_RENOVATE_IMAGE must be one renovate/renovate:x.y.z@sha256 pin" >&2; exit 2; }
+  image=$UPGRADE_RENOVATE_IMAGE
+fi
+# a writing run never beside a runner (its lock): Renovate rebasing a unit's branches mid-proof throws the proof away. A
+# lookup writes nothing - no branch, no pull request, no dashboard - so it takes no lock: the runner's copy proof runs one
+# with a unit's new image (task test:copy:renovate-image) while it holds the lock
+if [ "$dry" != lookup ]; then
+  mkdir -p "$ops/.upgrade-cycle"
+  exec 9>> "$ops/.upgrade-cycle/lock"
+  flock -n 9 || { echo "REFUSED: an upgrade run holds $ops/.upgrade-cycle/lock - Renovate not run beside it" >&2; exit 1; }
+fi
 RENOVATE_ALLOWED_COMMANDS=$(cat "$ops/renovate/allowed-commands.json")
 export RENOVATE_TOKEN RENOVATE_ALLOWED_COMMANDS
 args=(run --rm -e RENOVATE_TOKEN -e RENOVATE_ALLOWED_COMMANDS

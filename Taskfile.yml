@@ -733,10 +733,11 @@ tasks:
       - cmd: scripts/etcd-backup-now.sh
 
   # the copy proof's step for a new Renovate image (scripts/upgrade-renovate.sh's pin - the copy runs no Renovate): it
-  # starts, and its config validator reads both presets (the wave-patches review, 2026-11-23: it rode a wave unproven).
+  # starts, its config validator reads both presets, and a lookup with it reads infra, platform and ops as Forgejo serves
+  # them, logging no error (the wave-patches review, 2026-11-23: it rode a wave unproven).
   # The presets read-only; the container as the operator's user (a bind mount)
   test:copy:renovate-image:
-    desc: "The copy proof's step for a new Renovate image: renovate --version, and its config validator on renovate/upgrade-cycle.json and renovate/apps.json"
+    desc: "The copy proof's step for a new Renovate image: renovate --version, its config validator on renovate/upgrade-cycle.json and renovate/apps.json, and a lookup with it against infra, platform and ops (their configs as Forgejo serves them; read-only, the bot's token from the runner's environment) that must log no error"
     requires:
       vars: [IMAGE]
     preconditions:
@@ -745,6 +746,9 @@ tasks:
     cmds:
       - cmd: docker run --rm --user "$(id -u):$(id -g)" --entrypoint renovate '{{.IMAGE}}' --version
       - cmd: docker run --rm --user "$(id -u):$(id -g)" -v "$PWD/renovate:/presets:ro" --entrypoint renovate-config-validator '{{.IMAGE}}' /presets/upgrade-cycle.json /presets/apps.json
+      # the image doing its job: the three repos read, their dependencies looked up - the validator alone reads no repo
+      # and no registry (a lookup takes no runner lock: it writes nothing)
+      - cmd: UPGRADE_RENOVATE_IMAGE='{{.IMAGE}}' scripts/upgrade-renovate.sh --lookup
 
   test:copy:check:
     desc: "Every check on the built copy: Argo settled; data, survival, storage, metrics, k6 smoke, production's data paths and isolation at once (scripts/copy-checks.sh); a barman base backup; every certificate renewed; Postgres recovered and a Velero volume restored (restore-check); a Velero backup from production's daily schedule; a Scylla Manager backup; ScyllaDB's and ClickHouse's backups restored; the PR-env sweeper; the inventory against production's (after a change: its own differences printed, any it did not make judged). Run on its own it checks the refs the copy runs (.copy/copy-refs)"
