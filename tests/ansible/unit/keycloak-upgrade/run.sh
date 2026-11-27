@@ -54,12 +54,24 @@ check("the read: installed and running (the child's jars); moved; two at once; n
 check("  read again while a JVM holds no install open (unknown), not past it",
       [condition(reg("_read")["until"], _read={"rc": 0, "stdout_lines": lines})
        for lines in (["26.5.7", "unknown"], ["26.5.7", "26.5.7"], ["26.5.7", "not-running"])], [False, True, True])
-for reg_name in ("_first_up", "_up"):
-    t = reg(reg_name)
-    check(f"  the serve check ({reg_name}) runs the same read, its bash valid when rendered",
-          (t["vars"]["_read_script"] == read_cmd,
-           subprocess.run(["bash", "-n", "-c", render(t["ansible.builtin.shell"]["cmd"], _read_script=read_cmd, keycloak_version="26.8.2")]).returncode),
-          (True, 0))
+SV = yaml.safe_load(open("deploy/ansible/playbooks/tasks/keycloak-serves.yml"))[0]
+stub("curl", 'echo "${KC_HTTP:-000}"\n')
+def serves(target, link_pid=41, http="200", **fds):
+    cmd = render(SV["ansible.builtin.shell"]["cmd"], keycloak_serve_version=target)
+    env = dict(os.environ, PATH=bin_ + ":" + os.environ["PATH"], KC_PID=str(link_pid), KC_CHILD="42", KC_HTTP=http,
+               **{f"KC_FDS_{k[1:]}": v for k, v in fds.items()})
+    return subprocess.run(["bash", "-c", cmd], capture_output=True, text=True, env=env).returncode
+check("the serve check (tasks/keycloak-serves.yml): the target running and answering 200 - done; another version, not "
+      "answering, two versions, or down - read again",
+      [serves("26.8.2", p42=jar("26.8.2")), serves("26.8.2", p42=jar("26.5.7")), serves("26.8.2", http="503", p42=jar("26.8.2")),
+       serves("26.8.2", p41="/opt/keycloak-26.5.7/bin/kc.sh", p42=jar("26.8.2")), serves("26.8.2", link_pid=0)],
+      [0, 1, 1, 1, 1])
+check("  read again for Keycloak's database-lock wait (15 min) - the first start of a version builds and migrates",
+      (SV["retries"] * SV["delay"] >= 900, SV["until"]), (True, "_keycloak_serves_target.rc == 0"))
+for name in ("The first Pi runs and serves the target", "Every Pi runs and serves the target"):
+    t = task(name)
+    check(f"  {name}: the serve check on vars/keycloak.yml's version",
+          (t.get("ansible.builtin.include_tasks"), t["vars"]["keycloak_serve_version"]), ("tasks/keycloak-serves.yml", "{{ keycloak_version }}"))
 
 # ── the decisions, as Ansible renders them ────────────────────────────────────────────────────────────────────
 check("every Pi in the run: both - on; one left out (--limit) - refused",
@@ -97,8 +109,17 @@ def pick(starting, vip):
 check("the first Pi: the one already starting (maybe migrating); else the VIP's holder; else the first in the play",
       [pick("pi2", "pi1"), pick(None, "pi2"), pick(None, None)], ["pi2", "pi2", "pi1"])
 
+D = yaml.safe_load(open("deploy/ansible/playbooks/tasks/keycloak-dump.yml"))
+dreg = lambda r: next(t for t in D if t.get("register") == r)
+dtask = lambda name: next(t for t in D if str(t.get("name", "")).startswith(name))
+inc = task("Keycloak's database dumped")
+check("the dump included (tasks/keycloak-dump.yml), skipped on a run taken forward, named for the version both Pis ran",
+      (inc.get("ansible.builtin.include_tasks"), "not _forward | bool" in str(inc.get("when", "")),
+       render(inc["vars"]["keycloak_dump_running"], ansible_play_hosts=["pi1", "pi2"],
+              hostvars={"pi1": {"_running": "26.5.7"}, "pi2": {"_running": "26.5.7"}})),
+      ("tasks/keycloak-dump.yml", True, "26.5.7"))
 # ── the dump, pg_dump stubbed ──────────────────────────────────────────────────────────────────────────────────
-dump = reg("_dump")
+dump = dreg("_dump")
 check("the dump: once, on the first Pi, the password on stdin (never on the command line), not logged, its failure its own",
       (dump.get("run_once"), dump.get("delegate_to"), dump.get("no_log"), dump["ansible.builtin.shell"]["stdin"],
        "PGPASSWORD=" not in dump["ansible.builtin.shell"]["cmd"], dump.get("failed_when")),
@@ -108,14 +129,14 @@ with open(os.path.join(dbin, "pg_dump"), "w") as f:
     f.write('#!/bin/bash\n[ "$PGPASSWORD" = s3cret ] || exit 9\n[ -z "${PGD_FAIL:-}" ] || exit 1\necho "CREATE TABLE realm();"\n'
             '[ -n "${PGD_CUT:-}" ] || echo "-- PostgreSQL database dump complete"\n')
 os.chmod(os.path.join(dbin, "pg_dump"), 0o755)
-dcmd = render(dump["ansible.builtin.shell"]["cmd"], dump_dir=ddir, _schema={"stdout": "26.5.7\n"})
+dcmd = render(dump["ansible.builtin.shell"]["cmd"], dump_dir=ddir, _schema={"stdout": "26.5.0\n"}, keycloak_dump_running="26.5.7")
 def run_dump(**env):
     r = subprocess.run(["bash", "-c", dcmd], input="s3cret\n", capture_output=True, text=True,
                        env=dict(os.environ, PATH=dbin + ":" + os.environ["PATH"], **env))
     return r.returncode, sorted(os.listdir(ddir)) if os.path.isdir(ddir) else []
 rc, kept = run_dump()
-check("  whole: kept, named for the schema the database holds, nothing left aside, the directory root's alone",
-      (rc, len(kept), kept[0].endswith("-schema-26.5.7.sql.gz"), any(k.endswith(".part") for k in kept), oct(os.stat(ddir).st_mode)[-3:]),
+check("  whole: kept, named for the version running (the install a way back restores) and the schema, nothing left aside, root's alone",
+      (rc, len(kept), kept[0].endswith("-26.5.7-schema-26.5.0.sql.gz"), any(k.endswith(".part") for k in kept), oct(os.stat(ddir).st_mode)[-3:]),
       (0, 1, True, False, "700"))
 good = open(os.path.join(ddir, kept[0]), "rb").read()
 for env, why in (({"PGD_CUT": "1"}, "cut short (no footer)"), ({"PGD_FAIL": "1"}, "pg_dump failing")):
@@ -130,7 +151,7 @@ for _ in range(7):
     run_dump(); made = sorted(os.listdir(ddir)); time.sleep(1.1)
 names = sorted(os.listdir(ddir))
 check("  the 5 newest kept - never the newest rotated away", (len(names), names == sorted(made)[-5:]), (5, True))
-held = task("The dump taken")["ansible.builtin.assert"]["that"]
+held = dtask("The dump taken")["ansible.builtin.assert"]["that"]
 check("its check: a dump that ended 0 with the schema read holds; a failed dump, no result, or no schema - refused",
       [condition(held, _dump=d, _schema=s) for d, s in (({"rc": 0}, {"stdout": "26.5.7"}), ({"rc": 1}, {"stdout": "26.5.7"}),
                                                          ({}, {"stdout": "26.5.7"}), ({"rc": 0}, {"stdout": ""}))],
@@ -141,13 +162,12 @@ stop, link = task("Keycloak stopped on every Pi"), task("The target installed")
 s1, s2 = task("Started on the first Pi"), task("Then the others")
 check("the order: schema read, dump and its check before anything stops; every Pi stopped before /opt/keycloak moves; "
       "the first started and serving before the others",
-      (idx(reg("_schema")) < idx(dump) < idx(task("The dump taken")) < idx(stop) < idx(link) < idx(s1) < idx(reg("_first_up")) < idx(s2)),
-      True)
+      (D.index(dreg("_schema")) < D.index(dump) < D.index(dtask("The dump taken")),
+       idx(inc) < idx(stop) < idx(link) < idx(s1) < idx(task("The first Pi runs and serves")) < idx(s2)), (True, True))
 check("  the steps that change anything skipped on a run taken forward",
       all("not _forward | bool" in str(t.get("when", "")) for t in (task("The target's tarball"), task("The target extracted"),
-          reg("_schema"), dump, stop, link)), True)
+          inc, stop, link)), True)
 check("  the symlink replaced, not nested (force: true on a link)", (link["ansible.builtin.file"]["state"], link["ansible.builtin.file"].get("force")), ("link", True))
-check("  the first Pi's migration given Keycloak's database-lock wait (15 min)", reg("_first_up")["retries"] * reg("_first_up")["delay"] >= 900, True)
 check("  a run without every Pi failing everywhere (any_errors_fatal)", play.get("any_errors_fatal"), True)
 
 # ── the refusals elsewhere ─────────────────────────────────────────────────────────────────────────────────────
@@ -176,6 +196,76 @@ check("keycloak-restart (setup-patroni imports it too): running the installed ve
       [True, True, False, False])
 kn = [str(t.get("name", "")) for t in kr]
 check("  its refusal before any restart", kn.index(ka["name"]) < min(i for i, n in enumerate(kn) if n.startswith("Keycloak restarted where pending")), True)
+# ── the way back: tasks/keycloak-restore.yml, restore-keycloak.yml, the copy's rehearsal ──────────────────────────
+R = yaml.safe_load(open("deploy/ansible/playbooks/tasks/keycloak-restore.yml"))
+rt = lambda name: next(t for t in R if str(t.get("name", "")).startswith(name))
+rr = next(t for t in R if t.get("register") == "_restore")
+check("the restore: the dump's version's install checked, then every Pi stopped, then the database, then /opt/keycloak back, "
+      "the first Pi started and serving before the other",
+      R.index(rt("Every Pi has the dump's version's install")) < R.index(rt("Keycloak stopped on every Pi")) < R.index(rr)
+      < R.index(rt("The database restored")) < R.index(rt("/opt/keycloak back")) < R.index(rt("Started on the first Pi"))
+      < R.index(rt("The first Pi runs and serves")) < R.index(rt("Then the others")), True)
+check("  the database once, on the Pi holding the dump, the password on stdin, not logged, its failure its own",
+      (rr.get("run_once"), rr.get("delegate_to"), rr.get("no_log"), rr["ansible.builtin.shell"]["stdin"], rr.get("failed_when")),
+      (True, "{{ keycloak_restore_host }}", True, "{{ keycloak_dump_password }}", False))
+check("  a restore that failed - refused, Keycloak left stopped; one that ended 0 holds",
+      [condition(rt("The database restored")["ansible.builtin.assert"]["that"], _restore=d) for d in ({"rc": 0}, {"rc": 1}, {})],
+      [True, False, False])
+check("  the dump's version's install present - on; gone - refused before anything stops",
+      [condition(rt("Every Pi has the dump's version's install")["ansible.builtin.assert"]["that"], _restore_install={"stat": st})
+       for st in ({"isdir": True}, {"exists": False}, {})], [True, False, False])
+# the restore's SQL against a stubbed psql (each call recorded), the dump gzip-checked first
+pbin = os.path.join(work, "pbin"); os.makedirs(pbin); plog = os.path.join(work, "psql.log")
+with open(os.path.join(pbin, "psql"), "w") as f:
+    f.write(f'#!/bin/bash\n[ "$PGPASSWORD" = s3cret ] || exit 9\necho "$*" >> {plog}\n'
+            'case "$*" in *migration_model*) echo 26.5.0 ;; *"-q"*) cat > /dev/null ;; esac\n')
+os.chmod(os.path.join(pbin, "psql"), 0o755)
+good_dump = os.path.join(work, "keycloak-20261127T010000Z-26.5.7-schema-26.5.0.sql.gz")
+subprocess.run(f"echo 'CREATE TABLE realm();' | gzip > {good_dump}", shell=True, check=True)
+bad_dump = os.path.join(work, "bad.sql.gz"); open(bad_dump, "w").write("not gzip")
+def restore(dump):
+    if os.path.exists(plog):
+        os.remove(plog)
+    cmd = render(rr["ansible.builtin.shell"]["cmd"], keycloak_restore_dump=dump, keycloak_db_user="keycloak")
+    r = subprocess.run(["bash", "-c", cmd], input="s3cret\n", capture_output=True, text=True, env=dict(os.environ, PATH=pbin + ":" + os.environ["PATH"]))
+    return r.returncode, open(plog).read().splitlines() if os.path.exists(plog) else []
+rc, calls = restore(good_dump)
+check("  its SQL: the database dropped (connections forced off), created owned by keycloak's user, the dump loaded, the schema read",
+      (rc, [("DROP DATABASE IF EXISTS keycloak WITH (FORCE)" in c, 'CREATE DATABASE keycloak OWNER "keycloak"' in c, "-d keycloak -q" in c,
+             "migration_model" in c) for c in calls]),
+      (0, [(True, False, False, False), (False, True, False, False), (False, False, True, False), (False, False, False, True)]))
+check("  a dump that is no gzip: refused before the database is touched", restore(bad_dump), (1, []))
+W_ = yaml.safe_load(open("deploy/ansible/playbooks/restore-keycloak.yml"))[0]["tasks"]
+wt = lambda name: next(t for t in W_ if str(t.get("name", "")).startswith(name))
+pick = wt("The dump restored")
+def chosen(newest, given=None):
+    hv = {h: {"inventory_hostname": h, "_newest": {"stdout": p}} for h, p in newest.items()}
+    of = render(pick["vars"]["_newest_of"], ansible_play_hosts=list(newest), hostvars=hv)
+    extra = {} if given is None else {"keycloak_restore_dump": given[0], "keycloak_restore_host": given[1]}
+    return (render(pick["ansible.builtin.set_fact"]["_dump_path"], _newest_of=of, **extra),
+            render(pick["ansible.builtin.set_fact"]["_dump_host"], _newest_of=of, **extra))
+A, B = "/var/backups/keycloak/keycloak-20261127T010000Z-26.5.7-schema-26.5.0.sql.gz", "/var/backups/keycloak/keycloak-20261128T010000Z-26.8.2-schema-26.8.2.sql.gz"
+check("restore-keycloak: the newest dump on either Pi, or the one given; none - empty (refused below)",
+      [chosen({"pi1": A, "pi2": ""}), chosen({"pi1": A, "pi2": B}), chosen({"pi1": A, "pi2": B}, ("/x/given.sql.gz", "pi1")), chosen({"pi1": "", "pi2": ""})],
+      [(A, "pi1"), (B, "pi2"), ("/x/given.sql.gz", "pi1"), ("", "")])
+ver = lambda p: render(wt("Its version")["ansible.builtin.set_fact"]["_dump_version"], _dump_path=p)
+check("  the version a dump ran, from its name; a name not a dump's - none", [ver(A), ver(B), ver("/x/other.sql.gz")], ["26.5.7", "26.8.2", ""])
+known = wt("A dump, its Pi and its version known")["ansible.builtin.assert"]["that"]
+check("  refused before anything stops without a dump, its Pi among the play's, or a version",
+      [condition(known, _dump_path=p, _dump_host=h, _dump_version=v, ansible_play_hosts=["pi1", "pi2"])
+       for p, h, v in ((A, "pi1", "26.5.7"), ("", "pi1", "26.5.7"), (A, "pi3", "26.5.7"), (A, "pi1", ""))], [True, False, False, False])
+check("  every Pi in its run, and it runs the restore tasks with the chosen dump",
+      (condition(wt("Every Pi in the run")["ansible.builtin.assert"]["that"], ansible_play_hosts=["pi1"], groups={"pis": ["pi1", "pi2"]}),
+       wt("Restored").get("ansible.builtin.include_tasks")), (False, "tasks/keycloak-restore.yml"))
+C = yaml.safe_load(open("tests/ansible/copy/keycloak-way-back-check.yml"))[1]["tasks"]
+ct = lambda name: next(t for t in C if str(t.get("name", "")).startswith(name))
+check("the copy's rehearsal: production's dump and restore tasks, a marker before the dump and one after, the first kept and the second lost",
+      (os.path.normpath(os.path.join("tests/ansible/copy", ct("The dump, as upgrade-keycloak").get("ansible.builtin.include_tasks"))),
+       os.path.normpath(os.path.join("tests/ansible/copy", ct("The way back, as restore-keycloak").get("ansible.builtin.include_tasks"))),
+       C.index(ct("The marker from before")) < C.index(ct("The dump, as")) < C.index(ct("The marker from after")) < C.index(ct("The way back")),
+       [condition(ct("The marker from before there")["ansible.builtin.assert"]["that"], _markers={"stdout_lines": m})
+        for m in (["before"], ["after", "before"], [])]),
+      ("deploy/ansible/playbooks/tasks/keycloak-dump.yml", "deploy/ansible/playbooks/tasks/keycloak-restore.yml", True, [True, False, False]))
 print("keycloak-upgrade: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 PY_KU

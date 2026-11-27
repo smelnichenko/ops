@@ -1,0 +1,83 @@
+---
+# Keycloak's way back (plan 122): its database restored from a dump tasks/keycloak-dump.yml took - the dump's version's
+# install still there on every Pi (upgrade-keycloak.yml keeps the old one), Keycloak stopped on every Pi, the keycloak
+# database dropped and created again (owned by {{ keycloak_db_user }}) and the dump loaded through HAProxy (Patroni's
+# primary) on the Pi holding it, /opt/keycloak back on that install, the first Pi (the VIP's) started and serving that
+# version, then the other. restore-keycloak.yml runs it on production; the copy's way-back check rehearses it. The pin
+# (vars/keycloak.yml) moves back with the unit's revert - else setup-pi-services refuses the next run.
+# Needs keycloak_restore_dump (a path), keycloak_restore_host (the Pi holding it), keycloak_restore_version,
+# keycloak_dump_password, keycloak_db_user, _first.
+- name: The dump's version installed here (the way back puts it back)
+  ansible.builtin.stat:
+    path: "/opt/keycloak-{{ keycloak_restore_version }}"
+  register: _restore_install
+
+- name: Every Pi has the dump's version's install - else nothing stopped
+  ansible.builtin.assert:
+    that: _restore_install.stat.isdir | default(false)
+    fail_msg: "REFUSED: /opt/keycloak-{{ keycloak_restore_version }} is gone on {{ inventory_hostname }} - nothing stopped"
+    quiet: true
+
+- name: Keycloak stopped on every Pi
+  ansible.builtin.systemd:
+    name: keycloak
+    state: stopped
+
+- name: The keycloak database emptied and restored from the dump
+  ansible.builtin.shell:
+    executable: /bin/bash
+    cmd: |
+      set -euo pipefail
+      # the password on stdin, not in the environment Ansible puts on the command line
+      read -r PGPASSWORD; export PGPASSWORD
+      q() { psql -w -h 127.0.0.1 -p 5000 -U postgres -v ON_ERROR_STOP=1 "$@"; }
+      dump={{ keycloak_restore_dump | quote }}
+      [ -s "$dump" ] && gzip -t "$dump"
+      q -d postgres -c "DROP DATABASE IF EXISTS keycloak WITH (FORCE)"
+      q -d postgres -c 'CREATE DATABASE keycloak OWNER "{{ keycloak_db_user }}"'
+      gzip -dc "$dump" | q -d keycloak -q > /dev/null
+      q -d keycloak -tA -c "SELECT version FROM migration_model ORDER BY update_time DESC, id DESC LIMIT 1"
+    stdin: "{{ keycloak_dump_password }}"
+  register: _restore
+  changed_when: true
+  failed_when: false
+  delegate_to: "{{ keycloak_restore_host }}"
+  run_once: true
+  no_log: true  # the password went in on stdin - the restore's own error below, without it
+
+- name: The database restored (its error otherwise) - Keycloak still stopped
+  ansible.builtin.assert:
+    that: _restore.rc | default(1) == 0
+    fail_msg: "REFUSED: the Keycloak restore failed - Keycloak left stopped on every Pi: {{ _restore.stderr | default('') }}"
+    success_msg: "restored {{ keycloak_restore_dump }}: schema {{ _restore.stdout | default('') | trim }}"
+  run_once: true
+
+- name: /opt/keycloak back on the dump's version
+  ansible.builtin.file:
+    src: "/opt/keycloak-{{ keycloak_restore_version }}"
+    dest: /opt/keycloak
+    state: link
+    force: true
+
+- name: Started on the first Pi
+  ansible.builtin.systemd:
+    name: keycloak
+    state: started
+  when: inventory_hostname == _first
+
+- name: The first Pi runs and serves the dump's version
+  ansible.builtin.include_tasks: keycloak-serves.yml
+  vars:
+    keycloak_serve_version: "{{ keycloak_restore_version }}"
+  when: inventory_hostname == _first
+
+- name: Then the others
+  ansible.builtin.systemd:
+    name: keycloak
+    state: started
+  when: inventory_hostname != _first
+
+- name: Every Pi runs and serves the dump's version
+  ansible.builtin.include_tasks: keycloak-serves.yml
+  vars:
+    keycloak_serve_version: "{{ keycloak_restore_version }}"

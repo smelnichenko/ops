@@ -38,7 +38,7 @@
     - name: The version installed and the version running
       ansible.builtin.shell:
         executable: /bin/bash
-        cmd: &keycloak_read |
+        cmd: |
           set -euo pipefail
           installed=$(readlink -f /opt/keycloak 2> /dev/null | sed -n 's|^/opt/keycloak-\([^/]*\)/*$|\1|p')
           pid=$(systemctl show -p MainPID --value keycloak)
@@ -179,60 +179,11 @@
         group: keycloak
         recurse: true
 
-    # the schema the database holds - the dump is named for it, and a rerun after a migration is never mistaken for
-    # the database before it
-    - name: The version the database holds (migration_model)
-      when: not _forward | bool
-      ansible.builtin.shell:
-        executable: /bin/bash
-        cmd: |
-          set -euo pipefail
-          read -r PGPASSWORD; export PGPASSWORD
-          psql -w -h 127.0.0.1 -p 5000 -U postgres -d keycloak -tA \
-            -c "SELECT version FROM migration_model ORDER BY update_time DESC, id DESC LIMIT 1"
-        stdin: "{{ keycloak_dump_password }}"
-      register: _schema
-      changed_when: false
-      check_mode: false
-      delegate_to: "{{ _first }}"
-      run_once: true
-      no_log: true
-
     - name: Keycloak's database dumped, before anything stops
       when: not _forward | bool
-      ansible.builtin.shell:
-        executable: /bin/bash
-        cmd: |
-          set -euo pipefail
-          # the password on stdin, not in the environment Ansible puts on the command line
-          read -r PGPASSWORD; export PGPASSWORD
-          mkdir -p {{ dump_dir }} && chmod 0700 {{ dump_dir }}
-          out={{ dump_dir }}/keycloak-$(date -u +%Y%m%dT%H%M%SZ)-schema-{{ _schema.stdout | trim | regex_replace('[^0-9A-Za-z.-]', '_') }}.sql.gz
-          trap 'rm -f "$out.part"' ERR
-          # written aside and renamed once checked: a failed dump never counts among those kept
-          pg_dump -w -h 127.0.0.1 -p 5000 -U postgres keycloak | gzip > "$out.part"
-          gzip -t "$out.part"
-          [ "$(gzip -dc "$out.part" | tail -n 5 | grep -c 'PostgreSQL database dump complete')" = 1 ]
-          mv "$out.part" "$out"
-          ls -1t {{ dump_dir }}/keycloak-*.sql.gz | tail -n +6 | xargs -r rm -f
-          echo "$out $(du -h "$out" | cut -f1)"
-        stdin: "{{ keycloak_dump_password }}"
-      register: _dump
-      changed_when: true
-      failed_when: false
-      delegate_to: "{{ _first }}"
-      run_once: true
-      no_log: true  # the password went in on stdin - the dump's own error below, without it
-
-    - name: The dump taken (its error otherwise) - nothing stopped yet
-      when: not _forward | bool
-      ansible.builtin.assert:
-        that: _dump.rc | default(1) == 0 and (_schema.stdout | default('') | trim) != ''
-        fail_msg: >-
-          REFUSED: the Keycloak dump failed - nothing stopped:
-          {{ _dump.stderr | default('') }} {{ '' if (_schema.stdout | default('') | trim) else 'the database schema not read' }}
-        success_msg: "{{ _dump.stdout | default('') }}"
-      run_once: true
+      ansible.builtin.include_tasks: tasks/keycloak-dump.yml
+      vars:
+        keycloak_dump_running: "{{ ansible_play_hosts | map('extract', hostvars, '_running') | first }}"
 
     - name: Keycloak stopped on every Pi
       when: not _forward | bool
@@ -254,26 +205,10 @@
         state: started
       when: inventory_hostname == _first
 
-    # Keycloak waits for its database lock up to 15 min: the first start of a new version builds and migrates
-    - name: The first Pi runs and serves the target
-      ansible.builtin.shell:
-        executable: /bin/bash
-        cmd: |
-          set -uo pipefail
-          v=$(bash -s <<'KEYCLOAK_READ' | sed -n 2p
-          {{ _read_script }}
-          KEYCLOAK_READ
-          )
-          code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 http://127.0.0.1:8080/realms/master || true)
-          echo "$v $code"
-          [ "$v" = "{{ keycloak_version }}" ] && [ "$code" = 200 ]
+    - name: The first Pi runs and serves the target (it migrates - up to 15 min)
+      ansible.builtin.include_tasks: tasks/keycloak-serves.yml
       vars:
-        _read_script: *keycloak_read
-      register: _first_up
-      changed_when: false
-      retries: 90
-      delay: 10
-      until: _first_up.rc == 0
+        keycloak_serve_version: "{{ keycloak_version }}"
       when: inventory_hostname == _first
 
     - name: Then the others
@@ -283,24 +218,9 @@
       when: inventory_hostname != _first
 
     - name: Every Pi runs and serves the target
-      ansible.builtin.shell:
-        executable: /bin/bash
-        cmd: |
-          set -uo pipefail
-          v=$(bash -s <<'KEYCLOAK_READ' | sed -n 2p
-          {{ _read_script }}
-          KEYCLOAK_READ
-          )
-          code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 http://127.0.0.1:8080/realms/master || true)
-          echo "$v $code"
-          [ "$v" = "{{ keycloak_version }}" ] && [ "$code" = 200 ]
+      ansible.builtin.include_tasks: tasks/keycloak-serves.yml
       vars:
-        _read_script: *keycloak_read
-      register: _up
-      changed_when: false
-      retries: 90
-      delay: 10
-      until: _up.rc == 0
+        keycloak_serve_version: "{{ keycloak_version }}"
 
     - name: Upgraded
       ansible.builtin.debug:

@@ -1248,6 +1248,24 @@ tasks:
     cmds:
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/upgrade-keycloak.yml {{.CLI_ARGS}}
 
+  deploy:keycloak:way-back:
+    desc: "PRODUCTION: the way back from a Keycloak upgrade - after the unit is reverted (vars/keycloak.yml's old pin): both Pis stopped, the keycloak database restored from the newest pre-upgrade dump (or -- -e keycloak_restore_dump=<path> -e keycloak_restore_host=<pi>), the old version's install back, the VIP's Pi started first (everything since the dump lost; plan 122)"
+    dir: deploy/ansible
+    deps: [deploy:install]
+    dotenv: ['../../.env']
+    prompt: "Restore Keycloak's database on PRODUCTION from a dump (everything since it lost, logins down meanwhile)?"
+    cmds:
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/restore-keycloak.yml {{.CLI_ARGS}}
+
+  test:copy:keycloak-way-back:
+    desc: "Vagrant: Keycloak's way back with production's tasks - a marker before the dump, the dump, a marker after it, the database restored and the version's install back: the first marker there, the second gone, Keycloak serving on both Pis (plan 122; logins down meanwhile - a readied copy, alone)"
+    dir: deploy/ansible
+    deps: [deploy:install]
+    cmds:
+      # the copy's VMs used: one run at a time (scripts/copy-lock.sh - a nested task shares its caller's lock)
+      - cmd: ../../scripts/copy-lock.sh
+      - venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/keycloak-way-back-check.yml
+
   test:pi:rerun-guards:
     desc: "Vagrant: re-running the Pi playbooks is safe - setup-patroni refuses while Patroni is stopped (its data untouched), passes while it runs and keeps the database port; setup-consul keeps the key and restarts nothing; setup-keepalived reloads a changed config (PgBouncer put in front first, as on the Pis, where missing)"
     deps: [deploy:install]

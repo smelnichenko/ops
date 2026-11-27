@@ -1,0 +1,22 @@
+---
+# Keycloak runs {{ keycloak_serve_version }} here - the install its processes hold open (/opt/keycloak-<v>, as
+# scripts/version-inventory-pi.sh reads it) - and serves (/realms/master answering 200). Read again for up to 15 min:
+# the first start of a version builds and migrates the database (Keycloak waits for its database lock that long).
+# upgrade-keycloak.yml and tasks/keycloak-restore.yml wait on it. Needs keycloak_serve_version.
+- name: Keycloak runs and serves {{ keycloak_serve_version }}
+  ansible.builtin.shell:
+    executable: /bin/bash
+    cmd: |
+      set -uo pipefail
+      pid=$(systemctl show -p MainPID --value keycloak)
+      running=$( [ "$pid" = 0 ] || for p in "$pid" $(pgrep -P "$pid" || true); do readlink /proc/"$p"/fd/* 2> /dev/null || true; done \
+        | sed -n 's|^/opt/keycloak-\([^/]*\)/.*|\1|p' | sort -u | paste -sd' ')
+      code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 http://127.0.0.1:8080/realms/master || true)
+      echo "${running:-none} $code"
+      [ "$running" = "{{ keycloak_serve_version }}" ] && [ "$code" = 200 ]
+  register: _keycloak_serves_target
+  changed_when: false
+  check_mode: false  # a read
+  retries: 90
+  delay: 10
+  until: _keycloak_serves_target.rc == 0
