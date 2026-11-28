@@ -296,3 +296,143 @@ statement taken from someone other than the publisher. Anything not confirmed is
   `GET https://ec.europa.eu/esco/api/search?text=software%20developer&type=occupation&language=en&limit=1` -> 200,
   application/json, 1.1 kB: `total` 490, one occupation with its URI and labels in all languages; API page -> 200.
 - Caveats: no vacancy data; it is what makes vacancies from different countries comparable.
+
+## 4. Job aggregators with an API or feed
+
+Summary: **every general aggregator needs a key except Arbeitnow and Jobicy** (and Himalayas, topic 6). The keyed ones
+are built to show their listings on a partner's site and send clicks back; none of them permits building a standing
+copy of the listings, and none returns the full advert text.
+
+### Adzuna API
+- Publisher: Adzuna Ltd (UK).
+- Documentation: https://developer.adzuna.com/overview ; https://developer.adzuna.com/docs/search
+- Data or endpoint: `https://api.adzuna.com/v1/api/jobs/{country}/search/{page}?app_id=...&app_key=...` (also
+  histogram, top-companies, geodata, history endpoints).
+- Holds: title, company, location (with area hierarchy), category, `salary_min`/`salary_max` (flag
+  `salary_is_predicted`), contract type/time, `created`, `redirect_url` (back to Adzuna), and a **snippet** of the
+  description: "Please note we currently only provide a snipped of the job description in the response."
+- Countries: 19 country codes, of which eight are EU: **AT, BE, DE, ES, FR, IT, NL, PL** (list from third-party
+  pages; Adzuna's own list sits in its interactive docs, not read).
+- Access: REST API (JSON/XML).
+- Registration or key: **key needed** (`app_id` + `app_key`). "Every registered API user receives a free API key
+  immediately, with no payment details required. The free tier is intended for evaluating the API." Self-service
+  registration; not requested here.
+- Cost: free tier for evaluation; "Paid plans are available for personal and academic use at higher volumes"; a
+  licence agreement for commercial use.
+- Licence or terms (exact wording, https://developer.adzuna.com/docs/terms_of_service): permitted use is "Personal job
+  search; Publishing Adzuna ad listings; Publishing Jobsworth salary estimates; Personal and academic research. Any
+  other use, including commercial analysis, resale of data, and sales prospecting or lead generation, requires our
+  written agreement." "Any use of the Adzuna API by a commercial, government or academic organisation ... is permitted
+  subject to a 14 day trial period ... It may not be used in its original format or in aggregation (including but not
+  limited to vacancy counts, average salaries etc) to deliver any ongoing work or research ... without written
+  consent." Attribution: "label each displayed advert with the phrase "Adzuna" at least 116 X 23 pixels in size ...
+  hyperlinked". On termination the user "shall immediately remove all ... data acquired from Adzuna".
+- Volume: not stated on the pages read. Update cycle: continuous.
+- Seen on 2026-11-28: three documentation pages -> 200 (overview 3.5 kB, search 3.3 kB, terms 3.8 kB). No API call
+  (key needed).
+- Caveats: the free-tier call limits are shown only inside an account ("The plans available to you, and their
+  limits, are shown in your account").
+
+### Jooble REST API
+- Publisher: Jooble (Ukraine-founded aggregator; per-country domains).
+- Documentation: https://jooble.org/api/about ;
+  https://jooblehelpcenter.freshdesk.com/en/support/solutions/articles/60001448238-rest-api-documentation
+- Data or endpoint: `POST https://jooble.org/api/{api_Key}` (JSON body: `keywords`, `location`, `radius`, `salary`,
+  `page`, `ResultOnPage`); other countries on their own domains.
+- Holds: `id`, `title`, `location`, `snippet`, `salary`, `source`, `type`, `link`, `company`, `updated`,
+  `totalCount`. Snippet only, no full text.
+- Countries: "a key generated on jooble.org provides access exclusively to US job listings"; each country domain
+  needs its own key. Which EU countries have an API domain was not confirmed (third parties say 60-70 countries).
+- Access: REST API.
+- Registration or key: **key needed**; "Register on the Jooble API portal for your target country. Once registered,
+  your API key will be sent to you via email." The form is aimed at owners of a website (third-hand: search-result
+  text of the API page). Not requested here.
+- Cost: free; "The free REST API plan includes a limit of 100 requests per day per key for a specific country";
+  more on request.
+- Licence or terms: the help-centre article states none; the terms are said to be on `jooble.org/api/about`, which
+  could not be read.
+- Seen on 2026-11-28: `GET https://jooble.org/api/about` -> **HTTP 403** (3 kB HTML) for curl; the host was not asked
+  again. The help-centre article was read through WebFetch.
+- Caveats: 100 requests a day at 20-odd results a request is a search widget, not a data source.
+
+### Careerjet Job Search API
+- Publisher: Careerjet Ltd (UK).
+- Documentation: https://www.careerjet.com/partners/api/ ; terms
+  https://www.careerjet.com/partners/api/terms-and-conditions
+- Data or endpoint: `https://search.api.careerjet.net/v4/query` (HTTP Basic auth with the API key; parameters
+  `locale_code`, `keywords`, `location`, `sort`, `page`, `page_size` up to 100, and - required - `user_ip` and
+  `user_agent` "of the user whose action(s) triggered the API call").
+- Holds: title, company, locations, date, salary (with currency code, min/max, type), an excerpt of the description
+  (120 characters by default), tracking `url` on `jobviewtrack.com`. No full text.
+- Countries: by locale (`[language_code]_[COUNTRY_CODE]`, default `en_GB`); the list of supported locales was not
+  read (Careerjet advertises some 90 countries; not confirmed per EU state).
+- Access: REST API.
+- Registration or key: **key needed**: "Each publisher website requires a unique API key, which you can obtain from
+  your Publisher account"; "you will need to declare your IP address(es) / range ... Dynamic IP addresses or
+  serverless environments without fixed outbound IP addresses are not supported." Not requested here.
+- Cost: free for publishers (revenue share on clicks). A separate **paid** "Jobs Data API" exists for data use
+  ("Commercial, high-volume access to our jobs database for data-driven applications", with full descriptions):
+  https://www.careerjet.com/recruiter/jobs-data-api
+- Licence or terms (exact wording): "Careerjet's free Job Search API is intended for partners who integrate Careerjet
+  job search into their websites ... The API must not be used to: Extract or collect job listings in bulk for
+  purposes unrelated to displaying them to jobseekers and referring traffic to Careerjet. Build or maintain an
+  independent job database, search index, or competing job search service using Careerjet data. Sell, license,
+  redistribute, or otherwise make Careerjet job data available to third parties as a standalone data product. Train,
+  fine-tune, or evaluate artificial intelligence or machine learning models using Careerjet data. Develop independent
+  commercial data, analytics, research, or market intelligence products using Careerjet data."
+- Seen on 2026-11-28: three pages -> 200 (API 9.3 kB, terms 7.9 kB, data API 19 kB). No API call (key needed).
+- Caveats: the terms rule out exactly the "collect and keep" use.
+
+### Talent.com (formerly Neuvoo) publisher programme
+- Publisher: Talent.com Inc. (Canada).
+- Documentation: https://employers.talent.com/publishers
+- Data or endpoint: publisher XML feeds, a "self-serve job API", affiliate URLs; no public technical documentation.
+- Holds: "30M+ jobs in 79 countries" (their figure); fields not documented publicly.
+- Access: partner feed/API. Registration or key: **partnership needed** - "Get in touch with our team of experts to
+  learn more"; no self-service key was found. Cost: free to publishers (paid per click to them).
+- Licence or terms: none on the page beyond the site's general terms (not read).
+- Seen on 2026-11-28: one WebFetch of the publishers page.
+- Caveats: a traffic-monetisation product for job sites, not a data service.
+
+### Arbeitnow job board API  (host read by masi's investigation; documentation only)
+- Publisher: Arbeitnow (one developer, Berlin).
+- Documentation: https://www.arbeitnow.com/blog/job-board-api (and a Postman collection linked from it).
+- Data or endpoint: `https://www.arbeitnow.com/api/job-board-api` (JSON; parameters such as
+  `visa_sponsorship=true`); "In 2026, I have now launched the same API for the United Kingdom" at
+  `https://www.arbeitnow.co.uk/api/job-board-api`. Neither was requested.
+- Holds: jobs "mostly from Applicant Tracking Systems (ATS)", in one format, with a `remote` flag; title, company,
+  location, description, tags, URL, created date (field list from the documentation).
+- Countries: "some of the latest jobs in Europe" - in practice Germany: masi's investigation of 2026-11-10 found
+  300 jobs a page, every remote one at a German or Swiss city.
+- Access: REST API. Registration or key: "requires no API key". Cost: free; "For commercial use of the API, please
+  get in touch and propose a monthly fee in EUR. In general, donations are welcome."; a "custom, private, tailored
+  API endpoint ... for a monthly fee".
+- Licence or terms: no formal terms on the page read; the commercial-use sentence above is the only condition.
+- Seen on 2026-11-28: the documentation page -> 200, 10 kB.
+- Caveats: DE-centred; re-lists employer ATS boards (the same adverts as topic 5).
+
+### The Muse API
+- Publisher: The Muse (US).
+- Documentation: https://www.themuse.com/developers/api/v2
+- Data or endpoint: `https://www.themuse.com/api/public/jobs?page=N` (from memory and third-party directories).
+- Holds: jobs of The Muse's employer partners, mostly US; some European locations.
+- Access: REST API. Registration or key: third-party directories say a key is optional and lifts the limit from 500
+  to 3,600 requests an hour; one third party says the public API has been replaced. **Not confirmed.**
+- Seen on 2026-11-28: `GET https://www.themuse.com/developers/api/v2` -> **HTTP 403** (3 kB HTML) for curl; the host
+  was not asked again.
+- Caveats: nothing here is from the publisher today; of little weight for EU coverage in any case.
+
+### Jobicy  (host read by masi's investigation; documentation only) - see topic 6
+
+### Others found
+- **JobData API** (jobdataapi.com, https://jobdataapi.com/docs/): "All API endpoints are publicly accessible, except
+  for parameters and queries that require a certain subscription"; "Without a valid API key there is a maximum of
+  ~10 requests per hour"; anonymous lists return at most 20 items; paid plans for more (weekly CSV/Parquet dumps on
+  the top plan). Example feeds for about 45 countries. Source of the jobs and reuse terms not stated on the page.
+  One WebFetch of the docs; no data request.
+- **Findwork.dev**: its developers page is a sign-in form ("If you have not created an account yet, then please sign
+  up first") - an account and token are needed. Developer jobs only.
+- **Indeed**: no reading API - "the Indeed API is no longer maintained and it requires a published account which we
+  cannot obtain anymore" (third party: Arbeitnow's blog); masi's sources list also records no usable Indeed route.
+- **Paid only** (named for completeness, not examined): Careerjet Jobs Data API, TheirStack, Coresignal, Techmap,
+  LinkUp, Fantastic.jobs, JSearch on RapidAPI. See "Gaps".
