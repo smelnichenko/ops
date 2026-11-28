@@ -415,6 +415,9 @@ def show_bodies(name, out_dir):
     return 0
 
 
+MARK = {"digest": " digest"}  # a digest row's move marked (its from and to are digests, never versions)
+
+
 def show_moves(name):
     """What the unit moves, from its pull requests' tables: '<package> <from> <to>' a line, each once (patch, minor,
     major and digest rows - a digest's from and to its first 7 hex digits, the line marked ' digest': all digits can be a
@@ -428,9 +431,9 @@ def show_moves(name):
     for body in u.get("bodies", {}).values():
         for row in table_rows(body):
             values = re.findall(r"`([^`]+)`", row.get("Change", ""))
-            line = f"{package(row['Package'])} {values[0]} {values[-1]}" if len(values) >= 2 else ""
-            line += " digest" if line and row.get("Update", "") == "digest" else ""
-            if row.get("Update", "") in ("major", "minor", "patch", "digest") and line and line not in seen:
+            update = row.get("Update", "")
+            line = f"{package(row['Package'])} {values[0]} {values[-1]}{MARK.get(update, '')}" if len(values) >= 2 else ""
+            if update in ("major", "minor", "patch", "digest") and line and line not in seen:
                 seen.append(line)
     print("\n".join(seen))
     return 0

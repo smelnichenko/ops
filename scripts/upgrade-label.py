@@ -50,6 +50,10 @@ DASHBOARD_TITLE = "Upgrade cycle - Renovate's dashboard (label upgrades-paused: 
 CD_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cd-promotions.json")
 
 
+SHA = r"[0-9a-f]{40}"  # a whole commit
+GREEN = "success"  # Forgejo's combined state, a ci/ context green
+
+
 class Refused(Exception):
     """Forgejo's no - definite when Forgejo itself answered it (an HTTP status), else its answer was not had."""
 
@@ -148,48 +152,56 @@ def merge_commit(repo, number):
     """A merged pull request's own merge commit - None while it is not merged (or Forgejo names none)."""
     pr = call("GET", f"/repos/{repo}/pulls/{number}") or {}
     sha = str(pr.get("merge_commit_sha") or "")
-    return sha if pr.get("merged") and re.fullmatch(r"[0-9a-f]{40}", sha) else None
+    return sha if pr.get("merged") and re.fullmatch(SHA, sha) else None
 
 
 def superseded_by(repo, sha, desc):
     """Main's head when this commit's pipeline was canceled for a later push to main - else None (red as it is)."""
     if "canceled" not in desc.lower():
         return None
-    head = str(((call("GET", f"/repos/{repo}/branches/main") or {}).get("commit") or {}).get("id") or "")
-    return head if re.fullmatch(r"[0-9a-f]{40}", head) and head != sha else None
+    head = str(base_of(repo, {}))  # main's head (base_of: a pull request's base, main when it names none)
+    return head if re.fullmatch(SHA, head) and head != sha else None
+
+
+def ci_look(repo, sha):
+    """One look at main's CI for a commit: (verdict, sha, line) - verdict 0 green and 1 red, the line to say; None not
+    yet, the line what was read (None: no CI); a pipeline canceled for a later push gives main's head to look at next."""
+    st, desc = ci_now(repo, sha)
+    if st == GREEN:
+        return 0, sha, f"GREEN {repo} {sha}"
+    if st not in ("failure", "error"):
+        return None, sha, st
+    head = superseded_by(repo, sha, desc)
+    if head is None:
+        return 1, sha, f"RED {repo} {sha}: {st}" + (f" ({desc})" if desc else "")
+    print(f"CANCELED {repo} {sha}: superseded by a later push - main's {head} followed", flush=True)
+    return None, head, None
 
 
 def main_ci(repo, ref, minutes):
     """Main's CI after a merge that restarted CI itself (upgrade-cycle.sh), waited for minutes at most: green 0; red 1; not
     finished, no CI at all, or never read, 3 - said. The commit given, or a merged pull request's own merge commit (#N, read
-    from the pull request - main's head may be a CD commit pushed since). Its pipeline canceled - superseded by a later
-    push to main (Woodpecker cancels the older one) - main's head followed: that pipeline runs the merge too. A read that
-    fails (a 502, a timeout) is waited through, never a red (the review of 2026-11-27: one blip paged a false red)."""
+    from the pull request - main's head may be a CD commit since). Its pipeline canceled - superseded by a later push to main
+    (Woodpecker cancels the older one) - main's head followed: that pipeline runs the merge too. A read that fails (a 502, a
+    timeout) is waited through, never a red (the review of 2026-11-27: one blip paged a false red)."""
     end = time.monotonic() + minutes * 60
     sha = None if ref.startswith("#") else ref
-    st, err = None, None
+    seen, failed = None, ""
     while True:
         try:
             sha = sha or merge_commit(repo, ref[1:])
             if sha is None:
                 print(f"NOT MERGED {repo}{ref}: no merge commit")
                 return 3
-            st, desc = ci_now(repo, sha)
-            err = None
-            if st == "success":
-                print(f"GREEN {repo} {sha}")
-                return 0
-            if st in ("failure", "error"):
-                head = superseded_by(repo, sha, desc)
-                if head is None:
-                    print(f"RED {repo} {sha}: {st}" + (f" ({desc})" if desc else ""))
-                    return 1
-                print(f"CANCELED {repo} {sha}: superseded by a later push - main's {head} followed", flush=True)
-                sha, st = head, None
+            verdict, sha, seen = ci_look(repo, sha)
+            failed = ""
+            if verdict is not None:
+                print(seen)
+                return verdict
         except Refused as e:
-            err = e
+            failed = f" - the last read failed: {e}"
         if time.monotonic() >= end:
-            print(f"NOT FINISHED {repo} {sha or ref}: {st or 'no CI reported'}" + (f" - the last read failed: {err}" if err else ""))
+            print(f"NOT FINISHED {repo} {sha or ref}: {seen or 'no CI reported'}{failed}")
             return 3
         time.sleep(float(os.environ.get("UPGRADE_GREEN_POLL", "60")))
 
@@ -221,7 +233,7 @@ def green(unit, wait=0):
         if red:
             print("\n".join(f"{n} {st}" for n, st in states))
             raise Red(f"red: {', '.join(red)}")
-        if all(st == "success" for _, st in states):
+        if all(st == GREEN for _, st in states):
             print("\n".join(f"{n} {st}" for n, st in states))
             return
         if time.monotonic() >= deadline:
@@ -309,7 +321,7 @@ def read_expected(path):
     for line in filter(None, (x.strip() for x in lines)):
         parts = line.split()
         if (len(parts) != 4 or parts[0] not in REPOS or not parts[1].isdigit()
-                or not all(re.fullmatch(r"[0-9a-f]{40}", x) for x in parts[2:])):
+                or not all(re.fullmatch(SHA, x) for x in parts[2:])):
             raise Refused(f"the proven heads' line {line!r} is none")
         expected[parts[0]] = (int(parts[1]), parts[2], parts[3])
     if not expected:
@@ -325,7 +337,7 @@ def ready(repo, pr, proven):
     if sha != head:
         raise Refused(f"{repo}#{pr['number']} moved since its proof ({head[:12]} proven, {sha[:12]} now) - nothing merged")
     st = state(repo, sha)
-    if st != "success":
+    if st != GREEN:
         raise Refused(f"{repo}#{pr['number']} not green (its CI: {st or 'none'}) - nothing merged")
     if pr.get("mergeable") is False:
         raise Refused(f"{repo}#{pr['number']} not mergeable - nothing merged")
@@ -426,9 +438,9 @@ def unit_action(unit, args):
 def main(argv):
     # a main commit's CI (the runner's read after a merge that restarted CI's own database)
     if len(argv) == 4 and argv[0] == "--main-ci" and re.fullmatch(r"schnappy/[a-z0-9-]+", argv[1]) \
-            and re.fullmatch(r"[0-9a-f]{40}", argv[2]) and argv[3].isdigit():
+            and re.fullmatch(SHA, argv[2]) and argv[3].isdigit():
         return main_ci(argv[1], argv[2], int(argv[3]))
-    if len(argv) == 3 and argv[0] == "--main-ci" and re.fullmatch(r"schnappy/[a-z0-9-]+#[0-9]+", argv[1]) and argv[2].isdigit():
+    if len(argv) == 3 and argv[0] == "--main-ci" and re.fullmatch(r"schnappy/[a-z0-9-]+#\d+", argv[1]) and argv[2].isdigit():
         repo, number = argv[1].split("#")
         return main_ci(repo, "#" + number, int(argv[2]))
     if len(argv) == 2 and argv[0] == "--pause" and argv[1]:
