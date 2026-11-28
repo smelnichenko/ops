@@ -11,7 +11,7 @@
 #     itself failed or Vault holds it; older tokens deleted only when Vault and ten do not hold them and over 3 h old;
 #   - --tags retire deletes the admin's Argo CD tokens only once ten (read only) hands Argo CD the reader with Vault's
 #     token, and none it would delete Vault or ten still hold;
-#   - no secret on any command line over every run (argvwatch.py), curl, forgejo, vault, ssh, kubectl, argocd fenced;
+#   - curl, forgejo, vault, ssh, kubectl, argocd fenced (a secret on a command line: secrets-off-argv's, read statically);
 #   - seed-vault-secrets.yml's own argocd/forgejo-readonly tasks: Vault's kept over .env's old admin token.
 # Needs hvac (the hashi_vault modules): the CI image has it; where it is missing this says SKIPPED.
 set -u

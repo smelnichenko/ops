@@ -30,7 +30,6 @@ BOT, ORG, VIP, PATH_V = "argocd-reader", "schnappy", "192.168.11.5", "argocd/for
 ADMIN_PW = "adm'\"$(touch " + W + "/ran)`touch " + W + "/ran2`\\:pw"
 VAULT_TOKEN = "hvs.TEST" + secrets.token_hex(12)
 READONLY, ADMIN_ARGO, PUSH = (secrets.token_hex(20) for _ in range(3))
-CANARY = "canary" + secrets.token_hex(8)
 fails = 0
 procs = []
 atexit.register(lambda: [p.kill() for p in procs])
@@ -179,10 +178,6 @@ def write_vars(infra=INFRA, root_token=os.path.join(W, "root-token")):
 
 
 write_vars()
-FIXED = os.path.join(W, "fixed-secrets")
-open(FIXED, "w").write("\n".join([ADMIN_PW, VAULT_TOKEN, READONLY, ADMIN_ARGO, PUSH, CANARY]) + "\n")
-WATCH_OUT = os.path.join(W, "watch.json")
-watch = subprocess.Popen([sys.executable, os.path.join(FAKES, "argvwatch.py"), str(FP), FIXED, WATCH_OUT])
 procs.append(watch)
 COLL = ":".join([os.path.join(ROOT, "deploy/ansible/collections"), os.path.expanduser("~/.ansible/collections"),
                  "/usr/share/ansible/collections"])
@@ -902,19 +897,12 @@ check("deploy:full: Vault seeded, then the reader on production's inventory, the
       (0 <= seed < reader < argocd, "-i inventory/production.yml" in tf[reader] if reader >= 0 else None),
       (True, True))
 
-# ── no secret on a command line; no command but ten's reads and the derivation ───────────────────────────────────
-canary = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(1.5)", CANARY])
-canary.wait()
-watch.send_signal(signal.SIGTERM)
-watch.wait(timeout=30)
-w = json.load(open(WATCH_OUT))
+# ── nothing fenced run; no command but ten's reads and the derivation ─────────────────────────────────────────────
+# (a secret on a command line: the static secrets-off-argv harness reads these playbooks; a /proc watcher here took a
+# CPU of the suite's for the whole run - operator 2026-11-28: none that costs the build time)
 fence = open(os.path.join(W, "fence.log")).read().splitlines() if os.path.exists(os.path.join(W, "fence.log")) else []
-check("the watch bites: a process with a known secret on its command line is seen",
-      any(h["secret"] == 5 for h in w["hits"]), True)
-check(f"no secret on any command line over every run ({w['scans']} scans of /proc); nothing fenced run; the admin "
-      "password's $( ) and backticks never run",
-      ([h for h in w["hits"] if h["secret"] != 5], fence, w["scans"] > 50,
-       os.path.exists(os.path.join(W, "ran")) or os.path.exists(os.path.join(W, "ran2"))), ([], [], True, False))
+check("nothing fenced run; the admin password's $( ) and backticks never run",
+      (fence, os.path.exists(os.path.join(W, "ran")) or os.path.exists(os.path.join(W, "ran2"))), ([], False))
 # task: the kubectl verbs it may run (none: it runs no kubectl)
 ALLOWED = {"The ExternalSecrets of argocd - their Ready": {"get"},
            "What argocd's Secrets hold - their last eight characters": {"get"},

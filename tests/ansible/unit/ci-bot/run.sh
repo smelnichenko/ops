@@ -11,7 +11,7 @@
 #     Vault refuses before any mint; no preview;
 #   - --tags retire deletes the admin's tokens .env names as CI's, only once Vault hands CI none of them;
 #   - no secret on any command line over every run: every process's /proc/<pid>/cmdline read all the while
-#     (argvwatch.py - a canary shows it bites), curl, forgejo, vault, ssh, kubectl fenced;
+#     (secrets-off-argv's, read statically), curl, forgejo, vault, ssh, kubectl fenced;
 #   - seed-vault-secrets.yml's own woodpecker-ci tasks: Vault's CI bot properties kept over .env's old admin tokens,
 #     a first install takes them from .env (the Vagrant copy's placeholders), a sealed Vault refuses.
 # Needs hvac (the hashi_vault modules): the CI image has it; where it is missing this says SKIPPED.

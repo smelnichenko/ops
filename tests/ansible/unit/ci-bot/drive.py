@@ -1,6 +1,6 @@
 """The ci-bot harness's cases (run.sh starts it): the REAL setup-ci-bot.yml run by ansible-playbook against a fake
-Forgejo and a fake Vault (fakeforgejo.py, fakevault.py - the real community.hashi_vault modules talk to it), a
-watch over every process's command line (argvwatch.py), curl & co fenced; then seed-vault-secrets.yml's own two
+Forgejo and a fake Vault (fakeforgejo.py, fakevault.py - the real community.hashi_vault modules talk to it), curl
+& co fenced; then seed-vault-secrets.yml's own two
 woodpecker-ci tasks against the same Vault.
 argv: <ansible-playbook> <work dir>. Prints PASS/FAIL lines and "ci-bot: ALL-PASS" or "ci-bot: N FAILED".
 """
@@ -28,7 +28,6 @@ BOT, ORG, VIP = "woodpecker-ci", "schnappy", "192.168.11.5"
 ADMIN_PW = "adm'\"$(touch " + W + "/ran)`touch " + W + "/ran2`\\:pw"
 VAULT_TOKEN = "hvs.TEST" + secrets.token_hex(12)
 ADMIN_INFRA, ADMIN_CLONE, READONLY = (secrets.token_hex(20) for _ in range(3))
-CANARY = "canary" + secrets.token_hex(8)
 fails = 0
 procs = []
 # the fakes and the watch end with this, however it ends (timeout(1)'s TERM included)
@@ -123,10 +122,6 @@ yaml.safe_dump({"keepalived_vip": VIP, "forgejo_admin_user": "forgejo_admin", "f
                 "forgejo_api": f"http://127.0.0.1:{FP}/api/v1", "vault_addr": f"http://127.0.0.1:{VP}",
                 "vault_ca_cert": os.path.join(W, "no-ca.pem"), "vault_root_token_file": os.path.join(W, "root-token")},
                open(VARS, "w"))
-FIXED = os.path.join(W, "fixed-secrets")
-open(FIXED, "w").write("\n".join([ADMIN_PW, VAULT_TOKEN, ADMIN_INFRA, ADMIN_CLONE, READONLY, CANARY]) + "\n")
-WATCH_OUT = os.path.join(W, "watch.json")
-watch = subprocess.Popen([sys.executable, os.path.join(H, "argvwatch.py"), str(FP), FIXED, WATCH_OUT])
 procs.append(watch)
 COLL = ":".join([os.path.join(ROOT, "deploy/ansible/collections"), os.path.expanduser("~/.ansible/collections"),
                  "/usr/share/ansible/collections"])
@@ -758,20 +753,12 @@ check("create-environment: a new environment's forgejo-registry-es takes woodpec
       (1, [("registry_user", "secret/data/schnappy/woodpecker-ci", "registry_user"),
            ("registry_token", "secret/data/schnappy/woodpecker-ci", "pull_token")], False))
 
-# ── no secret on a command line ─────────────────────────────────────────────────────────────────────────────────
-canary = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(1.5)", CANARY])
-canary.wait()
-watch.send_signal(signal.SIGTERM)
-watch.wait(timeout=30)
-w = json.load(open(WATCH_OUT))
+# ── nothing fenced run ────────────────────────────────────────────────────────────────────────────────────────────
+# (a secret on a command line: the static secrets-off-argv harness reads these playbooks; a /proc watcher here took a
+# CPU of the suite's for the whole run - operator 2026-11-28: none that costs the build time)
 fence = open(os.path.join(W, "fence.log")).read().splitlines() if os.path.exists(os.path.join(W, "fence.log")) else []
-check("the watch bites: a process with a known secret on its command line is seen",
-      any(h["secret"] == 5 for h in w["hits"]), True)
-check(f"no secret on any command line over every run ({w['scans']} scans of /proc): the admin's password, Vault's "
-      "token, the bot's password, every token issued; no curl/forgejo/vault/ssh/kubectl run; the password's $( ) and "
-      "backticks never run",
-      ([h for h in w["hits"] if h["secret"] != 5], fence, w["scans"] > 50,
-       os.path.exists(os.path.join(W, "ran")) or os.path.exists(os.path.join(W, "ran2"))), ([], [], True, False))
+check("no curl/forgejo/vault/ssh/kubectl run; the password's $( ) and backticks never run",
+      (fence, os.path.exists(os.path.join(W, "ran")) or os.path.exists(os.path.join(W, "ran2"))), ([], False))
 pl = yaml.safe_load(open(PB))
 CMD = ("shell", "command", "raw", "script", "expect")
 # the reads on ten, by task: what each runs is kubectl, every kubectl a get
