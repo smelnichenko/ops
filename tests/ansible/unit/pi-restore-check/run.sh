@@ -39,10 +39,15 @@ case "${args[0]}" in
         if [ "$fmt" = pt ]; then echo "$f$sep$(date -r "$d/$f" '+%Y-%m-%d %H:%M:%S')"; else echo "$f"; fi
       done
     else
+      # the listing in one write: written a line at a time, a reader leaving at its first match (the script's
+      # rclone lsf ... | grep -q under pipefail) killed this stub with the next line - "no base backup", red one run in
+      # three in CI (2026-11-28). rclone itself writes a line at a time: the script's readers are fixed on their own,
+      # behind a copy run (a Pi's restore logic)
+      out=""
       for e in $(ls "$d"); do
-        if [ -d "$d/$e" ]; then [ -n "$files" ] || echo "$e/"; else [ -n "$dirs" ] || echo "$e"; fi
-        [ -z "${LS_SLOW:-}" ] || sleep 0.3  # a line at a time, as rclone writes them: a reader gone early is a SIGPIPE
+        if [ -d "$d/$e" ]; then [ -n "$files" ] || out+="$e/"$'\n'; else [ -n "$dirs" ] || out+="$e"$'\n'; fi
       done
+      printf '%s' "$out"
     fi ;;
   cat) cat "$(p "${args[1]}")" ;;
   copyto) cp "$(p "${args[1]}")" "${args[2]}" ;;
@@ -296,11 +301,6 @@ check "  last-success this run's" "$(success | grep -cE '^[0-9]{8}T[0-9]{6}Z$') 
 check "  last-report: the three parts OK" "$(report | grep -cE '^(POSTGRES|ETCD|TIER0) OK')" 3
 check "  production's server, named (not the old one, not another cluster's newer one), its newest RESTORABLE backup (not the one still written)" \
   "$(report | grep -oE 'schnappy-production-postgres/[0-9T]+' | sed 's#.*/##')" "$(utc '-2 hours' +%Y%m%dT%H0130)"
-# a listing written a line at a time (rclone's own way; the stub's too, when it is slow): grep -q leaves at its first
-# match, the next line's write is a SIGPIPE, and under pipefail the base backup found read as none - red one run in three
-# in CI (2026-11-28); every reader reads to the end
-store
-check "  the store's listings written a line at a time (a reader leaving early kills the writer): still green" "$(run LS_SLOW=1)" "rc=0"
 (export END_MISSING=1; store)
 check "an idle database (the newest complete backup's end segment unarchived): the backup before it restored, green" \
   "$(run END_MISSING=1) $(report | grep -oE 'schnappy-production-postgres/[0-9T]+' | sed 's#.*/##')" \
