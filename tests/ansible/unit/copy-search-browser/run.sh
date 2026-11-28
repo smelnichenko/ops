@@ -5,8 +5,11 @@
 # status judged (red fails, yellow and green pass), a document of this run written, found and its index deleted, in that
 # order - deleted on a failure too; the browser's page of this run rendered with its script run (a page without it fails),
 # its status read (a 429 not taken: waited out), the token still required (a 200 without it fails), the token never on a
-# command line here (the pod's shell expands it), the page on stdin; each exec into the workload, never a pod named once.
-# Then the play: behind the Vagrant guard, both workloads ready first (five minutes), the run's id the first play's.
+# command line here (the pod's shell expands it), the page on stdin, rendered headed as masi drives it; Centrifugo's
+# publication of this run through its API and one through Kafka (events.notifications, its channel in the
+# x-centrifugo-channels header) both read back from its history - either missing fails - and its API refusing a wrong key
+# (one taken fails), its key never on a command line here; each exec into the workload, never a pod named once. Then the
+# play: behind the Vagrant guard, the three workloads ready first (five minutes), the run's id the first play's.
 set -u
 cd "$(dirname "$0")/../../../.." || exit 1
 PY=python3
@@ -44,6 +47,27 @@ case "$a" in
   *" http://127.0.0.1:3000/content "*) echo "${NO_TOKEN:-401}" ;;
   *" get statefulset/schnappy-production-opensearch -o jsonpath={.status.readyReplicas} "*) echo "${OS_READY:-1}" ;;
   *" get deployment/schnappy-production-masi-browser -o jsonpath={.status.readyReplicas} "*) echo "${BR_READY:-1}" ;;
+  *" get deployment/schnappy-production-centrifugo -o jsonpath={.status.readyReplicas} "*) echo "${RT_READY:-1}" ;;
+  # Centrifugo's API through the pod's wget (sh -c '<script>' <method> <body>): a publish remembered by its channel
+  # (unless API_LOST), a history answering a remembered channel's publication, compact as Centrifugo writes it
+  *" exec deployment/schnappy-production-centrifugo -c centrifugo -- sh -c "*" publish {"*)
+    ch=$(sed -n 's/.* publish {"channel": "\([^"]*\)".*/\1/p' <<< "$a")
+    [ -n "${API_LOST:-}" ] || echo "$ch" >> "$W/published"
+    echo '{"result":{"offset":1,"epoch":"e"}}' ;;
+  *" exec deployment/schnappy-production-centrifugo -c centrifugo -- sh -c "*" history {"*)
+    ch=$(sed -n 's/.* history {"channel": "\([^"]*\)".*/\1/p' <<< "$a")
+    run=$(sed -n 's/.*copy-check-\([0-9A-Za-z]*\)-.*/\1/p' <<< "$ch")
+    if grep -qxF "$ch" "$W/published" 2> /dev/null; then echo "{\"result\":{\"publications\":[{\"data\":{\"run\":\"$run\"},\"offset\":1}],\"epoch\":\"e\",\"offset\":1}}"
+    else echo '{"result":{"publications":[],"epoch":"e","offset":0}}'; fi ;;
+  # a wrong key: busybox wget's refusal on stderr, exit 1 - unless the case has it taken
+  *" exec deployment/schnappy-production-centrifugo -c centrifugo -- wget "*"X-API-Key: copy-check-wrong"*)
+    [ -z "${WRONG_OK:-}" ] || exit 0
+    echo "wget: server returned error: HTTP/1.1 401 Unauthorized" >&2; exit 1 ;;
+  # Kafka's console producer: the line's x-centrifugo-channels header delivers it to that channel (unless KAFKA_LOST)
+  *" exec -i pod/schnappy-production-kafka-0 -c kafka -- /opt/kafka/bin/kafka-console-producer.sh "*)
+    line=$(sed -n 's/^stdin: //p' "$W/calls" | tail -1)
+    ch=$(sed -n 's/^x-centrifugo-channels:\([^	]*\)	.*/\1/p' <<< "$line")
+    [ -n "${KAFKA_LOST:-}" ] || [ -z "$ch" ] || echo "$ch" >> "$W/published" ;;
   *) echo "unexpected: $*" >&2; exit 9 ;;
 esac
 STUB
@@ -63,16 +87,18 @@ def check(name, got, want):
         print("FAIL " + name + "\n    got  " + repr(got) + "\n    want " + repr(want))
         fails += 1
 plays = yaml.safe_load(open("tests/ansible/copy/data-check.yml"))
-play = next(p for p in plays if p["name"] == "OpenSearch and the browser doing their work")
+play = next(p for p in plays if p["name"] == "OpenSearch, the browser and Centrifugo doing their work")
 T = {t["name"].split(" - ")[0]: t for t in play["tasks"]}
 V = play["vars"]
 RUN = "20261127T230000123456789"
 def run(task, **env):
+    for f in ("calls", "published"):
+        if os.path.exists(os.path.join(W, f)):
+            os.remove(os.path.join(W, f))
     calls = os.path.join(W, "calls")
-    if os.path.exists(calls):
-        os.remove(calls)
     kubectl = render(V["kubectl"], **V)
-    cmd = render(task["ansible.builtin.shell"]["cmd"], kubectl=kubectl, search=V["search"], browser=V["browser"], run_id=RUN)
+    cmd = render(task["ansible.builtin.shell"]["cmd"], kubectl=kubectl, search=V["search"], browser=V["browser"],
+                 realtime=V["realtime"], kafka_pod=V["kafka_pod"], run_id=RUN)
     r = subprocess.run(["bash", "-c", cmd], capture_output=True, text=True,
                        env={**os.environ, "PATH": W + "/bin:" + os.environ["PATH"], **env})
     result = {"rc": r.returncode, "stdout": r.stdout, "stdout_lines": r.stdout.splitlines()}
@@ -110,14 +136,35 @@ check("  the token expanded in the pod (\\$TOKEN on the line, quoted), never her
        any(c.startswith("stdin: ") and RUN in c and "6 * 7" in c for c in calls),
        bool(argv) and all(" exec -i deployment/schnappy-production-masi-browser -c chromium -- " in c for c in argv)),
       (True, False, True, True))
+check("  headed, as masi drives it (headless=false on its call): the virtual screen an upgrade can break",
+      any("content?token=$TOKEN&headless=false" in c for c in argv), True)
+rt_t = T["Centrifugo"]
+ok, calls, res = run(rt_t, CENTRIFUGO_HTTP_API_KEY="the-api-key-never-here")
+check("Centrifugo: this run's publication through its API and one through Kafka both in its history, a wrong key refused (401) - passes",
+      (ok, res["stdout_lines"]), (True, ["1", "1", "401"]))
+check("  the API's publication missing from history fails; Kafka's (its consumer not delivering) fails; a wrong key taken fails",
+      [run(rt_t, API_LOST="1")[0], run(rt_t, KAFKA_LOST="1")[0], run(rt_t, WRONG_OK="1")[0]], [False, False, False])
+argv = [c for c in calls if c.startswith("kubectl ")]
+kafka_in = [c for c in calls if c.startswith("stdin: x-centrifugo-channels:")]
+check("  its key expanded in the pod ($CENTRIFUGO_HTTP_API_KEY on the line), never here; Kafka's line to events.notifications, "
+      "headers parsed, its channel this run's in x-centrifugo-channels; every exec into the workload's container",
+      (any("$CENTRIFUGO_HTTP_API_KEY" in c for c in argv), any("the-api-key-never-here" in c for c in calls),
+       kafka_in == [f'stdin: x-centrifugo-channels:notifications:copy-check-{RUN}-kafka\t{{"run": "{RUN}"}}'],
+       any("--topic events.notifications --reader-property parse.headers=true" in c for c in argv),
+       bool(argv) and all(" exec deployment/schnappy-production-centrifugo -c centrifugo -- " in c
+                          or " exec -i pod/schnappy-production-kafka-0 -c kafka -- " in c for c in argv)),
+      (True, False, True, True, True))
+check("  a try waits for the consumer's first poll after a restart (two minutes): retries x delay",
+      rt_t.get("retries", 0) * rt_t.get("delay", 0), 120)
 check("  a try waits long enough for a busy browser or a slow cluster (two minutes; one): retries x delay",
       (br_t.get("retries", 0) * br_t.get("delay", 0), os_t.get("retries", 0) * os_t.get("delay", 0)), (120, 60))
-rt = T["OpenSearch and the browser ready (a ready replica each)"]
+rt = T["OpenSearch, the browser and Centrifugo ready (a ready replica each)"]
 check("the play: on the copy's target, behind the Vagrant guard first; both workloads read ready first (five minutes at most)",
       (play["hosts"], list(play["tasks"][0].values())[1], [render(i, **V) for i in rt["loop"]], rt.get("retries", 0) * rt.get("delay", 0),
        [condition(rt["until"], _ready={"rc": rc, "stdout": out}) for rc, out in ((0, "1"), (0, "0"), (0, ""), (1, "1"))],
        [t["name"] for t in play["tasks"]].index(rt["name"]) < [t["name"] for t in play["tasks"]].index(os_t["name"])),
-      ("target", "../vagrant-only.yml", ["statefulset/schnappy-production-opensearch", "deployment/schnappy-production-masi-browser"],
+      ("target", "../vagrant-only.yml", ["statefulset/schnappy-production-opensearch", "deployment/schnappy-production-masi-browser",
+                                          "deployment/schnappy-production-centrifugo"],
        300, [True, False, False, False], True))
 first = plays[0]["tasks"]
 check("  the run's id the first play's (set before, on the same hosts), and this play after it",
