@@ -701,3 +701,63 @@ board: a remote job is open to an EU country when its restriction field says so.
   the Jungle / Otta, Wellfound, Arc.dev: terms forbid automated reading. No Fluff Jobs and JustJoin.it (Polish
   market): robots.txt disallows `/api/`. 4dayweek.io: RSS of 50 jobs without a place field. Remote.co: no
   connection. europeremotely.com: parked. No further remote-job feed with usable terms turned up in today's search.
+
+## 7. Sector portals with EU-wide reach
+
+### EURAXESS - research jobs
+- Publisher: European Commission (DG Research and Innovation).
+- Documentation: https://euraxess.ec.europa.eu/jobs
+- Data or endpoint: web search https://euraxess.ec.europa.eu/jobs/search. No RSS, API or export link is on the search
+  page (its HTML was searched for rss, feed, xml, api, export, json).
+- Holds: research and academic vacancies posted by institutions in 40-odd countries or imported from partner boards
+  (seen today: "Talentech", "myScience", "Delft University of Technology via AcademicTransfer"). Per offer: title,
+  organisation, country, posting date, department, work location (address), research field, researcher profile
+  (R1-R4), funding programme, application deadline, description.
+- Access: web pages only. Registration or key: none to read. Cost: free.
+- Licence or terms: the site footer links the Commission's legal notice (CC BY 4.0 for content owned by the EU, "To use
+  or reproduce content that is not owned by the EU, you may need to seek permission directly from the rightholders" -
+  https://commission.europa.eu/legal-notice_en); the offers are the institutions' own. The EURAXESS-specific
+  notice was not read.
+- Volume: **6,947** offers on 28 November 2026 (all countries, the counter on the search page).
+- Update cycle: daily (offers "Posted on: 28 November 2026" were on the first page).
+- Seen on 2026-11-28: `GET https://euraxess.ec.europa.eu/jobs/search` -> 200, text/html, 21 kB: ten offers, the count,
+  two `application/ld+json` blocks (not examined).
+- Caveats: third-party scrapers exist (Apify); no official machine route was found. Country filter is a search
+  facet, not a feed.
+
+### EU Careers (EPSO) - EU institutions' and agencies' vacancies
+- Publisher: European Personnel Selection Office, for the institutions, bodies and agencies ("the job vacancies
+  published on this webpage are the sole responsibility of the EU institutions, bodies and agencies concerned" -
+  search-result text of the site).
+- Documentation: https://eu-careers.europa.eu/jobs_en
+- Data or endpoint: **RSS feed** `https://eu-careers.europa.eu/node/244/rss_en` (linked from the jobs page as "RSS").
+- Holds: per item: reference as title (e.g. "TRADE/COM/2026/2405"), link to the vacancy page, a short description,
+  `pubDate`, and categories: institution (with the Publications Office corporate-body authority as domain), job
+  field, city, contract type. The web list also shows grade and deadline.
+- Access: RSS feed and web pages. Registration or key: none. Cost: free.
+- Licence or terms: the feed says "(c) European Union, 1995-2026"; the site falls under the europa.eu legal notice
+  (reuse allowed with credit, CC BY 4.0, for EU-owned content).
+- Volume: 132 open vacancies on the jobs page; 30 items in the feed.
+- Update cycle: continuous (newest item 27 November 2026 19:00).
+- Seen on 2026-11-28: jobs page (`/en/job-opportunities/open-vacancies` redirects to `/jobs_en`) -> 200, 20 kB;
+  the feed -> 200, application/rss+xml, 6.7 kB, 30 items.
+- Caveats: the feed is the newest 30, not the whole list; workplaces are mostly Brussels, Luxembourg and the agency
+  seats. Each agency also lists vacancies on its own site.
+
+### Europass - "Find jobs"
+- Publisher: European Commission.
+- Documentation: https://europass.europa.eu/en/find-jobs
+- Holds: nothing of its own: "Search results are provided by EURES - the European Job Mobility Portal."
+- Access: web search only; the page offers no API, feed or download of jobs (its developer pages concern CV and
+  profile interoperability, not vacancies - from the page's link titles, not read).
+- Seen on 2026-11-28: one WebFetch of the page.
+- Caveats: adds no vacancies beyond EURES (topic 1).
+
+### Academic job feeds
+- jobs.ac.uk (UK, with European posts): RSS feeds per subject area and per location, listed at
+  https://www.jobs.ac.uk/feeds ("RSS links provide the raw RSS (XML) files, useful for feed syndication" -
+  search-result text). The feeds page answered **404** to the fetch tool today, and its terms were not read.
+- EURAXESS already carries the offers of several national academic boards (AcademicTransfer for the Netherlands was
+  seen in today's results).
+- AcademicTransfer, Academic Positions, Times Higher Education Unijobs, Nature Careers: no public feed or API was
+  found in one search; not examined further (see Gaps).
