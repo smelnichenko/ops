@@ -5,7 +5,7 @@ Date: 2026-11-28
 
 | Hosts | Source | What is forbidden | Clause (quoted) | Clause read at | Kind |
 |---|---|---|---|---|---|
-| rezoomo.com, www.rezoomo.com | Rezoomo (recruiting platform that hosts Irish employers' job pages) | systematic or automated scraping, data mining, extraction or harvesting, by means of or in relation to the services | "Data mining - You must not conduct any systematic or automated data scraping, data mining, data extraction or data harvesting, or other systematic or automated data collection activity, by means of or in relation to the Services." | https://www.rezoomo.com/terms-of-use/ | terms |
+| rezoomo.com, www.rezoomo.com | Rezoomo (recruiting platform that hosts Irish employers' job pages) | systematic or automated scraping, data mining, extraction or harvesting, by means of or in relation to the services | (section "Data mining") "You must not conduct any systematic or automated data scraping, data mining, data extraction or data harvesting, or other systematic or automated data collection activity, by means of or in relation to the Services." | https://www.rezoomo.com/terms-of-use/ | terms |
 
 Notes for the reader of this file (not rows):
 - Left out on purpose: IrishJobs.ie and Jobs.ie (their terms, read on 2026-11-28, have no clause on robots or

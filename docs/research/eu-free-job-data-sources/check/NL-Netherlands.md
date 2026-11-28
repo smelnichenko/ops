@@ -107,9 +107,9 @@ The research file has the section "Through the employers"; it is checked below (
 | UWV Open Match Data | no | Counts only, no adverts (CC BY 4.0) |
 | Werken voor Nederland (central government) | yes | "hergebruik van de inhoud van deze site is toegestaan" (CC0); robots.txt admits all agents at "Request-rate: 10/1"; vacancy sitemap of 1,309 pages |
 | CSO Vacature API | unclear | Could not be checked today (requests declined); reported gone by the research |
-| Nationale Vacaturebank | unclear | Terms not read; robots.txt closes search and apply addresses and shuts out "ClaudeBot" entirely |
-| Intermediair | unclear | Terms not read; same robots.txt, ClaudeBot shut out |
-| Jobbird | unclear | Terms silent on programs; reproduction or republication needs written permission; robots.txt closes `/nl/vacature?*` |
+| Nationale Vacaturebank | unclear | Terms not read; robots.txt closes search and apply addresses and shuts out "ClaudeBot" entirely (listed in `prohibited/` for that agent) |
+| Intermediair | unclear | Terms not read; same robots.txt, ClaudeBot shut out (listed in `prohibited/` for that agent) |
+| Jobbird | unclear | Terms silent on programs, but copying is forbidden: reproduction or republication needs written permission (listed in `prohibited/`); robots.txt closes `/nl/vacature?*` |
 | Werkzoeken.nl | unclear | Could not be read (blocked host) |
 | Monsterboard | unclear | Site gone: 301 to monster.com/nl/; terms there not read |
 | Indeed | no | Forbidden: "Utiliser un système automatisé (bots, agrégateurs (« scrapers »), « spiders », IA ou IA agentique) pour accéder, extraire des données" (terms of 1 April 2026, read in French) |

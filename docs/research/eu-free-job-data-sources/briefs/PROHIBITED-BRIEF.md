@@ -20,6 +20,12 @@ A source goes in only when BOTH hold:
 - Paid or partner-only data, closed services, dead hosts: unavailable, not prohibited.
 - A clause that only restricts redistribution, resale or commercial reuse.
 - A clause known only from a third party (a blog, another project's notes): not exact.
+- A robots.txt rule that names only particular crawlers (ClaudeBot, GPTBot and the like): it does
+  not bind the operator's own program. Mention it in the file's notes, not as a row.
+
+A robots.txt rule counts when it applies to every agent (`User-agent: *`) and closes the whole
+site or the addresses that hold the vacancies (search, list or advert pages). Say exactly which
+addresses in "What is forbidden".
 
 ## File: `prohibited/<CC>-<Name>.md` (same `<CC>-<Name>` as the country's other files; `00-EU-wide` for cross-border sources)
 

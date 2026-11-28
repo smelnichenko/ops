@@ -131,6 +131,7 @@ The research file has the section "Through the employers"; it is checked below (
 | Références | unclear | Could not be read (blocked host) |
 | Indeed | no | Forbidden: "Utiliser un système automatisé (bots, agrégateurs (« scrapers »), « spiders », IA ou IA agentique) pour accéder, extraire des données" |
 | LinkedIn | no | "Use bots or other unauthorized automated methods to access the Services" |
+| Statbel vacancy tables | no | Counts only, no adverts |
 | KBO/BCE - open data file | unclear | Free after registration per the e-Justice portal ("can be reused by any interested person provided they register"); the register's own licence text could not be read |
 | KBO/BCE - Public Search (one company at a time) | unclear | Terms not read; shows website and e-mail where declared |
 | KBO/BCE - web service | no | Paid: "this latter service is provided for a fee" |

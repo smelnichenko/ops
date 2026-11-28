@@ -1,6 +1,6 @@
 # EU-wide (00) - explicitly prohibited sources
 
-Status: first pass - not yet independently checked
+Status: checked - both rows confirmed by the France check (check/FR-France.md, claims 27 and 28); the German wording of the Indeed clause comes from the first pass
 Date: 2026-11-28
 
 | Hosts | Source | What is forbidden | Clause (quoted) | Clause read at | Kind |

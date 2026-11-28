@@ -175,6 +175,7 @@ The research file has the section "Through the employers"; it is checked below (
 | JobTeaser | unclear | Terms not read (redirect to another host) |
 | Monster France | unclear | Site gone: 301 to monster.com/fr/; terms there not read |
 | Dares JOCAS (past adverts scraped from about fifteen sites) | unclear | Access by status or on request, per a third-party page; licence, years, size and fields not read in its own documentation |
+| France Travail's and Dares' vacancy statistics | no | Counts only, no adverts |
 | Sirene (bulk files and recherche-entreprises API) | yes | Licence Ouverte 2.0, no key; every company with address, activity and size bracket; no website |
 | French Tech directory (Numeum) | unclear | Terms not read; lists company websites |
 | Annuaire des Entreprises | unclear | Not read (bot check) |
