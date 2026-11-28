@@ -269,7 +269,8 @@ check "a writing run told another image: refused, docker never run" \
 check "no CI cron runs Renovate any more (.woodpecker/renovate.yaml gone)" "$([ -e .woodpecker/renovate.yaml ] && echo present || echo gone)" "gone"
 # platform's CI check runs the chart's Alertmanager image (its render step refuses the two apart): the preset finds both,
 # one depName - one branch moves them together: a CI check that runs in production's image refuses the two apart
-# (platform's alertmanager-render.sh and clickhouse-config-start.sh, infra's tests/stale-pr-envs-sweeper and
+# (platform's alertmanager-render.sh, clickhouse-config-start.sh, reports-nginx-test.sh - its nginx left out until it
+# kept wave-patches red, 2026-11-28 - and backup-prune-rclone-test.sh, infra's tests/stale-pr-envs-sweeper and
 # tests/restore-check-age), so a unit that moved only production's stayed red for good (wave-patches, 2026-11-16: infra#36
 # alpine/k8s 1.35.10, platform#38 ClickHouse 26.8.37.168) - the step's image and its CI_STEP_IMAGE_CHECK both, digest kept;
 # CI's own tools (helm, kubeconform, postgres, Prometheus - its tag follows a chart's appVersion) never a unit; a values key
@@ -292,19 +293,21 @@ ci = ("  - name: stale-pr-envs-sweeper\n    image: alpine/k8s:1.35.9\n    comman
       "      CI_STEP_IMAGE_CHECK: rclone/rclone:1.75.1" + dig + "\n"
       "  - name: clickhouse-config-start\n    image: clickhouse/clickhouse-server:26.8.34.13-alpine\n    environment:\n"
       "      CI_STEP_IMAGE_CHECK: clickhouse/clickhouse-server:26.8.34.13-alpine\n"
+      "  - name: reports-nginx-test\n    image: nginx:1.27-alpine\n    environment:\n"
+      "      CI_STEP_IMAGE_CHECK: nginx:1.27-alpine\n"
       "  - name: rules-unit-tests\n    image: quay.io/prometheus/prometheus:v3.15.0\n"
       "  - name: alertmanager-check\n    image: prom/alertmanager:v0.34.1\n"
       "  - name: lint\n    image: alpine/helm:3.20.0\n  - name: kubeconform\n    image: ghcr.io/yannh/kubeconform:v0.7.0-alpine\n"
       "  - name: init-users-script\n    image: postgres:17-alpine\n")
 prod = ("              image: alpine/k8s:1.35.9\n              image: rclone/rclone:1.75.1" + dig + "\n")
-values = ("alertmanager:\n  image: prom/alertmanager:v0.34.1\nclickhouse:\n  image: clickhouse/clickhouse-server:26.8.34.13-alpine\n"
+values = ("reports:\n  image: nginx:1.27-alpine\nalertmanager:\n  image: prom/alertmanager:v0.34.1\nclickhouse:\n  image: clickhouse/clickhouse-server:26.8.34.13-alpine\n"
           "  backup:\n    rcloneImage: rclone/rclone:1.71.2\ncnpg:\n  ephemeralImage: ghcr.io/cloudnative-pg/postgresql:18.6-system-bullseye\n"
           "  imagePullPolicy: IfNotPresent\n  bootstrapServers: \"schnappy-kafka-bootstrap:9092\"\n")
 print(found(".woodpecker/ci.yaml", ci))
 print(found("clusters/production/cluster-config/restore-check-age.yaml", prod), found("helm/schnappy-observability/values.yaml", values))
 PYPRESET
-)" "[('alpine/k8s', '1.35.9', False), ('rclone/rclone', '1.75.1', True), ('rclone/rclone', '1.75.1', True), ('clickhouse/clickhouse-server', '26.8.34.13-alpine', False), ('clickhouse/clickhouse-server', '26.8.34.13-alpine', False), ('prom/alertmanager', 'v0.34.1', False)]
-[('alpine/k8s', '1.35.9', False), ('rclone/rclone', '1.75.1', True)] [('prom/alertmanager', 'v0.34.1', False), ('clickhouse/clickhouse-server', '26.8.34.13-alpine', False), ('rclone/rclone', '1.71.2', False), ('ghcr.io/cloudnative-pg/postgresql', '18.6-system-bullseye', False)]"
+)" "[('alpine/k8s', '1.35.9', False), ('rclone/rclone', '1.75.1', True), ('rclone/rclone', '1.75.1', True), ('clickhouse/clickhouse-server', '26.8.34.13-alpine', False), ('clickhouse/clickhouse-server', '26.8.34.13-alpine', False), ('nginx', '1.27-alpine', False), ('nginx', '1.27-alpine', False), ('prom/alertmanager', 'v0.34.1', False)]
+[('alpine/k8s', '1.35.9', False), ('rclone/rclone', '1.75.1', True)] [('nginx', '1.27-alpine', False), ('prom/alertmanager', 'v0.34.1', False), ('clickhouse/clickhouse-server', '26.8.34.13-alpine', False), ('rclone/rclone', '1.71.2', False), ('ghcr.io/cloudnative-pg/postgresql', '18.6-system-bullseye', False)]"
 # what Renovate moves in ops, the copy can prove: each ops value the preset reads (renovate_preset.reads: its managers,
 # ignorePaths, the rules turning a dependency off) is one copy-unit.sh follows or proves - its file a vars file it hands
 # over, or its key one that file's branch accepts - unless every dependency in the file goes to a manual- unit (never
