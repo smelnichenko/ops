@@ -177,15 +177,15 @@ image ghcr.io/cloudnative-pg/cloudnative-pg 1.30.1
 image ghcr.io/cloudnative-pg/postgresql 18.7-system-trixie
 image ghcr.io/external-secrets/external-secrets v2.12.0
 image ghcr.io/versity/versitygw v1.8.0
-image git.pmon.dev/schnappy/admin e13df8c
+image git.pmon.dev/schnappy/admin 84c93e8
 image git.pmon.dev/schnappy/apt-cacher-ng 7b46aea
-image git.pmon.dev/schnappy/chat 2a3de60
-image git.pmon.dev/schnappy/chess c2b6616
+image git.pmon.dev/schnappy/chat e2eb23a
+image git.pmon.dev/schnappy/chess 5d6630a
 image git.pmon.dev/schnappy/game-scp 216c611
 image git.pmon.dev/schnappy/hyperfoil latest
-image git.pmon.dev/schnappy/masi 647a1e3
-image git.pmon.dev/schnappy/monitor d9f5e3d
-image git.pmon.dev/schnappy/site bcb3bfb
+image git.pmon.dev/schnappy/masi 8886de0
+image git.pmon.dev/schnappy/monitor 5eca586
+image git.pmon.dev/schnappy/site 2a9218f
 image grafana/grafana 13.2.6
 image grafana/k6 1.7.1
 image grafana/mimir 3.2.5
@@ -227,10 +227,28 @@ image scylladb/scylla 2026.2.5
 image scylladb/scylla-manager 3.12.1
 image scylladb/scylla-manager-agent 3.12.1
 image scylladb/scylla-operator 1.22.1
-image sonarqube 26.9.0.129388-community
+image sonarqube 26.11.0.134175-community
 image talinx/cert-manager-webhook-porkbun 1.0.0
 image valkey/valkey 9.1.3-alpine
 image velero/velero-plugin-for-aws v1.14.4
+image-digest amazon/aws-cli 2.37.13 d32864c
+image-digest curlimages/curl 8.10.1 d9b4541
+image-digest curlimages/curl 8.12.1 94e9e44
+image-digest ghcr.io/browserless/chromium v2.56.7 b1ba7b0
+image-digest ghcr.io/cloudnative-pg/postgresql 18.7-system-trixie b4bbd2e
+image-digest grafana/k6 1.7.1 4fd3a69
+image-digest opensearchproject/opensearch 3.9.0 3b55f6b
+image-digest postgres 17-alpine 6f30057
+image-digest quay.io/cilium/cilium v1.20.4 20fe92e
+image-digest quay.io/cilium/cilium-envoy v1.39.5-1792733054-8c73b2816bc8239e27f1fd53b271884688137459 547ab45
+image-digest quay.io/cilium/hubble-relay v1.20.4 cb23408
+image-digest quay.io/cilium/hubble-ui v0.13.6 049a80a
+image-digest quay.io/cilium/hubble-ui-backend v0.13.6 83b3fc7
+image-digest quay.io/cilium/operator-generic v1.20.4 7a7a348
+image-digest rclone/rclone 1.71.2 3103526
+image-digest rclone/rclone 1.75.2 2687085
+image-digest scylladb/scylla-manager 3.12.1 ba54287
+image-digest scylladb/scylla-manager-agent 3.12.1 f47697d
 k8s server v1.36.6
 kafka-metadata schnappy-production/schnappy-production 4.3-IV0
 os debian 13.8

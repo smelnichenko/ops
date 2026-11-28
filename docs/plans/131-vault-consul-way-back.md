@@ -4,9 +4,11 @@
 token) merged (ops #84) and **rehearsed green on the copy (2026-11-28)**: `task test:copy:vault-way-back` took Vault
 1.21.4 to 2.2.2 and back - the secret written before there, the one written after gone, unsealed on both Pis, one active,
 External Secrets reading it (the first run, 2026-11-27, stopped at its first check on a list-typed fail_msg - ops #87);
-its store's `missing` cleared. Consul's part (items 3-4) merged (ops #88) - restore-consul.yml, its copy check,
-`task deploy:consul:way-back` and `task test:copy:consul-way-back`; its store's `missing` clears only once that passes in
-both modes (current KV, snapshot).
+its store's `missing` cleared. Consul's part (items 3-4) merged (ops #88) and **rehearsed green on the copy in both modes
+(2026-11-28)**: `task test:copy:consul-way-back` took Consul 1.20.6 to 2.1.0 and back - from the running cluster's KV (the
+marker written after the upgrade kept) and from the pre-upgrade snapshot (it gone), the same primary on the same timeline,
+Patroni not paused, Vault unsealed with one active (the first run stopped on the copy's absent tier-0 timers - ops #90);
+its store's `missing` cleared.
 
 ## Why
 
