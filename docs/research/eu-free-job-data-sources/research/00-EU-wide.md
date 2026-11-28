@@ -5,7 +5,10 @@ headers; `Accept` / `Content-Type` only where the protocol needs them), and Clau
 (their own client identity). No account, key or login was used anywhere. Hosts that masi already reads (named in
 masi's `docs/sources.md` and `docs/remote-sources-investigation.md`) got at most one request, to a documentation or
 terms page, and none to a data endpoint; what is said about their data comes from those two files and from the
-vendor's public documentation, and is marked so.
+vendor's public documentation, and is marked so. (masi's GitHub source reads `api.github.com`, which was not
+requested; documentation that vendors keep on GitHub was read from `raw.githubusercontent.com` and `github.com`,
+eight requests in all.) No job-board or vendor host got more than three requests; a host that answered 403 was
+not asked again.
 
 Conventions: "Seen on" lines give the request made on 28 November 2026 and what came back. "Third party" marks a
 statement taken from someone other than the publisher. Anything not confirmed is in "Gaps" at the end.
@@ -190,7 +193,8 @@ statement taken from someone other than the publisher. Anything not confirmed is
 ### Eurostat - job vacancy statistics (JVS)
 - Publisher: Eurostat (European Commission).
 - Documentation: https://ec.europa.eu/eurostat/cache/metadata/en/jvs_esms.htm (metadata);
-  https://ec.europa.eu/eurostat/web/user-guides/data-browser/api-data-access (API guide).
+  https://ec.europa.eu/eurostat/web/user-guides/data-browser/api-data-access (API guide; address from memory, not
+  opened today).
 - Data or endpoint: API `https://ec.europa.eu/eurostat/api/dissemination/statistics/1.0/data/<table>?format=JSON&...`
   (JSON-stat; SDMX 2.1 and 3.0 and TSV/CSV bulk files of each table are served by the same service); table list in
   `https://ec.europa.eu/eurostat/api/dissemination/catalogue/toc/txt?lang=en`. Tables as listed today:
@@ -709,7 +713,7 @@ board: a remote job is open to an EU country when its restriction field says so.
 - Documentation: https://euraxess.ec.europa.eu/jobs
 - Data or endpoint: web search https://euraxess.ec.europa.eu/jobs/search. No RSS, API or export link is on the search
   page (its HTML was searched for rss, feed, xml, api, export, json).
-- Holds: research and academic vacancies posted by institutions in 40-odd countries or imported from partner boards
+- Holds: research and academic vacancies posted by institutions or imported from partner boards
   (seen today: "Talentech", "myScience", "Delft University of Technology via AcademicTransfer"). Per offer: title,
   organisation, country, posting date, department, work location (address), research field, researcher profile
   (R1-R4), funding programme, application deadline, description.
@@ -761,3 +765,251 @@ board: a remote job is open to an EU country when its restriction field says so.
   seen in today's results).
 - AcademicTransfer, Academic Positions, Times Higher Education Unijobs, Nature Careers: no public feed or API was
   found in one search; not examined further (see Gaps).
+
+## 8. Open datasets of job postings
+
+### Web Data Commons - schema.org JobPosting subset (from Common Crawl)
+- Publisher: Web Data Commons project, University of Mannheim (Data and Web Science Group); extracted from the
+  Common Crawl.
+- Documentation: https://webdatacommons.org/structureddata/schemaorg/ ; release statistics
+  https://webdatacommons.org/structureddata/2024-12/stats/schema_org_subsets.html
+- Data or endpoint:
+  `https://data.dws.informatik.uni-mannheim.de/structureddata/2024-12/quads/classspecific/JobPosting/` (14 N-Quads
+  part files, a sample file, `JobPosting_lookup.csv`, `JobPosting_domain_stats.csv`).
+- Holds: every schema.org `JobPosting` entity found in that year's crawl, as N-Quads (subject, property, value, page
+  URL): title, description, datePosted, validThrough, hiringOrganization, jobLocation (PostalAddress), employmentType,
+  baseSalary, identifier - whatever each site marked up. The domain statistics file gives, per site, the number of
+  entities and how often each property is filled.
+- Access: bulk files over HTTPS. Registration or key: none. Cost: free.
+- Licence or terms (exact wording): "We publish the corpora for research purposes only."
+- Volume (latest release, **2024-12**): 175,205,867 quads, 3,606,092 URLs, 63,320 hosts, 4,068,348 JobPosting
+  entities, 4.86 GB. Whole series: yearly releases 2013-11 to 2024-12.
+- Vintage / update cycle: yearly; the newest release listed today is December 2024 (the statistics file is dated
+  22 October 2025), so the postings are about two years old. No 2025 release is listed.
+- Seen on 2026-11-28: series page -> 200, 7 kB; subset statistics -> 200, 11 kB; HEAD of
+  `JobPosting_domain_stats.csv` -> 200, 13,199,327 bytes; the first 400 kB of it (HTTP 206) -> 1,888 site rows.
+- Caveats: "The CommonCrawl covers only a" part of the web (their wording, cut) - a sample of each site's pages, not
+  a complete copy of any board; a snapshot, not live vacancies; research use only. Useful for finding which sites in
+  a country carry the markup (topic 9), not as a vacancy source.
+
+### Common Crawl (raw crawl)
+- Publisher: Common Crawl Foundation. Documentation: https://commoncrawl.org/ (not requested today).
+- Holds: monthly web crawls (WARC) in a public bucket, free to download; JobPosting markup can be extracted from
+  newer crawls than WDC's with one's own tooling. From memory, not checked today (see Gaps).
+
+### data.europa.eu - datasets about job vacancies
+- Publisher: Publications Office of the EU (portal); each dataset belongs to its national or EU publisher.
+- Documentation: https://data.europa.eu/ ; search API `https://data.europa.eu/api/hub/search/search?q=...&filter=dataset`.
+- Holds: metadata of the national portals' datasets. The English phrase "job vacancies" matches **64 datasets**:
+  FR 13, DK 6, ES 5, (UK 5), NL 4, PT 4, SK 4, LU 3, SI 3, BE 2, CZ 2, HR 2, IE 2, EU-level 2 (Eurostat), BG 1,
+  EE 1, FI 1, IT 1, SE 1, (MD 1, NO 1). Most are statistics tables (e.g. Slovakia "Job vacancies", Ireland "EHQ59 -
+  Job Vacancies", Denmark "Job vacancies by region and unit", Croatia "Job vacancies by occupation"); a few are
+  actual listings of one employer (Belgium "Open job vacancies by Infrabel", Czechia "Job vacancies at UMC Praha 8")
+  or derived data (Luxembourg "Skills required in ADEM job vacancies").
+- Access: API (search), then each dataset's own distribution. Registration or key: none. Cost: free.
+- Licence or terms: per dataset; in this result set CC BY 4.0 (the largest group), Licence Ouverte (FR), INE's notice
+  (ES), CC0, national open licences.
+- Seen on 2026-11-28: one search request -> 200, application/json, 422 kB, `count` 64, with country, catalogue,
+  format and licence facets.
+- Caveats: a phrase search in English finds only records whose (possibly machine-translated) metadata uses those
+  words - national PES vacancy feeds published under native-language titles are in the country files, not counted
+  here. No EU-wide vacancy listing dataset exists on the portal; no EURES dataset was among the first ten results.
+
+### Indeed Hiring Lab - Job Postings Index
+- Publisher: Indeed Hiring Lab.
+- Documentation and data: https://github.com/hiring-lab/job_postings_tracker
+- Holds: daily index of job postings on Indeed (percentage change since 1 February 2020, seasonally adjusted and
+  not), total and new postings, by country, by occupational sector, and by region for some countries. **Aggregates
+  only**, no adverts.
+- Countries: folders AU, CA, DE, EA (euro-area aggregate, by its name), ES, FR, GB, IE, IT, NL, US - six EU states;
+  regional files for Germany, France and Ireland.
+- Access: CSV files in the repository. Registration or key: none. Cost: free.
+- Licence or terms: the repository is marked "Creative Commons Attribution 4.0 International" (CC-BY-4.0).
+- Update cycle: "The frequency of the data is daily and it is refreshed each week."
+- Seen on 2026-11-28: README -> 200, 3.2 kB; repository page -> 200 (country folders and licence label).
+
+### Research corpora
+- Eurostat's web-intelligence competition datasets (European Statistics Awards): about 112,000 online job
+  advertisements in some 24 languages for a de-duplication challenge, and a set for occupation classification
+  (third party: arXiv papers 2406.13695 and 2411.03779, from search-result text). Whether they are openly
+  downloadable and under what licence was not confirmed.
+- No openly licensed, current, EU-wide corpus of full adverts was found. Commercial sets (Techmap, Lightcast,
+  Coresignal, Techsalerator) are sold, some with free samples. Kaggle and Hugging Face were not searched
+  individually (see Gaps).
+
+## 9. The schema.org JobPosting route
+
+### What the search engines require
+- Publisher: Google (Search Central).
+- Documentation: https://developers.google.com/search/docs/appearance/structured-data/job-posting
+- Holds (the programme's rules): a job page must carry `JobPosting` structured data with the required properties
+  `datePosted`, `description`, `hiringOrganization`, `jobLocation`, `title`; recommended:
+  `applicantLocationRequirements`, `baseSalary`, `directApply`, `employmentType`, `identifier`, `jobLocationType`,
+  `validThrough`. Sites are told to "Use the Indexing API to notify Google of a new URL to crawl or that content at
+  a URL has been updated" and to remove expired postings. Third-party job sites may take part; content policies
+  forbid "Job postings on behalf of an organization or company without authorization".
+- Countries: the job experience "is currently available in the following regions"; under Europe the page lists 14
+  countries, **ten of them EU: Austria, Belgium, Denmark, France, Germany, Greece, Italy, Netherlands, Portugal,
+  Spain** (plus Belarus, Russia, Switzerland, United Kingdom). The other 17 EU states are not listed.
+- Access for a reader: **none**. The page describes how to get postings *into* Google; it mentions no API or other
+  way to read the indexed postings (the Search Console API returns only a site's own performance figures).
+- Seen on 2026-11-28: two WebFetch reads of the page (the second for the exact country list).
+- Caveats: Bing's own documentation was not read (bing.com is not to be requested, and a search found no official
+  page), so nothing is stated about Bing's programme. Whether Google's job box has changed in the EU under the
+  Digital Markets Act measures of 2025-2026 was not confirmed (a search found the general Search changes only).
+
+### How widely EU job pages carry the markup
+- Web Data Commons 2024-12: JobPosting markup on 63,320 hosts (3.6 million URLs); the whole release holds
+  schema.org data from 12.3 million domains. In the first 1,888 rows of the per-domain statistics file (3% of it, in file
+  order, so only an indication): 498 hosts (26%) are on an EU country-code domain or `.eu`, carrying 10% of the
+  entities - `.de` 256 hosts, `.nl` 65, `.fr` 40, `.se` 29, `.at` 17, `.be` 16, `.eu` 13, `.it` 10, `.pl` 9, and
+  0-5 each for the others (`.ee` 1, `.lv` 1, `.lt` 1; `.cy`, `.mt`, `.si` none in the sample). EU employers on
+  `.com` domains are not counted.
+- From masi's sources file: Estonian boards cvpro.ee and cvkeskus.ee, Teamtailor boards, and the Phenom and
+  Eightfold career sites all embed a `JobPosting` JSON-LD block per advert, which is what masi reads for text,
+  salary, employment type and country.
+- The EURAXESS search page carried two `application/ld+json` blocks today (not examined).
+
+### Does it give a free way to read vacancies?
+- Only indirectly. The markup makes a page easy to parse once you have fetched it, but it grants no right to fetch
+  or reuse: each site's robots.txt and terms still decide (masi's file records sites whose terms forbid automated
+  reading while their pages carry the markup). The search engines' indexes built from it are not readable through
+  any free API. The free bulk form is Common Crawl / Web Data Commons - partial, a year or two old, and for
+  research only. Some feed owners even forbid passing their jobs on "through feeds or JobPosting structured data"
+  (Himalayas) or to "Google Jobs" (Remotive, Himalayas), precisely because the markup is how jobs travel.
+
+## 10. Maintained public comparisons
+
+### WIH-OJA landscaping report (Eurostat / Cedefop)
+- Publisher: Eurostat's Web Intelligence Hub (written under contract by Universita degli Studi di Milano-Bicocca,
+  Burning Glass Europe and GOPA; author Francesco Trentini).
+- Documentation / data:
+  https://cros.ec.europa.eu/system/files/2025-02/WIH%20Report%20-%20OJA%20Landscaping%20Implementation.pdf
+  ("Deliverable D3.2 - Final overall OJA landscaping report", version 2, 2022-06-21; file dated February 2025).
+- Holds: a per-country survey of where online job adverts are published, in the 27 EU states, the UK and the four
+  EFTA states: "During the 2021 landscaping 505 new potential sources have been identified ... Overall, the sum of
+  potential and new sources amounts to 1027 sources." Table 8 counts job portals per country, private and public
+  (in "Coverage by country" below); "all European and EFTA countries have one national public employment service
+  online job-portal"; text on which PES have agreements with private portals.
+- Access: PDF. Registration or key: none. Cost: free.
+- Licence or terms: "Reproduction is authorised provided the source is acknowledged."
+- Seen on 2026-11-28: the PDF through WebFetch (1.2 MB, 39 pages), read as text.
+- Caveats: the nearest thing to an official per-country comparison of job data sources, but it is a 2021 survey,
+  it counts portals rather than naming their APIs or terms, and the register of sources itself (names, URLs) is not
+  in the report. Not maintained as a living list.
+
+### Single Market Scoreboard - EURES (see topic 1)
+- The maintained official per-country figures on how much of each state's vacancy stock reaches EURES; yearly;
+  chart-only.
+
+### public-apis list, "Jobs" section (community)
+- Publisher: the `public-apis` GitHub project (community-maintained).
+- Documentation / data: https://github.com/public-apis/public-apis#jobs
+- Holds: 48 job-related APIs today with an "Auth" column (key / OAuth / none): among them Adzuna (`apiKey`),
+  Arbeitnow (No), Arbeitsamt = Germany's Bundesagentur job search (`OAuth`), Careerjet (`apiKey`), DevITjobs UK
+  (No), Findwork (`apiKey`), Jooble (`apiKey`), Reed (`apiKey`), RemoteOK (No), Techmap (`apiKey`), The Muse
+  (`apiKey`), WhatJobs (`apiKey`), Working Student Jobs (Germany, No), and a number of small new aggregators of ATS
+  boards (freehire, YubHub, JobsPipe, Jobven and others - not examined).
+- Access: a Markdown file. Licence: the project's (MIT, from memory). Last commit: 2026-11-27.
+- Seen on 2026-11-28: README -> 200, 122 kB; commit feed.
+- Caveats: maintained, but global, self-submitted, not per country, and without terms of reuse. Note it marks The
+  Muse as needing a key.
+
+### Nothing else found
+- No maintained public table of "public employment service X: API yes/no, licence" for the 27 states was found -
+  not from the PES Network, ELA, data.europa.eu or a community project (one search). The country files of this
+  study would be that table. Third-party blog lists of ATS endpoints (TheirStack, Cavuno, Fantastic.jobs) exist for
+  topic 5.
+
+## Coverage by country
+
+Columns are the cross-border sources that do not cover every state alike. "yes / no" as the source itself lists
+countries; "n.s." = not stated by the source or not confirmed today.
+
+- EURES: vacancies with a workplace in the country on the EURES portal, 28 November 2026 (all 27 states feed it).
+- Adzuna: country has an Adzuna API endpoint (third-party lists of Adzuna's 19 countries).
+- Google jobs: country is in Google's list of regions where the job search experience is available.
+- Indeed index: country has a folder in Indeed Hiring Lab's open Job Postings Index.
+- data.europa.eu: datasets matching the English phrase "job vacancies" on the EU portal, by publishing country.
+- WIH 2021: job portals found by the 2021 landscaping, private + public (Table 8).
+- Jooble API and Careerjet API: per-country availability was not confirmed for any state (n.s. throughout), so
+  they have no column. Arbeitnow: Germany (and the UK) only in practice. Eurostat JVS, ESCO, EURAXESS, EU Careers,
+  the ATS vendors and the remote-job feeds are not tied to a country.
+
+| Country | EURES vacancies | Adzuna API | Google jobs | Indeed index | data.europa.eu | WIH 2021 portals |
+|---|---|---|---|---|---|---|
+| AT | 57,261 | yes | yes | no | 0 | 13 + 1 |
+| BE | 237,924 | yes | yes | no | 2 | 60 + 4 |
+| BG | 10,685 | no | no | no | 1 | 29 + 1 |
+| CY | 3,713 | no | no | no | 0 | 8 + 1 |
+| CZ | 41,094 | no | no | no | 2 | 27 + 1 |
+| DE | 660,831 | yes | yes | yes | 0 | 67 + 1 |
+| DK | 1,465 | no | yes | no | 6 | 17 + 2 |
+| EE | 2,107 | no | no | no | 1 | 15 + 1 |
+| ES | 26,927 | yes | yes | yes | 5 | 39 + 8 |
+| FI | 14,528 | no | no | no | 1 | 24 + 1 |
+| FR | 427,029 | yes | yes | yes | 13 | 47 + 4 |
+| GR | 208 | no | yes | no | 0 | 25 + 3 |
+| HR | 6,345 | no | no | no | 2 | 15 + 1 |
+| HU | 1,154 | no | no | no | 0 | 52 + 3 |
+| IE | 999 | no | no | yes | 2 | 34 + 2 |
+| IT | 4,266 | yes | yes | yes | 1 | 34 + 1 |
+| LT | 6 | no | no | no | 0 | 27 + 2 |
+| LU | 3,223 | no | no | no | 3 | 24 + 4 |
+| LV | 3,748 | no | no | no | 0 | 27 + 1 |
+| MT | 5,331 | no | no | no | 0 | 12 + 1 |
+| NL | 285,437 | yes | yes | yes | 4 | 57 + 4 |
+| PL | 15,122 | yes | no | no | 0 | 37 + 2 |
+| PT | 934 | no | yes | no | 4 | 27 + 2 |
+| RO | 4,524 | no | no | no | 0 | 39 + 2 |
+| SE | 44,823 | no | no | no | 1 | 34 + 1 |
+| SI | 3,085 | no | no | no | 3 | 20 + 2 |
+| SK | 11,797 | no | no | no | 4 | 23 + 1 |
+
+A "0" under data.europa.eu means no dataset under that English phrase, not that the country publishes none.
+
+## Gaps
+
+- **EURES per-country figures from the official dashboard** were not read (Qlik dashboards need a browser session);
+  the counts here come from the facets of one answer of the search back end. The 34 `CONNECTION_POINT_ID` values
+  were not mapped to countries. Whether the low counts for LT, EL, PT, IE, HU reflect a broken national channel, an
+  opt-out practice or the day's state is not known. The EURES Extranet specifications were not accessible.
+- **EURES reuse terms for vacancy data**: no page states a licence for the vacancies themselves or a policy on
+  automated reading of the search back end; the reading given (not an open licence; members-only interfaces) rests
+  on Decision (EU) 2017/1257 and the privacy statement. A written answer from ELA (eures@ela.europa.eu) would
+  settle it; none was sought.
+- **Digital Omnibus**: adoption status on 28 November 2026 and its effect on the high-value dataset list were not
+  confirmed (only a June 2026 Council compromise text was found, third party).
+- **EUR-Lex** answered `202` with `x-amzn-waf-action: challenge` to a plain client; legal texts were read from the
+  Publications Office instead. Only original (unconsolidated) texts were read.
+- **Cedefop** (`www.cedefop.europa.eu`) answered **403** to the fetch tool; Skills-OVATE's own page, its export
+  functions, country list and copyright notice were not read (statements about it come from search-result text and
+  from Eurostat's WIH page).
+- **Jooble** (`jooble.org/api/about`) answered **403** to curl: its API terms and the list of country domains with
+  an API were not read. **The Muse** (`themuse.com/developers/api/v2`) answered **403** to curl: nothing about it
+  is confirmed from the publisher; third parties disagree on whether a key is needed and whether the API still exists.
+- **We Work Remotely** answered **403** with a Cloudflare challenge to curl; its RSS page and feeds were not read
+  today. masi's investigation of 2026-11-10 reached it with a browser-like User-Agent.
+- **Adzuna**: the country list (8 EU states) and any free-tier call limit come from third parties; Adzuna's
+  interactive docs and account pages were not read. **Careerjet**: supported locales not read. **Talent.com**: no
+  public technical documentation or terms for the publisher feeds.
+- **Jobicy endpoint**: today's documentation gives `/api/jobs`; masi's note of 11-10 gives `/api/v2/remote-jobs`.
+  Not tested which one answers (no data request allowed).
+- **ATS vendors**: no data endpoint was requested (masi hosts). Field lists for SmartRecruiters and Recruitee are
+  partly from memory. Pinpoint, Breezy HR, HireHive and Manatal endpoints are third-party statements. No vendor
+  states terms of reuse for postings; none was asked. Other EU-centred vendors (Softgarden, d.vinci, Join, Factorial,
+  Traffit, Jobylon, ReachMee, Talentsoft/Cegid, SAP SuccessFactors, Oracle) were not examined.
+- **Remote OK, Working Nomads, Remotive, Himalayas, HN**: volumes and place fields are masi's of 2026-11-10, not
+  re-measured. `hn.algolia.com/api` returned a script-only page; Algolia's rate limit was not re-read.
+- **EURAXESS**: no feed or API found on the search page; its own terms page and any partner import interface were
+  not read. **Academic boards** (AcademicTransfer, Academic Positions, THE Unijobs, Nature Careers) not examined;
+  `jobs.ac.uk/feeds` answered 404 to the fetch tool.
+- **Open datasets**: Kaggle, Hugging Face and Zenodo were not searched one by one; the Eurostat competition
+  datasets' availability and licence are unconfirmed; Common Crawl's own terms were not re-read.
+- **Bing**: its job-posting programme was not researched (no direct requests allowed; no official page found by
+  search). **Google**: any EU-specific change to the job search box in 2025-2026 is unconfirmed.
+- **Paid data vendors** (TheirStack, Coresignal, Techmap, LinkUp, Lightcast, Fantastic.jobs, Careerjet Jobs Data
+  API, JSearch) and the small new ATS aggregators in the public-apis list were named but not examined; some
+  advertise free tiers.
+- Statements marked "from memory" (Eurostat JVS release delays, ESCO concept counts, Common Crawl, public-apis'
+  licence, SmartRecruiters' owner) were not re-checked today.
