@@ -24,14 +24,14 @@ image docker.io/woodpeckerci/woodpecker-server *
 # (its manifest out of infra since 2026-11-20 - step two of its retirement)
 ? image busybox stable-musl
 image sonarqube *
-# SonarQube's setup Job (SonarQube is left out)
-image curlimages/curl 8.12.1
 # the nightly Hyperfoil load test (off in Vagrant: its image is a floating :latest, so the kubelet pulls it from
 # production's registry on every run, and an isolated copy can never run it)
 image git.pmon.dev/schnappy/hyperfoil latest
 # the k6 smoke's PostSync Job (curl waits for the app, then k6), kept 24 h after each sync (ttlSecondsAfterFinished):
-# production and the copy each have it or not by when they last synced - either way not judged
-? image curlimages/curl 8.10.1
+# production and the copy each have it or not by when they last synced - either way not judged; SonarQube's setup Job
+# runs the same curl (SonarQube is left out) - by name, any version: a unit moving curl (8.10.1 and 8.12.1 -> 8.23.0,
+# the wave-patches review of 2026-11-28) leaves no stale tag here
+? image curlimages/curl *
 ? image grafana/k6 *
 # Nexus runs on the Pis in production only (the Vagrant copy builds no Nexus)
 pi pi1 nexus *

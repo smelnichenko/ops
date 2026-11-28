@@ -497,7 +497,7 @@ import re, sys
 lines = [l for l in open(sys.argv[1]).read().splitlines()
          # verify's own headers, and its progress lines (each its time first: what a look found then, said again at its end)
          if l.strip() and not re.match(r"(SETTLED|NOT SETTLED|NOT QUIET)\b|\d\d:\d\d:\d\d ", l)]
-test = [l for l in lines if re.match(r"(app schnappy-test(-[^ ]+)? |pod schnappy-test(-[^/ ]+)?/)", l)]
+test = [l for l in lines if re.match(r"(app schnappy-test(-[^ ]+)? |(pod|job) schnappy-test(-[^/ ]+)?/)", l)]
 root = [l for l in lines if l.startswith("app root ")]
 sys.exit(0 if lines and test and len(test) + len(root) == len(lines) else 1)
 PY
@@ -876,6 +876,12 @@ done
 # failing that deploy - the observability review, 2026-11-25). Its app synced after the apply, the hook to succeed
 if grep -q '^grafana/k6 ' "$ops/.copy/unit-moves-$unit.txt" 2> /dev/null; then
   cmds+=("deploy:argo:sync -- -e argo_app=schnappy-production-apps")
+fi
+# rclone runs production's backup Jobs (etcd's snapshot, Kafka's dump, ClickHouse's backup and its prune): their first
+# runs on a moved image would be production's own, after the merge (the wave-patches review, 2026-11-28) - each taken
+# once after the apply and waited for, a failure the unit's (the verify's hold then judges the CronJobs' own runs)
+if grep -q '^rclone/rclone ' "$ops/.copy/unit-moves-$unit.txt" 2> /dev/null; then
+  cmds+=("deploy:etcd:backup" "check:production:kafka-backup" "check:production:clickhouse-backup")
 fi
 
 # 6. the apply - CI idle first when the merge restarts it (an hour at most: the gates and the kill switch read after

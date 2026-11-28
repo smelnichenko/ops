@@ -617,7 +617,7 @@ PYREGROUP
 # upgrade-cycle alone - a store's version outside its own unit, so nothing backed it up (Grafana migrates its database
 # one way on every new version from 13 on). Each its own unit now, renovate/<store>-<X.Y>, labelled one-way - its name
 # the store's in scripts/upgrade-stores.json; Grafana's k6 (no store) stays in observability
-check "the preset: Grafana's, ClickHouse's, Keycloak's, Vault's and Consul's minors each a one-way unit of its own, named for its store; k6 in observability" \
+check "the preset: Grafana's, ClickHouse's, Keycloak's, Vault's, Consul's and OpenSearch's minors each a one-way unit of its own, named for its store; k6 in observability; OpenSearch's patches in the wave" \
   "$("$PY" - <<'PYSTOREMIN'
 import json, re, sys
 sys.path.insert(0, "tests/ansible/unit")
@@ -625,11 +625,13 @@ from renovate_preset import branch, resolved
 t = {s["store"]: s for s in json.load(open("scripts/upgrade-stores.json"))["stores"]}
 got = [(p, branch(p, "minor", version=v), "one-way" in resolved(p, "minor").get("addLabels", []))
        for p, v in (("grafana", "13.3.2"), ("grafana/grafana", "13.3.2"), ("clickhouse/clickhouse-server", "26.8.1"),
-                    ("quay.io/keycloak/keycloak", "26.8.2"), ("hashicorp/vault", "1.22.1"), ("hashicorp/consul", "1.22.8"))]
-print(got, [bool(re.search(t[s]["units"], b)) for s, (_, b, _) in zip(("grafana", "grafana", "clickhouse", "keycloak", "vault", "consul"), got)],
-      branch("grafana/k6", "minor", version="1.8.3"), "one-way" in resolved("grafana/k6", "minor").get("addLabels", []))
+                    ("quay.io/keycloak/keycloak", "26.8.2"), ("hashicorp/vault", "1.22.1"), ("hashicorp/consul", "1.22.8"),
+                    ("opensearchproject/opensearch", "3.10.1"))]
+print(got, [bool(re.search(t[s]["units"], b)) for s, (_, b, _) in zip(("grafana", "grafana", "clickhouse", "keycloak", "vault", "consul", "opensearch"), got)],
+      branch("grafana/k6", "minor", version="1.8.3"), "one-way" in resolved("grafana/k6", "minor").get("addLabels", []),
+      branch("opensearchproject/opensearch", "patch", version="3.9.1"), "one-way" in resolved("opensearchproject/opensearch", "patch").get("addLabels", []))
 PYSTOREMIN
-)" "[('grafana', 'grafana-13.3', True), ('grafana/grafana', 'grafana-13.3', True), ('clickhouse/clickhouse-server', 'clickhouse-26.8', True), ('quay.io/keycloak/keycloak', 'keycloak-26.8', True), ('hashicorp/vault', 'vault-1.22', True), ('hashicorp/consul', 'consul-1.22', True)] [True, True, True, True, True, True] observability False"
+)" "[('grafana', 'grafana-13.3', True), ('grafana/grafana', 'grafana-13.3', True), ('clickhouse/clickhouse-server', 'clickhouse-26.8', True), ('quay.io/keycloak/keycloak', 'keycloak-26.8', True), ('hashicorp/vault', 'vault-1.22', True), ('hashicorp/consul', 'consul-1.22', True), ('opensearchproject/opensearch', 'opensearch-3.10', True)] [True, True, True, True, True, True, True] observability False wave-patches False"
 # The wave-patches review (2026-11-23): SonarQube a store of its own (every release migrates its database one way) - its
 # updates out of the wave and the majors, on renovate/manual-sonarqube-<N>.x (a manual unit since 2026-11-27, the operator's:
 # the copy cannot hold SonarQube), labelled one-way. Woodpecker's own database and

@@ -27,6 +27,11 @@ def run(unit, labels, table=None):
 check("each store's real unit names: its own store's answer (missing, store) - none unknown",
       sorted({(s["store"], run(e, "one-way")[1]) for s in REAL["stores"] for e in s["examples"]}),
       sorted({(s["store"], "missing" if s["missing"] else "store") for s in REAL["stores"]}))
+# OpenSearch (the wave-patches review, 2026-11-28): a minor rewrites its indexes one way, its way back (a volume made
+# afresh, the indexes rebuilt) not yet scripted nor rehearsed - its units blocked; no backup (derived data)
+check("OpenSearch's units (minor and major): missing - its way back not yet scripted nor rehearsed; no backup",
+      ([run(u, "one-way")[1] for u in ("opensearch-3.10", "opensearchproject-opensearch-4.x")],
+       next(s for s in REAL["stores"] if s["store"] == "opensearch")["backups"]), (["missing", "missing"], []))
 check("Keycloak's units (minor and major): its store - its way back rehearsed green on the copy (2026-11-27), its own command takes the dump",
       [run(u, "one-way")[1] for u in ("keycloak-26.8", "quay.io-keycloak-keycloak-27.x")], ["store", "store"])
 # Keycloak's dump is its own production command's (upgrade-keycloak.yml dumps before anything stops) - a

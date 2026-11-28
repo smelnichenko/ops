@@ -845,6 +845,22 @@ check("a unit moving k6 (run only as the apps' PostSync hook, out of Argo's diff
       (rc, merged(calls, "observability"), syncs), (0, True, ["task --yes deploy:argo:sync -- -e argo_app=schnappy-production-apps"]))
 rc, calls = night("prove istio minor")
 check("  a unit that moves no hook's image: no sync", has(calls, "deploy:argo:sync"), [])
+# a unit moving rclone (production's backup Jobs: etcd's snapshot, Kafka's dump, ClickHouse's backup and prune): each
+# backup taken once after the apply, before the verify - their first runs on the new image the unit's (the wave-patches
+# review, 2026-11-28); a unit not moving it, none
+rc, calls = night("prove wave-patches patch", plan=PLAN, files={"moves": "rclone/rclone 1.75.2 1.76.0\nnginx 1.29.1 1.31.0\n"})
+merge_at = next((i for i, c in enumerate(calls) if c.startswith("upgrade-label.py wave-patches --merge")), -1)
+verify_at = next((i for i, c in enumerate(calls) if c.startswith("upgrade-verify.sh AFTER")), -1)
+# after the merge (the kubeadm step's etcd snapshot before it is the backup a one-way step takes - another matter)
+backups = [words(c, 3) for i, c in enumerate(calls) if merge_at < i < verify_at and c.startswith("task --yes ")
+           and any(t in c for t in ("deploy:etcd:backup", "check:production:kafka-backup", "check:production:clickhouse-backup"))]
+check("a unit moving rclone: etcd's, Kafka's and ClickHouse's backups each taken after the merge, before the verify",
+      (rc, backups), (0, ["task --yes deploy:etcd:backup", "task --yes check:production:kafka-backup", "task --yes check:production:clickhouse-backup"]))
+rc, calls = night("prove wave-patches patch", plan=PLAN, files={"moves": "nginx 1.29.1 1.31.0\n"})
+merge_at = next((i for i, c in enumerate(calls) if c.startswith("upgrade-label.py wave-patches --merge")), -1)
+check("  a unit not moving rclone: no backup after the apply",
+      [c for i, c in enumerate(calls) if i > merge_at and c.startswith("task --yes ")
+       and any(t in c for t in ("deploy:etcd:backup", "check:production:kafka-backup", "check:production:clickhouse-backup"))], [])
 rc, calls = night("prove centrifugo-7.x major", files=MAJOR, args=("--dry",))
 check("  --dry: its notes never asked of Forgejo", has(calls, "upgrade-units.py notes"), [])
 for retired in ("notice centrifugo-7.x major", "apply centrifugo-7.x major"):
@@ -1214,7 +1230,9 @@ for out_, why in (("NOT SETTLED after 30 min:\napps not read\n", "production not
     rc, calls = night("test test-observability minor", files={"verify.rc": "1", "verify.out": out_})
     check(f"  {why}: paged (never read as the test environment's)", (rc, notices(calls)), (1, ["page test-observability"]))
 for out_, why in (("SETTLED\nNOT QUIET during the hold (10 looks in a row):\napp schnappy-test-apps Synced Degraded -\n", "the hold's own headers"),
-                  ("NOT SETTLED after 30 min:\npod schnappy-test-valkey/valkey-0 unready: c0\n", "a namespace of the test environment's (schnappy-test-valkey)")):
+                  ("NOT SETTLED after 30 min:\npod schnappy-test-valkey/valkey-0 unready: c0\n", "a namespace of the test environment's (schnappy-test-valkey)"),
+                  ("SETTLED\nNOT QUIET: a Job made during the hold failed:\njob schnappy-test-data/kafka-backup-29012 failed (BackoffLimitExceeded)\n",
+                   "a failed Job of the test environment's")):
     rc, calls = night("test test-observability minor", files={"verify.rc": "1", "verify.out": out_})
     check(f"  the test environment alone ({why}): its twin behind the others, not paged", (rc, notices(calls)), (1, ["stopped test-observability"]))
 for out_, why in (("NOT SETTLED after 30 min:\napp schnappy-testing-x Synced Degraded -\n", "an app only named like it (schnappy-testing-x)"),
