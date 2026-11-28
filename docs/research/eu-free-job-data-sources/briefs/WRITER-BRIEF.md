@@ -127,5 +127,14 @@ Write `report/<CC>-<Name>.md` (same `<CC>-<Name>` as the input files) with exact
 - Write each country file as soon as that country is finished, before starting the next. No git
   commands, and no edits outside `report/`.
 
+## Second output: the country's included sources
+
+The operator's rule is that a source not on the include list is excluded. For each country also
+write `included/<CC>-<Name>.md` in the format of `briefs/INCLUDED-BRIEF.md` (read it): one row per
+source that the check confirmed, whose verdict is "yes", that a program can read without anyone's
+approval, and that is not in `prohibited/<CC>-<Name>.md`. When in doubt, leave it out. Then run
+`python3 -I include_list.py` in the folder; it must exit 0. In the report section itself, say
+plainly for each source whether it is on the include list.
+
 Final message: one line per country - the file written, the "Readable by a program for own job
 search" value, and anything in the inputs that was contradictory or that you could not place.
