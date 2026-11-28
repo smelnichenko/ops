@@ -38,7 +38,11 @@ failed='{"failed": 1, "conditions": [{"type": "Failed", "status": "True"}]}'
   job schnappy-production scylla-schema scylladb/scylla:6.2 "$failed"; echo ,
   job velero velero-upgrade-crds bitnami/kubectl:1.34 "$done"; echo ,
   job schnappy-production gateway-patch example/patch:2.0 "$done" '{"velero.io/exclude-from-backup": "true"}'; echo ,
-  pod schnappy-infra local-registry registry.local:5000/tools/busybox
+  pod schnappy-infra local-registry registry.local:5000/tools/busybox; echo ,
+  pod schnappy-production pg-1 ghcr.io/cloudnative-pg/postgresql:18.7-standard-trixie@sha256:b4bbd2e800000000000000000000000000000000000000000000000000000000; echo ,
+  pod schnappy-production pg-2 ghcr.io/cloudnative-pg/postgresql:18.7-standard-trixie@sha256:b4bbd2e800000000000000000000000000000000000000000000000000000000; echo ,
+  pod schnappy-production pg-3 ghcr.io/cloudnative-pg/postgresql:18.7-standard-trixie@sha256:c437b7c111111111111111111111111111111111111111111111111111111111; echo ,
+  pod schnappy-production search-0 opensearchproject/opensearch@sha256:3b55f6b622222222222222222222222222222222222222222222222222222222
   echo ']}'
 } > "$W/pods.json"
 cat > "$W/stubs/kubectl" <<STUB_KUBECTL
@@ -63,8 +67,17 @@ check "the provisioner's helper pods (busybox) left out" "$(grep -c '^image busy
 check "Woodpecker's pipeline pods left out" "$(grep -c '^image alpine' <<< "$out")" 0
 check "the provisioner itself, a lookalike name elsewhere, a hook Job complete or failed listed (a registry's port no \
 tag); a finished pod, Velero's maintenance Jobs (any state) not" "$images" \
-  "image bitnami/kubectl 1.34,image example/app 1.0,image example/patch 2.0,image postgres 17-alpine,\
+  "image bitnami/kubectl 1.34,image example/app 1.0,image example/patch 2.0,image ghcr.io/cloudnative-pg/postgresql 18.7-standard-trixie,\
+image opensearchproject/opensearch latest,image postgres 17-alpine,\
 image rancher/local-path-provisioner v0.0.31,image registry.local:5000/tools/busybox latest,image scylladb/scylla 6.2"
+# a pinned image: its tag line once, a digest line for each digest it runs at (its first 7 hex digits, as Renovate's
+# tables show it) - a digest moves alone; a digest without a tag: latest, as an image without one is
+check "a pinned image: its tag line once; a digest line each digest (7 hex digits); a digest with no tag: latest" \
+  "$(grep -E '^image(-digest)? (ghcr.io/cloudnative-pg/postgresql|opensearchproject/opensearch) ' <<< "$out" | LC_ALL=C sort | paste -sd,)" \
+  "image ghcr.io/cloudnative-pg/postgresql 18.7-standard-trixie,image opensearchproject/opensearch latest,\
+image-digest ghcr.io/cloudnative-pg/postgresql 18.7-standard-trixie b4bbd2e,image-digest ghcr.io/cloudnative-pg/postgresql 18.7-standard-trixie c437b7c,\
+image-digest opensearchproject/opensearch latest 3b55f6b"
+check "  no digest line for an image without a pin" "$(grep -c '^image-digest .* \(1.0\|17-alpine\|6.2\) ' <<< "$out")" 0
 # the skip is Velero's maintenance Jobs only: a Velero hook Job (no repo-name label), a Job carrying another velero.io
 # label - listed
 check "a Velero hook Job, a Job with another velero.io/ label: listed" \

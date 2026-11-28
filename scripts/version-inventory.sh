@@ -51,13 +51,15 @@ for a in json.load(sys.stdin)["items"]:
         if s.get("chart"): print("argo-chart", a["metadata"]["name"], s["chart"]+"@"+str(s.get("targetRevision")))'
   fi
 
-  # every container image that runs or is set to run (digests dropped: the tag is the version): pods not finished,
+  # every container image that runs or is set to run (the tag is the version): pods not finished,
   # each CronJob's template, each Job no CronJob owns. A finished pod runs nothing, like a removed package: a CronJob
   # keeps its last runs' pods for hours, with the image they ran - after its image moves too. A CI pipeline's pods are
   # not the node's: Woodpecker's own (wp-...) and the local-path provisioner's helper pods that make and remove each
   # pipeline's workspace volume (helper-pod-..., busybox, seconds each). Nor Velero's repository maintenance Jobs
   # (labelled velero.io/repo-name): they run Velero's own image, listed by its Deployment, and keep the version before
   # an upgrade for hours. Any other Job is listed finished or not: a hook's image is a version the steps move.
+  # A pinned image's digest a line of its own (image-digest <name> <tag> <its first 7 hex digits>, as Renovate's
+  # tables show it): Renovate moves a digest alone too (a rebuilt tag), and the copy's check then needs it named
   kubectl get pods,cronjobs,jobs -A -o json \
     | python3 -c 'import json,os,sys
 ex,only=os.environ["INVENTORY_EXCLUDE_NAMESPACES"].split(),os.environ["INVENTORY_ONLY_NAMESPACES"].split()
@@ -77,11 +79,14 @@ for o in json.load(sys.stdin)["items"]:
         if "velero.io/repo-name" in (meta.get("labels") or {}): continue
         spec=o["spec"]["template"]["spec"]
     for c in spec.get("containers",[])+spec.get("initContainers",[]):
-        img=c["image"].split("@")[0]
-        if img in seen: continue
-        seen.add(img)
+        img,_,digest=c["image"].partition("@")
         name,tag=(img.rsplit(":",1) if ":" in img.split("/")[-1] else (img,"latest"))  # a registry port is no tag
-        print("image", name, tag)'
+        if img not in seen:
+            seen.add(img)
+            print("image", name, tag)
+        if digest.startswith("sha256:") and c["image"] not in seen:
+            seen.add(c["image"])
+            print("image-digest", name, tag, digest[7:14])'
 
   # CRD groups that carry a bundle/operator version
   kubectl get crd gateways.gateway.networking.k8s.io \

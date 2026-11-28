@@ -47,7 +47,7 @@ done
 # vagrant-libvirt names a machine's domain <the Vagrantfile's directory>_<machine>
 prefix="$(basename "$(dirname "$vagrantfile")")_"
 virsh_bin=${COPY_HOST_VIRSH:-virsh}
-virsh_() { timeout 30 "$virsh_bin" -c qemu:///system "$@"; }  # a hung libvirt never stalls the guard
+virsh_() { timeout 30 "$virsh_bin" -c qemu:///system "$@" 7>&-; }  # a hung libvirt never stalls the guard (nor holds its lock)
 
 machines() {  # "<machine> <MB>" for each VM the Vagrantfile defines: its define's name, the v.memory inside it - as
   # written, or `Integer(ENV.fetch("VAR", "<MB>"))`: the variable as this process has it (vagrant's own environment:
@@ -78,6 +78,12 @@ psi_full_avg10() {  # % of the last 10 s every non-idle task stalled on memory; 
   else echo 0; fi
 }
 now_s() { local u _; read -r u _ < "$uptime"; echo "${u%.*}"; }  # seconds since boot: steps with no clock change
+# a watcher alive: the pid file names a running _loop - never the lock alone (a killed watcher's child kept it once)
+live_watcher() {
+  local p
+  p=$(cat "$dir/host-guard.pid" 2> /dev/null) && [[ $p =~ ^[0-9]+$ ]] || return 1
+  tr '\0' ' ' < "/proc/$p/cmdline" 2> /dev/null | grep -q ' _loop \?$'
+}
 log() { echo "$(date '+%F %T') $*" >> "$dir/host-guard.log"; }
 
 case "${1:-}" in
@@ -134,10 +140,13 @@ case "${1:-}" in
     exec 8> "$dir/host-guard.lock"
     flock 8
     now_s > "$dir/host-guard.wanted"  # a caller relies on a watcher from now - read by one deciding to end
-    if ! flock -n "$dir/host-guard.alive" true; then
+    # the lock held by a live watcher: it watches. Held by none (a killed watcher's child a moment): one started all the
+    # same - it waits for the lock (10 s); held longer, it never starts and this says so
+    if ! flock -n "$dir/host-guard.alive" true && live_watcher; then
       echo "the host guard watches already (pid $(cat "$dir/host-guard.pid" 2> /dev/null || echo '?'))"
       exit 0
     fi
+    rm -f "$dir/host-guard.pid"  # the new watcher writes its own once it holds the lock
     # its own session, nothing of the caller's held (the lock's fd closed in it), no environment but its settings: no
     # run's Ctrl-C or end stops it (VMs outlive runs), and production's secrets do not live in it for days
     env -i PATH="$PATH" HOME="$HOME" COPY_VAGRANTFILE="$vagrantfile" COPY_HOST_MEMINFO="$meminfo" COPY_HOST_PSI="$psi" \
@@ -150,7 +159,7 @@ case "${1:-}" in
     # caller started a second one that found it running
     end=$((SECONDS + 30))
     while [ "$SECONDS" -lt "$end" ]; do
-      flock -n "$dir/host-guard.alive" true || { echo "the host guard watches (pid $child): the biggest running VM powered off under ${trip_mb} MB available or over ${psi_full}% memory stall, two polls ${poll} s apart"; exit 0; }
+      { live_watcher && ! flock -n "$dir/host-guard.alive" true; } && { echo "the host guard watches (pid $(cat "$dir/host-guard.pid")): the biggest running VM powered off under ${trip_mb} MB available or over ${psi_full}% memory stall, two polls ${poll} s apart"; exit 0; }
       kill -0 "$child" 2> /dev/null || break
       sleep 0.05
     done
@@ -164,16 +173,16 @@ case "${1:-}" in
     # waited for, never taken at once: a caller's probe (flock -n ... true, below and in watch) holds it a moment, and
     # a take meeting one ended this watcher - its caller said it did not start, the next caller started another (8 in
     # 300 takes, measured 2026-11-27; the CI flake of the slow-start case). Another watcher's: held past the wait
-    flock -w 10 7 || exit 0  # another watcher holds it
+    flock -w 10 7 || { log "watcher $$ not started: host-guard.alive held past 10 s (the pid file: $(cat "$dir/host-guard.pid" 2> /dev/null || echo none))"; exit 0; }
     echo $$ > "$dir/host-guard.pid"
     log "watcher $$ started: trip under ${trip_mb} MB available or over ${psi_full}% memory stall, two polls ${poll} s apart"
     trap 'log "watcher $$ ended"' EXIT
     quiet=$(now_s) low=0 virsh_down=no
     while :; do
-      if ! up=$(running); then
+      if ! up=$(exec 7>&-; running); then  # the lock's fd closed first: a killed watcher's subshell never keeps it
         [ "$virsh_down" = yes ] || log "libvirt's domains could not be listed (virsh) - still watching"
         virsh_down=yes
-        sleep "$poll"
+        sleep "$poll" 7>&-
         continue
       fi
       virsh_down=no
@@ -210,7 +219,7 @@ case "${1:-}" in
         echo "$(date '+%F %T') $msg" > "$dir/host-guard-tripped.new" && mv "$dir/host-guard-tripped.new" "$dir/host-guard-tripped"
         low=0
       fi
-      sleep "$poll"
+      sleep "$poll" 7>&-
     done
     ;;
   running) running ;;

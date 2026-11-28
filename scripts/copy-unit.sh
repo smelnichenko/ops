@@ -254,8 +254,9 @@ CADDY = {"caddy_version"}
 CONSUL = {"consul_version", "consul_checksums"}
 for path in changed:
     if path == "scripts/upgrade-renovate.sh":
-        # Renovate's own image (the copy runs no Renovate): the new image smoke-run here - it starts and its config
-        # validator reads both presets (task test:copy:renovate-image) - one renovate/renovate:x.y.z@sha256 pin, else
+        # Renovate's own image (the copy runs no Renovate): the new image smoke-run here - it starts, its config
+        # validator reads both presets and a lookup with it reads the three repos (task test:copy:renovate-image) - one
+        # renovate/renovate:x.y.z@sha256 pin, else
         # refused (the wave-patches review, 2026-11-23: it rode a wave unproven)
         image = re.findall(r"(?m)^image=(\S+)$", show(BRANCH, path) or "")
         if len(image) == 1 and re.fullmatch(r"renovate/renovate:\d+\.\d+\.\d+@sha256:[0-9a-f]{64}", image[0]):

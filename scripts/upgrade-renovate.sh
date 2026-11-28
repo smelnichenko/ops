@@ -8,7 +8,8 @@
 # only when set - an empty one sent as a token was a 401, 2026-11-14) passed by name, never on a command line; the
 # preset's one post-upgrade command allowed from renovate/allowed-commands.json (python3, gpg and xz are in the image);
 # no bind mount - Renovate clones into its own container. Its log in .copy/. Never beside a runner: the runner's lock
-# (.upgrade-cycle/lock) held while it runs.
+# (.upgrade-cycle/lock) held while it runs - but the copy proof's smoke of a unit's new image (UPGRADE_RENOVATE_IMAGE, a
+# lookup run inside the runner, which holds it), memory-capped beside the copy's VMs.
 #
 # --apps: the app repos' Renovate instead (task upgrade:apps:run; upgrade:apps:check its --lookup) - their dependency
 # pull requests, each repo's renovate.json extending renovate/apps.json; the same bot and image, by hand (monitor's and
@@ -17,7 +18,9 @@
 # hyperfoil - their PRs never merge themselves but ci-tools'): the bot has write on each (it pushes renovate/* branches).
 #
 # Usage: scripts/upgrade-renovate.sh [--apps] [--lookup]   --lookup: the repos and registries read, nothing changed
-# Env:   RENOVATE_TOKEN (required), RENOVATE_GITHUB_TOKEN, UPGRADE_DOCKER (the harness's docker, default docker)
+# Env:   RENOVATE_TOKEN (required), RENOVATE_GITHUB_TOKEN, UPGRADE_DOCKER (the harness's docker, default docker),
+#        UPGRADE_RENOVATE_IMAGE (a lookup only: another renovate/renovate:x.y.z@sha256 pin - the copy proof's smoke of a
+#        unit's new image, task test:copy:renovate-image)
 set -euo pipefail
 ops=$(cd "$(dirname "$0")/.." && pwd)
 image=renovate/renovate:44.198.3@sha256:bf344aa39d5b592ec728e1db5c3e1d940a5093a89a4598073efcb18d592d121c
@@ -31,10 +34,22 @@ for a in "$@"; do
   esac
 done
 [ -n "${RENOVATE_TOKEN:-}" ] || { echo "REFUSED: RENOVATE_TOKEN is empty (ops/.env) - Renovate not run" >&2; exit 1; }
-# never beside a runner (its lock): Renovate rebasing a unit's branches mid-proof throws the proof away
-mkdir -p "$ops/.upgrade-cycle"
-exec 9>> "$ops/.upgrade-cycle/lock"
-flock -n 9 || { echo "REFUSED: an upgrade run holds $ops/.upgrade-cycle/lock - Renovate not run beside it" >&2; exit 1; }
+# another image only for a lookup (it writes nothing), and only one exact pin - the image is given the bot's token
+if [ -n "${UPGRADE_RENOVATE_IMAGE:-}" ]; then
+  [ "$dry" = lookup ] || { echo "REFUSED: UPGRADE_RENOVATE_IMAGE is for a lookup only - a writing run uses the pinned image" >&2; exit 2; }
+  [[ $UPGRADE_RENOVATE_IMAGE =~ ^renovate/renovate:[0-9]+\.[0-9]+\.[0-9]+@sha256:[0-9a-f]{64}$ ]] ||
+    { echo "REFUSED: UPGRADE_RENOVATE_IMAGE must be one renovate/renovate:x.y.z@sha256 pin" >&2; exit 2; }
+  image=$UPGRADE_RENOVATE_IMAGE
+fi
+# never beside a runner (its lock): Renovate rebasing a unit's branches mid-proof throws the proof away, and a lookup by
+# hand beside a proof takes the memory the copy's VMs hold (the host guard's 2026-11-18 kill). The one exception the
+# runner's own: the copy proof's smoke of a unit's new image (task test:copy:renovate-image), a lookup run inside it - it
+# writes nothing, and its container capped (1536 MiB: the copy fully up leaves ~4 GB, the guard trips under 2)
+if [ -z "${UPGRADE_RENOVATE_IMAGE:-}" ]; then
+  mkdir -p "$ops/.upgrade-cycle"
+  exec 9>> "$ops/.upgrade-cycle/lock"
+  flock -n 9 || { echo "REFUSED: an upgrade run holds $ops/.upgrade-cycle/lock - Renovate not run beside it" >&2; exit 1; }
+fi
 RENOVATE_ALLOWED_COMMANDS=$(cat "$ops/renovate/allowed-commands.json")
 export RENOVATE_TOKEN RENOVATE_ALLOWED_COMMANDS
 args=(run --rm -e RENOVATE_TOKEN -e RENOVATE_ALLOWED_COMMANDS
@@ -42,6 +57,8 @@ args=(run --rm -e RENOVATE_TOKEN -e RENOVATE_ALLOWED_COMMANDS
       -e "RENOVATE_REPOSITORIES=$repos"
       -e "RENOVATE_GIT_AUTHOR=Renovate Bot <renovate-bot@pmon.dev>"
       -e RENOVATE_ONBOARDING=false -e RENOVATE_REQUIRE_CONFIG=required -e LOG_LEVEL=info)
+# the image smoke beside the copy's VMs: capped (its memory never the VMs')
+[ -z "${UPGRADE_RENOVATE_IMAGE:-}" ] || args+=(--memory=1536m --memory-swap=1536m)
 # a lookup prints what it found: Renovate's report written in the container (no bind mount) and printed after it, behind a
 # marker; summarised below by scripts/upgrade-report.py (its log alone shows nothing of the updates at info level)
 cmd=()

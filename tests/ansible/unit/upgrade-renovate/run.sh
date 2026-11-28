@@ -177,8 +177,9 @@ for name in ("copy-lock.sh", "upgrade-cycle.sh", "upgrade-renovate.sh", "upgrade
     answer = '\necho "${REPLENISH:-NOTHING}"' if name == "upgrade-units.py" else ""
     open(path, "w").write(f'#!/bin/sh\necho "{name} $* token=${{UPGRADE_FORGEJO_TOKEN:-none}}" >> "$REC"{answer}\n')
     os.chmod(path, 0o755)
-def admitted(t, given):
-    return all(subprocess.run(["sh", "-c", render(p["sh"], given)], cwd=TB).returncode == 0 for p in t.get("preconditions", []))
+def admitted(t, given, shell="sh"):
+    # go-task's own interpreter is bash-like ([[ ]] in it): bash for a precondition that uses it
+    return all(subprocess.run([shell, "-c", render(p["sh"], given)], cwd=TB).returncode == 0 for p in t.get("preconditions", []))
 def ran(t, replenish="NOTHING"):
     rec = os.path.join(TB, "rec")
     if os.path.exists(rec):
@@ -202,6 +203,24 @@ print("prompt" in ar, ar.get("deps"), ar.get("vars"), admitted(ar, {}),
 ap, am = tasks["upgrade:apply"], tasks["upgrade:apps:merge"]
 print("PRODUCTION" in ap.get("prompt", ""), ap.get("deps"), ap.get("vars"), admitted(ap, {}), ran(ap), sep="|")
 print("prompt" in am, am.get("deps"), am.get("vars"), ran(am), sep="|")
+# the copy proof's smoke of a unit's new image, its commands as rendered against a docker and an upgrade-renovate.sh that
+# record what they were given (the image the lookup is told, by the environment)
+ri = tasks["test:copy:renovate-image"]
+RB = os.path.join(W, "rb")
+os.makedirs(os.path.join(RB, "scripts"), exist_ok=True)
+os.makedirs(os.path.join(RB, "bin"), exist_ok=True)
+for path, line in ((os.path.join(RB, "bin", "docker"), 'docker $*'),
+                   (os.path.join(RB, "scripts", "upgrade-renovate.sh"), 'upgrade-renovate.sh $* image=${UPGRADE_RENOVATE_IMAGE:-none}')):
+    open(path, "w").write(f'#!/bin/sh\necho "{line}" >> "$REC"\n')
+    os.chmod(path, 0o755)
+NEW = "renovate/renovate:44.258.1@sha256:" + "b" * 64
+rec = os.path.join(RB, "rec")
+for c in ri["cmds"]:
+    subprocess.run(["sh", "-c", render(c if isinstance(c, str) else c.get("cmd", ""), {"IMAGE": NEW})], cwd=RB,
+                   capture_output=True, env={**os.environ, "REC": rec, "PATH": os.path.join(RB, "bin") + ":" + os.environ["PATH"]})
+got = open(rec).read().split("\n")[:-1] if os.path.exists(rec) else []
+print(len(got), sum(NEW in g for g in got), got[-1:] == [f"upgrade-renovate.sh --lookup image={NEW}"],
+      admitted(ri, {"IMAGE": NEW}, "bash"), admitted(ri, {"IMAGE": "renovate/renovate:44.258.1"}, "bash"), sep="|")
 PYCHECK
 )
 check "task upgrade gone; upgrade:check: Renovate's lookup alone - no variable, prompt, precondition or dependency to change it" \
@@ -220,12 +239,33 @@ check "upgrade:apply: a prompt naming production, the venv first, no variable; t
   "$(sed -n 6p <<< "$got")" "True|['deploy:install']|None|True|['copy-lock.sh  token=none', 'upgrade-cycle.sh --preflight token=none', 'upgrade-cycle.sh  token=the-bots']"
 check "upgrade:apps:merge: no prompt, no variable; the merge script alone" \
   "$(sed -n 7p <<< "$got")" "False|None|None|['upgrade-apps-merge.py  token=none']"
+check "test:copy:renovate-image: --version, the validator, then a lookup told the new image (by the environment) - each on the new image; a tag alone refused" \
+  "$(sed -n 8p <<< "$got")" "3|3|True|True|False"
 ARGS=()
 exec 8>> .upgrade-cycle/lock
 flock -n 8 || { echo "the lock is held by something else - the next check cannot run"; exit 1; }
 check "Renovate beside a running runner (its lock held): refused, docker never run" \
   "$(run RENOVATE_TOKEN=$TOKEN) $([ -e "$W/argv" ] && echo ran || echo not-run) $(grep -c 'holds' "$W/out")" "1 not-run 1"
+# a lookup by hand beside a proof: refused too (the memory the copy's VMs hold); the proof's own smoke of a unit's new
+# image runs beside it (the runner holds the lock it runs inside), its container capped
+ARGS=(--lookup)
+NEWIMG=renovate/renovate:44.258.1@sha256:$(printf 'c%.0s' {1..64})
+check "a lookup beside a running runner (its lock held): refused, docker never run; the image smoke: run, memory-capped" \
+  "$(run RENOVATE_TOKEN=$TOKEN FAKE_LOG="$LOOKUP_LOG") $([ -e "$W/argv" ] && echo ran || echo not-run) $(run RENOVATE_TOKEN=$TOKEN FAKE_LOG="$LOOKUP_LOG" UPGRADE_RENOVATE_IMAGE=$NEWIMG) $(grep -cxE -- '--memory=1536m|--memory-swap=1536m' "$W/argv")" \
+  "1 not-run 0 2"
 exec 8>&-
+check "  a lookup of the pinned image: no cap (the copy not up beside it)" \
+  "$(run RENOVATE_TOKEN=$TOKEN FAKE_LOG="$LOOKUP_LOG") $(grep -c -- '--memory' "$W/argv")" "0 0"
+# another image: a lookup's, one exact pin - the image is given the bot's token; a writing run never
+rc=$(run RENOVATE_TOKEN=$TOKEN FAKE_LOG="$LOOKUP_LOG" UPGRADE_RENOVATE_IMAGE=$NEWIMG)
+check "a lookup told another image: that image run, the pinned one not; the console names it" \
+  "$rc $(grep -cx "$NEWIMG" "$W/argv") $(grep -cx "$pin" "$W/argv") $(grep -cF "($NEWIMG)" "$W/out")" "0 1 0 1"
+check "another image refused unless one renovate/renovate:x.y.z@sha256 pin (a tag alone, another repository): docker never run" \
+  "$(run RENOVATE_TOKEN=$TOKEN UPGRADE_RENOVATE_IMAGE=renovate/renovate:44.258.1) $([ -e "$W/argv" ] && echo ran || echo not-run) $(run RENOVATE_TOKEN=$TOKEN UPGRADE_RENOVATE_IMAGE=evil/renovate:44.258.1@sha256:$(printf 'c%.0s' {1..64})) $([ -e "$W/argv" ] && echo ran || echo not-run)" \
+  "2 not-run 2 not-run"
+ARGS=()
+check "a writing run told another image: refused, docker never run" \
+  "$(run RENOVATE_TOKEN=$TOKEN UPGRADE_RENOVATE_IMAGE=$NEWIMG) $([ -e "$W/argv" ] && echo ran || echo not-run) $(grep -c 'lookup only' "$W/out")" "2 not-run 1"
 check "no CI cron runs Renovate any more (.woodpecker/renovate.yaml gone)" "$([ -e .woodpecker/renovate.yaml ] && echo present || echo gone)" "gone"
 # platform's CI check runs the chart's Alertmanager image (its render step refuses the two apart): the preset finds both,
 # one depName - one branch moves them together: a CI check that runs in production's image refuses the two apart
@@ -594,8 +634,9 @@ PYSTOREMIN
 # updates out of the wave and the majors, on renovate/manual-sonarqube-<N>.x (a manual unit since 2026-11-27, the operator's:
 # the copy cannot hold SonarQube), labelled one-way. Woodpecker's own database and
 # Renovate's image stay in the cycle's units (operator 2026-11-23: a manual unit defeats the automation - never a
-# manual- unit for them): the runner waits for an idle Woodpecker before a merge that restarts its database, and the
-# copy proof smoke-runs a new Renovate image
+# manual- unit for them): the runner waits for an idle Woodpecker (no CI step pod on ten) before a merge that restarts its
+# database and reads the merge's own infra pipeline after its verify (scripts/upgrade-cycle.sh - a claim with no code
+# behind it until 2026-11-27), and the copy proof smoke-runs a new Renovate image
 check "the preset: SonarQube a one-way unit of its own, manual (operator 2026-11-27: the copy cannot hold it); Woodpecker's database and Renovate's image in the wave, no manual unit" \
   "$("$PY" - <<'PYSPLIT'
 import sys

@@ -17,7 +17,9 @@
 # copy lack (a Job's image) is not required; a package production names only at another version runs nowhere at the
 # old one (a hook Job's image) - nothing to move. A package production names nowhere fails unless
 # tests/ansible/copy/moves-names.txt names it - by the lines production calls it (a Pi's service), or as checked
-# elsewhere (the runner's own image): no move passes unchecked (the wave-patches review, 2026-11-27).
+# elsewhere (the runner's own image): no move passes unchecked (the wave-patches review, 2026-11-27). A digest move
+# (Renovate's digest rows, a rebuilt tag) is judged on the image-digest lines; a version move's digest line wants the
+# new version's line with any digest (the pin's digest moves with its version).
 #
 # Usage: scripts/copy-change-inventory.sh tests/ansible/copy/prod-inventory.txt .copy/vagrant-inventory-build.txt \
 #          .copy/vagrant-inventory-after-change.txt .copy/vagrant-inventory.txt tests/ansible/copy/vagrant-allowed-missing.txt \
@@ -86,12 +88,26 @@ for a in (x.strip() for x in allowed):
     if a and not a.startswith("#"):
         a = a[2:] if a.startswith("? ") else a
         (anyver.add(a[:-2]) if a.endswith(" *") else exact.add(a))
-for pkg, old, new in (m.split() for m in moves if len(m.split()) == 3):
+# a move: "<package> <from> <to>", a digest's marked "<package> <from7> <to7> digest" (upgrade-units.py moves)
+for pkg, old, new, kind in (m.split() + [""] * (4 - len(m.split())) for m in moves if len(m.split()) in (3, 4)):
     at = re.compile(r"(?<![\d.])" + re.escape(old) + r"(?![\d.])")
-    left_out = lambda x: x in exact or x.rsplit(" ", 1)[0] in anyver
-    if pkg in elsewhere:
+    # an image's digest line left out with its image line
+    as_image = lambda x: " ".join(["image"] + x.split()[1:3]) if x.startswith("image-digest ") else x
+    left_out = lambda x: any(y in exact or y.rsplit(" ", 1)[0] in anyver for y in (x, as_image(x)))
+    digest_move = kind == "digest"
+    if pkg in elsewhere or (digest_move and pkg + "@digest" in elsewhere):
         continue
-    lines = [x for x in prod if (pkg in x or (pkg in mapped and mapped[pkg].search(x))) and at.search(x)]
+    if digest_move:
+        # a digest move: production's digest lines of that very image (its name, or a registry before it) - none pinned
+        # anywhere, a move nothing here can check (an ops pin production runs unpinned): named in moves-names.txt, or refused
+        pinned = [x for x in prod if x.startswith("image-digest ") and re.fullmatch(r"(.+/)?" + re.escape(pkg), x.split()[1])]
+        if not pinned:
+            print("  NOT CHECKED %s %s -> %s: production runs no image of it pinned by digest - name it in "
+                  "tests/ansible/copy/moves-names.txt ('%s@digest - why')" % (pkg, old, new, pkg))
+            continue
+        lines = [x for x in pinned if x.split()[-1] == old]
+    else:
+        lines = [x for x in prod if (pkg in x or (pkg in mapped and mapped[pkg].search(x))) and at.search(x)]
     if not lines and not any(pkg in x or (pkg in mapped and mapped[pkg].search(x)) for x in prod):
         # production names it nowhere, at no version: a move nothing checks - named in moves-names.txt, or refused
         print("  NOT CHECKED %s %s -> %s: no production line names it - name it in tests/ansible/copy/moves-names.txt" % (pkg, old, new))
@@ -109,7 +125,13 @@ for pkg, old, new in (m.split() for m in moves if len(m.split()) == 3):
                 out += [line[last:a], new if mask >> i & 1 else line[a:b]]
                 last = b
             wants.add("".join(out) + line[last:])
-        if not any(w in have or left_out(w) for w in wants):
+        if line.startswith("image-digest ") and not digest_move:
+            # a version move: the new version's digest line, whatever its digest
+            stems = {w.rsplit(" ", 1)[0] for w in wants}
+            moved = any(h.startswith("image-digest ") and h.rsplit(" ", 1)[0] in stems for h in have) or any(map(left_out, wants))
+        else:
+            moved = any(w in have or left_out(w) for w in wants)
+        if not moved:
             print("  NOT MOVED %s %s -> %s: the copy lacks '%s'" % (pkg, old, new, at.sub(new, line)))
 MOVES
 )

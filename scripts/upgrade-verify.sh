@@ -193,4 +193,42 @@ while [ "$(up)" -lt "$end" ]; do
   seen=(); for k in "${!now[@]}"; do seen[$k]=${now[$k]}; done
   unset now
 done
+# what the copy leaves out (scripts/vagrant-gitops-mirror.py's INFRA_DROP) is proven here alone: each such app named, its
+# state as read at the hold's end - Synced to its revision, Healthy, its last sync's phase (the wave-patches review,
+# 2026-11-27: "unproven" when the proof is this verify)
+HOST="$host" MIRROR="$(dirname "$0")/vagrant-gitops-mirror.py" python3 -I - <<'PY_DROPPED'
+import json, os, re, subprocess
+# INFRA_DROP itself (vagrant-gitops-mirror.py): its app files' stems and its directories - an Application is left out of
+# the copy when its name is a stem or starts with one (kagent-crds, schnappy-test-apps), is a directory's, or an
+# ApplicationSet named for a stem made it (the preview environments' pr-<n>-<repo>)
+src = open(os.environ["MIRROR"]).read()
+block = src[src.index("INFRA_DROP = ["):]
+block = block[:block.index("]")]
+stems = re.findall(r'"clusters/production/argocd/apps/([a-z0-9-]+)\.yaml"', block)
+dirs = re.findall(r'"clusters/production/([a-z0-9-]+)"', block)
+def left_out(a):
+    m = a.get("metadata") or {}
+    n = m.get("name") or ""
+    owners = [o.get("name") for o in m.get("ownerReferences") or [] if o.get("kind") == "ApplicationSet"]
+    return n in dirs or any(n == s or n.startswith(s + "-") for s in stems) or any(o in stems for o in owners)
+try:
+    # a read bounded (a stalled API server holds an ssh that connected): not read, said - the looks above judged them
+    r = subprocess.run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15", "-o", "ServerAliveInterval=15", os.environ["HOST"],
+                        "kubectl --request-timeout=60s get -n argocd application.argoproj.io -o json"],
+                       stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=120)
+    apps = sorted(json.loads(r.stdout)["items"], key=lambda a: a["metadata"]["name"])
+except (OSError, subprocess.TimeoutExpired, ValueError, KeyError, TypeError):
+    print("the apps the copy leaves out: not read here - the looks above judged them")
+    apps = []
+for a in (a for a in apps if left_out(a)):
+    st = a.get("status") or {}
+    sync = st.get("sync") or {}
+    rev = sync.get("revision") or ",".join(str(x)[:8] for x in sync.get("revisions") or []) or "?"
+    health, phase = (st.get("health") or {}).get("status"), (st.get("operationState") or {}).get("phase") or "none"
+    # an app the looks leave unjudged (the test environment's) can stand here not healthy: never called proven
+    proven = sync.get("status") == "Synced" and health == "Healthy" and phase in ("Succeeded", "none")
+    print("%s (the copy leaves it out): %s - %s/%s at %s, its last sync %s" % (
+        "PROVEN IN PRODUCTION ALONE" if proven else "NOT PROVEN IN PRODUCTION", a["metadata"]["name"], sync.get("status"), health,
+        str(rev)[:8] if sync.get("revision") else rev, phase))
+PY_DROPPED
 echo "SETTLED AND QUIET for $hold min"

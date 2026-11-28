@@ -138,6 +138,9 @@ flock -n 9 || { echo "REFUSED: another upgrade run holds $state/lock"; exit 1; }
 
 agent=${UPGRADE_AGENT:-claude}
 agent_timeout=${UPGRADE_AGENT_TIMEOUT:-3600}
+# the idle wait for CI before a merge that restarts it (minutes) and its reads' interval (seconds): whole numbers, or refused
+ci_wait=${UPGRADE_CI_IDLE_WAIT:-60} ci_poll=${UPGRADE_CI_IDLE_POLL:-30}
+[[ $ci_wait =~ ^[0-9]+$ && $ci_poll =~ ^[0-9]+$ ]] || { echo "REFUSED: UPGRADE_CI_IDLE_WAIT and UPGRADE_CI_IDLE_POLL are whole numbers"; exit 2; }
 # the agents' environment: none of ops/.env, no git credential or config of the operator's, no repository above their
 # clones; their commits the agent's own (never Renovate's identity: a branch it wrote to is one Renovate leaves alone)
 clean_env=(env -i "HOME=$HOME" "PATH=$PATH" "LANG=C.UTF-8" GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
@@ -181,7 +184,7 @@ mains_forward() {
   [ -n "$dry" ] && { say "RUN git fetch, merge --ff-only (infra, platform: a main only behind origin's brought to it)"; return 0; }
   for r in ../infra ../platform; do
     [ "$(git -C "$r" rev-parse --abbrev-ref HEAD 2> /dev/null)" = main ] && [ -z "$(git -C "$r" status --porcelain 2>&1)" ] || continue
-    git -C "$r" fetch -q origin main < /dev/null >> "$log" 2>&1 && git -C "$r" merge -q --ff-only origin/main < /dev/null >> "$log" 2>&1 || true
+    git -C "$r" fetch -q origin main < /dev/null >> "$log" 2>&1 9>&- && git -C "$r" merge -q --ff-only origin/main < /dev/null >> "$log" 2>&1 9>&- || true
   done
 }
 gates() {  # $1: start or merge
@@ -208,7 +211,7 @@ gates() {  # $1: start or merge
   # the copy's build reads production's inventory into its record (tracked): that alone may differ
   [ -z "$(git -C "$ops" status --porcelain -- . ':!tests/ansible/copy/prod-inventory.txt' ':!tests/ansible/copy/pi-versions.yml' 2>&1)" ] \
     || { say "REFUSED: ops has changes not on main - its tasks are what applies"; return 1; }
-  git -C "$ops" fetch -q origin main >> "$log" 2>&1 || { say "REFUSED: origin's main not read"; return 1; }
+  git -C "$ops" fetch -q origin main < /dev/null >> "$log" 2>&1 9>&- || { say "REFUSED: origin's main not read"; return 1; }
   head=$(git -C "$ops" rev-parse HEAD 2> /dev/null); origin=$(git -C "$ops" rev-parse origin/main 2> /dev/null)
   [ -n "$head" ] && [ "$head" = "$origin" ] || { say "REFUSED: ops is not origin's main (${head:0:12} here, ${origin:0:12} there)"; return 1; }
   if [ "$1" = start ]; then  # the copy mirrors the local mains (before the merge the base pin stands for them)
@@ -300,7 +303,7 @@ fetch_unit() {  # the unit's branches into the local checkouts (the proof reads 
   local repo
   [ -z "$dry" ] || return 0
   for repo in $(cut -d' ' -f1 "$heads"); do
-    git -C "$(repo_dir "$repo")" fetch -q origin main "+refs/heads/renovate/$unit:refs/heads/renovate/$unit" < /dev/null >> "$log" 2>&1 || return 1
+    git -C "$(repo_dir "$repo")" fetch -q origin main "+refs/heads/renovate/$unit:refs/heads/renovate/$unit" < /dev/null >> "$log" 2>&1 9>&- || return 1
   done
 }
 fresh() {
@@ -371,6 +374,44 @@ stop_if_one_way() {
   esac
   retry "a one-way change its store cannot take yet$([ "$judged" = "$unit" ] || echo " (its production twin $judged's)") - $(awk '{sub(/^(missing|unknown) /, ""); printf "%s%s", (NR > 1 ? "; " : ""), $0}' <<< "$need") (scripts/upgrade-stores.json - ops' to fix) - nothing applied"
 }
+# CI itself (infra's Woodpecker: its server and its CNPG Postgres, one instance): a unit moving it restarts it when Argo
+# applies the merge, and every pipeline running then is cut (the wave-patches review, 2026-11-27) - Woodpecker's own
+# directory (its manifests, the database among them, and its values), its Argo app (the chart), and the CNPG operator's
+# app and values (an operator upgrade rolls every Cluster, woodpecker-postgres too: no in-place instance-manager
+# updates). The merge waits for an idle Woodpecker first, before the gates and the kill switch are read for it; infra's
+# and platform's merge pipelines are read after the record (ops' merge commit is [CI SKIP])
+CI_RESTART_PATHS=(clusters/production/woodpecker clusters/production/argocd/apps/woodpecker.yaml
+                  clusters/production/argocd/apps/cnpg.yaml clusters/production/cnpg)
+restarts_ci() {  # 0 it does, 1 it does not, 2 not read - main fetched first (its base may be newer than the clone's)
+  local part head base dir out
+  part=$(grep '^schnappy/infra ' "$heads" 2> /dev/null) || return 1
+  read -r _ _ head base <<< "$part"
+  dir=$(repo_dir schnappy/infra)
+  git -C "$dir" fetch -q origin main < /dev/null >> "$log" 2>&1 9>&- || return 2
+  out=$(git -C "$dir" diff --name-only "$base" "$head" -- "${CI_RESTART_PATHS[@]}" < /dev/null 2>> "$log") || return 2
+  [ -n "$out" ]
+}
+ci_pods() {  # the CI step pods live on ten now (wp-*, not finished, not going) - a read bounded (a stalled API server)
+  timeout 60 ssh -o BatchMode=yes -o ConnectTimeout=15 -o ServerAliveInterval=15 "${UPGRADE_CI_HOST:-ten}" \
+    "kubectl --request-timeout=30s -n woodpecker get pods --no-headers --field-selector=status.phase!=Succeeded,status.phase!=Failed -o custom-columns=NAME:.metadata.name,GONE:.metadata.deletionTimestamp" \
+    < /dev/null 2>> "$log" | awk '$1 ~ /^wp-/ && $2 == "<none>" {print $1}'
+  return "${PIPESTATUS[0]}"
+}
+ci_idle() {  # two reads in a row UPGRADE_CI_IDLE_POLL s apart with no live CI step pod (between two steps a pipeline has
+  # none), within $1 minutes; a read that fails is no idle. What was seen last in ci_seen
+  local end=$((SECONDS + $1 * 60)) idle=0 pods
+  while :; do
+    if pods=$(ci_pods); then
+      ci_seen=${pods:+pipelines running ($(echo $pods))}
+      if [ -z "$pods" ]; then idle=$((idle + 1)); else idle=0; fi
+    else
+      ci_seen="ten not read" idle=0
+    fi
+    [ "$idle" -lt 2 ] || return 0
+    [ "$SECONDS" -lt "$end" ] || return 1
+    sleep "$ci_poll"
+  done
+}
 held_now() {  # the kill switch set since the pick: refused, nothing merged
   local held
   held=$(scripts/upgrade-units.py held "$unit") || { stopped "whether it is held not read - nothing merged" "$log"; exit 1; }
@@ -401,7 +442,7 @@ start_journal() {
 }
 merged=""
 merge() {  # the unit merged at the proven heads onto the proven bases - nothing in: blocked; part in, or not known: paged
-  if [ -z "$dry" ] && ! { git -C "$ops" fetch -q origin main < /dev/null >> "$log" 2>&1 && [ "$(git -C "$ops" rev-parse origin/main)" = "$gate_head" ]; }; then
+  if [ -z "$dry" ] && ! { git -C "$ops" fetch -q origin main < /dev/null >> "$log" 2>&1 9>&- && [ "$(git -C "$ops" rev-parse origin/main)" = "$gate_head" ]; }; then
     rm -f "$state/inflight"
     stopped "ops' main moved since the gate (or not read) - nothing merged, the next run proves it again" "$log"; exit 1
   fi
@@ -583,7 +624,7 @@ push_fix() {
     tip=$sha
     [ -d "$clone" ] || { say "the agent's clone of $repo is gone - not pushed"; return 1; }
     rm -rf "$mirror"; git init -q --bare "$mirror" < /dev/null
-    git -C "$mirror" -c fetch.fsckObjects=true fetch -q --no-tags "$clone" "+refs/heads/renovate/$unit:refs/fix" < /dev/null >> "$log" 2>&1 \
+    git -C "$mirror" -c fetch.fsckObjects=true fetch -q --no-tags "$clone" "+refs/heads/renovate/$unit:refs/fix" < /dev/null >> "$log" 2>&1 9>&- \
       || { say "the fix left $repo without its branch renovate/$unit - not pushed"; return 1; }
     tip=$(git -C "$mirror" rev-parse refs/fix < /dev/null)
     if [ "$tip" != "$sha" ]; then
@@ -837,7 +878,18 @@ if grep -q '^grafana/k6 ' "$ops/.copy/unit-moves-$unit.txt" 2> /dev/null; then
   cmds+=("deploy:argo:sync -- -e argo_app=schnappy-production-apps")
 fi
 
-# 6. the apply - the gates again (hours since the start), the backups a one-way change needs, still free, a journal
+# 6. the apply - CI idle first when the merge restarts it (an hour at most: the gates and the kill switch read after
+# it, never before), the gates again (hours since the start), the backups a one-way change needs, still free, a journal
+ci_restart=""
+rc=0
+restarts_ci || rc=$?
+[ "$rc" != 2 ] || { stopped "whether the merge restarts CI not read (infra's diff - see the log) - nothing merged" "$log"; exit 1; }
+if [ "$rc" = 0 ]; then
+  ci_restart=1
+  say "the merge restarts CI (Woodpecker or its database): it waits for an idle Woodpecker first (${ci_wait} minutes at most)"
+  ci_seen=""
+  ci_idle "$ci_wait" || { stopped "Woodpecker not idle in ${ci_wait} minutes (${ci_seen:-not read}) - the merge restarts CI: nothing merged, no try counted" "$log"; exit 1; }
+fi
 gates merge || { stopped "proven and reviewed, not applied: a gate refused it now (see the log) - the next run proves it again" "$log"; exit 1; }
 gate_head=$(git -C "$ops" rev-parse HEAD)
 for c in "${pre[@]}"; do
@@ -891,3 +943,12 @@ run scripts/upgrade-record.sh "$unit" "$log" \
 withfix=""
 [ -z "$fixed" ] && [[ ,$unit_labels, != *,agent-fixed,* ]] || withfix=", with the agent's fix (its commit merged with it)"
 say "APPLIED $unit: $kind$withfix, applied and verified ($copy_gone)"
+# CI restarted under the merge's own pipelines (infra's and platform's - ops' merge commit is [CI SKIP]): each read from
+# its pull request's merge commit (main's head may be a CD commit since; one canceled for a later push followed to main's
+# head). Applied, verified and recorded already: one not green is a notice to run it again, never a page
+if [ -n "$ci_restart" ] && [ -z "$dry" ]; then
+  for pr in $(grep -oE '^MERGED schnappy/(infra|platform)#[0-9]+' "$log" | cut -d' ' -f2 | sort -u); do
+    run scripts/upgrade-label.py --main-ci "$pr" "$ci_wait" \
+      || { stopped "applied, verified and recorded - $pr's own main pipeline not green after CI's restart under it: run it again in Woodpecker (see the log)" "$log"; exit 1; }
+  done
+fi

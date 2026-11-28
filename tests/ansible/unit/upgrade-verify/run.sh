@@ -17,6 +17,8 @@ cat > "$W/bin/ssh" <<'STUB'
 [ ! -e "$W/down" ] || exit 255
 read -r u _ < "$W/uptime"; echo "$((${u%.*} + 61)).00 0.00" > "$W/uptime"
 case "$*" in
+  # the read of what the copy leaves out, at the hold's end: the looks' apps unless the case gives that read its own
+  *"get -n argocd application.argoproj.io"*) if [ -e "$W/apps-final.json" ]; then cat "$W/apps-final.json"; else cat "$W/apps.json"; fi ;;
   *"get applications"*) n=$(cat "$W/looks" 2>/dev/null || echo 0)
     if [[ " $(cat "$W/bad-app-looks" 2>/dev/null) " == *" $n "* ]]; then
       if [ -e "$W/apps-bad.$n.json" ]; then cat "$W/apps-bad.$n.json"; else cat "$W/apps-bad.json"; fi
@@ -64,11 +66,13 @@ def pod(ns, name, phase="Running", ready=(True,), native=None):
         out["status"]["initContainerStatuses"] = [{"name": "istio-proxy", "ready": native}, {"name": "setup", "ready": False}]
     return out
 def run(apps, pods, alerts=(), alert_after=None, down=False, settle="0", hold="2", pods_raw=None, streak="5", revs="",
-        alert_until=None, alert_looks=None, bad_app_looks=None, bad_apps=None, apps_by_look=None, pods_by_look=None):
-    for f in [x for x in os.listdir(W) if x.startswith(("apps-bad.", "pods."))] + ["down", "looks", "alert-after", "alert-until", "alert-looks", "bad-app-looks"]:
+        alert_until=None, alert_looks=None, bad_app_looks=None, bad_apps=None, apps_by_look=None, pods_by_look=None, final_apps=None):
+    for f in [x for x in os.listdir(W) if x.startswith(("apps-bad.", "pods."))] + ["down", "looks", "alert-after", "alert-until", "alert-looks", "bad-app-looks", "apps-final.json"]:
         if os.path.exists(os.path.join(W, f)):
             os.remove(os.path.join(W, f))
     json.dump({"items": apps}, open(os.path.join(W, "apps.json"), "w"))
+    if final_apps is not None:  # a list: those apps; a string: the read's raw answer
+        open(os.path.join(W, "apps-final.json"), "w").write(final_apps if isinstance(final_apps, str) else json.dumps({"items": final_apps}))
     json.dump({"items": pods}, open(os.path.join(W, "pods.json"), "w"))
     if pods_raw is not None:
         open(os.path.join(W, "pods.json"), "w").write(pods_raw)
@@ -138,6 +142,44 @@ held = [re.fullmatch(r"\d\d:\d\d:\d\d quiet - (\d+) of 25 min held", l) for l in
 check("a quiet hold of 25 min: its start said with its time, then one line every 10 minutes - how far, never past the hold",
       (rc, bool(re.fullmatch(r"SETTLED at \d\d:\d\d:\d\d - the hold: 25 min", lines[0])), [int(m.group(1)) for m in held if m],
        lines[-1], len(lines)), (0, True, [12, 21], "SETTLED AND QUIET for 25 min", 4))
+# what the copy leaves out (vagrant-gitops-mirror.py's INFRA_DROP) proven here alone: each named at the hold's end, before
+# the verdict line; an app the copy runs, or one production lacks, unnamed
+W_APPS = OK_APPS + [app("woodpecker", sources=[("https://git.pmon.dev/schnappy/infra.git", "main")], revisions=["a" * 40], single=True),
+                    app("schnappy-sonarqube", op="Succeeded", sources=[("https://git.pmon.dev/schnappy/platform.git", "main"),
+                                                                       ("https://git.pmon.dev/schnappy/infra.git", "main")],
+                        revisions=["b" * 40, "c" * 40]),
+                    app("kagent-crds"), app("schnappy-test-apps"), app("pr-12-site"), app("pr-13-site"), app("schnappy-testing")]
+W_APPS[-3]["metadata"]["ownerReferences"] = [{"kind": "ApplicationSet", "name": "schnappy-pr-envs"}]
+W_APPS[-2]["metadata"]["ownerReferences"] = [{"kind": "ApplicationSet", "name": "someone-elses"}]
+rc, out = run(W_APPS, OK_PODS, hold="2")
+lines = out.strip().splitlines()
+proven = [l for l in lines if l.startswith("PROVEN IN PRODUCTION ALONE")]
+P = "PROVEN IN PRODUCTION ALONE (the copy leaves it out): "
+check("the apps the copy leaves out named at the hold's end with their state - by a dropped app file's stem (kagent-crds "
+      "beside kagent's), a dropped directory, a dropped ApplicationSet's own; a multi-source app's revisions; the copy's own, "
+      "another set's and a name only like one unnamed; the verdict still the last line", (rc, proven, lines[-1]),
+      (0, [P + "kagent-crds - Synced/Healthy at ?, its last sync Succeeded",
+           P + "pr-12-site - Synced/Healthy at ?, its last sync Succeeded",
+           P + "schnappy-sonarqube - Synced/Healthy at bbbbbbbb,cccccccc, its last sync Succeeded",
+           P + "schnappy-test-apps - Synced/Healthy at ?, its last sync Succeeded",
+           P + "woodpecker - Synced/Healthy at aaaaaaaa, its last sync Succeeded"],
+       "SETTLED AND QUIET for 2 min"))
+# an app left out not healthy (the test environment's, which the looks leave unjudged), one with no last sync, a short
+# revision: each said as it is - never "proven"
+NP_APPS = OK_APPS + [app("schnappy-test-apps"), app("kagent", op=None),
+                     app("woodpecker", sources=[("https://git.pmon.dev/schnappy/infra.git", "main")], revisions=["abc"], single=True)]
+NP_FINAL = OK_APPS + [app("schnappy-test-apps", health="Degraded")] + NP_APPS[-2:]
+rc, out = run(NP_APPS, OK_PODS, hold="2", final_apps=NP_FINAL)
+said = [l for l in out.strip().splitlines() if "(the copy leaves it out)" in l]
+check("  an app left out not healthy: NOT PROVEN, its state said; no last sync: none; a short revision as it is",
+      said, ["PROVEN IN PRODUCTION ALONE (the copy leaves it out): kagent - Synced/Healthy at ?, its last sync none",
+             "NOT PROVEN IN PRODUCTION (the copy leaves it out): schnappy-test-apps - Synced/Degraded at ?, its last sync Succeeded",
+             "PROVEN IN PRODUCTION ALONE (the copy leaves it out): woodpecker - Synced/Healthy at abc, its last sync Succeeded"])
+rc, out = run(W_APPS, OK_PODS, hold="2", final_apps="not json")
+lines = out.strip().splitlines()
+check("  the apps left out not read at the end: said so - nothing named, the verdict (the looks') still the last line",
+      (rc, [l for l in lines if "(the copy leaves it out)" in l], "the apps the copy leaves out: not read here - the looks above judged them" in lines, lines[-1]),
+      (0, [], True, "SETTLED AND QUIET for 2 min"))
 rc, out = run(OK_APPS, OK_PODS, alerts=CRIT, alert_after=1, alert_until=3, streak="3", hold="15")
 check("one firing 2 looks, then gone (a rollout's minutes): quiet", (rc, out.strip().splitlines()[-1]), (0, "SETTLED AND QUIET for 15 min"))
 rc, out = run(OK_APPS, OK_PODS, alerts=CRIT, alert_looks=(1, 2, 4, 5), streak="3", hold="15")

@@ -83,6 +83,7 @@ loops_now() {  # the watchers of this host (their environment names its director
     && grep -q '_loop' "${e%environ}cmdline" 2> /dev/null && echo x; done | wc -l
 }
 loop_seen() { [ "$(loops_now)" -ge 1 ]; }
+lock_free() { flock -n "$COPY_HOST_DIR/host-guard.alive" true; }
 pid_file() { [ -s "$COPY_HOST_DIR/host-guard.pid" ]; }
 pid_on() {  # alive, and no zombie; /proc - CI has no ps
   local st
@@ -275,13 +276,18 @@ stop_watcher
 # a watcher slow to start (a loaded host: 6 s): its caller waits for it by the clock - never "did not start" - and the
 # second caller finds it watching, one watcher
 fresh 9000 ops_kubeadm
+t0=$SECONDS
 COPY_HOST_LOOP_DELAY=6 bash scripts/copy-host-guard.sh watch > "$W/w1.out" 2>&1 & w1=$!
 sleep 1
 bash scripts/copy-host-guard.sh watch > "$W/w2.out" 2>&1 & w2=$!
-wait "$w1"; r1=$?; wait "$w2"
+wait "$w1"; r1=$?; waited=$((SECONDS - t0)); wait "$w2"
 loops=$(for e in /proc/[0-9]*/environ; do { tr '\0' '\n' < "$e"; } 2> /dev/null | grep -qxF "COPY_HOST_DIR=$COPY_HOST_DIR" && grep -q '_loop' "${e%environ}cmdline" 2> /dev/null && echo x; done | wc -l)
-check "a watcher 6 s slow to start: its caller waited (rc 0, no REFUSED), the other found it, one watcher" \
-  "$r1 $(grep -c REFUSED "$W/w1.out") $(grep -c 'watches already' "$W/w2.out") $loops" "0 0 1 1"
+got="$r1 $(grep -c REFUSED "$W/w1.out") $(grep -c 'watches already' "$W/w2.out") $loops"
+# it failed once in CI (2026-11-27, eight harnesses at once): what to read the next time - the first caller's wait (under
+# its 30 s bound: its watcher died; at it: the watcher slower than the bound), both callers' words, the guard's log
+[ "$got" = "0 0 1 1" ] || printf '    diagnosis: the first caller waited %s s; it said: %s; the second said: %s; the guard log: %s\n' \
+  "$waited" "$(tr '\n' ' ' < "$W/w1.out")" "$(tr '\n' ' ' < "$W/w2.out")" "$(tail -6 "$COPY_HOST_DIR/host-guard.log" 2> /dev/null | tr '\n' '|')"
+check "a watcher 6 s slow to start: its caller waited (rc 0, no REFUSED), the other found it, one watcher" "$got" "0 0 1 1"
 p=$(watcher)
 read -r st < "/proc/$p/stat"; st=${st##*) }; set -- $st; loop_sid=$4   # after the name: state ppid pgrp session
 read -r st < "/proc/$$/stat"; st=${st##*) }; set -- $st; my_sid=$4
@@ -302,6 +308,36 @@ check "  the lock held across the watcher's take: it waited and watches (its pid
   "$held $([ -n "$(watcher)" ] && pid_on "$(watcher)" && echo watching) $(loops_now)" "0 watching 1"
 stop_watcher
 
+# a watcher killed mid-poll: its sleep and its virsh hold no lock (fd 7 closed in them) - the next caller starts a watcher,
+# never "watches already" with nothing watching (the concurrency review, 2026-11-28: a killed watcher's sleep kept it)
+fresh 9000 ops_kubeadm
+COPY_HOST_POLL=3 guard watch; p=$(watcher)
+wait_for 10 polls_ge 1
+kill -9 "$p" 2> /dev/null; wait_for 10 pid_off "$p"
+check "  a watcher killed mid-poll: its sleep holds no lock" "$(lock_free && echo free)" free
+guard watch; p2=$(watcher)
+check "  the next caller starts a watcher - never 'watches already' with none alive" \
+  "$(grep -c 'watches already' <<< "$out") $([ -n "$p2" ] && [ "$p2" != "$p" ] && pid_on "$p2" && echo watching) $(loops_now)" "0 watching 1"
+stop_watcher
+# the lock held with no watcher alive (a phantom holder): a watcher started all the same, waiting for it - never trusted
+fresh 9000 ops_kubeadm
+echo 999999 > "$COPY_HOST_DIR/host-guard.pid"
+flock -n "$COPY_HOST_DIR/host-guard.alive" sleep 3 & phantom=$!
+wait_for 5 bash -c '! flock -n "$0/host-guard.alive" true' "$COPY_HOST_DIR"
+guard watch; rc=$?
+wait "$phantom"
+wait_for 15 pid_file
+check "  the lock held by no watcher alive: a watcher started, waited for it, watches - said once it does" \
+  "$rc $(grep -c 'watches already' <<< "$out") $(grep -cF "the host guard watches (pid $(watcher))" <<< "$out") $(pid_on "$(watcher)" && echo watching) $(loops_now)" "0 0 1 watching 1"
+stop_watcher
+# a watcher that loses (the lock held past its wait) says so in the guard's log
+fresh 9000 ops_kubeadm
+flock -n "$COPY_HOST_DIR/host-guard.alive" sleep 14 & phantom=$!
+wait_for 5 bash -c '! flock -n "$0/host-guard.alive" true' "$COPY_HOST_DIR"
+guard watch; rc=$?
+kill "$phantom" 2> /dev/null; wait "$phantom" 2> /dev/null
+check "  the lock held past the watcher's wait: the caller refused, the watcher's loss logged" \
+  "$rc $(grep -c 'REFUSED' <<< "$out") $(grep -c 'not started: host-guard.alive held past 10 s' "$COPY_HOST_DIR/host-guard.log")" "1 1 1"
 # its lifetime: on a whole grace after its VMs stopped (the clock is the test's), then ends
 fresh 9000 ops_kubeadm
 COPY_HOST_GRACE=10 guard watch; p=$(watcher)

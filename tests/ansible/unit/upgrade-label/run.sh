@@ -27,6 +27,11 @@ class H(http.server.BaseHTTPRequestHandler):
         with open(os.path.join(W, "reads"), "a") as f:
             f.write(p + "\n")
         data = fx.get(p)
+        if isinstance(data, dict) and "__seq__" in data:  # one answer a read, the last kept
+            n_path = os.path.join(W, "seq." + p.replace("/", "_"))
+            n = int(open(n_path).read()) if os.path.exists(n_path) else 0
+            open(n_path, "w").write(str(n + 1))
+            data = data["__seq__"][min(n, len(data["__seq__"]) - 1)]
         if p.endswith(".diff") and isinstance(data, str):  # a pull request's diff: text, as Forgejo serves it
             body = data.encode(); self.send_response(200); self.end_headers(); self.wfile.write(body); return
         if isinstance(data, list) and "page" in q:  # Forgejo's pages, newest first: 50 a page
@@ -120,9 +125,9 @@ def fixture(prs, states, labels=None, base=None, fail_post=(), merged=None, issu
 def writes():
     p = os.path.join(W, "writes")
     return [json.loads(x) for x in open(p)] if os.path.exists(p) else []
-def run(*args, url=None):
+def run(*args, url=None, env_extra=None):
     env = {**os.environ, "UPGRADE_FORGEJO_URL": url or f"http://127.0.0.1:{PORT}/api/v1", "UPGRADE_FORGEJO_TOKEN": "t",
-           "UPGRADE_MERGE_READS": "3", "UPGRADE_MERGE_WAIT": "0.05"}
+           "UPGRADE_MERGE_READS": "3", "UPGRADE_MERGE_WAIT": "0.05", **(env_extra or {})}
     r = subprocess.run([sys.executable, "scripts/upgrade-label.py", *args], capture_output=True, text=True, env=env, timeout=60)
     return r.returncode, r.stdout.strip()
 UNIT = {"infra": [pr(1, "wave-patches", "a1"), pr(2, "istio", "a2")], "platform": [pr(5, "wave-patches", "b1")],
@@ -364,6 +369,61 @@ check("no pull request for the unit: refused", (rc, out.startswith("REFUSED"), w
 check("Forgejo unreachable: refused", run("wave-patches", "agent-fixed", url="http://127.0.0.1:1/api/v1")[0], 1)
 for args in (("wave-patches",), ("Bad/Unit", "x"), ("wave-patches", "--comment", "x"), ("wave-patches", "Bad Label")):
     check(f"usage refused: {args}", (run(*args)[0], writes()), (2, []))  # --comment: the veto notice's, gone 2026-11-21
+# a main commit's CI after a merge that restarted CI's own database (upgrade-cycle.sh): green 0, red 1, none or not
+# finished in the wait 3 - only a ci/ context counts (Renovate's status alone is no CI)
+M = "9" * 40
+outs = []
+for st, want in (("success", 0), ("failure", 1), ("error", 1), ("pending", 3), ("", 3), ("stability-only", 3)):
+    fixture(UNIT, {M: st})
+    rc, out = run("--main-ci", "schnappy/infra", M, "0")
+    outs.append((st, rc == want, out.split(" ")[0]))
+check("--main-ci: green 0, red 1, pending or no CI (Renovate's status alone) 3 - each said", outs,
+      [("success", True, "GREEN"), ("failure", True, "RED"), ("error", True, "RED"), ("pending", True, "NOT"), ("", True, "NOT"),
+       ("stability-only", True, "NOT")])
+check("  its arguments: a schnappy repo, a whole commit, minutes - else usage",
+      [run(*a_)[0] for a_ in (("--main-ci", "other/infra", M, "0"), ("--main-ci", "schnappy/infra", "abc", "0"), ("--main-ci", "schnappy/infra", M, "x"))],
+      [2, 2, 2])
+# a merged pull request's own merge commit (main's head may be a CD commit since); a pipeline canceled for a later push
+# followed to main's head; a read failing waited through to the end - never a red, never a traceback
+N = "8" * 40
+def ci(st, desc=""):
+    return {"state": st, "statuses": [{"context": "ci/woodpecker/push/ci", "status": st, "description": desc}]}
+def pr_merged(merged=True, sha=M):  # a merge commit named either way: "merged" is what decides
+    return {"/repos/schnappy/infra/pulls/4": {"merged": merged, "merge_commit_sha": sha}}
+fixture(UNIT, {}, extra={**pr_merged(), f"/repos/schnappy/infra/commits/{M}/status": ci("success")})
+rc, out = run("--main-ci", "schnappy/infra#4", "0")
+reads = open(os.path.join(W, "reads")).read().split()
+check("--main-ci REPO#PR: the pull request's merge commit read, its CI judged", (rc, out, "/repos/schnappy/infra/pulls/4" in reads),
+      (0, f"GREEN schnappy/infra {M}", True))
+fixture(UNIT, {}, extra={**pr_merged(False), f"/repos/schnappy/infra/commits/{M}/status": ci("success")})
+check("  a pull request not merged: not judged (3), said", run("--main-ci", "schnappy/infra#4", "0")[:2], (3, "NOT MERGED schnappy/infra#4: no merge commit"))
+CANCELED = ci("failure", "Pipeline was canceled")
+fixture(UNIT, {}, base={"infra": N}, extra={**pr_merged(), f"/repos/schnappy/infra/commits/{M}/status": CANCELED,
+                                            f"/repos/schnappy/infra/commits/{N}/status": ci("success")})
+rc, out = run("--main-ci", "schnappy/infra#4", "1", env_extra={"UPGRADE_GREEN_POLL": "0.05"})
+check("  its pipeline canceled for a later push: main's head followed - green there, green", (rc, out.splitlines()[0].split(" ")[0], out.splitlines()[-1]),
+      (0, "CANCELED", f"GREEN schnappy/infra {N}"))
+fixture(UNIT, {}, base={"infra": M}, extra={**pr_merged(), f"/repos/schnappy/infra/commits/{M}/status": CANCELED})
+check("  canceled with nothing later on main (canceled by hand): red", run("--main-ci", "schnappy/infra#4", "1", env_extra={"UPGRADE_GREEN_POLL": "0.05"})[0], 1)
+fixture(UNIT, {}, extra={**pr_merged(), f"/repos/schnappy/infra/commits/{M}/status": ci("failure", "Pipeline failed")})
+check("  red for its own reason: red, the reason said", run("--main-ci", "schnappy/infra#4", "0"), (1, f"RED schnappy/infra {M}: failure (Pipeline failed)"))
+fixture(UNIT, {}, extra=pr_merged())
+rc, out = run("--main-ci", "schnappy/infra#4", "0")
+check("  a read failing (Forgejo's 404/5xx): waited through to the end - not finished (3), the failure said, no traceback",
+      (rc, out.startswith(f"NOT FINISHED schnappy/infra {M}") and "the last read failed" in out, "Traceback" in out), (3, True, False))
+# polling: pending three reads 0.6 s apart, then green - within a minute's wait green (one read, or a bound read as
+# seconds, gives not finished)
+for f in os.listdir(W):
+    if f.startswith("seq."):
+        os.remove(os.path.join(W, f))
+fixture(UNIT, {}, extra={**pr_merged(), f"/repos/schnappy/infra/commits/{M}/status": {"__seq__": [ci("pending")] * 3 + [ci("success")]}})
+rc, out = run("--main-ci", "schnappy/infra#4", "1", env_extra={"UPGRADE_GREEN_POLL": "0.6"})
+reads = open(os.path.join(W, "reads")).read().split()
+check("  pending, then green within the wait: polled until green", (rc, out, reads.count(f"/repos/schnappy/infra/commits/{M}/status")),
+      (0, f"GREEN schnappy/infra {M}", 4))
+check("  REPO#PR's arguments: a schnappy repo, a number, minutes - else usage",
+      [run(*a_)[0] for a_ in (("--main-ci", "other/infra#4", "0"), ("--main-ci", "schnappy/infra#x", "0"), ("--main-ci", "schnappy/infra#4", "x"))],
+      [2, 2, 2])
 print("upgrade-label: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 PYCHECK

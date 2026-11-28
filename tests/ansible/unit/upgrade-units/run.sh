@@ -354,11 +354,11 @@ check("bodies: each pull request's body (Renovate's table, its release notes) to
       (r, read_or(os.path.join(out, "infra.pr.md")), read_or(os.path.join(out, "ops.pr.md"))),
       ((0, f"{out}/infra.pr.md\n{out}/ops.pr.md"), b1["body"], "ops' table"))
 mv1 = pr(3, "observability"); mv1["body"] = ("| Package | Update | Change |\n|---|---|---|\n| [grafana/grafana](https://x) | minor | `13.2.6` → `13.3.2` |\n"
-    "| docker.io/grafana/k6 | minor | `1.7.1` → `1.8.3` |\n| nginx | digest | `abc` → `def` |\n\n### Release Notes\n| x | major | `1` → `2` |\n")
+    "| docker.io/grafana/k6 | minor | `1.7.1` → `1.8.3` |\n| nginx | digest | `b4bbd2e` → `c437b7c` |\n\n### Release Notes\n| x | major | `1` → `2` |\n")
 mv2 = pr(5, "observability"); mv2["body"] = "| Package | Update | Change |\n|---|---|---|\n| grafana/grafana | minor | `13.2.6` → `13.3.2` |\n"
 fixture(infra=[mv1], platform=[mv2])
-check("moves: each row's package, from and to, once - a digest row and a table in the release notes left out",
-      run("moves", "observability"), (0, "grafana/grafana 13.2.6 13.3.2\ngrafana/k6 1.7.1 1.8.3"))
+check("moves: each row's package, from and to, once - a digest row's too (its 7 hex digits); a table in the release notes left out",
+      run("moves", "observability"), (0, "grafana/grafana 13.2.6 13.3.2\ngrafana/k6 1.7.1 1.8.3\nnginx b4bbd2e c437b7c digest"))
 check("moves: a unit not open", run("moves", "nope"), (1, "NO UNIT nope"))
 check("a command it does not take - noticed, apply and notes among them (no notice any more; missing release notes never "
       "stop a unit, operator 2026-11-25)", (run("apply")[0], run("noticed", "postgresql-19.x")[0], run("notes", "istiod-2.x")[0]),
