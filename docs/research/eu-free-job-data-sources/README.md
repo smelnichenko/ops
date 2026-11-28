@@ -1,8 +1,17 @@
 # Free online job data sources, EU-27 - research behind the report
 
-Question: for every EU member state, which job data sources (job vacancies and postings, and
-official vacancy statistics) are available online for free, and on what terms? Same method as
-`../eu-free-address-data-sources/`. Started 2026-11-28.
+Question: for every EU member state, which job data sources (job vacancies and postings) are
+available online for free, and on what terms? Same method as `../eu-free-address-data-sources/`.
+Started 2026-11-28.
+
+**Purpose (set by the operator on 2026-11-28, 18:40):** the data is for one person's own job search
+and job applications only - a program finds vacancies, reads them and prepares applications for
+that person. Not for redistribution, publishing, resale, statistics or model training. Terms are
+therefore read four ways per source: job-seeker use, automated reading by a program, keeping a
+private copy, and how one applies. A ban on bots counts whatever the purpose; a clause that only
+restricts redistribution or commercial reuse does not block this purpose. The files
+`research/00-EU-wide.md` and the six Nordic and Baltic research files were written before the
+purpose was stated; their checks apply it.
 
 **State: see [STATUS.md](STATUS.md)** - per country, whether its research, its independent check
 and its report section exist, with the check's verdict counts.

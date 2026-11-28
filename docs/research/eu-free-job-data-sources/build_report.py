@@ -22,7 +22,7 @@ COUNTRIES = [
     ("NL", "Netherlands"), ("PL", "Poland"), ("PT", "Portugal"), ("RO", "Romania"), ("SE", "Sweden"),
     ("SI", "Slovenia"), ("SK", "Slovakia"),
 ]
-SUMMARY_COLUMNS = 7  # Free machine-readable vacancies | Best free source | How to get it | Terms of reuse | Volume | Salary and full text | Update cycle
+SUMMARY_COLUMNS = 7  # Readable by a program for own job search | Best source | How to read it | What its terms allow | Live vacancies | Full text and how to apply | Update cycle
 
 
 def summary_row(text):
@@ -73,9 +73,9 @@ def main(outputs):
     intro = (HERE / "report" / "INTRO.md").read_text(encoding="utf-8").strip()
     doc = [intro, "",
            "## Overview by country", "",
-           f"Free machine-readable vacancies: {counts['Yes']} yes, {counts['Partly']} partly, {counts['No']} no "
+           f"Readable by a program for own job search: {counts['Yes']} yes, {counts['Partly']} partly, {counts['No']} no "
            "(as each country section defines it).", "",
-           "| Country | Free machine-readable vacancies | Best free source | How to get it | Terms of reuse | Volume | Salary and full text | Update cycle |",
+           "| Country | Readable by a program for own job search | Best source | How to read it | What its terms allow | Live vacancies | Full text and how to apply | Update cycle |",
            "|---|---|---|---|---|---|---|---|",
            *rows, "",
            eu.read_text(encoding="utf-8").strip(), "",
