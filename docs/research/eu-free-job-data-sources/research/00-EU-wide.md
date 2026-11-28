@@ -184,3 +184,115 @@ statement taken from someone other than the publisher. Anything not confirmed is
 - Seen on 2026-11-28: both texts fetched from the Publications Office (200, XHTML, 236 kB and 59 kB); the passages
   above are copied from them.
 - Caveats: the 2017 "EURES Single Coordinated Channel Specifications" sit on the EURES Extranet and were not read.
+
+## 3. Official statistics
+
+### Eurostat - job vacancy statistics (JVS)
+- Publisher: Eurostat (European Commission).
+- Documentation: https://ec.europa.eu/eurostat/cache/metadata/en/jvs_esms.htm (metadata);
+  https://ec.europa.eu/eurostat/web/user-guides/data-browser/api-data-access (API guide).
+- Data or endpoint: API `https://ec.europa.eu/eurostat/api/dissemination/statistics/1.0/data/<table>?format=JSON&...`
+  (JSON-stat; SDMX 2.1 and 3.0 and TSV/CSV bulk files of each table are served by the same service); table list in
+  `https://ec.europa.eu/eurostat/api/dissemination/catalogue/toc/txt?lang=en`. Tables as listed today:
+  - `jvs_q_r21` - by NACE Rev. 2.1 activity, quarterly, 2001-Q1 to 2026-Q3, updated 19.11.2026 (the current table);
+  - `jvs_q_isco_r21` - by NACE Rev. 2.1 activity, occupation and NUTS 2 region, quarterly, to 2026-Q3;
+  - `jvs_a_r21` - job vacancy rate by NACE Rev. 2.1, annual, 2008-2025;
+  - `jvs_q_nace2`, `jvs_q_isco_r2`, `jvs_a_rate_r2` - the NACE Rev. 2 versions, now filed under "historical data",
+    ending 2025-Q4 / 2025 (last updated 20.03.2026);
+  - headline tables `ei_lmjv_q_r2`, `teilm310`, `tps00172`; older `jvs_q_nace1`, `jvs_a_nace1`, `jvs_a_nace2`.
+- Holds: numbers of job vacancies and occupied posts, job vacancy rate, by economic activity, size class
+  (total / 10+ employees), seasonal adjustment, country; an occupation and region breakdown for the countries that
+  supply it. Survey-based statistics from national statistical institutes (Regulation (EC) No 453/2008); **no
+  individual vacancies**.
+- Access: API and bulk download.
+- Registration or key: none.
+- Cost: free.
+- Licence or terms (exact wording, with URL): "Reuse of statistical data, metadata, publications, and other
+  dissemination tools published on this website for commercial or non-commercial purposes is authorised provided the
+  source is acknowledged. ... There is no special procedure or requirement for a written licence. Just download the
+  material and use it, unless the material is listed in the exceptions above." (editorial content: CC BY 4.0) -
+  https://ec.europa.eu/eurostat/help/copyright-notice
+- Volume: `jvs_q_r21` 749,892 observations; `jvs_q_isco_r21` 2,055,710.
+- Update cycle: quarterly (about 45 days for a flash figure and 70-80 days for full data after the quarter; the
+  latter from memory of the metadata, not re-read today).
+- Seen on 2026-11-28: `GET .../catalogue/toc/txt?lang=en` -> 200, text/plain, 1.99 MB (the table list above);
+  `GET .../data/jvs_q_r21?format=JSON&lang=EN&geo=EE&lastTimePeriod=1` -> 200, application/json, 6.5 kB: dimensions
+  `freq, nace_r2_1, sizeclas, s_adj, indic_em, geo, time`, time 2026-Q3, updated 2026-11-19, DOI 10.2908/JVS_Q_R21;
+  the Estonian cells for 2026-Q3 were empty (0 values) in that answer.
+- Caveats: the move from NACE Rev. 2 to Rev. 2.1 happened during 2026 - a reader of `jvs_q_nace2` now gets a table
+  that stops at 2025-Q4. Country coverage of each breakdown differs (some states report only 10+ employee firms or
+  leave out sections); not every state has a value for every quarter.
+
+### Eurostat - online job advertisement (OJA) statistics "under development"
+- Publisher: Eurostat, from the Web Intelligence Hub's OJA data.
+- Documentation: https://ec.europa.eu/eurostat/web/experimental-statistics/online-job-advertisement-rate ;
+  https://cros.ec.europa.eu/wih/oja
+- Data or endpoint: Eurostat tables `jvs_a_isco3_r1` ("Job vacancy statistics by occupation and NUTS 1 region (OJA
+  breakdowns) - annual data - statistics under development", 2019-2024, updated 17.02.2026) and `isoc_sk_oja1`,
+  `isoc_sk_oja2`, `isoc_sk_oja3` (demand for ICT specialists in online job advertisements, by NUTS 2 region and
+  ISCO-08, 2019-Q4 to 2026-Q3, updated 16.11.2026), through the same API as above.
+- Holds: aggregates only (shares, rates, changes).
+- Access: API and bulk download. Registration or key: none. Cost: free.
+- Licence or terms: Eurostat's notice quoted above.
+- Seen on 2026-11-28: listed in the table of contents fetched above; the tables themselves were not requested.
+- Caveats: Eurostat labels them experimental: "The coverage of the web portals is not exhaustive" (from a search
+  result of the Eurostat page).
+
+### Web Intelligence Hub OJA data (Eurostat) and Cedefop Skills-OVATE
+- Publisher: Eurostat's Web Intelligence Hub (WIH) collects and classifies the adverts (since 2021; Cedefop built
+  the system from 2017); Cedefop publishes the Skills-OVATE dashboards from it.
+- Documentation: https://cros.ec.europa.eu/wih/oja ; https://www.cedefop.europa.eu/en/tools/skills-online-vacancies
+- Data or endpoint: none public for the adverts. Public outputs are dashboards (Skills-OVATE; the WIH "Top &
+  Trending skills" app) and the Eurostat tables in the block above.
+- Holds: "millions of OJAs collected from diverse sources" - private job portals, public employment service portals,
+  recruitment agencies - found by a "landscaping" per country (2017 by Cedefop for the EU 27 and the UK; 2021 by
+  Eurostat, extended to EFTA), each advert classified by occupation (ISCO/ESCO), skills (ESCO), region (NUTS),
+  activity (NACE), etc. Skills-OVATE (third-hand: search-result text of Cedefop's page) "covers online job
+  advertisements in 32 European countries", "presents data for the last 4 available quarters and is updated four
+  times a year".
+- Access:
+  - the adverts (microdata): **not public and not downloadable**. "Access to OJA data in the WIH is open to ESS
+    members, National Statistical Institutes, and other national statistical authorities"; scientific use datasets
+    "are accessible for scientific research purposes via the Datalab" where researchers query with SQL in R/Python;
+    "WIH OJA microdata cannot be downloaded"; researchers apply through Eurostat's microdata access portal
+    (research entities only) - wording from https://cros.ec.europa.eu/wih/oja as summarised by the fetch tool;
+  - aggregates: Skills-OVATE dashboards (web; the dashboards have per-chart export - not verified today, see Gaps).
+- Registration or key: none for the dashboards; a recognised research entity and an approved proposal for microdata.
+- Cost: free.
+- Licence or terms: the WIH page states no licence. Cedefop's site-wide copyright notice was not read (403).
+- Volume: not stated on the page read.
+- Update cycle: quarterly ("released to statisticians on the WIH's DataLab, on a quarterly basis").
+- Seen on 2026-11-28: WebFetch of https://cros.ec.europa.eu/wih/oja -> content returned (summarised above);
+  WebFetch of https://www.cedefop.europa.eu/en/tools/skills-online-vacancies -> **HTTP 403 Forbidden**; the host was
+  not asked again.
+- Caveats: the page notes that reading portals through their APIs "requires formal agreements with website
+  operators" - the WIH's sources are scraped or contracted, so its adverts cannot be passed on. Skills-OVATE leaves
+  out portals without a stable feed ("job ads from these portals are excluded", search-result text). The list of
+  portals per country is in the landscaping reports, not on the page read.
+
+### ESCO - European Skills, Competences, Qualifications and Occupations
+- Publisher: European Commission (DG Employment, Social Affairs and Inclusion).
+- Documentation: https://esco.ec.europa.eu/en/use-esco/download ;
+  https://esco.ec.europa.eu/en/use-esco/use-esco-services-api
+- Data or endpoint: download page (versions v1.0.3 to **v1.2.1**; formats "RDF, TTL, ODS, CSV, XML, JSON-LD"; "all
+  28 ESCO languages"; delta files between versions); web-service API at `https://ec.europa.eu/esco/api/` (e.g.
+  `/search`, `/resource/occupation`, `/resource/skill`); a downloadable "Local API" (the page says the current local
+  API version "is provided for reference only and will be replaced shortly").
+- Holds: about 3,000 occupations mapped to ISCO-08, and about 13,900 skills, with labels in 28 languages and
+  occupation-skill relations (counts for v1.2 from memory, not re-read today). It is the classification EURES uses
+  (`jobCategoriesCodes` in a EURES vacancy are ESCO occupation URIs).
+- Access: bulk file and API.
+- Registration or key: the API needs none. The download form asks for an e-mail address: "Read and accept the
+  [privacy] statement, then enter your email address. You will receive a link to download your chosen dataset." (not
+  done here); the page also gives a direct link to the v1.2.0 RDF file.
+- Cost: "free of charge".
+- Licence or terms (exact wording, with URL): the ESCO site's legal link is the Commission's notice: "Unless
+  otherwise indicated (e.g. in individual copyright notices), content owned by the EU on this website is licensed
+  under the Creative Commons Attribution 4.0 International (CC BY 4.0) licence" -
+  https://commission.europa.eu/legal-notice_en . The API software: "The ESCO API is licensed under the EUPL 1.2".
+- Volume: small (tens of MB per language package).
+- Update cycle: major versions every few years (v1.1 January 2022, v1.2.0 May 2024), minor ones between (v1.2.1).
+- Seen on 2026-11-28: download page -> 200, 12.9 kB (wording above);
+  `GET https://ec.europa.eu/esco/api/search?text=software%20developer&type=occupation&language=en&limit=1` -> 200,
+  application/json, 1.1 kB: `total` 490, one occupation with its URI and labels in all languages; API page -> 200.
+- Caveats: no vacancy data; it is what makes vacancies from different countries comparable.
