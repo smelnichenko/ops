@@ -85,7 +85,7 @@ The research file has the section "Through the employers"; it is checked below (
 | JobsIreland | unclear | Nothing could be read: every address returns the same script shell, the terms address included |
 | publicjobs.ie | unclear | "This site is for your personal, non-commercial use"; download "for personal use only"; silent on programs; the vacancies sit on publicjobs.tal.net, not requested |
 | CSO job-vacancy tables | no | Counts only, no adverts |
-| IrishJobs.ie | unclear | Terms silent on programs; "Content on the IrishJobs.ie website can be downloaded for personal non-commercial use"; robots.txt closes paged, filtered and apply addresses |
+| IrishJobs.ie | unclear | Terms silent on programs; "Content on the IrishJobs.ie website can be downloaded for personal non-commercial use"; robots.txt closes one list, paged filtered lists and apply addresses for every agent (that part is listed in `prohibited/`) |
 | Jobs.ie | unclear | Same terms and robots.txt as IrishJobs.ie |
 | Indeed | no | Forbidden: "Utiliser un système automatisé (bots, agrégateurs (« scrapers »), « spiders », IA ou IA agentique) pour accéder, extraire des données" (terms of 1 April 2026, read in French) |
 | LinkedIn | no | "Use bots or other unauthorized automated methods to access the Services" |
