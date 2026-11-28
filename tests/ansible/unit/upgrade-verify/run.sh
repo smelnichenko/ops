@@ -24,6 +24,8 @@ case "$*" in
       if [ -e "$W/apps-bad.$n.json" ]; then cat "$W/apps-bad.$n.json"; else cat "$W/apps-bad.json"; fi
     else cat "$W/apps.json"; fi ;;
   *"get pods"*) n=$(cat "$W/looks" 2>/dev/null || echo 0); if [ -e "$W/pods.$n.json" ]; then cat "$W/pods.$n.json"; else cat "$W/pods.json"; fi ;;
+  # the Jobs made during the hold, read at its end (none unless the case gives them)
+  *"get jobs,namespaces -A -o json"*) if [ -e "$W/jobs.json" ]; then cat "$W/jobs.json"; else echo '{"items": []}'; fi ;;
 
   *"amtool alert query"*) n=$(cat "$W/looks" 2>/dev/null || echo 0); echo $((n + 1)) > "$W/looks"
     if [ -e "$W/alert-looks" ]; then
@@ -66,11 +68,14 @@ def pod(ns, name, phase="Running", ready=(True,), native=None):
         out["status"]["initContainerStatuses"] = [{"name": "istio-proxy", "ready": native}, {"name": "setup", "ready": False}]
     return out
 def run(apps, pods, alerts=(), alert_after=None, down=False, settle="0", hold="2", pods_raw=None, streak="5", revs="",
-        alert_until=None, alert_looks=None, bad_app_looks=None, bad_apps=None, apps_by_look=None, pods_by_look=None, final_apps=None):
-    for f in [x for x in os.listdir(W) if x.startswith(("apps-bad.", "pods."))] + ["down", "looks", "alert-after", "alert-until", "alert-looks", "bad-app-looks", "apps-final.json"]:
+        alert_until=None, alert_looks=None, bad_app_looks=None, bad_apps=None, apps_by_look=None, pods_by_look=None, final_apps=None,
+        jobs=None):
+    for f in [x for x in os.listdir(W) if x.startswith(("apps-bad.", "pods."))] + ["down", "looks", "alert-after", "alert-until", "alert-looks", "bad-app-looks", "apps-final.json", "jobs.json"]:
         if os.path.exists(os.path.join(W, f)):
             os.remove(os.path.join(W, f))
     json.dump({"items": apps}, open(os.path.join(W, "apps.json"), "w"))
+    if jobs is not None:  # a list: those Jobs and namespaces; a string: the read's raw answer
+        open(os.path.join(W, "jobs.json"), "w").write(jobs if isinstance(jobs, str) else json.dumps({"items": jobs}))
     if final_apps is not None:  # a list: those apps; a string: the read's raw answer
         open(os.path.join(W, "apps-final.json"), "w").write(final_apps if isinstance(final_apps, str) else json.dumps({"items": final_apps}))
     json.dump({"items": pods}, open(os.path.join(W, "pods.json"), "w"))
@@ -175,6 +180,22 @@ check("  an app left out not healthy: NOT PROVEN, its state said; no last sync: 
       said, ["PROVEN IN PRODUCTION ALONE (the copy leaves it out): kagent - Synced/Healthy at ?, its last sync none",
              "NOT PROVEN IN PRODUCTION (the copy leaves it out): schnappy-test-apps - Synced/Degraded at ?, its last sync Succeeded",
              "PROVEN IN PRODUCTION ALONE (the copy leaves it out): woodpecker - Synced/Healthy at abc, its last sync Succeeded"])
+# a Job made during the hold that failed for good (a CronJob's run on a moved image - no pod, a warning alert): not quiet,
+# named; made before the hold, in a preview, still retrying, or succeeding on a retry: none of the hold's failures
+def job(ns, name, created="2099-01-01T00:00:00Z", failed=1, succeeded=0, gave_up=True):
+    st = {"failed": failed, "succeeded": succeeded,
+          "conditions": [{"type": "Failed", "status": "True", "reason": "BackoffLimitExceeded"}] if gave_up else []}
+    return {"kind": "Job", "metadata": {"namespace": ns, "name": name, "creationTimestamp": created}, "status": st}
+PREVIEW_NS = {"kind": "Namespace", "metadata": {"name": "pr-12", "labels": {"preview-env": "true"}}}
+rc, out = run(OK_APPS, OK_PODS, hold="2", jobs=[job("kube-system", "etcd-backup-29012345")])
+lines = out.strip().splitlines()
+check("a Job made during the hold failed for good: not quiet, named with its reason", (rc, lines[-2:]),
+      (1, ["NOT QUIET: a Job made during the hold failed:", "job kube-system/etcd-backup-29012345 failed (BackoffLimitExceeded)"]))
+rc, out = run(OK_APPS, OK_PODS, hold="2", jobs=[job("kube-system", "old", created="2000-01-01T00:00:00Z"), job("pr-12", "smoke"), PREVIEW_NS,
+                                                job("velero", "retrying", gave_up=False), job("schnappy-infra", "retried", succeeded=1)])
+check("  made before the hold, a preview's, still retrying, succeeding on a retry: quiet", (rc, out.strip().splitlines()[-1]), (0, "SETTLED AND QUIET for 2 min"))
+rc, out = run(OK_APPS, OK_PODS, hold="2", jobs="not json")
+check("  the Jobs not read: not quiet, said - none judged", (rc, out.strip().splitlines()[-1]), (1, "NOT QUIET: the Jobs made during the hold not read - none judged"))
 rc, out = run(W_APPS, OK_PODS, hold="2", final_apps="not json")
 lines = out.strip().splitlines()
 check("  the apps left out not read at the end: said so - nothing named, the verdict (the looks') still the last line",

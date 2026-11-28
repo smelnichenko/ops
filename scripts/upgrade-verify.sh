@@ -13,7 +13,9 @@
 #   hold    then for UPGRADE_VERIFY_HOLD minutes, every UPGRADE_VERIFY_POLL seconds: still so, and no critical alert firing
 #           (Watchdog aside, and the cycle's own UpgradeCycle page: an open one-way failure is the runner's to refuse on,
 #           never every later apply's verify - each failed and paged again, a cascade) - one thing wrong for
-#           UPGRADE_VERIFY_STREAK looks in a row (an app's rollout by CD within the hour is not the apply failing)
+#           UPGRADE_VERIFY_STREAK looks in a row (an app's rollout by CD within the hour is not the apply failing); at its
+#           end no Job made during it failed for good (a CronJob's run on a moved image: a failed Job is no running pod,
+#           and KubeJobFailed is a warning - no look sees it)
 # Usage: scripts/upgrade-verify.sh            exit 0 settled and quiet, 1 what is not (said)
 # Env:   UPGRADE_VERIFY_SETTLE (30), UPGRADE_VERIFY_HOLD (60), UPGRADE_VERIFY_POLL (60), UPGRADE_VERIFY_STREAK (10),
 #        UPGRADE_VERIFY_HOST (ten), UPGRADE_VERIFY_REVISIONS ("infra=<sha> platform=<sha>": the merge's commits on main),
@@ -168,6 +170,7 @@ while :; do
 done
 [ "$hold" -gt 0 ] || { echo "SETTLED AND QUIET ($need look$([ "$need" = 1 ] || echo "s in a row"))"; exit 0; }
 echo "SETTLED at $(date '+%T') - the hold: $hold min"
+hold_from=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 end=$(( $(up) + hold * 60 )); note=$(( $(up) + 600 ))
 declare -A seen=()
 while [ "$(up)" -lt "$end" ]; do
@@ -193,6 +196,29 @@ while [ "$(up)" -lt "$end" ]; do
   seen=(); for k in "${!now[@]}"; do seen[$k]=${now[$k]}; done
   unset now
 done
+# the Jobs made during the hold (a CronJob's run: etcd's snapshot, the restore checks' age, a backup and its prune): one
+# that failed for good (its Failed condition, no success) is the hold's failure - the first runs of an image a unit moved
+# (rclone in production's backup Jobs, the wave-patches review of 2026-11-28); a preview's aside; not read, not quiet
+failed_jobs=$(HOST="$host" FROM="$hold_from" python3 -I - <<'PY_JOBS'
+import json, os, subprocess, sys
+try:
+    r = subprocess.run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15", "-o", "ServerAliveInterval=15", os.environ["HOST"],
+                        "kubectl --request-timeout=60s get jobs,namespaces -A -o json"],
+                       stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=120)
+    items = json.loads(r.stdout)["items"]
+except (OSError, subprocess.TimeoutExpired, ValueError, KeyError, TypeError):
+    sys.exit(3)
+preview = {o["metadata"]["name"] for o in items if o.get("kind") == "Namespace"
+           and (o["metadata"].get("labels") or {}).get("preview-env") == "true"}
+for j in (o for o in items if o.get("kind") == "Job"):
+    m, st = j["metadata"], j.get("status") or {}
+    gave_up = any(c.get("type") == "Failed" and c.get("status") == "True" for c in st.get("conditions") or [])
+    if m.get("creationTimestamp", "") >= os.environ["FROM"] and gave_up and not st.get("succeeded") and m["namespace"] not in preview:
+        reason = next((c.get("reason") for c in st["conditions"] if c.get("type") == "Failed"), "") or "failed"
+        print(f"job {m['namespace']}/{m['name']} failed ({reason})")
+PY_JOBS
+) || { echo "NOT QUIET: the Jobs made during the hold not read - none judged"; exit 1; }
+if [ -n "$failed_jobs" ]; then echo "NOT QUIET: a Job made during the hold failed:"; echo "$failed_jobs"; exit 1; fi
 # what the copy leaves out (scripts/vagrant-gitops-mirror.py's INFRA_DROP) is proven here alone: each such app named, its
 # state as read at the hold's end - Synced to its revision, Healthy, its last sync's phase (the wave-patches review,
 # 2026-11-27: "unproven" when the proof is this verify)
