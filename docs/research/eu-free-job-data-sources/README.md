@@ -13,6 +13,13 @@ restricts redistribution or commercial reuse does not block this purpose. The fi
 `research/00-EU-wide.md` and the six Nordic and Baltic research files were written before the
 purpose was stated; their checks apply it.
 
+**Second route, added 2026-11-28, 18:43: through the employers.** The tool this serves already
+finds jobs in Estonia from a list of companies and each employer's own careers feed, applying
+straight to the employer. Each country file therefore also covers what that route needs: the
+business register's free data, the applicant-tracking vendors employers use and whether their
+boards have a documented public feed, and where links to employers' own pages can be had. Files
+written before 18:43 get this in an add-on pass.
+
 **State: see [STATUS.md](STATUS.md)** - per country, whether its research, its independent check
 and its report section exist, with the check's verdict counts.
 

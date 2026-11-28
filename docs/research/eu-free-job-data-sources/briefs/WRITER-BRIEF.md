@@ -70,6 +70,14 @@ Write `report/<CC>-<Name>.md` (same `<CC>-<Name>` as the input files) with exact
 | Board | Link | Feed or API for reading | Automated reading under its terms | Private copy | How to apply | Check |
 |---|---|---|---|---|---|---|
 
+### Through the employers
+
+- **Company register:** name, link, what is free (bulk or API), which fields, licence; whether it carries websites.
+- **Where links to employers' own pages come from:** the free sources that carry them, or "none found".
+
+| Applicant-tracking vendor | Public feed for an employer's board | Documentation | Check |
+|---|---|---|---|
+
 ### Caveats and recent changes
 
 ### Not usable for this purpose
@@ -95,6 +103,10 @@ Write `report/<CC>-<Name>.md` (same `<CC>-<Name>` as the input files) with exact
   where a reader sees which boards are for manual use only.
 - "Not usable for this purpose": paid products, partner-only feeds, and sources whose terms forbid
   automated reading, each with the deciding clause.
+- "Through the employers" is the second route: a list of companies, then each employer's own
+  careers feed, with the application going straight to the employer. Write it from the inputs'
+  section of the same name. If the inputs have none, write "Not researched." under the heading.
+  A vendor counts as having a public feed only if its own documentation says so.
 - "Check" column: confirmed / corrected / unverified / none found.
 - Bullets under the last three headings; write "None." under a heading with nothing to say.
 - Plain English, short sentences, no filler, no first person, and no mention of "the research",

@@ -48,6 +48,24 @@ so mention those only where there is something specific to your country.
    (open data tables), in two or three lines.
 7. **What is not free or not allowed**: paid data products, feeds for partners only, terms that
    forbid reuse.
+8. **The employer route** (added 2026-11-28, 18:43). The tool this serves already finds jobs in
+   Estonia through the companies: it takes a list of companies and reads each employer's own
+   careers feed, so the application goes straight to the employer. Find what that route needs in
+   the country:
+   a. **The official business register**: is basic company data free in bulk or by API (name,
+      registration number, status, legal form, address, activity code)? Does it carry a website or
+      e-mail address? Licence, key, update cycle, exact URL. Say whether it is published as an EU
+      high-value dataset (category "companies and company ownership").
+   b. **Applicant-tracking systems employers in the country use**, local vendors above all. For
+      each: does an employer's board have a documented public feed (JSON, XML, RSS) readable
+      without a key, and what do the vendor's terms say? Take this from the vendor's own
+      documentation and customer pages only. NEVER request an employer's board or a vendor's data
+      endpoint. Give the source of any "widely used here" statement.
+   c. **Links from vacancies to employers' own pages**: any free source a program may read that
+      carries the employer's own careers or apply URL (for example an open vacancy dataset with an
+      external link field). Such links are how employers' boards are discovered.
+   d. **Employer directories** with websites (industry associations, startup registers, chambers):
+      two or three at most, with their terms.
 
 For every source record: publisher; exact URL of the documentation and of the data or endpoint;
 what it holds (which fields: title, employer, location, salary, description, dates, occupation
@@ -112,7 +130,21 @@ Three to six sentences: the best free source, how it is obtained and on what ter
 - Caveats:
 
 (one block per source: employment service first, then public-sector portals, open-data datasets,
-commercial boards, statistics)
+commercial boards)
+
+## Through the employers
+
+### Business register
+(one block in the same format as a source)
+
+### Applicant-tracking vendors seen in the country
+
+| Vendor | Local or international | Public feed for an employer's board (format, key?) | Documentation URL | Basis for "used here" |
+|---|---|---|---|---|
+
+### Links to employers' own pages
+
+### Employer directories
 
 ## Not free or not allowed
 

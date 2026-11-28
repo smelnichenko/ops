@@ -25,6 +25,15 @@ readings, each backed by a quoted clause and its URL:
 This is a reading of published terms, not legal advice: quote, do not interpret beyond the words.
 Official vacancy statistics are of no use for this purpose; do not spend requests on them.
 
+## The employer route (added 2026-11-28, 18:43)
+
+Research files written after 18:43 have a section "Through the employers": the business register,
+the applicant-tracking vendors employers use, links to employers' own pages, employer directories.
+Check its claims like any others - the register's free access, fields and licence; each vendor's
+documented public feed, from the vendor's documentation page only; the link sources. NEVER request
+an employer's board or a vendor's data endpoint. If a research file has no such section, say so in
+one line at the top of the check file and do not research it yourself.
+
 ## What to do, per country (or per topic for the EU-wide file)
 
 1. Read the research file fully. List every checkable claim: each source URL, endpoint, feed or
