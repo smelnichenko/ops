@@ -41,7 +41,9 @@ part_postgres() {
   # production's server, named (setup-pi-restore-check.yml's pi_restore_check_pg_server, infra's backupServerName): the
   # one written last was taken for it - another cluster's backups beside it (SonarQube's at 01:45, after production's
   # 01:30) would have been restored and judged instead, red every day, production's never checked (2026-11-17's review)
-  rclone lsf --dirs-only "store:postgres-backups/$server/base" 2> /dev/null | grep -qE '^[0-9]{8}T[0-9]{6}/$' \
+  # grep reads the listing to its end (no -q): rclone writes it a line at a time, and a reader leaving at its first match
+  # killed it with the next line (SIGPIPE) - under pipefail a base backup found read as none (the CI flake, 2026-11-28)
+  rclone lsf --dirs-only "store:postgres-backups/$server/base" 2> /dev/null | grep -E '^[0-9]{8}T[0-9]{6}/$' > /dev/null \
     || { echo "$server: no base backup in postgres-backups (production's server - pi_restore_check_pg_server)"; return 1; }
   # every WAL segment archived (the timeline aside, as a recovery reads them), and the timelines a promotion's history
   # file names
@@ -251,7 +253,7 @@ part_tier0() {
   local rc=0
   runuser -u postgres -- "$bin/psql" "${P[@]}" -q -f "$w/b/pg-globals.sql" > "$w/globals.log" 2>&1 || rc=$?
   [ "$rc" = 0 ] || { cat "$w/globals.log"; echo "$d: psql could not run pg-globals.sql (exit $rc)"; return 1; }
-  if grep 'ERROR' "$w/globals.log" | grep -v 'role "postgres" already exists' | grep -q .; then
+  if grep 'ERROR' "$w/globals.log" | grep -v 'role "postgres" already exists' | grep . > /dev/null; then  # read to the end, as above
     cat "$w/globals.log"; echo "$d: pg-globals.sql did not restore"; return 1
   fi
   local f db tables dbs=()
@@ -332,7 +334,7 @@ if [ -z "${PI_RESTORE_LOCKED:-}" ]; then
   for i in $(seq 60); do
     [ "$(timedatectl show -p NTPSynchronized --value 2> /dev/null)" = yes ] && break
     if [ -e "${PI_RESTORE_TIMESYNC_MARKER:-/run/systemd/timesync/synchronized}" ] \
-        || chronyc -n tracking 2> /dev/null | grep -q '^Leap status *: Normal$'; then
+        || chronyc -n tracking 2> /dev/null | grep '^Leap status *: Normal$' > /dev/null; then  # read to the end, as above
       break
     fi
     [ "$i" != 60 ] || { echo "the clock is not synchronized (timedatectl) - no restore check" >&2; exit 1; }
