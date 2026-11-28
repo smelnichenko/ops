@@ -182,6 +182,9 @@ default=$(grep -oP 'bound=\$\{COPY_CHECKS_SECONDS:-\K[0-9]+' "$ROOT/scripts/copy
 check "the bound by default above every check's own (the longest: $budget s)" \
   "$([ -n "$budget" ] && [ -n "$default" ] && [ "$default" -gt "$budget" ] && echo above || echo "${default:-none} vs ${budget:-none}")" \
   above
+check "  and not far above it (under 1.25 times the longest: a runaway default is a hang left unbounded for hours)" \
+  "$([ -n "$budget" ] && [ -n "$default" ] && [ $((default * 100)) -lt $((budget * 125)) ] && echo near || echo "${default:-none} vs ${budget:-none}")" \
+  near
 
 # the script stopped (a TERM, as an interrupted full run sends): the checks still running stopped with it - the storage
 # check runs on here until then; the script is this test's own child, checked so before it is signalled. The other

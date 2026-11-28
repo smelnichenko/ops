@@ -33,10 +33,13 @@
 # the operator now running (an operator-only step changes no cluster generation: the old status read as finished). The
 # Scylla steps roll the database through 2025.1 and 2026.1.
 #
-# OpenSearch and the browser (fourth play), nothing seeded - each doing its work now: their readiness probes answer
-# while neither does (OpenSearch's _cluster/health is 200 on a red cluster; browserless's /pressure while Chrome cannot
-# start). OpenSearch's status not red, a document of this run written and found, its index deleted; a page of this run
-# rendered by the browser with its script run, and a request without its token refused (401).
+# OpenSearch, the browser and Centrifugo (fourth play), nothing seeded - each doing its work now: their readiness probes
+# answer while none does (OpenSearch's _cluster/health is 200 on a red cluster; browserless's /pressure while Chrome cannot
+# start; Centrifugo's /health with its engine or its Kafka consumer broken). OpenSearch's status not red, a document of
+# this run written and found, its index deleted; a page of this run rendered by the browser as masi drives it (headed)
+# with its script run, and a request without its token refused (401); a publication of this run through Centrifugo's
+# HTTP API and one through its Kafka consumer, both read back from its history (its Valkey engine), and its API refusing
+# a wrong key (401).
 #
 # Usage: ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/copy/data-check.yml -e mode=seed|verify
 - name: Postgres data that must survive the upgrade
@@ -431,7 +434,7 @@
           {{ _scylla.stdout_lines[0].split()[1] }}, operator {{ _scylla_operator.stdout.split(':')[-1] }}; row {{ run_id }}
           written and read through {{ scylla_cluster }}-client
 
-- name: OpenSearch and the browser doing their work
+- name: OpenSearch, the browser and Centrifugo doing their work
   hosts: target
   become: true
   gather_facts: false
@@ -441,15 +444,16 @@
     kubectl: "kubectl --kubeconfig {{ kubeconfig }} -n {{ apps_namespace }}"
     search: statefulset/schnappy-production-opensearch
     browser: deployment/schnappy-production-masi-browser
+    realtime: deployment/schnappy-production-centrifugo
   tasks:
     - name: Vagrant VMs only (fails closed on any other host)
       ansible.builtin.import_tasks: ../vagrant-only.yml
 
     # one restarting after the change (a node's restart rolls them): waited for until ready - five minutes at most
     # (OpenSearch's startup probe allows 300 s)
-    - name: OpenSearch and the browser ready (a ready replica each)
+    - name: OpenSearch, the browser and Centrifugo ready (a ready replica each)
       ansible.builtin.command: "{{ kubectl }} get {{ item }} -o jsonpath={.status.readyReplicas}"
-      loop: ["{{ search }}", "{{ browser }}"]
+      loop: ["{{ search }}", "{{ browser }}", "{{ realtime }}"]
       register: _ready
       changed_when: false
       retries: 30
@@ -483,14 +487,17 @@
     # its probes ask /pressure, which answers while Chrome cannot start: a page of this run rendered by Chrome, its script
     # run (6*7 written into it) - its status said (two sessions at most, none queued: a 429 while masi holds them is waited
     # out, two minutes); and the token still required - without it browserless hands a CDP session to any page. The token
-    # stays in the pod: $TOKEN is expanded by the pod's shell, never on a command line here; the page on stdin
+    # stays in the pod: $TOKEN is expanded by the pod's shell, never on a command line here; the page on stdin. Headed, as
+    # masi drives it (platform's masiService.browser.headless: false - its endpoint's ?headless=false): the virtual screen
+    # (Xvfb) under the pod's read-only root is the part an upgrade can break, which a headless render never starts
+    # (browserless 2.56 and 2.64 both take it on /content)
     - name: The browser - a page of this run rendered with its script run; refused without the token
       ansible.builtin.shell:
         executable: /bin/bash
         cmd: |
           set -euo pipefail
           B="{{ kubectl }} exec -i {{ browser }} -c chromium --"
-          out=$($B sh -c 'curl -sS -m 90 -w "\n%{http_code}" -X POST -H "Content-Type: application/json" --data-binary @- "http://127.0.0.1:3000/content?token=$TOKEN"' \
+          out=$($B sh -c 'curl -sS -m 90 -w "\n%{http_code}" -X POST -H "Content-Type: application/json" --data-binary @- "http://127.0.0.1:3000/content?token=$TOKEN&headless=false"' \
             <<< '{"html": "<p id=x>copy-check {{ run_id }}:</p><script>x.textContent += 6 * 7</script>"}')
           echo "${out##*$'\n'}"
           { grep -cF 'copy-check {{ run_id }}:42</p>' <<< "${out%$'\n'*}" || true; }
@@ -502,9 +509,45 @@
       delay: 10
       until: _browser.rc == 0 and _browser.stdout_lines == ['200', '1', '401']
 
-    - name: OpenSearch and the browser working
+    # its /health answers with its engine or its Kafka consumer broken: a publication of this run through its HTTP API
+    # (POST /api/publish) and one through Kafka - events.notifications, the topic its consumer reads that nothing else
+    # produces to, the target channel in the x-centrifugo-channels header as chat and chess send it - both read back from
+    # its history (its Valkey engine), and the API refusing a wrong key (401). The key stays in the pod: the pod's shell
+    # expands $CENTRIFUGO_HTTP_API_KEY, never a command line here. Retried for two minutes: the consumer's first poll after
+    # a restart (6.10 changed its consumers' retries and its JSON parsing - checked
+    # against 6.9.7 and 6.10.3 with Kafka 4.3.1)
+    - name: Centrifugo - a publication of this run through its API and one through Kafka, both in its history; refused with a wrong key
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          C="{{ kubectl }} exec {{ realtime }} -c centrifugo --"
+          # a broker found by its label each try, as the Kafka play finds it (Strimzi's pods: no StatefulSet to exec into)
+          broker=$({{ kubectl }} get pods -l strimzi.io/broker-role=true -o jsonpath='{.items[0].metadata.name}')
+          [ -n "$broker" ] || { echo "no Kafka broker pod"; exit 1; }
+          api() {  # api <method> <json body>: the pod's own wget (20 s at most), its key expanded by the pod's shell
+            $C sh -c 'wget -qO- -T 20 --header "X-API-Key: $CENTRIFUGO_HTTP_API_KEY" --header "Content-Type: application/json" --post-data "$1" "http://127.0.0.1:8000/api/$0"' "$1" "$2"
+          }
+          api publish '{"channel": "notifications:copy-check-{{ run_id }}-api", "data": {"run": "{{ run_id }}"}}' > /dev/null
+          printf 'x-centrifugo-channels:notifications:copy-check-{{ run_id }}-kafka\t{"run": "{{ run_id }}"}\n' \
+            | {{ kubectl }} exec -i "pod/$broker" -c kafka -- /opt/kafka/bin/kafka-console-producer.sh \
+              --bootstrap-server localhost:9092 --topic events.notifications --reader-property parse.headers=true > /dev/null
+          for via in api kafka; do
+            { grep -cF '"run":"{{ run_id }}"' <<< "$(api history '{"channel": "notifications:copy-check-{{ run_id }}-'"$via"'", "limit": 10}')" || true; }
+          done
+          wrong=$($C wget -q -T 20 -O /dev/null --header "X-API-Key: copy-check-wrong" --header "Content-Type: application/json" \
+            --post-data '{"channel": "notifications:copy-check-{{ run_id }}-api", "data": {}}' http://127.0.0.1:8000/api/publish 2>&1 || true)
+          if [[ $wrong =~ HTTP/1\.1\ ([0-9]+) ]]; then echo "${BASH_REMATCH[1]}"; else echo "no refusal: $wrong"; fi
+      register: _realtime
+      changed_when: true
+      retries: 12
+      delay: 10
+      until: _realtime.rc == 0 and _realtime.stdout_lines == ['1', '1', '401']
+
+    - name: OpenSearch, the browser and Centrifugo working
       ansible.builtin.debug:
         msg: >-
-          SEARCH AND BROWSER OK: OpenSearch {{ _search.stdout_lines[1] }} {{ _search.stdout_lines[0] }}, a document of
-          {{ run_id }} written, found and its index deleted; the browser rendered a page of {{ run_id }} with its script
-          run, and refused a request without its token (401)
+          SEARCH, BROWSER AND REALTIME OK: OpenSearch {{ _search.stdout_lines[1] }} {{ _search.stdout_lines[0] }}, a
+          document of {{ run_id }} written, found and its index deleted; the browser rendered a page of {{ run_id }}
+          headed with its script run, and refused a request without its token (401); Centrifugo published {{ run_id }}
+          through its API and through Kafka, both read back from its history, and refused a wrong key (401)

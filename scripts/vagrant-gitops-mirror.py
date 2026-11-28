@@ -65,6 +65,8 @@ INFRA_DROP = [
     "clusters/production/schnappy-test-mesh",
 ]
 
+YAML = (".yaml", ".yml")
+
 # platform paths the Vagrant copy leaves out (see the docstring)
 PLATFORM_DROP = [
     "helm/schnappy-mesh/templates/certificates.yaml",
@@ -197,7 +199,7 @@ def refuse_masked(name, src, ref, drops, base="origin/main"):
     hits = masked(changed, drops, replaced)
     for c in changed:
         sibling = os.path.join(over, re.sub(r"\.ya?ml$", ".vagrant.yaml", c))
-        if c.endswith((".yaml", ".yml")) and os.path.isfile(sibling):
+        if c.endswith(YAML) and os.path.isfile(sibling):
             merge = subprocess.run(["git", "-C", src, "merge-base", base, ref], capture_output=True, text=True,
                                    check=True).stdout.strip()
             hits += [f"{c}: {k}" for k in masked_keys(at(src, merge, c), at(src, ref, c),
@@ -207,13 +209,59 @@ def refuse_masked(name, src, ref, drops, base="origin/main"):
                  + "\n  ".join(hits))
 
 
+def app_sources(spec):
+    """An Argo app's (or an ApplicationSet template's) spec: its sources, one or many."""
+    return spec.get("sources") or ([spec["source"]] if spec.get("source") else [])
+
+
+def source_paths(source):
+    """(repo, path) one Argo source renders: its path in infra or platform, and its $values files (infra's)."""
+    url = (source.get("repoURL") or "").rstrip("/").removesuffix(".git")
+    repo = next((n for n in ("infra", "platform") if url.endswith("/" + n)), None)
+    out = {(repo, source["path"].rstrip("/"))} if repo and source.get("path") else set()
+    return out | {("infra", v[len("$values/"):]) for v in (source.get("helm") or {}).get("valueFiles") or []
+                  if v.startswith("$values/")}
+
+
+def rendered(src, ref, files):
+    """(repo, path) the Argo apps and sets in files render at ref: each source's (source_paths)."""
+    out = set()
+    for f in files:
+        r = subprocess.run(["git", "-C", src, "show", f"{ref}:{f}"], capture_output=True, text=True)
+        docs = list(yaml.safe_load_all(r.stdout)) if r.returncode == 0 else []
+        for spec in ((d.get("spec") or {}) for d in docs if isinstance(d, dict)):
+            for source in app_sources(spec) + app_sources((spec.get("template") or {}).get("spec") or {}):
+                out |= source_paths(source)
+    return out
+
+
+def left_out_paths(src, ref):
+    """What only the apps INFRA_DROP leaves out render - no app the copy keeps renders it: a change there runs on no
+    copy, and production's verify proves it alone (Woodpecker's Postgres digest
+    and SonarQube's images read as proven on the copy, their paths in no list)."""
+    files = subprocess.run(["git", "-C", src, "ls-tree", "-r", "--name-only", ref, "--", "clusters/production/argocd"],
+                           capture_output=True, text=True, check=True).stdout.split()
+    files = [f for f in files if f.endswith(YAML)]
+    dropped = [f for f in files if f in INFRA_DROP]
+    return rendered(src, ref, dropped) - rendered(src, ref, [f for f in files if f not in INFRA_DROP])
+
+
+def left_out(name, src, ref, paths, base="origin/main"):
+    """A change's files under what only the left-out apps render ("<repo>/<path>"): said, and handed to the review."""
+    if ref == "main":
+        return []
+    changed = subprocess.run(["git", "-C", src, "diff", "--no-renames", "--name-only", f"{base}...{ref}"],
+                             capture_output=True, text=True, check=True).stdout.split()
+    return [f"{name}/{c}" for c in changed if any(r == name and (c == p or c.startswith(p + "/")) for r, p in paths)]
+
+
 def point_apps_at_copy(repo, forgejo):
     """Every Argo app's repo URL the copy's Forgejo, its value files followed by the Vagrant ones."""
     apps = os.path.join(repo, "clusters/production/argocd")
     changed = 0
     for root, _, files in os.walk(apps):
         for f in files:
-            if not f.endswith((".yaml", ".yml")):
+            if not f.endswith(YAML):
                 continue
             p = os.path.join(root, f)
             text = open(p).read()
@@ -323,6 +371,18 @@ def main():
     # both refs judged before anything is pushed: a refused platform change left infra's already mirrored
     refuse_masked("infra", os.path.abspath(a.infra), a.infra_ref, INFRA_DROP)
     refuse_masked("platform", os.path.abspath(a.platform), a.platform_ref, PLATFORM_DROP)
+    # what the change does where only the left-out apps render: mirrored, run on no copy - said, and written for the
+    # runner to hand to the review (.copy/left-out.txt, "<repo>/<path>" a line - empty for none)
+    alone = []
+    if (a.infra_ref, a.platform_ref) != ("main", "main"):  # main alone mirrors no change: nothing read
+        paths = left_out_paths(os.path.abspath(a.infra), a.infra_ref)
+        alone = (left_out("infra", os.path.abspath(a.infra), a.infra_ref, paths)
+                 + left_out("platform", os.path.abspath(a.platform), a.platform_ref, paths))
+    os.makedirs(WORK, exist_ok=True)
+    with open(os.path.join(WORK, "left-out.txt"), "w") as f:
+        for p in alone:
+            print(f"PROVEN IN PRODUCTION ALONE (the copy leaves its app out - the verify judges it): {p}")
+            f.write(p + "\n")
     api(a.forgejo, user, password, "POST", "/orgs", {"username": "schnappy", "visibility": "public"}, ok=(201, 422))
     os.makedirs(WORK, exist_ok=True)
     work = tempfile.mkdtemp(prefix="gitops-mirror-", dir=WORK)

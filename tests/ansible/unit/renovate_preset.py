@@ -34,6 +34,14 @@ def managers(path):
     return [m for m in PRESET["customManagers"] if any(matches(p, path) for p in m["managerFilePatterns"])]
 
 
+def parent_key(text, line_start, indent):
+    """The nearest line above line_start, less indented, that opens a map ('<key>:' alone): its key match, or None"""
+    for line in reversed(text[:line_start].split("\n")):
+        if line.strip() and len(line) - len(line.lstrip()) < indent:
+            return re.match(r"\s*([A-Za-z0-9_]+):\s*$", line)
+    return None
+
+
 def reads(path, text=None):
     """Each value the preset's custom managers move in the file: {line, key, datasource, depName, currentValue,
     currentDigest} - line 0-based, key the YAML key on that line (or None). Nothing for an ignored file; a dependency
@@ -53,6 +61,8 @@ def reads(path, text=None):
                 start = g.start("currentValue")
                 line = text[text.rfind("\n", 0, start) + 1:].split("\n", 1)[0]
                 key = re.match(r"\s*([A-Za-z0-9_]+):", line)
+                if key is None:  # an entry of a map (a quoted key: "18": ...) - the key of the map holding it
+                    key = parent_key(text, text.rfind("\n", 0, start) + 1, len(line) - len(line.lstrip()))
                 out.append({"line": text.count("\n", 0, start), "key": key.group(1) if key else None,
                             "datasource": d.get("datasource") or m.get("datasourceTemplate"), "depName": d["depName"],
                             "currentValue": d["currentValue"], "currentDigest": d.get("currentDigest")})

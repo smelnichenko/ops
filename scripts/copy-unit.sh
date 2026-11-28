@@ -157,7 +157,7 @@ if [ "$ops_ref" != main ]; then
   # the unit's vars files, read from its branch, where test:copy:playbook reads them (-e @<file>)
   mkdir -p "$ops_repo/.copy"
   out=$(mktemp -d "$ops_repo/.copy/unit-$unit.XXXXXX")
-  ops_steps=$(OPS="$ops_repo" BRANCH="$branch" OUT="$out" ISTIO_TO="$istio_to" "$py" - <<'PY'
+  ops_steps=$(OPS="$ops_repo" BRANCH="$branch" OUT="$out" ISTIO_TO="$istio_to" INFRA="$src/infra" INFRA_REF="$infra_ref" "$py" - <<'PY'
 import os, subprocess, sys
 import yaml
 OPS, BRANCH, OUT = os.environ["OPS"], os.environ["BRANCH"], os.environ["OUT"]
@@ -243,6 +243,15 @@ ORDER = {"upgrade-kubeadm.yml": 0, "setup-kubeadm.yml": 1, "setup-argocd.yml": 2
          "setup-caddy.yml": 8, "upgrade-keycloak.yml": 9}
 # node_exporter on ten: its version and the hash that moves with it - production's setup-host-hardening.yml on the copy
 NODE_EXPORTER = {"node_exporter_version", "node_exporter_sha256"}
+# the Pis' restore check: the Postgres image it restores production's backups in - production's own, moved with it (its
+# data cluster's cnpg.imageName at the unit's infra head), proven by the copy's own restore check run in it on the Pis
+# (test:pi-restore-check: the copy's real base backups and WAL restored), installed on production's Pis after the merge
+PI_RESTORE = {"pi_restore_check_pg_images"}
+PROD_PG = "clusters/production/schnappy-production-data/values.yaml"
+def production_pg():
+    """production's Postgres image at the unit's infra head (main when it has no infra part), None where not read"""
+    r = subprocess.run(["git", "-C", os.environ["INFRA"], "show", f"{os.environ['INFRA_REF']}:{PROD_PG}"], capture_output=True, text=True)
+    return ((yaml.safe_load(r.stdout) or {}).get("cnpg") or {}).get("imageName") if r.returncode == 0 else None
 # Argo CD itself (no Argo app holds it): its chart default and the image pinned on a chart - setup-argocd.yml on the copy
 # with the copy's Vault values (as test:copy:build installs it), its pods restarting
 ARGOCD = {"argocd_chart_default", "argocd_image_pins"}
@@ -315,6 +324,20 @@ for path in changed:
             moved_values = {k: new[k] for k in moved if k in new}
             refused += pins({k: old.get(k) for k in moved}, moved_values, path)
             steps.append(("setup-host-hardening.yml", f"-e @{vars_file(moved_values, 'setup-host-hardening-vars.yml')}", False))
+    elif path == "deploy/ansible/playbooks/setup-pi-restore-check.yml":
+        old, new = play_vars(show("main", path) or ""), play_vars(show(BRANCH, path) or "")
+        moved = sorted(k for k in set(old) | set(new) if old.get(k) != new.get(k))
+        prod, images = production_pg(), new.get("pi_restore_check_pg_images") or {}
+        major = prod.split(":", 1)[1].split(".")[0] if prod and ":" in prod else None
+        if without_vars(show("main", path)) != without_vars(show(BRANCH, path)):
+            refused.append(f"{path} (its tasks)")
+        elif not moved or set(moved) - PI_RESTORE:
+            refused.append(f"{path} {' '.join(sorted(set(moved) - PI_RESTORE)) or '(its tasks)'}")
+        elif major is None or images.get(major) != prod:
+            refused.append(f"{path} pi_restore_check_pg_images (its {major} not the image production runs: {prod})")
+        else:
+            smokes.append("test:pi-restore-check -- -e @"
+                          + vars_file({"pi_restore_check_pg_images": images}, "setup-pi-restore-check-vars.yml"))
     elif path == "deploy/ansible/playbooks/setup-consul.yml":
         old, new = play_vars(show("main", path) or ""), play_vars(show(BRANCH, path) or "")
         moved = sorted(k for k in set(old) | set(new) if old.get(k) != new.get(k))

@@ -116,6 +116,21 @@ for c in "cert-manager cert-manager v1.21.3" "cnpg cloudnative-pg 0.29.1"; do
   printf 'apiVersion: argoproj.io/v1alpha1\nkind: Application\nmetadata:\n  name: %s\nspec:\n  sources:\n    - repoURL: https://charts.example\n      chart: %s\n      targetRevision: %s\n' \
     "$1" "$2" "$3" > "$W/src/infra/clusters/production/argocd/apps/$1.yaml"
 done
+# the Pis' restore check's Postgres pins (17 by its tag, 18 by its digest) and production's data cluster image (infra)
+PGA=$(printf 'a%.0s' $(seq 64)) PGB=$(printf 'b%.0s' $(seq 64)) PGC=$(printf 'c%.0s' $(seq 64))
+cat > "$W/src/ops/deploy/ansible/playbooks/setup-pi-restore-check.yml" <<Y
+- name: restore check
+  hosts: pis
+  vars:
+    pi_restore_check_pg_images:
+      "17": "ghcr.io/cloudnative-pg/postgresql:17"
+      "18": "ghcr.io/cloudnative-pg/postgresql:18.7-system-trixie@sha256:$PGA"
+    pi_restore_check_pg_base_max_age_h: 30
+  tasks: []
+Y
+mkdir -p "$W/src/infra/clusters/production/schnappy-production-data"
+printf 'cnpg:\n  imageName: ghcr.io/cloudnative-pg/postgresql:18.7-system-trixie@sha256:%s\n' "$PGA" \
+  > "$W/src/infra/clusters/production/schnappy-production-data/values.yaml"
 for r in infra platform ops; do (cd "$W/src/$r" && g add -A && g commit -qm base && g push -q origin main 2> /dev/null); done
 # unit <repo> <unit> <sed on its files> <file>...: the unit's branch on origin, the clone left on main
 unit() {
@@ -142,6 +157,10 @@ unit ops argocd-tasks 's/tasks: \[\]/tasks: [{debug: {msg: x}}]/' deploy/ansible
 unit ops argocd-bad 's/"10.9.7"/"10.18.0 -e x=y"/' deploy/ansible/playbooks/setup-argocd.yml
 unit ops node-exporter 's/"1.12.1"/"1.13.0"/; s/b51d8a76aa2a9156a55d501aca6276fae09e262259a5e4e831d2c2222f084e63/'"$(printf 'ab%.0s' $(seq 32))"'/' deploy/ansible/playbooks/setup-host-hardening.yml
 unit ops node-exporter-port 's/node_exporter_port: 9100/node_exporter_port: 9101/' deploy/ansible/playbooks/setup-host-hardening.yml
+unit infra pi-pin "s/$PGA/$PGB/" clusters/production/schnappy-production-data/values.yaml
+unit ops pi-pin "s/$PGA/$PGB/" deploy/ansible/playbooks/setup-pi-restore-check.yml
+unit ops pi-pin-lag "s/$PGA/$PGC/" deploy/ansible/playbooks/setup-pi-restore-check.yml
+unit ops pi-pin-other 's/pi_restore_check_pg_base_max_age_h: 30/pi_restore_check_pg_base_max_age_h: 40/' deploy/ansible/playbooks/setup-pi-restore-check.yml
 unit ops caddy 's/"2.10.0"/"2.10.2"/' deploy/ansible/playbooks/setup-caddy.yml
 unit ops consul 's/"1.20.6"/"1.20.7"/; s/96ba60faadde5d92f36d536818a6382159344983c79529015e5d991fd1199d4b/1111111111111111111111111111111111111111111111111111111111111111/; s/37fc6f213a44c6db3a2b912966fb1415939e9b189ce1bc1eb07b7f87449a28c2/2222222222222222222222222222222222222222222222222222222222222222/' deploy/ansible/playbooks/setup-consul.yml
 unit ops consul-dc 's/"1.20.6"/"1.20.7"/; s/"schnappy"/"other"/' deploy/ansible/playbooks/setup-consul.yml
@@ -272,6 +291,19 @@ out=$(plan node-exporter); f=$(vars_of setup-host-hardening.yml "$out")
 check "node_exporter's version and its hash: production's setup-host-hardening on the copy, the branch's two handed to it" \
   "$(sed "s|@$f|@VARS|" <<< "$out") | $( [ -n "$f" ] && tr '\n' ' ' < "$f")" \
   "test:copy:playbook PLAYBOOK=setup-host-hardening.yml ARGS='-e @VARS' | node_exporter_sha256: $(printf 'ab%.0s' $(seq 32)) node_exporter_version: 1.13.0 "
+# the Pis' restore check's Postgres image: moved to exactly the image production's data cluster runs at the unit's infra
+# head, proven by the copy's own restore check run in it (test:pi-restore-check, its vars handed); one production does
+# not run, or another value of the playbook: refused
+out=$(plan pi-pin); f=$(sed -n "s/^test:pi-restore-check -- -e @\(.*\)$/\1/p" <<< "$out")
+check "the Pis' Postgres pin moved with production's image: the copy's restore check run in it, after the infra change" \
+  "$(grep -c '^test:copy:change INFRA_REF=renovate/pi-pin' <<< "$out") $(grep -n '' <<< "$out" | grep -E 'test:copy:change|test:pi-restore-check' | cut -d: -f1 | tr '\n' ' ')| $( [ -n "$f" ] && grep -c "18.7-system-trixie@sha256:$PGB" "$f")" \
+  "1 1 2 | 1"
+out=$(plan pi-pin-lag); rc=$?
+check "  a pin production does not run (its data cluster on another digest): refused, named" \
+  "$rc $(grep -c 'pi_restore_check_pg_images (its 18 not the image production runs' <<< "$out") $(grep -c 'test:pi-restore-check' <<< "$out")" "1 1 0"
+out=$(plan pi-pin-other); rc=$?
+check "  another value of the playbook: refused, named" \
+  "$rc $(grep -c 'setup-pi-restore-check.yml pi_restore_check_pg_base_max_age_h' <<< "$out")" "1 1"
 for u in vault-jinja forgejo-conn forgejo-hash-jinja forgejo-vault-tag argocd-pin-jinja; do
   out=$(plan "$u"); rc=$?
   check "  $u: a value the copy would hand Ansible that is no version or hash (a template, a connection setting, a tag): refused" \
