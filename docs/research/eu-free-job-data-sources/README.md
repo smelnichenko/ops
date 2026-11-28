@@ -19,7 +19,8 @@ purpose was stated; their checks apply it.
 finds jobs in Estonia from a list of companies and each employer's own careers feed, applying
 straight to the employer. Each country file therefore also covers what that route needs: the
 business register's free data, the applicant-tracking vendors employers use and whether their
-boards have a documented public feed, and where links to employers' own pages can be had. Files
+boards have a documented public feed, where links to employers' own pages can be had, and which
+archives of past adverts exist (they show which companies hire in a given skills area). Files
 written before 18:43 get this in an add-on pass.
 
 **State: see [STATUS.md](STATUS.md)** - per country, whether its research, its independent check

@@ -30,6 +30,10 @@ documented public feed, from the vendor's documentation page only; the link sour
 an employer's board or a vendor's data endpoint. If a research file has no such section, say so in
 one line at the top of the check file and do not research it yourself.
 
+Archives of past adverts count as usable: they show which companies hire in a given skills area.
+Never give one the verdict "no" for being old; check its years, size, licence and whether it
+carries the employer's name or registration number and an occupation or skills field.
+
 ## What to do, per country (or per topic for the EU-wide file)
 
 1. Read the research file fully. List every checkable claim: each source URL, endpoint, feed or

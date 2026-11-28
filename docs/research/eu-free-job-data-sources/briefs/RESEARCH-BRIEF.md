@@ -17,7 +17,8 @@ training. So each source gets ONE verdict, and no further analysis of its terms:
 - "unclear" when the terms are silent or could not be read.
 - Clauses that only restrict redistribution or commercial reuse do not count against a source.
 
-Official vacancy statistics are of no use for this purpose: skip item 6 below.
+Official vacancy statistics (counts) are of no use for this purpose: skip item 6 below. Archives
+of past adverts are a different thing and ARE wanted: see item 8e.
 
 You research the countries named in your task. Another pass covers the EU-wide layer (EURES,
 aggregators' APIs, applicant-tracking vendors' public feeds, remote-job feeds, Eurostat, Cedefop),
@@ -66,6 +67,12 @@ so mention those only where there is something specific to your country.
       external link field). Such links are how employers' boards are discovered.
    d. **Employer directories** with websites (industry associations, startup registers, chambers):
       two or three at most, with their terms.
+   e. **Archives of past adverts.** Old adverts show which companies hire in a given skills area,
+      so they are wanted, not waste: any free dataset or API of adverts that are no longer live.
+      Record the years covered, the size, the licence, and above all the fields - employer name,
+      employer registration number, occupation or skills, place, date - since those decide whether
+      employers can be picked out by skill. Do not download the files; read their documentation
+      and at most one small sample.
 
 For every source record: publisher; exact URL of the documentation and of the data or endpoint;
 what it holds (which fields: title, employer, location, salary, description, dates, occupation
@@ -144,6 +151,8 @@ commercial boards)
 ### Links to employers' own pages
 
 ### Employer directories
+
+### Archives of past adverts
 
 ## Not free or not allowed
 

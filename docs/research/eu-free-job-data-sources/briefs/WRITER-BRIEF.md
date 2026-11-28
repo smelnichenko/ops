@@ -77,6 +77,7 @@ Write `report/<CC>-<Name>.md` (same `<CC>-<Name>` as the input files) with exact
 
 - **Company register:** link, what is free and what is not, which fields, update cycle.
 - **Where links to employers' own pages come from:** the free sources that carry them, or "none found".
+- **Past adverts (which employers hire for which skills):** free archives of old adverts, with years, size, licence and whether they name the employer and the occupation or skills; or "none found".
 
 | Applicant-tracking vendor | Public feed for an employer's board | Documentation | Check |
 |---|---|---|---|
@@ -109,6 +110,8 @@ Write `report/<CC>-<Name>.md` (same `<CC>-<Name>` as the input files) with exact
   careers feed, with the application going straight to the employer. Write it from the inputs'
   section of the same name. If the inputs have none, write "Not researched." under the heading.
   A vendor counts as having a public feed only if its own documentation says so.
+  Archives of past adverts are valuable here, not waste: they show which companies hire in a
+  given skills area. Never describe one as useless for being old.
   Its first table has exactly one data row, short cells, no "|" inside a cell. Countries differ
   here, so state this country's facts and never what EU law requires in place of them:
   **Yes** = basic data on every company is free in bulk or by API without approval;
