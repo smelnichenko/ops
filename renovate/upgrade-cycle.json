@@ -188,7 +188,8 @@
         "!/(^|\\/)consul$/",
         "!sonarqube",
         "!/(^|\\/)sonarqube$/",
-        "!quay.io/keycloak/keycloak"
+        "!quay.io/keycloak/keycloak",
+        "!/(^|\\/)opensearch$/"
       ],
       "groupName": "wave patches",
       "groupSlug": "wave-patches",
@@ -432,6 +433,23 @@
       ]
     },
     {
+      "description": "OpenSearch's minors (a store, scripts/upgrade-stores.json: a new minor rewrites its on-disk indexes one way - 3.9 cannot open what 3.10 wrote, platform's schnappy-data values) - renovate/opensearch-<X.Y>, labelled one-way, out of the wave: 3.9.0 -> 3.10.1 rode in renovate/wave-patches as an ordinary change, its way back nothing (the wave-patches review, 2026-11-28); its patches stay in the wave",
+      "matchUpdateTypes": [
+        "minor"
+      ],
+      "matchPackageNames": [
+        "/(^|\\/)opensearch$/"
+      ],
+      "groupName": "opensearch",
+      "groupSlug": "opensearch",
+      "group": {
+        "branchTopic": "opensearch-{{{newMajor}}}.{{{newMinor}}}"
+      },
+      "addLabels": [
+        "one-way"
+      ]
+    },
+    {
       "description": "Vault's minors (a store, scripts/upgrade-stores.json: HashiCorp supports no binary-only downgrade - the data goes back with the binary) - renovate/vault-<X.Y>, labelled one-way, out of the Pis' services unit (operator 2026-11-27): a store's version moves only in its own unit, blocked by the store until its way back has run on the copy; its patches stay in the wave",
       "matchUpdateTypes": [
         "minor"
@@ -530,6 +548,7 @@
         "!sonarqube",
         "!/(^|\\/)sonarqube$/",
         "!quay.io/keycloak/keycloak",
+        "!/(^|\\/)opensearch$/",
         "!registry.k8s.io/kube-apiserver",
         "!alpine/k8s",
         "!bitnami/kubectl",
@@ -569,6 +588,7 @@
         "!sonarqube",
         "!/(^|\\/)sonarqube$/",
         "!quay.io/keycloak/keycloak",
+        "!/(^|\\/)opensearch$/",
         "!registry.k8s.io/kube-apiserver",
         "!alpine/k8s",
         "!bitnami/kubectl",
@@ -588,7 +608,7 @@
       "separateMultipleMajor": false
     },
     {
-      "description": "One-way majors (Postgres - the CNPG image ghcr.io/cloudnative-pg/postgresql the databases run; the plain postgres image here is only the init-users Job's psql client and CI services, no store -, ScyllaDB, Kafka and Strimzi, ClickHouse, Grafana, Vault, Consul, Keycloak): label one-way - the runner backs the store up first or blocks the unit, naming the part with no backup (scripts/upgrade-stores.json: each package here a store's there, the harness checks)",
+      "description": "One-way majors (Postgres - the CNPG image ghcr.io/cloudnative-pg/postgresql the databases run; the plain postgres image here is only the init-users Job's psql client and CI services, no store -, ScyllaDB, Kafka and Strimzi, ClickHouse, Grafana, Vault, Consul, Keycloak, OpenSearch): label one-way - the runner backs the store up first or blocks the unit, naming the part with no backup (scripts/upgrade-stores.json: each package here a store's there, the harness checks)",
       "matchUpdateTypes": [
         "major"
       ],
@@ -603,7 +623,8 @@
         "grafana/grafana",
         "/(^|\\/)vault$/",
         "/(^|\\/)consul$/",
-        "quay.io/keycloak/keycloak"
+        "quay.io/keycloak/keycloak",
+        "/(^|\\/)opensearch$/"
       ],
       "addLabels": [
         "one-way"

@@ -169,6 +169,23 @@
         "deploy:keycloak:upgrade"
       ],
       "_why": "Keycloak migrates its database one way (Liquibase, no downgrade) on minors too; it runs on the Pis, its database on Patroni. Its production command takes the backup itself: upgrade-keycloak.yml dumps the keycloak database through HAProxy before anything stops (named for the schema the database holds; the last 5 kept), then both Pis stopped and the VIP's started first. Its way back ran green on the copy on 2026-11-27 (task test:copy:keycloak-way-back: 26.5.7 to 26.8.2 by upgrade-keycloak.yml, then restore-keycloak.yml from that dump - loaded beside keycloak and swapped in, the old install back, a marker from before the upgrade there and one from after gone)"
+    },
+    {
+      "store": "opensearch",
+      "units": "(^|-)opensearch-[0-9]+\\.(x|[0-9]+)$",
+      "packages": [
+        "/(^|\\/)opensearch$/"
+      ],
+      "backups": [],
+      "missing": [
+        "its way back not yet scripted nor rehearsed on the copy - a minor or major rewrites its indexes one way (the older version cannot open them): back means the old version on a volume made afresh (OpenSearch scaled down, its PVC deleted - a stateful delete - and the indexes rebuilt by their readers from Postgres); nothing scripts or runs that yet (the wave-patches review, 2026-11-28)"
+      ],
+      "examples": [
+        "opensearch-3.10",
+        "opensearchproject-opensearch-4.x"
+      ],
+      "taken_by": [],
+      "_why": "one OpenSearch node of derived indexes (platform's schnappy-data: masi's places, then its entities) - nothing in it is the truth (Postgres is), so no backup: its way back is a volume made afresh on the old version and the indexes rebuilt, blocked until that is scripted and rehearsed (the one-way rule, as every store's)"
     }
   ]
 }

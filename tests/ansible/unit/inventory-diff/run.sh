@@ -75,6 +75,12 @@ stale=$(grep -v -E '^\s*(#|$)' "$U/vagrant-allowed-missing.txt" | grep -v '^? ' 
 done)
 if [ -z "$stale" ]; then echo "PASS every allowed-missing line is one production has"
 else echo "FAIL allowed-missing lines production does not have: $stale"; fails=$((fails + 1)); fi
+# a Job's image either side may have ('? '): by name when its tag is a version - a unit moves it and an exact tag left here
+# fails the next run's diff (curl 8.10.1 and 8.12.1 against 8.23.0, the wave-patches review of 2026-11-28); a floating
+# tag (busybox stable-musl) as it is
+vpinned=$(grep -E '^\? image \S+ v?[0-9]+(\.[0-9]+)+\S*$' "$U/vagrant-allowed-missing.txt" || true)
+if [ -z "$vpinned" ]; then echo "PASS the '? ' Job images by name where their tags are versions"
+else echo "FAIL '? ' Job images at a version (the next unit moving one fails the copy's diff): $vpinned"; fails=$((fails + 1)); fi
 # the left-outs production upgrades on its own (Woodpecker, kagent, SonarQube, Nexus) by name, never a restated version
 pinned=$(grep -E '^(image docker.io/woodpeckerci/|argo-chart (woodpecker|kagent)|image sonarqube|pi pi[12] nexus )' \
   "$U/vagrant-allowed-missing.txt" | grep -v ' \*$' || true)
