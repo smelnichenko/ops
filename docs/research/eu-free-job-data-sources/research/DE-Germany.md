@@ -12,9 +12,8 @@ api.karriere.nrw, karriere.nrw, ckan.open.nrw.de, e-justice.europa.eu, offenereg
 www.bitkom.org, www.haufe.de, static.dvinci-easy.com, support.dvinci.de (403), www.personio.de (429),
 www.startbase.de (403), netzpolitik.org; for the archives question huggingface.co 3 (one a redirect),
 data.ub.uni-muenchen.de 2 (one a redirect), zenodo.org, ideas.repec.org, doi.org (redirect), iab.de 1 each.
-`rest.arbeitsagentur.de` (the job search's data endpoint) was not
-requested: the agency's terms forbid it (below). LinkedIn was not requested (terms read once for this study's
-France file).
+`rest.arbeitsagentur.de` (the job search's data endpoint) was not requested: the agency's terms forbid it
+(below). LinkedIn was not requested (terms read once for this study's France file).
 
 ## Takeaway
 
@@ -30,7 +29,8 @@ reading feeds (RSS, ten items per field); Indeed, Kleinanzeigen and LinkedIn for
 and XING's terms could not be read on their German sites. For the employer route Germany is poor ground: the
 commercial register is free since 1 August 2022 but only one company at a time through a web search (no bulk
 file, no API, a stated limit of 60 retrievals an hour per third parties), it is not among Germany's published
-high-value datasets, and the one open copy (OffeneRegister.de) is a snapshot from about 2018-2019.
+high-value datasets, and the one open copy (OffeneRegister.de) is, by third parties' accounts, a snapshot from
+about 2018-2019. No free archive of past adverts was found.
 
 ## Sources
 
@@ -47,8 +47,7 @@ high-value datasets, and the one open copy (OffeneRegister.de) is a snapshot fro
   header `X-API-Key: jobboerse-jobsuche`.
 - Holds: vacancies placed by employers, by private placement agencies and by temporary-work firms (the search
   has a filter for each of the two), and external adverts. Fields per the community README (third party): search
-  filters `was`
-  (title), `wo` (place), `umkreis`, `berufsfeld`, `arbeitgeber`, `angebotsart` (1 work, 2 self-employment,
+  filters `was` (title), `wo` (place), `umkreis`, `berufsfeld`, `arbeitgeber`, `angebotsart` (1 work, 2 self-employment,
   4 training, 34 internship/trainee), `befristung`, `arbeitszeit` (full time, part time, shift, home office,
   mini-job), `veroeffentlichtseit` (0-100 days), `zeitarbeit`, `pav`; in the detail record
   `stellenangebotsTitel`, `stellenangebotsBeschreibung`, `referenznummer`, `arbeitgeberKundennummerHash`; "Externe

@@ -242,10 +242,12 @@ documents an XML/RSS job feed on every customer portal.
     operations on filed documents (search, changes, retrieval - e.g. annual accounts as XML).
   - The extract schema carries the name (`BEZEICHNUNG`), the address (`STELLE`, `PLZ`, `ORT`, `STAAT`), the seat
     (`SITZ`), the legal form (`RECHTSFORM`), the number (`FNR`), the European identifier (`EUID`), the dates of
-    entries (`VOLLZUGSDATUM`) and whether an entry stands (`AUFRECHT`), a key to the statistical business
-    register (`KUR`), persons and their functions - and an optional element `HOMEPAGE`. The documentation's
+    entries (`VOLLZUGSDATUM`) and whether an entry stands (`AUFRECHT`), a key `KUR` ("Key des
+    Unternehmensregisters zur Firmenbuchnummer"), persons and their functions - and an optional element
+    `HOMEPAGE`. The documentation's
     example of a short extract shows name and address; **whether the short extract fills `HOMEPAGE` is not
-    confirmed**. No e-mail or telephone element and no activity code exist in the schemas.
+    confirmed**. The schemas hold no element for an e-mail address, a telephone number or an activity code
+    (one free-text group, `FI_DKZ05`, carries no label and was not identified).
   - Statistik Austria's file: two columns, `FB_NUMMER;OENACE_ZUORD` (e.g. `000196p;62100`) - "Firmenbuchnummer mit
     ÖNACE Zuordnung; Grundmasse: alle aktiv im Firmenbuch eingetragenen Unternehmen mit aktiv zugeordneter
     Wirtschaftstätigkeit. Unternehmen ohne zugeordnete ÖNACE sind nicht enthalten."
