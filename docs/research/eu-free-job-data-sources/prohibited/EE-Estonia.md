@@ -15,7 +15,7 @@ Notes for the reader of this file (not rows):
   scripts or automated queries, and 3.6 binds employer clients only. Its robots.txt (Internet Archive copy of
   2026-03-24) allows every path to unnamed agents and closes the site to named AI crawlers only.
 - Left out on purpose: Töötukassa (terms unread - a script shell; robots.txt, archive copy, asks a crawl delay
-  and closes list addresses with a query only); fin.ee "Avalikud konkursid" (no terms; robots.txt closes
-  administration paths only); cvpro.ee and MeetFrank (terms not found); Glassdoor and Facebook ("terms forbid"
+  and closes list addresses with a query only); fin.ee "Avalikud konkursid" (no terms; robots.txt has Drupal's
+  standard lines only); cvpro.ee and MeetFrank (terms not found); Glassdoor and Facebook ("terms forbid"
   is known from the production file only, no clause read); Töötukassa's vacancy statistics (CC BY-NC: a limit
   on commercial reuse only).

@@ -12,7 +12,8 @@ Notes for the reader of this file (not rows):
   quoted); the archived front page answers 410, "Ofir.dk er lukket, besøg Jobindex i stedet". The row rests on
   the robots.txt.
 - Left out on purpose: Jobindex and it-jobbank.dk (no clause on automated reading in the terms; robots.txt
-  closes `/api/` and paged or filtered search addresses, and three named agents outright, not the site);
+  closes `/api/` and paged or filtered search addresses, not the site; Jobindex's also shuts out three named
+  agents);
   jobbank.dk (pages answered 500, terms unread; robots.txt closes some paths only); Jobnet (no terms for
   readers, no robots.txt); STAR's JobannonceService (by signed agreement only: unavailable, not prohibited);
   Workindenmark (no robots.txt, no terms of use).

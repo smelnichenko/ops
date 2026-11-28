@@ -10,7 +10,7 @@ Date: 2026-11-28
 
 Notes for the reader of this file (not rows):
 - Duunitori's terms were read through a fetch tool that relays text in fragments; the check confirmed the
-  sentence as relayed. Its robots.txt says "User-agent: *", "Disallow: /" but lets some twenty named agents in,
+  sentence as relayed. Its robots.txt says "User-agent: *", "Disallow: /" but lets twenty named agents in,
   so it is not a ban for every agent and the row rests on the terms.
 - Duunitori's terms are group terms: they name JobbSafari AB (Sweden) and Jobbland AS (Norway) as the contracting
   party by the user's country, but no host. jobbsafari.se is not in the row: whether it publishes these terms
