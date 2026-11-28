@@ -445,8 +445,6 @@
     search: statefulset/schnappy-production-opensearch
     browser: deployment/schnappy-production-masi-browser
     realtime: deployment/schnappy-production-centrifugo
-    # Strimzi's broker pod (no StatefulSet): its own console producer, on its plain listener
-    kafka_pod: pod/schnappy-production-kafka-0
   tasks:
     - name: Vagrant VMs only (fails closed on any other host)
       ansible.builtin.import_tasks: ../vagrant-only.yml
@@ -491,8 +489,8 @@
     # out, two minutes); and the token still required - without it browserless hands a CDP session to any page. The token
     # stays in the pod: $TOKEN is expanded by the pod's shell, never on a command line here; the page on stdin. Headed, as
     # masi drives it (platform's masiService.browser.headless: false - its endpoint's ?headless=false): the virtual screen
-    # (Xvfb) under the pod's read-only root is the part an upgrade can break, which a headless render never starts (the
-    # wave-patches review, 2026-11-28; browserless 2.56 and 2.64 both take it on /content)
+    # (Xvfb) under the pod's read-only root is the part an upgrade can break, which a headless render never starts
+    # (browserless 2.56 and 2.64 both take it on /content)
     - name: The browser - a page of this run rendered with its script run; refused without the token
       ansible.builtin.shell:
         executable: /bin/bash
@@ -516,7 +514,7 @@
     # produces to, the target channel in the x-centrifugo-channels header as chat and chess send it - both read back from
     # its history (its Valkey engine), and the API refusing a wrong key (401). The key stays in the pod: the pod's shell
     # expands $CENTRIFUGO_HTTP_API_KEY, never a command line here. Retried for two minutes: the consumer's first poll after
-    # a restart (the wave-patches review, 2026-11-28: 6.10 changed its consumers' retries and its JSON parsing - checked
+    # a restart (6.10 changed its consumers' retries and its JSON parsing - checked
     # against 6.9.7 and 6.10.3 with Kafka 4.3.1)
     - name: Centrifugo - a publication of this run through its API and one through Kafka, both in its history; refused with a wrong key
       ansible.builtin.shell:
@@ -524,17 +522,20 @@
         cmd: |
           set -euo pipefail
           C="{{ kubectl }} exec {{ realtime }} -c centrifugo --"
-          api() {  # api <method> <json body>: the pod's own wget, its key expanded by the pod's shell
-            $C sh -c 'wget -qO- --header "X-API-Key: $CENTRIFUGO_HTTP_API_KEY" --header "Content-Type: application/json" --post-data "$1" "http://127.0.0.1:8000/api/$0"' "$1" "$2"
+          # a broker found by its label each try, as the Kafka play finds it (Strimzi's pods: no StatefulSet to exec into)
+          broker=$({{ kubectl }} get pods -l strimzi.io/broker-role=true -o jsonpath='{.items[0].metadata.name}')
+          [ -n "$broker" ] || { echo "no Kafka broker pod"; exit 1; }
+          api() {  # api <method> <json body>: the pod's own wget (20 s at most), its key expanded by the pod's shell
+            $C sh -c 'wget -qO- -T 20 --header "X-API-Key: $CENTRIFUGO_HTTP_API_KEY" --header "Content-Type: application/json" --post-data "$1" "http://127.0.0.1:8000/api/$0"' "$1" "$2"
           }
           api publish '{"channel": "notifications:copy-check-{{ run_id }}-api", "data": {"run": "{{ run_id }}"}}' > /dev/null
           printf 'x-centrifugo-channels:notifications:copy-check-{{ run_id }}-kafka\t{"run": "{{ run_id }}"}\n' \
-            | {{ kubectl }} exec -i {{ kafka_pod }} -c kafka -- /opt/kafka/bin/kafka-console-producer.sh \
+            | {{ kubectl }} exec -i "pod/$broker" -c kafka -- /opt/kafka/bin/kafka-console-producer.sh \
               --bootstrap-server localhost:9092 --topic events.notifications --reader-property parse.headers=true > /dev/null
           for via in api kafka; do
             { grep -cF '"run":"{{ run_id }}"' <<< "$(api history '{"channel": "notifications:copy-check-{{ run_id }}-'"$via"'", "limit": 10}')" || true; }
           done
-          wrong=$($C wget -q -O /dev/null --header "X-API-Key: copy-check-wrong" --header "Content-Type: application/json" \
+          wrong=$($C wget -q -T 20 -O /dev/null --header "X-API-Key: copy-check-wrong" --header "Content-Type: application/json" \
             --post-data '{"channel": "notifications:copy-check-{{ run_id }}-api", "data": {}}' http://127.0.0.1:8000/api/publish 2>&1 || true)
           if [[ $wrong =~ HTTP/1\.1\ ([0-9]+) ]]; then echo "${BASH_REMATCH[1]}"; else echo "no refusal: $wrong"; fi
       register: _realtime

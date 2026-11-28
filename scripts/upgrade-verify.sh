@@ -19,13 +19,17 @@
 # Usage: scripts/upgrade-verify.sh            exit 0 settled and quiet, 1 what is not (said)
 # Env:   UPGRADE_VERIFY_SETTLE (30), UPGRADE_VERIFY_HOLD (60), UPGRADE_VERIFY_POLL (60), UPGRADE_VERIFY_STREAK (10),
 #        UPGRADE_VERIFY_HOST (ten), UPGRADE_VERIFY_REVISIONS ("infra=<sha> platform=<sha>": the merge's commits on main),
-#        UPGRADE_VERIFY_REPOS (the directory holding the infra and platform checkouts - default ops' parent)
+#        UPGRADE_VERIFY_REPOS (the directory holding the infra and platform checkouts - default ops' parent),
+#        UPGRADE_VERIFY_JOBS_FROM (a UTC time, "YYYY-MM-DDTHH:MM:SSZ": the Jobs judged at the hold's end are those made
+#        since it when it is before the hold - the apply's start: the runner's own syncs run the hooks before it)
 set -uo pipefail
 export LC_ALL=C
 host=${UPGRADE_VERIFY_HOST:-ten}
 settle=${UPGRADE_VERIFY_SETTLE:-30}; hold=${UPGRADE_VERIFY_HOLD:-60}; poll=${UPGRADE_VERIFY_POLL:-60}
 streak=${UPGRADE_VERIFY_STREAK:-10}
 for v in settle hold poll streak; do [[ ${!v} =~ ^[0-9]+$ ]] || { echo "REFUSED: $v '${!v}' - a whole number"; exit 2; }; done
+[[ ${UPGRADE_VERIFY_JOBS_FROM:-} =~ ^([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z)?$ ]] \
+  || { echo "REFUSED: UPGRADE_VERIFY_JOBS_FROM '${UPGRADE_VERIFY_JOBS_FROM:-}' - a UTC time, YYYY-MM-DDTHH:MM:SSZ"; exit 2; }
 [[ ${UPGRADE_VERIFY_REVISIONS:-} =~ ^(((infra|platform)=[0-9a-f]{40})( |$))*$ ]] \
   || { echo "REFUSED: UPGRADE_VERIFY_REVISIONS '${UPGRADE_VERIFY_REVISIONS:-}' - \"infra=<sha> platform=<sha>\""; exit 2; }
 repos=${UPGRADE_VERIFY_REPOS:-$(cd "$(dirname "$0")/../.." && pwd)}
@@ -171,6 +175,10 @@ done
 [ "$hold" -gt 0 ] || { echo "SETTLED AND QUIET ($need look$([ "$need" = 1 ] || echo "s in a row"))"; exit 0; }
 echo "SETTLED at $(date '+%T') - the hold: $hold min"
 hold_from=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+# the Jobs to judge at its end: made since the apply's start when it is given (the runner's syncs after the merge run the
+# apps' hooks - k6's smoke run among them - before this hold), else since the hold's
+jobs_from=$hold_from
+[ -z "${UPGRADE_VERIFY_JOBS_FROM:-}" ] || [[ ! $UPGRADE_VERIFY_JOBS_FROM < $hold_from ]] || jobs_from=$UPGRADE_VERIFY_JOBS_FROM
 end=$(( $(up) + hold * 60 )); note=$(( $(up) + 600 ))
 declare -A seen=()
 while [ "$(up)" -lt "$end" ]; do
@@ -198,24 +206,33 @@ while [ "$(up)" -lt "$end" ]; do
 done
 # the Jobs made during the hold (a CronJob's run: etcd's snapshot, the restore checks' age, a backup and its prune): one
 # that failed for good (its Failed condition, no success) is the hold's failure - the first runs of an image a unit moved
-# (rclone in production's backup Jobs, the wave-patches review of 2026-11-28); a preview's aside; not read, not quiet.
+# (rclone in production's backup Jobs); a preview's aside; not read, not quiet.
 # And k6's smoke run (the apps' PostSync hook, run by a sync during the hold - the runner's after a unit moving a hook's
 # image, or CD's): k6 exits 0 when its push to Mimir fails, and K6SmokeMetricsMissing stays quiet after any earlier push
 # that day - so each one that succeeded needs a sample of its run behind it, k6_checks_rate{source="k6"} in its namespace
-# no older than its start (read from Mimir through the API server; the wave-patches review, 2026-11-28)
-failed_jobs=$(HOST="$host" FROM="$hold_from" python3 -I - <<'PY_JOBS'
+# no older than its start (read from Mimir through the API server)
+failed_jobs=$(HOST="$host" FROM="$jobs_from" python3 -I - <<'PY_JOBS'
 import calendar, json, os, subprocess, sys, time, urllib.parse
 SSH = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15", "-o", "ServerAliveInterval=15", os.environ["HOST"]]
 MIMIR = "/api/v1/namespaces/schnappy-infra/services/schnappy-mimir:9009/proxy/prometheus/api/v1/query?query="
 def read(cmd):
     r = subprocess.run(SSH + [cmd], stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=120)
     return json.loads(r.stdout)
+def mimir(q):
+    """A query's first value (float) or None - read three times at most, ten seconds apart (one proxy or Mimir error at
+    the end of a long verify is no verdict); the last failure raised"""
+    for attempt in range(3):
+        try:
+            res = read(f"kubectl --request-timeout=60s get --raw '{MIMIR}{urllib.parse.quote(q)}'")["data"]["result"]
+            return float(res[0]["value"][1]) if res else None
+        except (OSError, subprocess.TimeoutExpired, ValueError, KeyError, TypeError, IndexError):
+            if attempt == 2:
+                raise
+            time.sleep(float(os.environ.get("UPGRADE_VERIFY_MIMIR_RETRY", "10")))
 def newest_k6(ns, since):
     """The newest k6_checks_rate sample's time in ns (seconds), over the time since `since` and ten minutes more; None"""
     window = max(600, int(time.time() - since) + 600)
-    q = f'max(max_over_time(timestamp(k6_checks_rate{{source="k6",namespace="{ns}"}})[{window}s:30s]))'
-    res = read(f"kubectl --request-timeout=60s get --raw '{MIMIR}{urllib.parse.quote(q)}'")["data"]["result"]
-    return float(res[0]["value"][1]) if res else None
+    return mimir(f'max(max_over_time(timestamp(k6_checks_rate{{source="k6",namespace="{ns}"}})[{window}s:30s]))')
 try:
     items = read("kubectl --request-timeout=60s get jobs,namespaces -A -o json")["items"]
 except (OSError, subprocess.TimeoutExpired, ValueError, KeyError, TypeError):
@@ -237,8 +254,14 @@ for j in (o for o in items if o.get("kind") == "Job"):
         except (OSError, subprocess.TimeoutExpired, ValueError, KeyError, TypeError, IndexError):
             sys.exit(3)
         if newest is None or newest < since:
-            print(f"job {m['namespace']}/{m['name']}: its k6 run (started {started}) pushed no metric - no k6_checks_rate "
-                  "sample since in Mimir (k6 exits 0 when its push fails)")
+            # Mimir taking no sample at all now (its up series) is Mimir's state, not k6's push - said apart
+            try:
+                fresh = mimir("max(timestamp(up))")
+            except (OSError, subprocess.TimeoutExpired, ValueError, KeyError, TypeError, IndexError):
+                sys.exit(3)
+            why = ("Mimir holds no fresh sample of anything (up) - k6's push not judged" if fresh is None or time.time() - fresh > 300
+                   else "no k6_checks_rate sample since in Mimir (k6 exits 0 when its push fails)")
+            print(f"job {m['namespace']}/{m['name']}: its k6 run (started {started}) pushed no metric - {why}")
 PY_JOBS
 ) || { echo "NOT QUIET: the Jobs made during the hold not read - none judged"; exit 1; }
 if [ -n "$failed_jobs" ]; then echo "NOT QUIET: a Job made during the hold failed:"; echo "$failed_jobs"; exit 1; fi

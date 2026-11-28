@@ -508,10 +508,7 @@ red "tier0: psql could not run pg-globals.sql: red" TIER0 PSQL_FAIL=1
 # the playbook's wiring
 PY=python3
 "$PY" -c 'import yaml, ansible' 2> /dev/null || PY=deploy/ansible/venv/bin/python3
-# its Postgres by the digest production runs, not its tag alone: a rebuilt tag (a digest move - wave-patches' 18.7) left
-# the Pis proving restores in an image production no longer runs, unflagged (the wave-patches review, 2026-11-28); the
-# inventory's image-digest lines name each digest production runs (7 hex digits, as Renovate's tables show it)
-check "the playbook names production's images (its Postgres now, by the digest production runs; one of its etcd images, digested; 17's for the backups made before 18)" "$(PYTHONDONTWRITEBYTECODE=1 "$PY" - <<'PY_WIRING'
+check "the playbook names production's images (its Postgres now, one of its etcd images, digested; 17's for the backups made before 18)" "$(PYTHONDONTWRITEBYTECODE=1 "$PY" - <<'PY_WIRING'
 import re, yaml
 v = yaml.safe_load(open("deploy/ansible/playbooks/setup-pi-restore-check.yml"))[0]["vars"]
 now = open("tests/ansible/copy/prod-inventory.txt").read().splitlines()
@@ -521,14 +518,11 @@ digested = lambda ref, name, tags: [re.fullmatch(re.escape(name) + r":(\S+)@sha2
 # etcd: one of production's - its server's (kubeadm's static pod) beside the backup Job's etcdutl, which moves alone
 etcd_one_of = lambda ref, tags: (m := re.fullmatch(re.escape(etcd) + r":(\S+)@sha256:[0-9a-f]{64}", ref)) is not None and m[1] in tags
 major = img(now, pg)[0].split(".")[0] if img(now, pg) else None
-digests = lambda inv, name, tag: [l.split()[3] for l in inv if l.startswith(f"image-digest {name} {tag} ")]
-pin = re.fullmatch(re.escape(pg) + r":(\S+)@sha256:([0-9a-f]{64})", v["pi_restore_check_pg_images"].get(major, ""))
 print(v["pi_restore_check_pg_images"].get("17") == pg + ":17",
       digested(v["pi_restore_check_pg_images"].get(major, ""), pg, img(now, pg)),
-      pin is not None and pin[2][:7] in digests(now, pg, pin[1]),
       etcd_one_of(v["pi_restore_check_etcd_image"], img(now, etcd)) and len(img(now, etcd)) > 0, sorted(v["pi_restore_check_pg_images"]))
 PY_WIRING
-)" "True True True True ['17', '18']"
+)" "True True True ['17', '18']"
 check "the two Pis on opposite days (pi1 even, pi2 odd), the store through the VIP" "$("$PY" - <<'PY_PARITY'
 import yaml
 p = yaml.safe_load(open("deploy/ansible/playbooks/setup-pi-restore-check.yml"))[0]

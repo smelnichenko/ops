@@ -107,6 +107,17 @@
         "image=(?<depName>renovate/renovate):(?<currentValue>\\d+\\.\\d+\\.\\d+)@(?<currentDigest>sha256:[a-f0-9]{64})"
       ],
       "datasourceTemplate": "docker"
+    },
+    {
+      "customType": "regex",
+      "description": "The Pis' restore check restores production's backups in production's Postgres image: its digest-pinned image per major in setup-pi-restore-check.yml (pi_restore_check_pg_images) moved with production's - one depName, one update, in the same branch (a digest move left the Pis on an image production no longer ran); copy-unit.sh holds it to production's data cluster image and proves it with the copy's restore check. The 17 entry (a tag alone, the backups made before 18) is no match",
+      "managerFilePatterns": [
+        "/^deploy/ansible/playbooks/setup-pi-restore-check\\.yml$/"
+      ],
+      "matchStrings": [
+        "\"\\d+\":\\s*\"(?<depName>ghcr\\.io/cloudnative-pg/postgresql):(?<currentValue>[^\"@\\s]+)@(?<currentDigest>sha256:[a-f0-9]{64})\""
+      ],
+      "datasourceTemplate": "docker"
     }
   ],
   "packageRules": [
@@ -682,6 +693,16 @@
       "registryUrls": [
         "https://dl.cloudsmith.io/public/caddy/stable/deb/debian?suite=any-version&components=main&binaryArch=arm64"
       ]
+    },
+    {
+      "description": "The Pis' restore check never takes a Postgres major: its key is the major whose backups it restores (a new major is an entry beside it, added with production's own major's unit)",
+      "matchFileNames": [
+        "deploy/ansible/playbooks/setup-pi-restore-check.yml"
+      ],
+      "matchUpdateTypes": [
+        "major"
+      ],
+      "enabled": false
     },
     {
       "description": "Woodpecker, the CI server (its chart, and the server and agent images infra's values pin - registry and repository named there since 2026-11-21 so Renovate reads their tag; they move together): a unit of its own, renovate/manual-woodpecker - the Vagrant copy runs no Woodpecker, so nothing proves it there and the copy refuses it (SHADOW run 7, 2026-11-16). The runner never picks a manual- unit: applied by hand - infra's pull request merged, then ops' (setup-woodpecker.yml's woodpecker_chart_default moves with it), a pipeline run checked (a bad one is CI down, reverted by its commit), then production's inventory read again and committed (task test:copy:inventory) - ops' main fails defaults-follow-production from ops' merge until then, as after every applied unit until its record. Last, so it takes Woodpecker out of wave-patches and every group (operator 2026-11-16). Its group.branchTopic too: the wave-patches rule names its branch by one, and a groupSlug alone left Woodpecker on renovate/manual-wave-patches (SHADOW run 8, 2026-11-16)",

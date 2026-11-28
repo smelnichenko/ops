@@ -29,6 +29,13 @@ case "$*" in
   # Mimir through the API server: each query recorded; the case's answer (none by default)
   *"get --raw '/api/v1/namespaces/schnappy-infra/services/schnappy-mimir:9009/proxy/prometheus/api/v1/query?query="*)
     echo "$*" >> "$W/mimir-q"
+    if [ -e "$W/mimir-fail-once" ]; then rm "$W/mimir-fail-once"; echo "Error from server (ServiceUnavailable)" >&2; exit 1; fi
+    case "$*" in *"timestamp%28up%29"*) if [ -e "$W/mimir-up.json" ]; then cat "$W/mimir-up.json"; exit 0; fi ;; esac
+    # the case's sample is in the window asked only when that window reaches back far enough (mimir-min-window seconds)
+    if [ -e "$W/mimir-min-window" ]; then
+      win=$(sed -n 's/.*%5B\([0-9]*\)s%3A30s%5D.*/\1/p' <<< "$*")
+      [ -n "$win" ] && [ "$win" -ge "$(cat "$W/mimir-min-window")" ] || { echo '{"status":"success","data":{"resultType":"vector","result":[]}}'; exit 0; }
+    fi
     if [ -e "$W/mimir.json" ]; then cat "$W/mimir.json"; else echo '{"status":"success","data":{"resultType":"vector","result":[]}}'; fi ;;
 
   *"amtool alert query"*) n=$(cat "$W/looks" 2>/dev/null || echo 0); echo $((n + 1)) > "$W/looks"
@@ -73,14 +80,21 @@ def pod(ns, name, phase="Running", ready=(True,), native=None):
     return out
 def run(apps, pods, alerts=(), alert_after=None, down=False, settle="0", hold="2", pods_raw=None, streak="5", revs="",
         alert_until=None, alert_looks=None, bad_app_looks=None, bad_apps=None, apps_by_look=None, pods_by_look=None, final_apps=None,
-        jobs=None, mimir=None):
-    for f in [x for x in os.listdir(W) if x.startswith(("apps-bad.", "pods."))] + ["down", "looks", "alert-after", "alert-until", "alert-looks", "bad-app-looks", "apps-final.json", "jobs.json", "mimir.json", "mimir-q"]:
+        jobs=None, mimir=None, jobs_from="", mimir_up=None, mimir_fail_once=False, mimir_min_window=None):
+    for f in [x for x in os.listdir(W) if x.startswith(("apps-bad.", "pods."))] + ["down", "looks", "alert-after", "alert-until", "alert-looks", "bad-app-looks", "apps-final.json", "jobs.json", "mimir.json", "mimir-q", "mimir-up.json", "mimir-fail-once", "mimir-min-window"]:
         if os.path.exists(os.path.join(W, f)):
             os.remove(os.path.join(W, f))
     json.dump({"items": apps}, open(os.path.join(W, "apps.json"), "w"))
     if mimir is not None:  # Mimir's answer to the k6 query: a sample's time (seconds), or the raw answer
         open(os.path.join(W, "mimir.json"), "w").write(mimir if isinstance(mimir, str) else json.dumps(
             {"status": "success", "data": {"resultType": "vector", "result": [{"metric": {}, "value": [0, str(mimir)]}]}}))
+    if mimir_up is not None:  # Mimir's answer to max(timestamp(up)): a time (seconds)
+        open(os.path.join(W, "mimir-up.json"), "w").write(json.dumps(
+            {"status": "success", "data": {"resultType": "vector", "result": [{"metric": {}, "value": [0, str(mimir_up)]}]}}))
+    if mimir_min_window is not None:
+        open(os.path.join(W, "mimir-min-window"), "w").write(str(mimir_min_window))
+    if mimir_fail_once:
+        open(os.path.join(W, "mimir-fail-once"), "w").write("")
     if jobs is not None:  # a list: those Jobs and namespaces; a string: the read's raw answer
         open(os.path.join(W, "jobs.json"), "w").write(jobs if isinstance(jobs, str) else json.dumps({"items": jobs}))
     if final_apps is not None:  # a list: those apps; a string: the read's raw answer
@@ -107,7 +121,8 @@ def run(apps, pods, alerts=(), alert_after=None, down=False, settle="0", hold="2
     env = {**os.environ, "PATH": os.path.join(W, "bin") + ":" + os.environ["PATH"], "W": W,
            "UPGRADE_VERIFY_SETTLE": settle, "UPGRADE_VERIFY_HOLD": hold, "UPGRADE_VERIFY_POLL": "0",
            "UPGRADE_VERIFY_UPTIME": os.path.join(W, "uptime"), "UPGRADE_VERIFY_STREAK": streak,
-           "UPGRADE_VERIFY_REVISIONS": revs, "UPGRADE_VERIFY_REPOS": os.path.join(W, "repos")}
+           "UPGRADE_VERIFY_REVISIONS": revs, "UPGRADE_VERIFY_REPOS": os.path.join(W, "repos"), "UPGRADE_VERIFY_JOBS_FROM": jobs_from,
+           "UPGRADE_VERIFY_MIMIR_RETRY": "0"}
     r = subprocess.run(["bash", "scripts/upgrade-verify.sh"], capture_output=True, text=True, env=env, timeout=60)
     return r.returncode, r.stdout
 OK_APPS = [app("root", op=None), app("schnappy-production-data")]
@@ -204,7 +219,7 @@ check("  made before the hold, a preview's, still retrying, succeeding on a retr
 rc, out = run(OK_APPS, OK_PODS, hold="2", jobs="not json")
 check("  the Jobs not read: not quiet, said - none judged", (rc, out.strip().splitlines()[-1]), (1, "NOT QUIET: the Jobs made during the hold not read - none judged"))
 # k6's smoke run during the hold (the apps' PostSync hook): it exits 0 when its push to Mimir fails, so a sample of its
-# run must be behind it - k6_checks_rate{source="k6"} in its namespace no older than its start (the review, 2026-11-28)
+# run must be behind it - k6_checks_rate{source="k6"} in its namespace no older than its start
 K6 = job("schnappy-production", "schnappy-production-k6-smoke", failed=0, succeeded=1, gave_up=False)
 START = 4070908800  # 2099-01-01T00:00:00Z, the Job's creation (no startTime: its creation taken)
 rc, out = run(OK_APPS, OK_PODS, hold="2", jobs=[K6], mimir=START + 3)
@@ -218,8 +233,43 @@ for why, mimir in (("its newest sample older than its start", START - 100), ("no
     lines = out.strip().splitlines()
     check(f"  {why}: not quiet, the run named - k6 exits 0 when its push fails", (rc, lines[-2], "pushed no metric" in lines[-1]
           and "schnappy-production/schnappy-production-k6-smoke" in lines[-1]), (1, "NOT QUIET: a Job made during the hold failed:", True))
+import time as _t  # noqa: E402
+rc, out = run(OK_APPS, OK_PODS, hold="2", jobs=[K6], mimir=None, mimir_up=_t.time())
+check("  no k6 sample while Mimir takes others (up fresh): k6's push named as the cause",
+      (rc, "no k6_checks_rate sample since in Mimir" in out), (1, True))
+rc, out = run(OK_APPS, OK_PODS, hold="2", jobs=[K6], mimir=None, mimir_up=_t.time() - 3600)
+check("  no k6 sample and no fresh sample of anything (up an hour old): Mimir's state said, not k6's push",
+      (rc, "Mimir holds no fresh sample of anything" in out), (1, True))
+rc, out = run(OK_APPS, OK_PODS, hold="2", jobs=[K6], mimir=START + 3, mimir_fail_once=True)
+check("  Mimir's read failing once: read again - quiet", (rc, out.strip().splitlines()[-1]), (0, "SETTLED AND QUIET for 2 min"))
+# a run two hours old (its start, not its creation): the window asked reaches back to its start and ten minutes more, and
+# a sample from before its start (an earlier run's) is no sample of it; a run still going (no success yet) not judged
+ts = lambda t: _t.strftime("%Y-%m-%dT%H:%M:%SZ", _t.gmtime(t))
+now = int(_t.time())
+OLD = job("schnappy-production", "schnappy-production-k6-smoke", created=ts(now - 3 * 3600), failed=0, succeeded=1, gave_up=False)
+OLD["status"]["startTime"] = ts(now - 2 * 3600)
+rc, out = run(OK_APPS, OK_PODS, hold="2", jobs=[OLD], jobs_from="2000-01-01T00:00:00Z", mimir=now - 2 * 3600 + 5, mimir_min_window=2 * 3600 + 590)
+check("  a run two hours old: the window asked reaches its start (and ten minutes more) - its sample found, quiet",
+      (rc, out.strip().splitlines()[-1]), (0, "SETTLED AND QUIET for 2 min"))
+rc, out = run(OK_APPS, OK_PODS, hold="2", jobs=[OLD], jobs_from="2000-01-01T00:00:00Z", mimir=now - 2 * 3600 - 60)
+check("  the newest sample from before its start (an earlier run's, after its creation): not its run's - not quiet",
+      (rc, "pushed no metric" in out), (1, True))
+RUNNING = job("schnappy-production", "schnappy-production-k6-smoke", failed=0, succeeded=0, gave_up=False)
+rc, out = run(OK_APPS, OK_PODS, hold="2", jobs=[RUNNING])
+check("  a run still going (no success yet): not judged, Mimir never asked",
+      (rc, os.path.exists(os.path.join(W, "mimir-q"))), (0, False))
 rc, out = run(OK_APPS, OK_PODS, hold="2", jobs=[K6], mimir="not json")
 check("  Mimir not read: not quiet, said", (rc, out.strip().splitlines()[-1]), (1, "NOT QUIET: the Jobs made during the hold not read - none judged"))
+# the runner's own sync runs k6's hook before the hold: from the apply's start (UPGRADE_VERIFY_JOBS_FROM) its run judged
+OLD_K6 = job("schnappy-production", "schnappy-production-k6-smoke", created="2000-01-01T00:00:00Z", failed=0, succeeded=1, gave_up=False)
+rc, out = run(OK_APPS, OK_PODS, hold="2", jobs=[OLD_K6], jobs_from="1999-12-31T00:00:00Z")
+check("a k6 run made after the apply's start, before the hold (the runner's own sync): judged - no sample, not quiet",
+      (rc, "pushed no metric" in out), (1, True))
+rc, out = run(OK_APPS, OK_PODS, hold="2", jobs=[OLD_K6], jobs_from="2099-12-31T00:00:00Z")
+check("  an apply's start after the hold's (never earlier than it): the hold's start kept - that run not judged",
+      (rc, out.strip().splitlines()[-1]), (0, "SETTLED AND QUIET for 2 min"))
+rc, out = run(OK_APPS, OK_PODS, hold="2", jobs_from="yesterday")
+check("  not a UTC time: refused before anything", (rc, out.strip().splitlines()[-1][:40]), (2, "REFUSED: UPGRADE_VERIFY_JOBS_FROM 'yeste"))
 rc, out = run(OK_APPS, OK_PODS, hold="2", jobs=[job("pr-12", "pr-12-k6-smoke", failed=0, succeeded=1, gave_up=False), PREVIEW_NS,
                                                 job("schnappy-production", "schnappy-production-k6-smoke", created="2000-01-01T00:00:00Z",
                                                     failed=0, succeeded=1, gave_up=False)])

@@ -316,6 +316,15 @@ def pick():
     # a production unit waits while its test environment's is open - tried or not (its twin goes first); a test
     # unit itself is never a production one
     prod = sorted((n for n in open_units if f"test-{n}" not in all_units and not n.startswith("test-")), key=queue)
+    # the operator's one-run choice (UPGRADE_UNIT=<unit>): that unit when the pick may take it at all - open, labelled, no
+    # lower step or test twin open - whatever the queue's order; else nothing, said (never another unit in its place)
+    only = os.environ.get("UPGRADE_UNIT", "")
+    if only:
+        if re.fullmatch(r"[a-z0-9][a-z0-9.-]*", only) and only in (set(tests) | set(prod)):
+            return f"{'test' if only.startswith('test-') else 'prove'} {only} {open_units[only]['kind']}"
+        print(f"UPGRADE_UNIT={only}: not a unit the pick may take now (open, labelled, no lower step or test twin open) "
+              "- nothing picked", file=sys.stderr)
+        return NOTHING
     # tests first - unless the first has a try and a production unit has none (one that keeps failing never holds the
     # queue: no blocked state)
     if tests and not (tried(tests[0], open_units[tests[0]]) and prod and not tried(prod[0], open_units[prod[0]])):

@@ -234,7 +234,7 @@ def rendered(src, ref, files):
 
 def left_out_paths(src, ref):
     """What only the apps INFRA_DROP leaves out render - no app the copy keeps renders it: a change there runs on no
-    copy, and production's verify proves it alone (the wave-patches review, 2026-11-28: Woodpecker's Postgres digest
+    copy, and production's verify proves it alone (Woodpecker's Postgres digest
     and SonarQube's images read as proven on the copy, their paths in no list)."""
     files = subprocess.run(["git", "-C", src, "ls-tree", "-r", "--name-only", ref, "--", "clusters/production/argocd"],
                            capture_output=True, text=True, check=True).stdout.split()
@@ -370,9 +370,11 @@ def main():
     refuse_masked("platform", os.path.abspath(a.platform), a.platform_ref, PLATFORM_DROP)
     # what the change does where only the left-out apps render: mirrored, run on no copy - said, and written for the
     # runner to hand to the review (.copy/left-out.txt, "<repo>/<path>" a line - empty for none)
-    paths = left_out_paths(os.path.abspath(a.infra), a.infra_ref)
-    alone = (left_out("infra", os.path.abspath(a.infra), a.infra_ref, paths)
-             + left_out("platform", os.path.abspath(a.platform), a.platform_ref, paths))
+    alone = []
+    if (a.infra_ref, a.platform_ref) != ("main", "main"):  # main alone mirrors no change: nothing read
+        paths = left_out_paths(os.path.abspath(a.infra), a.infra_ref)
+        alone = (left_out("infra", os.path.abspath(a.infra), a.infra_ref, paths)
+                 + left_out("platform", os.path.abspath(a.platform), a.platform_ref, paths))
     os.makedirs(WORK, exist_ok=True)
     with open(os.path.join(WORK, "left-out.txt"), "w") as f:
         for p in alone:

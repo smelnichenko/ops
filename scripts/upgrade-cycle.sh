@@ -17,6 +17,7 @@
 #               copy's memory (the operator stops the radar) for a unit that builds it - refused, never waited
 #   1. pick     scripts/upgrade-units.py pick - NOTHING / PAUSED end the run quietly; the units with no try on record
 #               first (one that keeps failing never holds the queue: there is no blocked state, operator 2026-11-20);
+#               UPGRADE_UNIT=<unit>: the operator's one-run choice - that unit when the pick may take it, else nothing;
 #               a one-way unit whose store has a part with no backup yet (scripts/upgrade-stores.json) stopped at once,
 #               the part named - ops' to fix, a try; one without Renovate's labels (its kind not known) never applied
 #   2. prove    the unit's heads read (and its bases); its branches, in every repo, on main but for CD's promotions
@@ -842,7 +843,7 @@ if run vagrant halt; then built=""; else copy_gone="THE COPY NOT HALTED - the ra
 if [ -n "$dry" ]; then
   say "RUN task test:copy:unit UNIT=$unit PLAN=true"; plan=""
 else
-  plan=$(task test:copy:unit UNIT="$unit" PLAN=true 2>> "$log" 9>&- | grep -E '^test:copy:') \
+  plan=$(task test:copy:unit UNIT="$unit" PLAN=true 2>> "$log" 9>&- | grep -E '^test:(copy:|pi-restore-check )') \
     || { stopped "its plan not read - nothing applied" "$log"; exit 1; }
 fi
 pre=(); cmds=()
@@ -869,6 +870,7 @@ while IFS= read -r step; do
     "test:copy:playbook PLAYBOOK=upgrade-vault.yml"*) cmds+=("deploy:vault:upgrade") ;;
     "test:copy:playbook PLAYBOOK=upgrade-forgejo.yml"*) cmds+=("deploy:forgejo:upgrade") ;;
     "test:copy:playbook PLAYBOOK=setup-caddy.yml"*) cmds+=("deploy:caddy") ;;  # it installs the version pinned
+    "test:pi-restore-check "*) cmds+=("deploy:pi-restore-check") ;;  # the Pis' restore check, in production's image
     "test:copy:playbook PLAYBOOK=upgrade-keycloak.yml"*) cmds+=("deploy:keycloak:upgrade") ;;  # its dump first, both Pis stopped, the VIP's first
     "test:copy:playbook PLAYBOOK=restart-mesh-workloads.yml"*)  # every sidecar on istiod's version - Argo applied it first
       v=$(version_of istio_version "$step") || { stopped "no Istio version in its plan ($step) - nothing merged" "$log"; exit 1; }
@@ -884,32 +886,34 @@ for c in "${one_way_taken[@]}"; do  # a store whose backup its own command takes
   grep -qx -- "$c" <<< "$(printf '%s\n' "${cmds[@]}")" \
     || { stopped "a one-way change whose backup its command takes ($c) - not in its plan; nothing merged" "$log"; exit 1; }
 done
-# what production runs only as an Argo hook - k6's PostSync smoke test and its curl, the data chart's init Jobs,
-# SonarQube's setup Job: Argo leaves hooks out of its diff, so the apply alone never runs the new version (production met
-# it at the next unrelated sync, a failure failing that deploy - the observability review, 2026-11-25). Each app whose
-# chart runs a moved image in a hook synced after the apply, its hooks to succeed (scripts/upgrade-hook-apps.py - keyed
-# on k6 alone, curl, aws-cli and postgres rode unrun: the wave-patches review, 2026-11-28); not read: nothing merged
-hook_apps=$(scripts/upgrade-hook-apps.py "$ops/.copy/unit-moves-$unit.txt" "$(repo_dir schnappy/platform)" 2>> "$log") \
-  || { stopped "the apps whose hooks run its moved images not read (scripts/upgrade-hook-apps.py: ${hook_apps:-see the log}) - nothing merged" "$log"; exit 1; }
-for a in $hook_apps; do
-  cmds+=("deploy:argo:sync -- -e argo_app=$a")
-done
+# what production runs only as an Argo hook (k6's PostSync smoke test and its curl, the data chart's init Jobs, SonarQube's
+# setup Job) needs no sync of the runner's: each chart's hook-templates ConfigMap hashes every sync hook's rendered
+# template, its images in it (platform d9b2770, 2026-11-19; platform CI's chart-render-checks hold every hook listed), so a
+# moved hook image is in the app's diff, auto-sync runs the hooks, and the verify requires each app's last operation
+# Succeeded at the merge's revision. The forced syncs (k6's since 2026-11-25, every hook app's in the wave-patches
+# review's first fix) only ran each hook a second time, bounded below the hooks' own deadlines, against the wrong app for
+# a chart several apps render
 # rclone runs production's backup Jobs (etcd's snapshot, Kafka's dump, ClickHouse's backup and its prune): their first
 # runs on a moved image would be production's own, after the merge (the wave-patches review, 2026-11-28) - each taken
 # once after the apply and waited for, a failure the unit's (the verify's hold then judges the CronJobs' own runs)
-# - and the restore check's age check (kube-system, every third hour: the hold saw a run a third of the time), run now
+# - and the restore check's age check (kube-system, every third hour: the hold saw a run a third of the time), run now;
+# before the merge too: its verdict is the Pis' last restores, which no unit owns - one already stale stops the unit
+# with nothing merged, never pages it after
 if grep -q '^rclone/rclone ' "$ops/.copy/unit-moves-$unit.txt" 2> /dev/null; then
+  pre+=("check:production:restore-check-age")
   cmds+=("deploy:etcd:backup" "check:production:kafka-backup" "check:production:clickhouse-backup" "check:production:restore-check-age")
 fi
-# CNPG's Postgres image (a version or a digest) restarts every production cluster on it, and its barman-cloud archives
-# each one's WAL: each cluster with an object store (read from ten now - a cluster added is in it) has its archiving
-# checked and a base backup taken after the apply (the wave-patches review, 2026-11-28: four clusters restarted, no
-# backup or archiving check after - broken archiving's first sign would have been WAL piling up); not read: nothing merged
-if grep -q '^ghcr.io/cloudnative-pg/postgresql ' "$ops/.copy/unit-moves-$unit.txt" 2> /dev/null; then
-  clusters=$(cnpg_clusters) && [ -n "$clusters" ] \
-    || { stopped "it moves CNPG's Postgres image: production's CNPG clusters not read (ten) - nothing merged" "$log"; exit 1; }
+# CNPG's Postgres image (a version or a digest) restarts every production cluster on it, and its operator's chart every
+# instance manager - which runs barman-cloud, archiving each one's WAL: each cluster with an object store (read from ten
+# now - a cluster added is in it) has its archiving checked and a base backup taken after the apply, once it has settled
+# (healthy, every instance on its image, its primary where CNPG wants it, no backup of it running: a backup read a primary
+# the rolling update was replacing, or met a running ScheduledBackup, and failed); not read: nothing merged
+if grep -qE '^(ghcr\.io/cloudnative-pg/postgresql|cloudnative-pg) ' "$ops/.copy/unit-moves-$unit.txt" 2> /dev/null; then
+  clusters=$(cnpg_clusters) || { stopped "it moves CNPG: production's CNPG clusters not read (ten) - nothing merged" "$log"; exit 1; }
+  [ -n "$clusters" ] || { stopped "it moves CNPG: no production CNPG cluster with an object store read - nothing merged" "$log"; exit 1; }
   for c in $clusters; do
-    cmds+=("deploy:postgres:base-backup -- -e pg_namespace=${c%/*} -e cluster=${c#*/}")
+    cmds+=("check:production:cnpg-settled -- -e pg_namespace=${c%/*} -e cluster=${c#*/}"
+           "deploy:postgres:base-backup -- -e pg_namespace=${c%/*} -e cluster=${c#*/}")
   done
 fi
 
@@ -929,10 +933,11 @@ gates merge || { stopped "proven and reviewed, not applied: a gate refused it no
 gate_head=$(git -C "$ops" rev-parse HEAD)
 for c in "${pre[@]}"; do
   read -ra words <<< "$c"
-  run task --yes "${words[@]}" || { stopped "its backup before the change failed (task $c) - nothing merged" "$log"; exit 1; }
+  run task --yes "${words[@]}" || { stopped "its step before the change failed (task $c) - nothing merged" "$log"; exit 1; }
 done
 held_now
 start_journal
+apply_from=$(date -u +%Y-%m-%dT%H:%M:%SZ)  # the verify judges the Jobs made since (the hooks the syncs below run)
 merge
 revs=$(revisions) || { page "merged, the merge's commits not read - its production commands not run"; exit 1; }
 journal "revisions $revs"
@@ -964,7 +969,7 @@ for c in "${cmds[@]}"; do
 done
 
 # 7. verify
-if ! UPGRADE_VERIFY_REVISIONS="$revs" run scripts/upgrade-verify.sh; then
+if ! UPGRADE_VERIFY_REVISIONS="$revs" UPGRADE_VERIFY_JOBS_FROM="$apply_from" run scripts/upgrade-verify.sh; then
   page "applied, production not settled after it - see the log"
   exit 1
 fi

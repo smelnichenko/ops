@@ -1,0 +1,63 @@
+---
+# A CNPG cluster settled - waited for, read only: its phase healthy, every instance ready, its primary where CNPG wants
+# it, every instance pod on the image its spec names, no backup of it running. A base backup taken while a rolling
+# update replaces its instances (a Postgres image's move restarts every instance; the operator's, every instance manager)
+# reads a primary that is switched over or recreated under it, and one taken beside a running backup (the daily
+# ScheduledBackups at 01:15-02:00) fails at once - the upgrade cycle runs this before each cluster's base backup (the
+# reliability review, 2026-11-28). Twenty minutes at most, then a failure that says what is not settled.
+#
+# Usage: task check:production:cnpg-settled -- -e pg_namespace=<namespace> -e cluster=<name>
+- name: A CNPG cluster settled
+  hosts: target
+  become: true
+  gather_facts: false
+  vars:
+    kubeconfig: /etc/kubernetes/admin.conf
+    pg_namespace: schnappy-production
+    cluster: schnappy-production-postgres
+    kubectl: "kubectl --kubeconfig {{ kubeconfig }} -n {{ pg_namespace }}"
+  tasks:
+    - name: Healthy, every instance ready on its image, its primary CNPG's target, no backup of it running
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          { {{ kubectl }} get clusters.postgresql.cnpg.io {{ cluster }} -o json
+            {{ kubectl }} get pods -l cnpg.io/cluster={{ cluster }},cnpg.io/podRole=instance -o json
+            {{ kubectl }} get backups.postgresql.cnpg.io -o json; } | python3 -c '
+          import json, sys
+          dec, text, docs, i = json.JSONDecoder(), sys.stdin.read(), [], 0
+          while len(docs) < 3:
+              while text[i].isspace():
+                  i += 1
+              doc, i = dec.raw_decode(text, i)
+              docs.append(doc)
+          c, pods, backups = docs
+          spec, st, name = c.get("spec") or {}, c.get("status") or {}, c["metadata"]["name"]
+          phase, ready, instances = st.get("phase"), st.get("readyInstances"), spec.get("instances")
+          items, want = pods["items"], spec.get("imageName")
+          wrong = []
+          if phase != "Cluster in healthy state":
+              wrong.append(f"phase {phase!r}")
+          if ready != instances or len(items) != instances:
+              wrong.append(f"{ready} of {instances} instances ready, {len(items)} instance pods")
+          if st.get("currentPrimary") != st.get("targetPrimary"):
+              wrong.append("its primary moving")
+          for p in items:
+              image = next((x["image"] for x in p["spec"]["containers"] if x["name"] == "postgres"), None)
+              if want and image != want:
+                  wrong.append(p["metadata"]["name"] + " not on its image yet")
+          for b in backups["items"]:
+              if (b.get("spec") or {}).get("cluster", {}).get("name") == name \
+                      and (b.get("status") or {}).get("phase") not in ("completed", "failed", "walArchivingFailing"):
+                  wrong.append("backup " + b["metadata"]["name"] + " running")
+          print("settled" if not wrong else "not settled: " + "; ".join(wrong))'
+      register: _settled
+      changed_when: false
+      retries: 120
+      delay: 10
+      until: _settled.rc == 0 and _settled.stdout == 'settled'
+
+    - name: Settled
+      ansible.builtin.debug:
+        msg: "CNPG SETTLED: {{ pg_namespace }}/{{ cluster }}"

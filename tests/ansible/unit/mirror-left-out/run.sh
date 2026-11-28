@@ -3,7 +3,7 @@
 # render - their sources' paths in infra or platform and their $values files, less what an app the copy keeps renders too
 # (the preview environments' ApplicationSet renders platform's helm/schnappy, as production's apps do) - and a change's
 # files there: said "PROVEN IN PRODUCTION ALONE" and written to .copy/left-out.txt for the runner to hand to the review
-# (the wave-patches review, 2026-11-28: Woodpecker's Postgres digest and SonarQube's images read as proven on the copy).
+# (Woodpecker's Postgres digest and SonarQube's images read as proven on the copy).
 # Against an infra and a platform repository of its own, each with origin/main and a change's branch.
 set -u
 cd "$(dirname "$0")/../../../.." || exit 1
@@ -86,7 +86,16 @@ infra = repo("infra", infra_files, {
     "clusters/production/woodpecker/values.yaml": "agent: {}\n",
     "clusters/production/schnappy-production-data/notes.yaml": "x: 1\n",
     "clusters/production/woodpecker-notes.md": "a sibling, not under the path\n",
+    "clusters/production/woodpecker/manifests-old/x.yaml": "a sibling path that starts alike\n",
 })
+# after the branch: origin's main moved under a left-out path (the change's diff is from where it branched - never this),
+# and the local main ahead of origin's by one more (main itself is no change - never read as one)
+g = lambda *a: subprocess.run(["git", "-C", infra, *a], check=True, capture_output=True)
+for f, ref in (("clusters/production/woodpecker/manifests/on-origin.yaml", True), ("clusters/production/woodpecker/manifests/ahead.yaml", False)):
+    open(os.path.join(infra, f), "w").write("x: 1\n")
+    g("add", "-A"); g("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", f)
+    if ref:
+        g("update-ref", "refs/remotes/origin/main", "HEAD")
 platform = repo("platform", {"helm/schnappy/values.yaml": "a: 1\n", "helm/schnappy-sonarqube/values.yaml": "b: 1\n"}, {
     "helm/schnappy/values.yaml": "a: 2\n",
     "helm/schnappy-sonarqube/templates/setup.yaml": "image: curlimages/curl:8.23.0\n",
@@ -131,6 +140,12 @@ check("main(): each file said PROVEN IN PRODUCTION ALONE, and written to .copy/l
         "platform/helm/schnappy-sonarqube/templates/setup.yaml"],) * 2)
 check("  main at both: the list written empty (a later read never takes an earlier change's)", mirror("main", "main")[1], [])
 m.INFRA_DROP = saved
+# infra's own tree, when its checkout is beside this one (a developer's; CI has none): Woodpecker's manifests left out,
+# platform's helm/schnappy (production's apps render it) not - a renamed Application file would empty the list unseen
+if os.path.isdir(os.path.join(ops, "..", "infra", ".git")):
+    real = m.left_out_paths(os.path.join(ops, "..", "infra"), "origin/main")
+    check("infra's real tree: Woodpecker's manifests left out, helm/schnappy not",
+          (("infra", "clusters/production/woodpecker/manifests") in real, ("platform", "helm/schnappy") in real), (True, False))
 check("INFRA_DROP's own Application files are what left_out reads (the copy's list, not a copy of it)",
       all(d.startswith(APPS) or d.startswith("clusters/production/schnappy-test") for d in m.INFRA_DROP), True)
 print("mirror-left-out: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))

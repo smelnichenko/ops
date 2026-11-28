@@ -712,7 +712,7 @@ tasks:
       - cmd: 'UPGRADE_FORGEJO_TOKEN="$RENOVATE_TOKEN" scripts/upgrade-cycle.sh'
 
   upgrade:run:
-    desc: "PRODUCTION. Renovate updates its open PRs in infra, platform and ops - and, when none is left to pick, the next unit approved on its dashboards and opened; then one update is tested on the Vagrant copy, reviewed (compatibility with what production runs among its passes) and applied to production. Stop the radar first."
+    desc: "PRODUCTION. Renovate updates its open PRs in infra, platform and ops - and, when none is left to pick, the next unit approved on its dashboards and opened; then one update is tested on the Vagrant copy, reviewed (compatibility with what production runs among its passes) and applied to production. Stop the radar first. UPGRADE_UNIT=<unit> task upgrade:run: that unit this run, past the queue's order (nothing when it may not be taken)."
     deps: [deploy:install]
     prompt: "Run the upgrade cycle against PRODUCTION? The radar must be stopped."
     preconditions:
@@ -1383,7 +1383,8 @@ tasks:
     cmds:
       # the copy's VMs used: one run at a time (scripts/copy-lock.sh - a nested task shares its caller's lock)
       - cmd: scripts/copy-lock.sh
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-pi-restore-check.yml
+      # -- -e @<vars>: a unit's moved values (copy-unit.sh: the Postgres image it restores in)
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-pi-restore-check.yml {{.CLI_ARGS}}
 
   deploy:pi-restore-check:
     desc: "PRODUCTION: the backups restored on the Pis, in turn every day - production's Postgres from its base backup and WAL, ten's etcd snapshot, the Pis' tier-0 backup (setup-pi-restore-check.yml; after deploy:pi-backups)"
@@ -1585,6 +1586,14 @@ tasks:
     prompt: "Take a ClickHouse backup on PRODUCTION?"
     cmds:
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/clickhouse-backup-check.yml {{.CLI_ARGS}}
+
+  check:production:cnpg-settled:
+    desc: "PRODUCTION, read only: a CNPG cluster settled - healthy, every instance ready on its spec's image, its primary CNPG's target, no backup of it running - waited for, 20 min at most (cnpg-settled.yml; -- -e pg_namespace=, cluster=); the upgrade cycle runs it before each base backup after a CNPG move"
+    dir: deploy/ansible
+    deps: [deploy:install]
+    dotenv: ['../../.env']
+    cmds:
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/cnpg-settled.yml {{.CLI_ARGS}}
 
   check:production:restore-check-age:
     desc: "PRODUCTION: the Pis' restore checks judged now - a Job from the restore-check-age CronJob (kube-system), waited for, its verdict said (restore-check-age-now.yml); the upgrade cycle runs it after a unit moving rclone, the image it runs in"

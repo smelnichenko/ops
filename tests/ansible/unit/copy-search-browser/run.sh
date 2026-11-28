@@ -48,21 +48,14 @@ case "$a" in
   *" get statefulset/schnappy-production-opensearch -o jsonpath={.status.readyReplicas} "*) echo "${OS_READY:-1}" ;;
   *" get deployment/schnappy-production-masi-browser -o jsonpath={.status.readyReplicas} "*) echo "${BR_READY:-1}" ;;
   *" get deployment/schnappy-production-centrifugo -o jsonpath={.status.readyReplicas} "*) echo "${RT_READY:-1}" ;;
-  # Centrifugo's API through the pod's wget (sh -c '<script>' <method> <body>): a publish remembered by its channel
-  # (unless API_LOST), a history answering a remembered channel's publication, compact as Centrifugo writes it
-  *" exec deployment/schnappy-production-centrifugo -c centrifugo -- sh -c "*" publish {"*)
-    ch=$(sed -n 's/.* publish {"channel": "\([^"]*\)".*/\1/p' <<< "$a")
-    [ -n "${API_LOST:-}" ] || echo "$ch" >> "$W/published"
-    echo '{"result":{"offset":1,"epoch":"e"}}' ;;
-  *" exec deployment/schnappy-production-centrifugo -c centrifugo -- sh -c "*" history {"*)
-    ch=$(sed -n 's/.* history {"channel": "\([^"]*\)".*/\1/p' <<< "$a")
-    run=$(sed -n 's/.*copy-check-\([0-9A-Za-z]*\)-.*/\1/p' <<< "$ch")
-    if grep -qxF "$ch" "$W/published" 2> /dev/null; then echo "{\"result\":{\"publications\":[{\"data\":{\"run\":\"$run\"},\"offset\":1}],\"epoch\":\"e\",\"offset\":1}}"
-    else echo '{"result":{"publications":[],"epoch":"e","offset":0}}'; fi ;;
-  # a wrong key: busybox wget's refusal on stderr, exit 1 - unless the case has it taken
-  *" exec deployment/schnappy-production-centrifugo -c centrifugo -- wget "*"X-API-Key: copy-check-wrong"*)
-    [ -z "${WRONG_OK:-}" ] || exit 0
-    echo "wget: server returned error: HTTP/1.1 401 Unauthorized" >&2; exit 1 ;;
+  # Kafka's broker, found by its label (none when the case says)
+  *" get pods -l strimzi.io/broker-role=true -o jsonpath={.items[0].metadata.name} "*) [ -n "${NO_BROKER:-}" ] || echo schnappy-production-kafka-0 ;;
+  # Centrifugo's pod: what the task runs there is run here as the pod's shell would - its own key in its environment, its
+  # wget the fake below (busybox's, as Centrifugo's image has it)
+  *" exec deployment/schnappy-production-centrifugo -c centrifugo -- "*)
+    shift_to=0; i=0; for x in "$@"; do i=$((i + 1)); [ "$x" != -- ] || shift_to=$i; done
+    shift "$shift_to"
+    PATH="$W/podbin:$PATH" CENTRIFUGO_HTTP_API_KEY=the-pods-api-key "$@" ;;
   # Kafka's console producer: the line's x-centrifugo-channels header delivers it to that channel (unless KAFKA_LOST)
   *" exec -i pod/schnappy-production-kafka-0 -c kafka -- /opt/kafka/bin/kafka-console-producer.sh "*)
     line=$(sed -n 's/^stdin: //p' "$W/calls" | tail -1)
@@ -72,6 +65,36 @@ case "$a" in
 esac
 STUB
 chmod +x "$W/bin/kubectl"
+# busybox's wget in Centrifugo's pod, playing Centrifugo's API: every call recorded; its key checked against the pod's;
+# a publish remembered by its channel (unless API_LOST), a history answering a remembered channel's publication, compact
+# as Centrifugo writes it; a wrong key refused as busybox reports a 401 (unless WRONG_OK)
+mkdir -p "$W/podbin"
+cat > "$W/podbin/wget" <<'WGET'
+#!/bin/bash
+printf '%s\n' "wget $*" >> "$W/wget-calls"
+key="" data="" url=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --header) [[ $2 == "X-API-Key: "* ]] && key=${2#X-API-Key: }; shift ;;
+    --post-data) data=$2; shift ;;
+    -T|-O) shift ;;
+    http://*) url=$1 ;;
+  esac
+  shift
+done
+if [ "$key" != "$CENTRIFUGO_HTTP_API_KEY" ] && [ -z "${WRONG_OK:-}" ]; then
+  echo "wget: server returned error: HTTP/1.1 401 Unauthorized" >&2; exit 1
+fi
+ch=$(sed -n 's/.*"channel": "\([^"]*\)".*/\1/p' <<< "$data")
+case "$url" in
+  http://127.0.0.1:8000/api/publish) [ -n "${API_LOST:-}" ] || echo "$ch" >> "$W/published"; echo '{"result":{"offset":1,"epoch":"e"}}' ;;
+  http://127.0.0.1:8000/api/history) run=$(sed -n 's/.*copy-check-\([0-9A-Za-z]*\)-.*/\1/p' <<< "$ch"); run=${OTHER_RUN:-$run}
+    if grep -qxF "$ch" "$W/published" 2> /dev/null; then echo "{\"result\":{\"publications\":[{\"data\":{\"run\":\"$run\"},\"offset\":1}],\"epoch\":\"e\",\"offset\":1}}"
+    else echo '{"result":{"publications":[],"epoch":"e","offset":0}}'; fi ;;
+  *) echo "wget: bad address '$url'" >&2; exit 1 ;;
+esac
+WGET
+chmod +x "$W/podbin/wget"
 W=$W TOKEN=the-pods-token-never-here exec "$PY" - <<'PY_SB'
 import os, subprocess, sys
 import yaml
@@ -92,13 +115,13 @@ T = {t["name"].split(" - ")[0]: t for t in play["tasks"]}
 V = play["vars"]
 RUN = "20261127T230000123456789"
 def run(task, **env):
-    for f in ("calls", "published"):
+    for f in ("calls", "published", "wget-calls"):
         if os.path.exists(os.path.join(W, f)):
             os.remove(os.path.join(W, f))
     calls = os.path.join(W, "calls")
     kubectl = render(V["kubectl"], **V)
     cmd = render(task["ansible.builtin.shell"]["cmd"], kubectl=kubectl, search=V["search"], browser=V["browser"],
-                 realtime=V["realtime"], kafka_pod=V["kafka_pod"], run_id=RUN)
+                 realtime=V["realtime"], run_id=RUN)
     r = subprocess.run(["bash", "-c", cmd], capture_output=True, text=True,
                        env={**os.environ, "PATH": W + "/bin:" + os.environ["PATH"], **env})
     result = {"rc": r.returncode, "stdout": r.stdout, "stdout_lines": r.stdout.splitlines()}
@@ -140,10 +163,13 @@ check("  headed, as masi drives it (headless=false on its call): the virtual scr
       any("content?token=$TOKEN&headless=false" in c for c in argv), True)
 rt_t = T["Centrifugo"]
 ok, calls, res = run(rt_t, CENTRIFUGO_HTTP_API_KEY="the-api-key-never-here")
+wg_main = open(os.path.join(W, "wget-calls")).read().splitlines() if os.path.exists(os.path.join(W, "wget-calls")) else []
 check("Centrifugo: this run's publication through its API and one through Kafka both in its history, a wrong key refused (401) - passes",
       (ok, res["stdout_lines"]), (True, ["1", "1", "401"]))
-check("  the API's publication missing from history fails; Kafka's (its consumer not delivering) fails; a wrong key taken fails",
-      [run(rt_t, API_LOST="1")[0], run(rt_t, KAFKA_LOST="1")[0], run(rt_t, WRONG_OK="1")[0]], [False, False, False])
+check("  the API's publication missing from history fails; Kafka's (its consumer not delivering) fails; a wrong key taken "
+      "fails; no broker pod found fails; history holding another run's publication alone fails",
+      [run(rt_t, API_LOST="1")[0], run(rt_t, KAFKA_LOST="1")[0], run(rt_t, WRONG_OK="1")[0], run(rt_t, NO_BROKER="1")[0],
+       run(rt_t, OTHER_RUN="20000101T000000000000000")[0]], [False, False, False, False, False])
 argv = [c for c in calls if c.startswith("kubectl ")]
 kafka_in = [c for c in calls if c.startswith("stdin: x-centrifugo-channels:")]
 check("  its key expanded in the pod ($CENTRIFUGO_HTTP_API_KEY on the line), never here; Kafka's line to events.notifications, "
@@ -152,8 +178,18 @@ check("  its key expanded in the pod ($CENTRIFUGO_HTTP_API_KEY on the line), nev
        kafka_in == [f'stdin: x-centrifugo-channels:notifications:copy-check-{RUN}-kafka\t{{"run": "{RUN}"}}'],
        any("--topic events.notifications --reader-property parse.headers=true" in c for c in argv),
        bool(argv) and all(" exec deployment/schnappy-production-centrifugo -c centrifugo -- " in c
-                          or " exec -i pod/schnappy-production-kafka-0 -c kafka -- " in c for c in argv)),
+                          or " exec -i pod/schnappy-production-kafka-0 -c kafka -- " in c
+                          or " get pods -l strimzi.io/broker-role=true " in c for c in argv)),
       (True, False, True, True, True))
+check("  its wget bounded (20 s) on every call - busybox's own wait is 900 s",
+      all(" -T 20 " in c for c in argv if " wget " in c) and any(" wget " in c for c in argv), True)
+wg = wg_main
+api_calls = [c for c in wg if "X-API-Key: the-pods-api-key" in c]
+check("  run as the pod runs it: its key the pod's own on the API's calls; publish, then history twice, at 127.0.0.1:8000/api/<it>; "
+      "JSON with this run's channels; every wget bounded (20 s)",
+      ([c.split()[-1] for c in api_calls], all("Content-Type: application/json" in c for c in api_calls),
+       [c.count(f"notifications:copy-check-{RUN}-") for c in api_calls], all(" -T 20 " in c for c in wg) and len(wg) == 4),
+      (["http://127.0.0.1:8000/api/publish", "http://127.0.0.1:8000/api/history", "http://127.0.0.1:8000/api/history"], True, [1, 1, 1], True))
 check("  a try waits for the consumer's first poll after a restart (two minutes): retries x delay",
       rt_t.get("retries", 0) * rt_t.get("delay", 0), 120)
 check("  a try waits long enough for a busy browser or a slow cluster (two minutes; one): retries x delay",

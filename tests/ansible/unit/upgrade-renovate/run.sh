@@ -308,6 +308,22 @@ print(found("clusters/production/cluster-config/restore-check-age.yaml", prod), 
 PYPRESET
 )" "[('alpine/k8s', '1.35.9', False), ('rclone/rclone', '1.75.1', True), ('rclone/rclone', '1.75.1', True), ('clickhouse/clickhouse-server', '26.8.34.13-alpine', False), ('clickhouse/clickhouse-server', '26.8.34.13-alpine', False), ('nginx', '1.27-alpine', False), ('nginx', '1.27-alpine', False), ('prom/alertmanager', 'v0.34.1', False)]
 [('alpine/k8s', '1.35.9', False), ('rclone/rclone', '1.75.1', True)] [('nginx', '1.27-alpine', False), ('prom/alertmanager', 'v0.34.1', False), ('clickhouse/clickhouse-server', '26.8.34.13-alpine', False), ('rclone/rclone', '1.71.2', False), ('ghcr.io/cloudnative-pg/postgresql', '18.6-system-bullseye', False)]"
+# the Pis' restore check's Postgres image moves with production's: the preset finds its digest-pinned entry (one depName with
+# infra's data cluster image - one branch moves both), never its 17 entry (a tag alone), never a major (a digest move left the Pis on an image production no longer ran)
+check "the Pis' restore check's Postgres pin found as production's image is (depName, tag, digest); its 17 entry not; no major" \
+  "$("$PY" - <<'PYPIPIN'
+import json, re
+d = json.load(open("renovate/upgrade-cycle.json"))
+path = "deploy/ansible/playbooks/setup-pi-restore-check.yml"
+text = open(path).read()
+found = [(g.group("depName"), g.group("currentValue"), bool(g.groupdict().get("currentDigest")))
+         for m in d["customManagers"] if any(re.search(p.strip("/"), path) for p in m["managerFilePatterns"])
+         for s in m["matchStrings"] for g in re.finditer(s.replace("(?<", "(?P<"), text)]
+no_major = any(r.get("enabled") is False and r.get("matchUpdateTypes") == ["major"] and path in r.get("matchFileNames", [])
+               for r in d["packageRules"])
+print(found, no_major)
+PYPIPIN
+)" "[('ghcr.io/cloudnative-pg/postgresql', '18.7-system-trixie', True)] True"
 # what Renovate moves in ops, the copy can prove: each ops value the preset reads (renovate_preset.reads: its managers,
 # ignorePaths, the rules turning a dependency off) is one copy-unit.sh follows or proves - its file a vars file it hands
 # over, or its key one that file's branch accepts - unless every dependency in the file goes to a manual- unit (never
@@ -332,6 +348,7 @@ PROVEN = {  # the keys each playbook's branch in copy-unit.sh accepts, read from
     "deploy/ansible/playbooks/setup-host-hardening.yml": pyset("NODE_EXPORTER"),
     "deploy/ansible/playbooks/setup-caddy.yml": pyset("CADDY"),
     "deploy/ansible/playbooks/setup-consul.yml": pyset("CONSUL"),
+    "deploy/ansible/playbooks/setup-pi-restore-check.yml": pyset("PI_RESTORE"),
 }
 VARS_FILES = set(re.findall(r'"(deploy/ansible/vars/[^"]+)": \(', cu))
 NO_PROOF = {  # tracked, with no proof path on the copy yet - such a unit is refused by the proof, after its build

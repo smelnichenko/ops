@@ -107,10 +107,14 @@ def fixture(infra=(), platform=(), ops=(), comments=None, dashboard_labels=(), d
             p["head"]["repo"] = {"full_name": "someone/" + repo if p["head"]["repo"] == "FORK" else f"schnappy/{repo}"}
             fx.setdefault(f"/repos/schnappy/{repo}/issues/{p['number']}/comments", [])
     json.dump(fx, open(os.path.join(W, "fixture.json"), "w"))
-def run(*args, url=None):
+def run(*args, url=None, unit=None):
     env = {**os.environ, "UPGRADE_FORGEJO_URL": url or f"http://127.0.0.1:{PORT}/api/v1", "UPGRADE_FORGEJO_TOKEN": "t",
            "UPGRADE_TRIES": TRIES}
+    env.pop("UPGRADE_UNIT", None)
+    if unit is not None:
+        env["UPGRADE_UNIT"] = unit
     r = subprocess.run([sys.executable, "scripts/upgrade-units.py", *args], capture_output=True, text=True, env=env, timeout=60)
+    run.err = r.stderr
     return r.returncode, r.stdout.strip()
 fixture()
 check("no unit open: nothing", run("pick"), (0, "NOTHING"))
@@ -204,6 +208,21 @@ tries("wave-patches", "none")
 check("  a try with its pull requests not read (none): the unit's", run("pick"), (0, "prove observability minor"))
 tries("observability", "test-environment")
 check("  both with tries: their order again", run("pick"), (0, "prove wave-patches patch"))
+shutil.rmtree(TRIES)
+# the operator's one-run choice (UPGRADE_UNIT): the unit named when the pick may take it, whatever the order - a tried
+# one ahead of one with none; one it may not take (not open, a lower step open, its test twin open, a bad name): nothing,
+# said - never another unit in its place (2026-11-28: wave-patches' fixes in, two untried units ahead of it)
+fixture(infra=[pr(1, "wave-patches"), pr(2, "observability"), pr(3, "test-scylladb-2026.3"), pr(4, "scylladb-2026.3"),
+               pr(5, "kubernetes-1.36"), pr(6, "kubernetes-1.37")], ops=[pr(9, "wave-patches")])
+tries("wave-patches", "schnappy/ops#9,schnappy/infra#1")
+check("UPGRADE_UNIT names a tried unit behind untried ones: that one", run("pick", unit="wave-patches"), (0, "prove wave-patches patch"))
+check("  unset: the queue's order (the test unit first)", run("pick"), (0, "test test-scylladb-2026.3 minor"))
+check("  a test unit named: tested", run("pick", unit="test-scylladb-2026.3"), (0, "test test-scylladb-2026.3 minor"))
+for why, name in (("its test twin open", "scylladb-2026.3"), ("a lower step open", "kubernetes-1.37"),
+                  ("not open", "argocd"), ("not a unit's name", "wave-patches;x")):
+    rc, out = run("pick", unit=name)
+    check(f"  {why}: nothing, said - never another unit", (rc, out, f"UPGRADE_UNIT={name}: not a unit the pick may take" in run.err),
+          (0, "NOTHING", True))
 shutil.rmtree(TRIES)
 fixture(infra=[pr(1, "test-observability"), pr(2, "test-wave-patches")])
 tries("test-wave-patches", "schnappy/infra#2")

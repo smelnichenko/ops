@@ -46,6 +46,10 @@ before the gates and the kill switch are read for it; after the record, infra's 
 because the copy leaves it out" is no finding on its own: name what that verify would miss. `left-out.txt` beside the
 clones names each file of the unit's change that only those apps render (the mirror's left_out: their sources' paths and
 value files, less what an app the copy keeps renders too) - proven by that verify alone, and so marked; empty, none.
+An Argo hook (k6's smoke test and its curl, the data chart's init Jobs, SonarQube's setup Job) runs with the apply: each
+platform chart's hook-templates ConfigMap hashes its hooks' rendered templates (images included), so a moved hook image is
+in the app's diff and auto-sync runs the hooks - whose success that verify requires (the app's last operation Succeeded at
+the merge's revision).
 
 Your reviewers and skills run under the same refusals. Hand each the absolute paths of the `.diff` and `.commits` files
 and of the clones, and tell it to read with Read, Grep and Glob alone - its Bash commands are refused.
