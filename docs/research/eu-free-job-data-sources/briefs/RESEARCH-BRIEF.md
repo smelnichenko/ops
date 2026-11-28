@@ -159,5 +159,13 @@ commercial boards)
 ## Gaps
 ```
 
+## Second output: the country's prohibited sources
+
+For each country also write `<folder>/prohibited/<CC>-<Name>.md`, with "Status: first pass - not
+yet independently checked", in the format of `briefs/PROHIBITED-BRIEF.md` (read it): one row per
+source whose own terms or robots.txt explicitly forbid automated reading or copying, with the
+clause you read today quoted. It needs no extra requests. Run `python3 -I exclude_list.py` in the
+folder at the end; it must exit 0.
+
 Your final message: one line per country (the file written, the best free source, and its access
 and terms in a few words), then anything that was refused, blocked or contradictory.

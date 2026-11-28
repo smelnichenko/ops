@@ -101,5 +101,13 @@ Verdicts: CONFIRMED / CORRECTED / WRONG / UNVERIFIED / NOT DISPROVED. Put the ve
 in its cell. Write each country's file before starting the next, so an interruption loses at most
 one country.
 
+## Second output: the country's prohibited sources
+
+For each country also write `<folder>/prohibited/<CC>-<Name>.md`, with "Status: checked", in the
+format of `briefs/PROHIBITED-BRIEF.md` (read it): one row per source whose own terms or robots.txt
+explicitly forbid automated reading or copying, only from clauses you saw yourself today. If a
+first-pass file is already there, replace it. It needs no extra requests. Run
+`python3 -I exclude_list.py` in the folder at the end; it must exit 0.
+
 Your final message: counts per verdict per country, each CORRECTED or WRONG item in one line with
 the right value, and each UNVERIFIED item with the reason.

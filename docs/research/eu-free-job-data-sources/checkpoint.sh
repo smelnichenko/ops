@@ -14,6 +14,8 @@ case "$branch" in main | master | HEAD) echo "on '$branch' - a checkpoint needs 
 exec 9>"$(git rev-parse --git-dir)/eu-job-checkpoint.lock"
 flock -n 9 || { echo "another checkpoint is running"; exit 0; }
 python3 -I status.py >/dev/null || { echo "status.py failed - nothing committed"; exit 1; }
+# The exclude list is rebuilt when its inputs are well formed; a malformed input is said and the old list kept.
+python3 -I exclude_list.py >/dev/null || echo "exclude_list.py: a prohibited/ file is malformed - list not rebuilt"
 git add -- . || exit 1
 if ! git diff --cached --quiet -- .; then
   git commit -q -F - -- . <<COMMIT_MSG_EU_JOBS
