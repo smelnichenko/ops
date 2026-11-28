@@ -6,7 +6,7 @@
 set -u
 cd "$(dirname "$0")/../../../.." || exit 1
 PY=$(command -v python3)
-"$PY" -c 'import yaml, jinja2' 2> /dev/null || PY=deploy/ansible/venv/bin/python3
+"$PY" -c 'import yaml, jinja2, ansible' 2> /dev/null || PY=deploy/ansible/venv/bin/python3
 exec "$PY" - "$PWD" <<'PY_GUARD_CONDITIONS'
 import os, sys
 import yaml

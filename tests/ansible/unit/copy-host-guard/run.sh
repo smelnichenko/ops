@@ -295,6 +295,18 @@ check "  the watcher in a session of its own (its own leader)" "$([ "$loop_sid" 
 timeout 10 bash scripts/copy-host-guard.sh watch > /dev/null 2>&1; rc=$?
 check "  a caller while it lives returns at once (not held by a lock the watcher kept)" "$rc" 0
 stop_watcher
+# the caller's 30 s bound read on the guard's clock, the time since boot (bash's SECONDS follows the wall clock: a step
+# forward refused a watcher starting fine, a step back held every caller's lock longer - the concurrency review's S3,
+# 2026-11-28): that clock moved past the bound while a slow watcher starts - REFUSED then, its 6 s not waited for
+fresh 9000 ops_kubeadm
+COPY_HOST_LOOP_DELAY=6 bash scripts/copy-host-guard.sh watch > "$W/w1.out" 2>&1 & w1=$!
+wait_for 10 loop_seen; sleep 0.5
+t0=$SECONDS; clock 131
+wait "$w1"; r1=$?; waited=$((SECONDS - t0))
+check "the caller's 30 s bound on the guard's clock (since boot): moved past it, REFUSED at once - the watcher's 6 s not waited" \
+  "$r1 $(grep -c 'did not start' "$W/w1.out") $([ "$waited" -le 2 ] && echo soon || echo "after $waited s")" "1 1 soon"
+wait_for 10 pid_file
+stop_watcher
 # a probe holding the lock the moment the watcher takes it (a caller's flock -n ... true holds it a moment): the watcher
 # waits for it and watches - a take refused ended it, nothing watching (the slow-start case's CI flake, 2026-11-27). Held
 # here from its slow start (5 s) to past its take, then let go

@@ -397,9 +397,10 @@ ci_pods() {  # the CI step pods live on ten now (wp-*, not finished, not going) 
     < /dev/null 2>> "$log" | awk '$1 ~ /^wp-/ && $2 == "<none>" {print $1}'
   return "${PIPESTATUS[0]}"
 }
+boot_s() { local u _; read -r u _ < /proc/uptime; echo "${u%.*}"; }  # seconds since boot: bash's SECONDS follows the wall clock
 ci_idle() {  # two reads in a row UPGRADE_CI_IDLE_POLL s apart with no live CI step pod (between two steps a pipeline has
-  # none), within $1 minutes; a read that fails is no idle. What was seen last in ci_seen
-  local end=$((SECONDS + $1 * 60)) idle=0 pods
+  # none), within $1 minutes by the clock since boot; a read that fails is no idle. What was seen last in ci_seen
+  local end=$(($(boot_s) + $1 * 60)) idle=0 pods
   while :; do
     if pods=$(ci_pods); then
       ci_seen=${pods:+pipelines running ($(echo $pods))}
@@ -408,7 +409,7 @@ ci_idle() {  # two reads in a row UPGRADE_CI_IDLE_POLL s apart with no live CI s
       ci_seen="ten not read" idle=0
     fi
     [ "$idle" -lt 2 ] || return 0
-    [ "$SECONDS" -lt "$end" ] || return 1
+    [ "$(boot_s)" -lt "$end" ] || return 1
     sleep "$ci_poll"
   done
 }

@@ -156,9 +156,10 @@ case "${1:-}" in
     child=$!
     # the lock held until the watcher holds its own: no second caller starts another meanwhile. Bounded by the clock (30
     # s), not by tries: a host under load (a copy's build) started it after 5 s of tries - "did not start", and the next
-    # caller started a second one that found it running
-    end=$((SECONDS + 30))
-    while [ "$SECONDS" -lt "$end" ]; do
+    # caller started a second one that found it running. The clock since boot (now_s): bash's SECONDS follows the wall
+    # clock, whose step forward refused a watcher starting fine, and a step back held lock 8 - every caller's - longer
+    end=$(($(now_s) + 30))
+    while [ "$(now_s)" -lt "$end" ]; do
       { live_watcher && ! flock -n "$dir/host-guard.alive" true; } && { echo "the host guard watches (pid $(cat "$dir/host-guard.pid")): the biggest running VM powered off under ${trip_mb} MB available or over ${psi_full}% memory stall, two polls ${poll} s apart"; exit 0; }
       kill -0 "$child" 2> /dev/null || break
       sleep 0.05

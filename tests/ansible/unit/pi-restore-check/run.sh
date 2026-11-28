@@ -39,9 +39,15 @@ case "${args[0]}" in
         if [ "$fmt" = pt ]; then echo "$f$sep$(date -r "$d/$f" '+%Y-%m-%d %H:%M:%S')"; else echo "$f"; fi
       done
     else
+      # the listing in one write: written a line at a time, a reader leaving at its first match (the script's
+      # rclone lsf ... | grep -q under pipefail) killed this stub with the next line - "no base backup", red one run in
+      # three in CI (2026-11-28). rclone itself writes a line at a time: the script's readers are fixed on their own,
+      # behind a copy run (a Pi's restore logic)
+      out=""
       for e in $(ls "$d"); do
-        if [ -d "$d/$e" ]; then [ -n "$files" ] || echo "$e/"; else [ -n "$dirs" ] || echo "$e"; fi
+        if [ -d "$d/$e" ]; then [ -n "$files" ] || out+="$e/"$'\n'; else [ -n "$dirs" ] || out+="$e"$'\n'; fi
       done
+      printf '%s' "$out"
     fi ;;
   cat) cat "$(p "${args[1]}")" ;;
   copyto) cp "$(p "${args[1]}")" "${args[2]}" ;;
@@ -501,7 +507,7 @@ red "tier0: psql could not run pg-globals.sql: red" TIER0 PSQL_FAIL=1
 
 # the playbook's wiring
 PY=python3
-"$PY" -c 'import yaml' 2> /dev/null || PY=deploy/ansible/venv/bin/python3
+"$PY" -c 'import yaml, ansible' 2> /dev/null || PY=deploy/ansible/venv/bin/python3
 check "the playbook names production's images (its Postgres now, one of its etcd images, digested; 17's for the backups made before 18)" "$(PYTHONDONTWRITEBYTECODE=1 "$PY" - <<'PY_WIRING'
 import re, yaml
 v = yaml.safe_load(open("deploy/ansible/playbooks/setup-pi-restore-check.yml"))[0]["vars"]
