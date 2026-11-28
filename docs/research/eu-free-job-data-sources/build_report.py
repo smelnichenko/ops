@@ -46,6 +46,37 @@ def register_row(text):
     return None
 
 
+LISTS = [("included", "Included: a program may read these", "None."),
+         ("pending", "For future investigation: excluded until settled", "None."),
+         ("prohibited", "Explicitly prohibited", "None found.")]
+PLACEHOLDER = "[[LISTS]]"
+
+
+def lists_block(stem, problems):
+    """The unit's three lists as markdown, taken from included/, pending/ and prohibited/ as they stand."""
+    out = []
+    for folder, heading, _ in LISTS:
+        path = HERE / folder / f"{stem}.md"
+        out += [f"### {heading}", ""]
+        if not path.exists():
+            problems.append(f"missing {folder}/{stem}.md")
+            continue
+        lines = path.read_text(encoding="utf-8").splitlines()
+        table = [l for l in lines if l.startswith("|")]
+        status = next((l for l in lines if l.startswith("Status:")), "")
+        if status:
+            out += [status.replace("Status:", "Status of these rows:").strip(), ""]
+        out += (table if len(table) > 2 else ["None."]) + [""]
+    return "\n".join(out).rstrip("\n")
+
+
+def with_lists(text, stem, problems):
+    if text.count(PLACEHOLDER) != 1:
+        problems.append(f"report/{stem}.md: the line {PLACEHOLDER} must appear exactly once")
+        return text
+    return text.replace(PLACEHOLDER, lists_block(stem, problems))
+
+
 def anchor(code, name):
     return f"{name.lower()}-{code.lower()}"
 
@@ -73,7 +104,8 @@ def main(outputs):
             problems.append(f"{path.name}: 'Company register free' table row not found or not {REGISTER_COLUMNS} cells")
         else:
             registers.append(f"| [{name}](#{anchor(code, name)}) | " + " | ".join(reg) + " |")
-        bodies.append(text)
+        bodies.append(with_lists(text, f"{code}-{name}", problems))
+    eu_text = with_lists(eu.read_text(encoding="utf-8").strip(), "00-EU-wide", problems) if eu.exists() else ""
     if problems:
         print("NOT BUILT:")
         for p in problems:
@@ -100,7 +132,7 @@ def main(outputs):
            "| Country | Company register free | Register and how to get it | Licence | Website or e-mail in the data | Activity codes |",
            "|---|---|---|---|---|---|",
            *registers, "",
-           eu.read_text(encoding="utf-8").strip(), "",
+           eu_text, "",
            "# Countries", ""]
     for body in bodies:
         doc += [body, ""]

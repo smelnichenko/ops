@@ -59,15 +59,7 @@ Write `report/<CC>-<Name>.md` (same `<CC>-<Name>` as the input files) with exact
 
 **In short.** Two to four sentences: what the tool should read, on what terms, and the one thing most likely to trip a developer up.
 
-### Sources a program may read
-
-| Source | Publisher | Link | What it holds | Access | Key or registration | Usable for own job search | Updated | Check |
-|---|---|---|---|---|---|---|---|---|
-
-### Job boards: what their terms say
-
-| Board | Link | Feed or API for reading | Usable for own job search (why) | Check |
-|---|---|---|---|---|
+[[LISTS]]
 
 ### Through the employers
 
@@ -83,10 +75,6 @@ Write `report/<CC>-<Name>.md` (same `<CC>-<Name>` as the input files) with exact
 |---|---|---|---|
 
 ### Caveats and recent changes
-
-### Not usable for this purpose
-
-### Could not be verified
 ```
 
 - The first table has exactly one data row; keep each cell under about 12 words and put no "|"
@@ -99,13 +87,13 @@ Write `report/<CC>-<Name>.md` (same `<CC>-<Name>` as the input files) with exact
     automated reading, copies may not be kept, stale).
   - **No** = web pages for manual use only: nothing a program may read was found, or the terms
     forbid automated reading.
-- "Sources a program may read" holds only sources whose terms allow or do not forbid automated
-  reading: the public employment service first, then public-sector portals, open-data datasets,
-  then the cross-border sources that cover the country.
-- "Job boards: what their terms say" lists the main commercial boards whatever their terms; it is
-  where a reader sees which boards are for manual use only.
-- "Not usable for this purpose": paid products, partner-only feeds, and sources whose terms forbid
-  automated reading, each with the deciding clause.
+- **The line `[[LISTS]]` stays exactly as it is, once.** The report builder replaces it with the
+  country's three lists, taken from the files you write as second and third output (and from
+  `prohibited/`): "Included", "For future investigation", "Explicitly prohibited". So do not
+  retype source tables in the section: every source belongs in one of those three files.
+- "Caveats and recent changes": bullets on what a developer must know that is not a source row -
+  services that moved or closed, figures that were not recounted, paid products, anything a
+  source row would not carry. "None." if there is nothing.
 - "Through the employers" is the second route: a list of companies, then each employer's own
   careers feed, with the application going straight to the employer. Write it from the inputs'
   section of the same name. If the inputs have none, write "Not researched." under the heading.
@@ -119,7 +107,6 @@ Write `report/<CC>-<Name>.md` (same `<CC>-<Name>` as the input files) with exact
   that needs approval, a fee for bulk); **No** = paid or not published; "Not researched" if the
   inputs have no such section.
 - "Check" column: confirmed / corrected / unverified / none found.
-- Bullets under the last three headings; write "None." under a heading with nothing to say.
 - Plain English, short sentences, no filler, no first person, and no mention of "the research",
   "the researcher" or "the checker" - just what is known and how firmly. Where a figure was not
   recounted, call it "the publisher's figure" or "a first-pass count". Native names in their own
@@ -135,6 +122,17 @@ source that the check confirmed, whose verdict is "yes", that a program can read
 approval, and that is not in `prohibited/<CC>-<Name>.md`. When in doubt, leave it out. Then run
 `python3 -I include_list.py` in the folder; it must exit 0. In the report section itself, say
 plainly for each source whether it is on the include list.
+
+## Third output: the country's sources for future investigation
+
+For each country also write `pending/<CC>-<Name>.md` in the format of `briefs/INVESTIGATE-BRIEF.md`
+(read it): one row per source that could serve the purpose, is not in `prohibited/`, and did not
+make the include list because its terms are unclear, its access needs someone's approval, its host
+refused the request, or the check could not confirm it - each with the one concrete step that
+would settle it. Then run `python3 -I investigate_list.py` in the folder; it must exit 0.
+Every source in the country's research and check files must end up in exactly one of the three
+(`included/`, `prohibited/`, `pending/`) or be dropped as closed, paid or statistics; say in your
+final message which were dropped.
 
 Final message: one line per country - the file written, the "Readable by a program for own job
 search" value, and anything in the inputs that was contradictory or that you could not place.
