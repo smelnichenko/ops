@@ -26,6 +26,13 @@ class H(http.server.BaseHTTPRequestHandler):
         q = urllib.parse.parse_qs(u.query)
         with open(os.path.join(W, "reads"), "a") as f:
             f.write(p + "\n")
+        drops = fx.get("drop_get", {}).get(p, 0)  # its first n reads closed with no answer (a connection reset)
+        if drops:
+            d_path = os.path.join(W, "drop." + p.replace("/", "_"))
+            d = int(open(d_path).read()) if os.path.exists(d_path) else 0
+            open(d_path, "w").write(str(d + 1))
+            if d < drops:
+                self.close_connection = True; return
         data = fx.get(p)
         if isinstance(data, dict) and "__seq__" in data:  # one answer a read, the last kept
             n_path = os.path.join(W, "seq." + p.replace("/", "_"))
@@ -99,8 +106,12 @@ def status(st):
     if st == "stability-only":
         return {"state": "success", "statuses": [days]}
     return {"state": st, "statuses": [days, {"context": "ci/woodpecker/pr/ci", "status": st}]}
-def fixture(prs, states, labels=None, base=None, fail_post=(), merged=None, issues=None, drop_post=(), extra=None, fail_code=409):
-    fx = {"fail_post": list(fail_post), "drop_post": list(drop_post), "fail_code": fail_code}
+def fixture(prs, states, labels=None, base=None, fail_post=(), merged=None, issues=None, drop_post=(), extra=None, fail_code=409,
+            drop_get=None):
+    fx = {"fail_post": list(fail_post), "drop_post": list(drop_post), "fail_code": fail_code, "drop_get": drop_get or {}}
+    for f in os.listdir(W):
+        if f.startswith("drop."):
+            os.remove(os.path.join(W, f))
     for repo in ("infra", "platform", "ops"):
         fx[f"/repos/schnappy/{repo}/branches/main"] = {"commit": {"id": (base or {}).get(repo, BASE)}}
         for p in prs.get(repo, []):
@@ -127,7 +138,7 @@ def writes():
     return [json.loads(x) for x in open(p)] if os.path.exists(p) else []
 def run(*args, url=None, env_extra=None):
     env = {**os.environ, "UPGRADE_FORGEJO_URL": url or f"http://127.0.0.1:{PORT}/api/v1", "UPGRADE_FORGEJO_TOKEN": "t",
-           "UPGRADE_MERGE_READS": "3", "UPGRADE_MERGE_WAIT": "0.05", **(env_extra or {})}
+           "UPGRADE_MERGE_READS": "3", "UPGRADE_MERGE_WAIT": "0.05", "UPGRADE_API_RETRY_DELAYS": "0.01 0.01 0.01", **(env_extra or {})}
     r = subprocess.run([sys.executable, "scripts/upgrade-label.py", *args], capture_output=True, text=True, env=env, timeout=60)
     return r.returncode, r.stdout.strip()
 UNIT = {"infra": [pr(1, "wave-patches", "a1"), pr(2, "istio", "a2")], "platform": [pr(5, "wave-patches", "b1")],
@@ -303,7 +314,8 @@ def flip():
     fx[f"/repos/schnappy/platform/commits/{SHA['b1']}/status"] = status("success")
     write_fixture(fx)
 t = threading.Thread(target=flip); t.start()
-env = {**os.environ, "UPGRADE_FORGEJO_URL": f"http://127.0.0.1:{PORT}/api/v1", "UPGRADE_FORGEJO_TOKEN": "t", "UPGRADE_GREEN_POLL": "0.1"}
+env = {**os.environ, "UPGRADE_FORGEJO_URL": f"http://127.0.0.1:{PORT}/api/v1", "UPGRADE_FORGEJO_TOKEN": "t", "UPGRADE_GREEN_POLL": "0.1",
+       "UPGRADE_API_RETRY_DELAYS": "0.01 0.01 0.01"}
 r = subprocess.run([sys.executable, "scripts/upgrade-label.py", "wave-patches", "--green", "60"], capture_output=True, text=True, env=env, timeout=60)
 t.join()
 check("green with a wait: the running one waited for until it is green - exit 0", (r.returncode, r.stdout.strip().split("\n")[-1]),
@@ -328,6 +340,24 @@ fixture(UNIT, {"a1": "success", "b1": "stability-only", "c1": "success"})
 rc, out = run("wave-patches", "--green")
 check("green: a head \"success\" by Renovate's stability-days alone - its pipeline never started (2026-11-19) - no CI "
       "(exit 5), named: never green", (rc, out.split("\n")[-1]), (5, "NO CI: no CI on: schnappy/platform#5"))
+# a read whose answer was lost (Forgejo reset the connection: run 4 of 2026-11-28 stopped on one) read again, three times
+# at most; a write never sent twice
+def reads_of(path):
+    p = os.path.join(W, "reads")
+    return sum(1 for x in open(p) if x.strip() == path) if os.path.exists(p) else 0
+ST = f"/repos/schnappy/platform/commits/{SHA['b1']}/status"
+fixture(UNIT, {"a1": "success", "b1": "success", "c1": "success"}, drop_get={ST: 1})
+rc, out = run("wave-patches", "--green")
+check("a read's connection reset once: read again - green (exit 0), that head's status read twice",
+      (rc, out.split("\n")[-1], reads_of(ST)), (0, "schnappy/ops#8 success", 2))
+fixture(UNIT, {"a1": "success", "b1": "success", "c1": "success"}, drop_get={ST: 99})
+rc, out = run("wave-patches", "--green")
+check("  reset every time: refused (exit 1) after four reads - the first and three again",
+      (rc, "REFUSED" in out, reads_of(ST)), (1, True, 4))
+fixture(UNIT, {"a1": "success", "b1": "success", "c1": "success"}, drop_post=["/repos/schnappy/infra/pulls/1/merge"])
+run("wave-patches", "--merge", "--expect", PROVEN)
+check("  a merge's answer lost: the merge never sent again (the outcome read instead)",
+      sum(1 for x in writes() if x[0] == "/repos/schnappy/infra/pulls/1/merge"), 1)
 fixture(UNIT, {"a1": "success", "b1": "stability-only", "c1": "success"})
 proven()
 rc, out = run("wave-patches", "--merge", "--expect", PROVEN)

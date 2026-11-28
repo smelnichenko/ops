@@ -66,7 +66,25 @@ class Partial(Exception):
     """Some of a unit's pull requests merged, then one did not."""
 
 
+# a read (GET) sent again after its answer was not had - a dropped connection, a timeout, a 5xx - these many seconds apart:
+# one connection reset by Forgejo stopped a run's hour of waiting for CI (2026-11-28, run 4) with nothing proven. A
+# write is never sent twice (a merge may have gone through: merge() reads the outcome instead)
+READ_RETRY_DELAYS = [float(x) for x in os.environ.get("UPGRADE_API_RETRY_DELAYS", "5 15 45").split()]
+
+
 def call(method, path, body=None):
+    delays = READ_RETRY_DELAYS if method == "GET" else []
+    for attempt, delay in enumerate(delays + [None]):
+        try:
+            return call_once(method, path, body)
+        except Refused as e:
+            if e.definite or delay is None:
+                raise
+            print(f"{method} {path}: no answer ({e}) - read again in {delay:g} s ({attempt + 1} of {len(delays)})", file=sys.stderr)
+            time.sleep(delay)
+
+
+def call_once(method, path, body=None):
     req = urllib.request.Request(f"{API}{path}", method=method, data=json.dumps(body).encode() if body is not None else None,
                                  headers={"Content-Type": "application/json"})
     req.add_unredirected_header("Authorization", f"token {TOKEN}")  # not kept across a redirect
