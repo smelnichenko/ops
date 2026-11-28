@@ -1,11 +1,12 @@
 # Plan 131 - Vault's and Consul's way back, rehearsed on the copy (minimum plan)
 
 **Status:** the operator answered the question (2026-11-27: keep the root token). Vault's part (items 1-2 and the root
-token) merged (ops #84): restore-vault.yml, the copy check, upgrade-vault.yml's root-token check and its backups fetched
-off the Pi, backup-vault-keys.yml requiring the token; its store's `missing` clears only once
-`task test:copy:vault-way-back` passes. Consul's part (items 3-4) built on its own branch - restore-consul.yml, its copy
-check, `task deploy:consul:way-back` and `task test:copy:consul-way-back`; its store's `missing` clears only once that
-passes.
+token) merged (ops #84) and **rehearsed green on the copy (2026-11-28)**: `task test:copy:vault-way-back` took Vault
+1.21.4 to 2.2.2 and back - the secret written before there, the one written after gone, unsealed on both Pis, one active,
+External Secrets reading it (the first run, 2026-11-27, stopped at its first check on a list-typed fail_msg - ops #87);
+its store's `missing` cleared. Consul's part (items 3-4) merged (ops #88) - restore-consul.yml, its copy check,
+`task deploy:consul:way-back` and `task test:copy:consul-way-back`; its store's `missing` clears only once that passes in
+both modes (current KV, snapshot).
 
 ## Why
 

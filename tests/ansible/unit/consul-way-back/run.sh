@@ -278,6 +278,14 @@ check("keys held by sessions: Patroni's (leader, members) and Vault's allowed, a
        render(bt("None but Patroni's and Vault's (a lock taken since")["vars"]["_held_now_others"], _held_now={"json": KVH("caddy-turn/.lock")}, patroni_scope="pg"),
        bi(bt("None but Patroni's and Vault's (a lock taken since")) < bi(bt("Consul stopped on every server"))),
       ([], ["pi-restart/.lock", "pi-tier0-backup/.lock"], [True, False], ["caddy-turn/.lock"], True))
+# a timer a host has not (the copy's Pis have neither locked job's - the first rehearsal failed stopping one, 2026-11-28):
+# left alone - neither stopped nor started; an enabled or disabled one stopped (and started again only where enabled)
+ts = bt("Their timers stopped")
+check("a locked job's timer the host has not (not-found, or no answer): not stopped; enabled or disabled: stopped - over the "
+      "timers read", (render(ts["loop"], _lock_timers=jobs("enabled", "not-found")),
+                      [condition(ts["when"], inventory_hostname="pi1", groups=PIS, item={"item": "x", "stdout": s}) for s in ("enabled", "disabled", "not-found", "")],
+                      [condition(bt("Its timer stopped for the run")["when"], inventory_hostname="target", groups=PIS, _apt_timer={"stdout": s}) for s in ("enabled", "not-found")]),
+      (jobs("enabled", "not-found")["results"], [True, True, False, False], [True, False]))
 check("ten's unattended-upgrades: refused while it runs (it reboots ten after); its timer stopped in the block and started again where "
       "enabled", ([condition(rt("Unattended-upgrades not running on ten now")["failed_when"], _apt_upgrade={"stdout": x}) for x in ("active", "activating", "inactive")],
                   bt("Its timer stopped for the run")["ansible.builtin.systemd"], bt("Unattended-upgrades' timer on ten started again")["ansible.builtin.systemd"],
@@ -455,7 +463,7 @@ check("  each unit the step names, to the state it names - and only where it run
        "Vault and its unseal enabled again": ("{{ item }}", None, True, "inventory_hostname in groups['pis']"),
        "Vault started": ("vault", "started", None, "inventory_hostname in groups['pis']"),
        "Unsealed by the Pi's own script": ("vault-unseal", "restarted", None, "inventory_hostname in groups['pis']"),
-       "Their timers stopped": ("{{ item }}.timer", "stopped", None, "inventory_hostname in groups['pis']"),
+       "Their timers stopped": ("{{ item.item }}.timer", "stopped", None, "inventory_hostname in groups['pis'] and item.stdout | default('') not in ['', 'not-found']"),
        "The Consul-locked jobs' timers started again": ("{{ item.item }}.timer", "started", None, "item.stdout | default('') == 'enabled'")})
 check("  the unseal bounded (420 s); the kept binary the version gone back to, copied on the server itself; the new directory Consul's",
       (bt("Unsealed by the Pi's own script").get("timeout"), bt("The kept binary back")["ansible.builtin.copy"]["src"],
@@ -590,6 +598,11 @@ resc = lambda **v: render(blk["rescue"][0]["ansible.builtin.fail"]["msg"], ansib
 r1 = resc(_set_aside={"stdout_lines": ["/var/lib/consul/data.pre-restore-T1"]}, _orig_aside="", _src=KV, _recorded="")
 r2 = resc(_orig_aside="/var/lib/consul/data.pre-restore-T1", _recorded=KV)
 r0 = resc(_orig_aside="", _recorded="", _snap=SNAP)
+# a server that failed only because another did (every server stops with it): its message says so, never "?"
+r_other = render(blk["rescue"][0]["ansible.builtin.fail"]["msg"], ansible_failed_result={}, _pg_primary="pi1", consul_data="/var/lib/consul/data",
+                 _from="2.0.4", _src_host="pi1", restore_state=V["restore_state"], pause_marker=V["pause_marker"], _orig_aside="", _recorded="", _snap=SNAP)
+check("  a server failing only with another: 'another server's failure', never '?'",
+      ('at "another server\'s failure (every server stops with it)"' in r_other, 'at "?"' in r_other), (True, False))
 check("  the way forward in full: the current directory moved aside (never deleted), the record deleted, the primary's Patroni first",
       [x in r1 for x in ("move /var/lib/consul/data aside (never delete it)", "/usr/local/bin/consul, delete /var/lib/consul/restore-consul.state, start Consul",
                          "(pi1 first)")], [True] * 3)

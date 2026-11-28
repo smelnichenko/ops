@@ -109,9 +109,7 @@
         "/(^|\\/)vault$/"
       ],
       "backups": [],
-      "missing": [
-        "its way back not yet rehearsed on the copy - after the new version ran on Vault's storage: Vault stopped on both Pis, vault/ restored from the export upgrade-vault.yml took (or the Consul snapshot, Patroni paused), the kept old binary back, unsealed, one active, a secret written before the upgrade there and one written after gone; the Pi restore check counts restored keys, it starts no Vault"
-      ],
+      "missing": [],
       "examples": [
         "hashicorp-vault-2.x",
         "vault-1.22"
@@ -119,7 +117,7 @@
       "taken_by": [
         "deploy:vault:upgrade"
       ],
-      "_why": "its own command takes it: upgrade-vault.yml snapshots Consul (Vault's storage) and exports vault/ before it touches a Pi - its way back from them scripted (restore-vault.yml, task deploy:vault:way-back), not yet run on the copy (task test:copy:vault-way-back): blocked until a way-back check passes there (the one-way rule, as ScyllaDB's)"
+      "_why": "its own command takes it: upgrade-vault.yml snapshots Consul (Vault's storage) and exports vault/ before it touches a Pi - its way back from them scripted (restore-vault.yml, task deploy:vault:way-back) and rehearsed green on the copy (task test:copy:vault-way-back, 2026-11-28: 1.21.4 -> 2.2.2 -> back, the secret from before there, the one from after gone, unsealed on both Pis, one active)"
     },
     {
       "store": "consul",

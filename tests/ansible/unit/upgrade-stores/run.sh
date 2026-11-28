@@ -34,11 +34,12 @@ check("Keycloak's units (minor and major): its store - its way back rehearsed gr
 check("  its store taken by deploy:keycloak:upgrade (the playbook that dumps it)",
       next(s for s in REAL["stores"] if s["store"] == "keycloak")["taken_by"], ["deploy:keycloak:upgrade"])
 # Vault's and Consul's own commands take their snapshots, and their way backs are scripted (restore-vault.yml,
-# restore-consul.yml) but have never run on the copy: blocked until a way-back check passes there - a literal, as Keycloak's
-check("Vault's and Consul's majors: missing - their way backs not yet rehearsed; their commands still the ones taking the snapshot",
+# restore-consul.yml): Vault's rehearsed green on the copy (2026-11-28) - its store; Consul's not yet - blocked until its
+# way-back check passes there - a literal, as Keycloak's
+check("Vault's major: its store (its way back rehearsed); Consul's: missing; their commands still the ones taking the snapshot",
       ([run(u, "major,one-way")[1] for u in ("hashicorp-vault-2.x", "hashicorp-consul-2.x")],
        [next(s for s in REAL["stores"] if s["store"] == x)["taken_by"] for x in ("vault", "consul")]),
-      (["missing", "missing"], [["deploy:vault:upgrade"], ["deploy:consul:upgrade"]]))
+      (["store", "missing"], [["deploy:vault:upgrade"], ["deploy:consul:upgrade"]]))
 # Postgres' store is the CNPG image alone (2026-11-21): the plain postgres image in infra and platform is the init-users
 # Job's psql client - its major, postgres-19.x, is an ordinary unit; the databases' image a store's as before
 check("postgres-19.x (the init-users Job's psql client) a unit of no store; the CNPG image's major Postgres' store",
