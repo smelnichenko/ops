@@ -961,16 +961,12 @@ try:
           (rc, merged(calls, "hashicorp-consul-2.x"), "deploy:consul:upgrade" in blocked_why(calls)), (1, False, True))
 finally:
     open(TABLE, "w").write(REAL_TABLE)
-# on the REAL table: blocked until its way back is rehearsed on the copy, even with its command in the plan - clearing
-# `missing` before a way-back check passes fails here (the one-way rule). Vault's rehearsed green (2026-11-28): proven and
-# applied by its own command, as above
-for unit, plan, why in (("hashicorp-consul-2.x", CONSUL_PLAN, "task test:copy:consul-way-back"),):
+# on the REAL table: Vault's and Consul's way backs rehearsed green (2026-11-28): each proven, merged and applied by its
+# own command - a store's `missing` back (another store's) blocks its units as the cases above show
+for unit, plan, cmd in (("hashicorp-vault-2.x", VAULT_PLAN, "deploy:vault:upgrade"), ("hashicorp-consul-2.x", CONSUL_PLAN, "deploy:consul:upgrade")):
     rc, calls = night(f"prove {unit} major", plan=plan, files={"list": f"{unit} major schnappy/ops major,one-way,upgrade-cycle\n"})
-    check(f"{unit} (one-way, its way back not rehearsed): blocked before anything is built, never merged, its way back named",
-          (rc, merged(calls, unit), has(calls, "task test:copy"), why in blocked_why(calls)), (1, False, [], True))
-rc, calls = night("prove hashicorp-vault-2.x major", plan=VAULT_PLAN, files={"list": "hashicorp-vault-2.x major schnappy/ops major,one-way,upgrade-cycle\n"})
-check("hashicorp-vault-2.x on the REAL table (its way back rehearsed): proven, merged, applied by its own command",
-      (rc, merged(calls, "hashicorp-vault-2.x"), bool(has(calls, "task --yes deploy:vault:upgrade"))), (0, True, True))
+    check(f"{unit} on the REAL table (its way back rehearsed): proven, merged, applied by its own command",
+          (rc, merged(calls, unit), bool(has(calls, f"task --yes {cmd}"))), (0, True, True))
 rc, calls = night("prove centrifugo-6.x minor", files={"list": "centrifugo-6.x minor schnappy/infra upgrade-cycle\n",
                                                      "list.later": "centrifugo-6.x minor schnappy/infra one-way,upgrade-cycle\n"})
 check("a one-way label put on during the proof (its labels read again after it): blocked, nothing merged - the copy built",
