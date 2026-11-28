@@ -5,6 +5,26 @@ postings) in the EU. A researcher wrote one file per country in `research/`. You
 those files against the live sources, not to trust them. Assume each claim may be wrong until you
 have seen the evidence yourself.
 
+## Purpose of the data (added 2026-11-28, 18:40)
+
+The data is wanted for ONE purpose: one person's own job search and job applications - finding
+vacancies, reading them, and applying, with a program doing the reading for that person. It is NOT
+wanted for redistribution, publishing, resale, statistics, or training of models. Some research
+files were written before this was stated, so they judge terms more generally. For every source in
+a country's file, read the terms yourself and fill a second table (see Output) with four separate
+readings, each backed by a quoted clause and its URL:
+
+1. **Job-seeker use**: allowed / forbidden / not stated.
+2. **Automated reading** (bot, crawler, script, API client), in the terms and in robots.txt:
+   allowed / forbidden / not stated. A ban on bots applies whatever the purpose; a ban only on
+   commercial reuse or redistribution does not block this purpose - say which kind it is.
+3. **Keeping a private copy**: allowed / forbidden / limited (how) / not stated.
+4. **How one applies**: apply link in the record, employer e-mail or contact, or only through the
+   board's own form or account.
+
+This is a reading of published terms, not legal advice: quote, do not interpret beyond the words.
+Official vacancy statistics are of no use for this purpose; do not spend requests on them.
+
 ## What to do, per country (or per topic for the EU-wide file)
 
 1. Read the research file fully. List every checkable claim: each source URL, endpoint, feed or
@@ -57,9 +77,17 @@ Checked on <date>. Client: <what you used>.
 | # | Claim | Verdict | Evidence (URL, status, what was seen) | Corrected statement |
 |---|---|---|---|---|
 
+## For a personal job search and applications
+
+| Source | Job-seeker use | Automated reading | Private copy | How to apply | Basis (quoted clause, URL) |
+|---|---|---|---|---|---|
+
 ## Found beyond the research
 - sources or facts the research missed, each with its evidence
 ```
+
+In the second table write the reading first in each cell (allowed / forbidden / limited / not
+stated), then a few words. One row per source, including the commercial boards.
 
 Verdicts: CONFIRMED / CORRECTED / WRONG / UNVERIFIED / NOT DISPROVED. Put the verdict word first
 in its cell. Write each country's file before starting the next, so an interruption loses at most
