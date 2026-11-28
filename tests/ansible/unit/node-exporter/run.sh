@@ -6,7 +6,7 @@
 set -u
 cd "$(dirname "$0")/../../../.." || exit 1
 PY=python3
-"$PY" -c 'import yaml, jinja2' 2> /dev/null || PY=deploy/ansible/venv/bin/python3
+"$PY" -c 'import yaml, jinja2, ansible' 2> /dev/null || PY=deploy/ansible/venv/bin/python3
 PYTHONDONTWRITEBYTECODE=1 exec "$PY" - <<'PY_NODEEXP'
 import re, shlex, sys, yaml, jinja2
 fails = 0

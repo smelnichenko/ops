@@ -501,7 +501,7 @@ red "tier0: psql could not run pg-globals.sql: red" TIER0 PSQL_FAIL=1
 
 # the playbook's wiring
 PY=python3
-"$PY" -c 'import yaml' 2> /dev/null || PY=deploy/ansible/venv/bin/python3
+"$PY" -c 'import yaml, ansible' 2> /dev/null || PY=deploy/ansible/venv/bin/python3
 check "the playbook names production's images (its Postgres now, one of its etcd images, digested; 17's for the backups made before 18)" "$(PYTHONDONTWRITEBYTECODE=1 "$PY" - <<'PY_WIRING'
 import re, yaml
 v = yaml.safe_load(open("deploy/ansible/playbooks/setup-pi-restore-check.yml"))[0]["vars"]

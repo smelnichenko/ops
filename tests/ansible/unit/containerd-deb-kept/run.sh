@@ -5,7 +5,7 @@
 set -u
 cd "$(dirname "$0")/../../../.." || exit 1
 PY=python3
-"$PY" -c 'import yaml, jinja2' 2> /dev/null || PY=deploy/ansible/venv/bin/python3
+"$PY" -c 'import yaml, jinja2, ansible' 2> /dev/null || PY=deploy/ansible/venv/bin/python3
 W=$(mktemp -d)
 trap 'rm -rf "$W"' EXIT
 mkdir -p "$W/bin" "$W/keep"
