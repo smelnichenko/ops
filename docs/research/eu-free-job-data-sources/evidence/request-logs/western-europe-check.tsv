@@ -1,0 +1,171 @@
+2026-11-28T17:19:19Z	www.data.gouv.fr	https://www.data.gouv.fr/api/1/dataservices/api-offres-demploi/	fr_ft_api_record	200	application/json	6724		curl_rc=0	
+2026-11-28T17:19:27Z	www.data.gouv.fr	https://www.data.gouv.fr/api/1/discussions/?for=672cf68826b31834a945cefe	fr_ft_api_disc	200	application/json	8826		curl_rc=0	
+2026-11-28T17:19:32Z	francetravail.io	https://francetravail.io/produits-partages/catalogue/offres-emploi	fr_ftio_cat	200	text/html	2000		curl_rc=0	
+2026-11-28T17:19:41Z	www.francetravail.fr	https://www.francetravail.fr/informations/informations-legales-et-conditio/conditions-generales-dutilisatio.html	fr_ft_terms	200	text/html;charset=UTF-8	74673		curl_rc=0	
+2026-11-28T17:19:44Z	candidat.francetravail.fr	https://candidat.francetravail.fr/robots.txt	fr_ft_robots	200	text/plain	1321		curl_rc=0	
+2026-11-28T17:19:59Z	candidat.francetravail.fr	https://candidat.francetravail.fr/offres/recherche	fr_ft_search	301	text/html;charset=UTF-8	66556	https://candidat.francetravail.fr/offres/emploi	curl_rc=0	
+2026-11-28T17:20:08Z	www.data.gouv.fr	https://www.data.gouv.fr/api/1/datasets/?q=offres%20d%27emploi&page_size=40	fr_dgf_search	200	application/json	173842		curl_rc=0	
+2026-11-28T17:20:17Z	www.data.gouv.fr	https://www.data.gouv.fr/api/1/datasets/?q=france%20travail%20offres%20seine-saint-denis&page_size=20	fr_dgf_ssd	200	application/json	94		curl_rc=0	
+2026-11-28T17:20:30Z	www.data.gouv.fr	https://www.data.gouv.fr/api/1/datasets/?q=france%20travail%20offres%20d%27emploi&archived=true&page_size=20	fr_dgf_ssd2	401	application/json	235		curl_rc=0	
+2026-11-28T17:20:31Z	data.seinesaintdenis.fr	https://data.seinesaintdenis.fr/api/explore/v2.1/catalog/datasets/france-travail-offres-d-emploi	fr_ssd_src	404	application/json	123		curl_rc=0	
+2026-11-28T17:20:38Z	www.data.gouv.fr	https://www.data.gouv.fr/api/1/datasets/les-offres-diffusees-sur-choisir-le-service-public/	fr_csp_ds	200	application/json	21453		curl_rc=0	
+2026-11-28T17:20:49Z	static.data.gouv.fr	https://static.data.gouv.fr/resources/les-offres-diffusees-sur-choisir-le-service-public/20261123-070111/offres-datagouv-20261122.csv	fr_csp_csv	206	text/csv	12000		curl_rc=0	-r 0-11999
+2026-11-28T17:20:57Z	www.data.gouv.fr	https://www.data.gouv.fr/api/1/dataservices/?dataset=6322e99e12175f7eb26ff465&page_size=10	fr_csp_dsvc	200	application/json	15318		curl_rc=0	
+2026-11-28T17:21:05Z	choisirleservicepublic.gouv.fr	https://choisirleservicepublic.gouv.fr/robots.txt	fr_csp_robots	200	text/plain	173		curl_rc=0	
+2026-11-28T17:21:07Z	choisirleservicepublic.gouv.fr	https://choisirleservicepublic.gouv.fr/mentions-legales/	fr_csp_legal	200	text/html; charset=UTF-8	171784		curl_rc=0	
+2026-11-28T17:21:14Z	choisirleservicepublic.gouv.fr	https://choisirleservicepublic.gouv.fr/sitemapindex.xml	fr_csp_sitemap	200	application/xml	1075		curl_rc=0	
+2026-11-28T17:21:20Z	www.emploi-territorial.fr	https://www.emploi-territorial.fr/robots.txt	fr_et_robots	200	text/plain	138		curl_rc=0	
+2026-11-28T17:21:22Z	www.emploi-territorial.fr	https://www.emploi-territorial.fr/api/	fr_et_api	200	text/html; charset=UTF-8	28422		curl_rc=0	
+2026-11-28T17:21:36Z	www.emploi-territorial.fr	https://www.emploi-territorial.fr/api/emploi-territorial.yml	fr_et_yml	200		106639		curl_rc=0	
+2026-11-28T17:21:51Z	data.iledefrance.fr	https://data.iledefrance.fr/api/explore/v2.1/catalog/datasets/offres-emploi-region-iledefrance	fr_idf_meta	200	application/json; charset=utf-8	15058		curl_rc=0	
+2026-11-28T17:21:54Z	data.iledefrance.fr	https://data.iledefrance.fr/api/explore/v2.1/catalog/datasets/offres-emploi-region-iledefrance/records?limit=1&order_by=vacancy_activation_date%20desc	fr_idf_rec	200	application/json; charset=utf-8	11220		curl_rc=0	
+2026-11-28T17:22:05Z	data.europa.eu	https://data.europa.eu/api/hub/search/search?q=offres%20d%27emploi&filter=dataset&facets=%7B%22country%22%3A%5B%22fr%22%5D%7D&limit=12&page=0&includes=id,title,modified,catalog.id,publisher.name,license	fr_deu	200	application/json	79202		curl_rc=0	
+2026-11-28T17:22:12Z	data.europa.eu	https://data.europa.eu/api/hub/search/search?q=BPCE%20offres%20emploi&filter=dataset&facets=%7B%22country%22%3A%5B%22fr%22%5D%7D&limit=8&page=0&includes=id,title,modified,catalog.id,publisher.name	fr_deu2	200	application/json	76190		curl_rc=0	
+2026-11-28T17:22:19Z	www.data.gouv.fr	https://www.data.gouv.fr/api/1/dataservices/api-la-bonne-alternance/	fr_lba_rec	200	application/json	20989		curl_rc=0	
+2026-11-28T17:22:20Z	api.apprentissage.beta.gouv.fr	https://api.apprentissage.beta.gouv.fr/fr/documentation-technique	fr_lba_doc	200	text/html; charset=utf-8	91288		curl_rc=0	
+2026-11-28T17:22:30Z	api.apprentissage.beta.gouv.fr	https://api.apprentissage.beta.gouv.fr/fr/cgu	fr_lba_cgu	200	text/html; charset=utf-8	101033		curl_rc=0	
+2026-11-28T17:22:38Z	www.maformation.fr	https://www.maformation.fr/cgu.html	fr_hw_cgu	200	text/html; charset=utf-8	93432		curl_rc=0	
+2026-11-28T17:22:40Z	www.hellowork.com	https://www.hellowork.com/robots.txt	fr_hw_robots	200	text/plain	18595		curl_rc=0	
+2026-11-28T17:22:49Z	fr.indeed.com	https://fr.indeed.com/legal	fr_indeed_legal	200	text/html;charset=utf-8	665417		curl_rc=0	
+2026-11-28T17:22:55Z	www.linkedin.com	https://www.linkedin.com/legal/user-agreement	fr_li_ua	200	text/html; charset=utf-8	184070		curl_rc=0	
+2026-11-28T17:22:58Z	www.welcometothejungle.com	https://www.welcometothejungle.com/en/pages/terms	fr_wttj_terms	200	text/html; charset=utf-8	315527		curl_rc=0	
+2026-11-28T17:23:06Z	www.meteojob.com	https://www.meteojob.com/robots.txt	fr_meteojob_robots	200	text/plain	730		curl_rc=0	
+2026-11-28T17:23:07Z	www.monster.fr	https://www.monster.fr/	fr_monster	301	text/html	162	https://www.monster.com/fr/	curl_rc=0	
+2026-11-28T17:23:08Z	www.data.gouv.fr	https://www.data.gouv.fr/api/1/datasets/base-sirene-des-entreprises-et-de-leurs-etablissements-siren-siret/	fr_sirene_ds	200	application/json	63141		curl_rc=0	
+2026-11-28T17:23:19Z	static.data.gouv.fr	https://static.data.gouv.fr/resources/base-sirene-des-entreprises-et-de-leurs-etablissements-siren-siret/20260113-143438/stockunitelegale-311-dessin-de-fichier.csv	fr_sirene_ul	200	text/csv; charset=utf-8	3165		curl_rc=0	
+2026-11-28T17:23:20Z	static.data.gouv.fr	https://static.data.gouv.fr/resources/base-sirene-des-entreprises-et-de-leurs-etablissements-siren-siret/20260113-143513/stocketablissement-311-dessin-de-fichier.csv	fr_sirene_et	200	text/csv; charset=utf-8	4875		curl_rc=0	
+2026-11-28T17:23:22Z	recherche-entreprises.api.gouv.fr	https://recherche-entreprises.api.gouv.fr/search?q=doctolib&per_page=1	fr_re_api	200	application/json	10572		curl_rc=0	
+2026-11-28T17:23:29Z	frenchtech120.numeum.fr	https://frenchtech120.numeum.fr/annuaire/	fr_numeum	200	text/html; charset=utf-8	140572		curl_rc=0	
+2026-11-28T17:24:55Z	developers.cegid.com	https://developers.cegid.com/docreference/BusinessUnits/Recruiting-developer-portal/jobboard/_index.html	v_cegid_jb	200	text/html	5558		curl_rc=0	
+2026-11-28T17:24:56Z	developers.flatchr.io	https://developers.flatchr.io/en/docs/getting_started/	v_flatchr	200	text/html; charset=utf-8	24596		curl_rc=0	
+2026-11-28T17:24:58Z	taleez.com	https://taleez.com/	v_taleez	200	text/html; charset=utf-8	357310		curl_rc=0	
+2026-11-28T17:25:00Z	developers.welcomekit.co	https://developers.welcomekit.co/	v_welcomekit	200	text/html; charset=utf-8	394329		curl_rc=0	
+2026-11-28T17:25:01Z	www.jobaffinity.fr	https://www.jobaffinity.fr/	v_jobaffinity	301	text/html; charset=UTF-8	469	https://jobaffinity.fr/	curl_rc=0	
+2026-11-28T17:25:02Z	support.beetween.com	https://support.beetween.com/en/knowledge/documentation-api	v_beetween	200	text/html; charset=UTF-8	268275		curl_rc=0	
+2026-11-28T17:25:04Z	www.softy.pro	https://www.softy.pro/	v_softy	307	text/html; charset=UTF-8	0	https://v2.softy.pro/	curl_rc=0	
+2026-11-28T17:25:05Z	www.digitalrecruiters.com	https://www.digitalrecruiters.com/	v_digitalrecruiters	301	text/html; charset=iso-8859-1	270	https://www.cegid.com/fr/produits/cegid-hr/talent-acquisition/	curl_rc=0	
+2026-11-28T17:25:06Z	www.jobteaser.com	https://www.jobteaser.com/fr/about/terms-for-members	fr_jobteaser_terms	301	text/html; charset=utf-8	0	https://d1guu6n8gz71j.cloudfront.net/system/legal_files/348/original.pdf?1781772520	curl_rc=0	
+2026-11-28T17:25:08Z	annuaire-entreprises.data.gouv.fr	https://annuaire-entreprises.data.gouv.fr/	fr_annuaire	302	text/html	122	https://annuaire-entreprises.data.gouv.fr/	curl_rc=0	
+2026-11-28T17:25:41Z	jobaffinity.fr	https://jobaffinity.fr/	v_jobaffinity2	303	text/html;charset=utf-8	130	https://jobaffinity.fr/user/?from_page=%2F	curl_rc=0	
+2026-11-28T17:25:43Z	v2.softy.pro	https://v2.softy.pro/	v_softy2	307		39	https://v2.softy.pro/login?redirect=%2F	curl_rc=0	
+2026-11-28T17:25:44Z	developers.flatchr.io	https://developers.flatchr.io/en/site-carriere/	v_flatchr_cs	200	text/html; charset=utf-8	43152		curl_rc=0	
+2026-11-28T17:25:52Z	help.jobaffinity.fr	https://help.jobaffinity.fr/en/articles/11561675-automatic-posting-on-your-wordpress-site	v_jobaffinity_help	200	text/html; charset=utf-8	92891		curl_rc=0	
+2026-11-28T17:26:10Z	recrutement.softy.pro	https://recrutement.softy.pro/	v_softy3	200	text/html; charset=UTF-8	418323		curl_rc=0	
+2026-11-28T17:26:12Z	developers.cegid.com	https://developers.cegid.com/docreference/BusinessUnits/Recruiting-developer-portal/JobadService/documentation.html	v_cegid_jobad	200	text/html	11248		curl_rc=0	
+2026-11-28T17:26:23Z	developers.greenhouse.io	https://developers.greenhouse.io/job-board.html	v_greenhouse	301	text/html; charset=utf-8	0	https://docs.greenhouse.io/job-board.html	curl_rc=0	
+2026-11-28T17:26:25Z	raw.githubusercontent.com	https://raw.githubusercontent.com/lever/postings-api/master/README.md	v_lever	200	text/plain; charset=utf-8	25813		curl_rc=0	
+2026-11-28T17:26:26Z	developers.smartrecruiters.com	https://developers.smartrecruiters.com/docs/posting-api	v_smartrecruiters	200	text/html; charset=utf-8	234241		curl_rc=0	
+2026-11-28T17:26:28Z	workable.readme.io	https://workable.readme.io/reference/jobs-1	v_workable	200	text/html; charset=utf-8	287991		curl_rc=0	
+2026-11-28T17:26:30Z	docs.recruitee.com	https://docs.recruitee.com/reference/offers	v_recruitee	200	text/html; charset=utf-8	197897		curl_rc=0	
+2026-11-28T17:26:32Z	developer.personio.de	https://developer.personio.de/docs/retrieving-open-job-positions	v_personio	200	text/html; charset=utf-8	175942		curl_rc=0	
+2026-11-28T17:26:46Z	support.teamtailor.com	https://support.teamtailor.com/en/articles/11171756-rss-feed-how-to-guide	v_teamtailor	200	text/html; charset=utf-8	101810		curl_rc=0	
+2026-11-28T17:26:48Z	docs.greenhouse.io	https://docs.greenhouse.io/job-board.html	v_greenhouse2	200	text/html; charset=utf-8	142149		curl_rc=0	
+2026-11-28T17:27:16Z	www.data.gouv.fr	https://www.data.gouv.fr/api/1/dataservices/?organization=534fffa3a3a7292c64a78094&page_size=50	fr_ft_services	200	application/json	89544		curl_rc=0	
+2026-11-28T17:27:17Z	www.workday.com	https://www.workday.com/en-us/products/talent-management/talent-acquisition.html	v_workday	200	text/html;charset=utf-8	728527		curl_rc=0	
+2026-11-28T17:32:24Z	www.leforem.be	https://www.leforem.be/open-data.html	be_forem_od	200	text/html;charset=utf-8	151560		curl_rc=0	
+2026-11-28T17:32:31Z	www.leforem.be	https://www.leforem.be/conditions-d-utilisation.html	be_forem_terms	200	text/html;charset=utf-8	167237		curl_rc=0	
+2026-11-28T17:32:33Z	www.leforem.be	https://www.leforem.be/partenaires/cgu-apis.html	be_forem_api	200	text/html;charset=utf-8	157007		curl_rc=0	
+2026-11-28T17:32:48Z	www.odwb.be	https://www.odwb.be/api/explore/v2.1/catalog/datasets/offres-d-emploi-forem/records?limit=1	be_odwb_rec	429	application/json	187		curl_rc=0	
+2026-11-28T17:33:02Z	data.europa.eu	https://data.europa.eu/api/hub/search/datasets/https-www-odwb-be-explore-dataset-offres-d-emploi-forem-	be_deu_forem	200	application/json	45091		curl_rc=0	
+2026-11-28T17:33:39Z	economie.fgov.be	https://economie.fgov.be/en/themes/enterprises/crossroads-bank-enterprises/services-everyone/public-data-available-reuse/cbe-open-data	be_fps_cbe	200	text/html	47048		curl_rc=0	
+2026-11-28T17:33:40Z	kbopub.economie.fgov.be	https://kbopub.economie.fgov.be/kbo-open-data	be_kbo_od	302		0	https://kbopub.economie.fgov.be/kbo-open-data/login	curl_rc=0	
+2026-11-28T17:33:42Z	e-justice.europa.eu	https://e-justice.europa.eu/topics/registers-business-insolvency-land/business-registers-eu-countries/be_en	be_ejustice	200	text/html; charset=utf-8	68586		curl_rc=0	
+2026-11-28T17:33:52Z	data.europa.eu	https://data.europa.eu/api/hub/search/search?q=vacatures%20offres%20d%27emploi%20jobs&filter=dataset&facets=%7B%22country%22%3A%5B%22be%22%5D%7D&limit=25&page=0&includes=id,title,modified,catalog.id,publisher.name	be_deu_vac	200	application/json	104389		curl_rc=0	
+2026-11-28T17:33:54Z	data.europa.eu	https://data.europa.eu/api/hub/search/search?q=KBO%20open%20data%20Kruispuntbank%20ondernemingen&filter=dataset&facets=%7B%22country%22%3A%5B%22be%22%5D%7D&limit=12&page=0&includes=id,title,modified,catalog.id,publisher.name,is_hvd	be_deu_kbo	200	application/json	266972		curl_rc=0	
+2026-11-28T17:34:06Z	data.europa.eu	https://data.europa.eu/api/hub/search/datasets/fpseco-cbeopen-download	be_deu_cbe	200	application/json	26550		curl_rc=0	
+2026-11-28T17:34:13Z	data.gov.be	https://data.gov.be/license/cbe/open	be_dgb_lic	200	text/html	45752		curl_rc=0	
+2026-11-28T17:34:21Z	www.vdab.be	https://www.vdab.be/robots.txt	be_vdab_robots	200	text/plain; charset=utf-8	3564		curl_rc=0	
+2026-11-28T17:34:23Z	www.vdab.be	https://www.vdab.be/disclaimer	be_vdab_disc	200	text/html; charset=utf-8	67132		curl_rc=0	
+2026-11-28T17:34:33Z	developer.vdab.be	https://developer.vdab.be/openservices/	be_vdabdev_home	200	text/html; charset=utf-8	26180		curl_rc=0	
+2026-11-28T17:34:35Z	developer.vdab.be	https://developer.vdab.be/openservices/product/6468	be_vdabdev_prod	200	text/html; charset=utf-8	37887		curl_rc=0	
+2026-11-28T17:34:43Z	developer.vdab.be	https://developer.vdab.be/openservices/tsandcs	be_vdabdev_terms	200	text/html; charset=utf-8	16208		curl_rc=0	
+2026-11-28T17:34:45Z	www.actiris.brussels	https://www.actiris.brussels/fr/citoyens/mentions-legales/	be_actiris_legal	200	text/html; charset=utf-8	97808		curl_rc=0	
+2026-11-28T17:34:48Z	www.actiris.brussels	https://www.actiris.brussels/robots.txt	be_actiris_robots	404	text/html; charset=utf-8	86980		curl_rc=0	
+2026-11-28T17:34:56Z	www.stepstone.be	https://www.stepstone.be/robots.txt	be_stepstone_robots	200	text/plain; charset=utf-8	2897		curl_rc=0	
+2026-11-28T17:34:59Z	www.stepstone.be	https://www.stepstone.be/about-us/terms-of-use/	be_stepstone_terms	200	text/html; charset=UTF-8	118235		curl_rc=0	
+2026-11-28T17:35:11Z	www.vacature.com	https://www.vacature.com/robots.txt	be_vacature	301	text/html; charset=UTF-8	167	https://www.jobat.be/nl/vacature	curl_rc=0	
+2026-11-28T17:35:12Z	travaillerpour.be	https://travaillerpour.be/robots.txt	be_travaillerpour	200	text/html	50228		curl_rc=0	
+2026-11-28T17:35:14Z	www.talent.brussels	https://www.talent.brussels/robots.txt	be_talent_robots	200	text/plain	2141		curl_rc=0	
+2026-11-28T17:35:15Z	www.vlaanderen.be	https://www.vlaanderen.be/werken-voor-vlaanderen/vacatures	be_vlaanderen	200	text/html;charset=UTF-8	60861		curl_rc=0	
+2026-11-28T17:35:44Z	c.cvwarehouse.com	https://c.cvwarehouse.com/en/documentation	v_cvwarehouse	404	text/html	103		curl_rc=0	
+2026-11-28T17:35:45Z	intercom.help	https://intercom.help/carerix-0337b1ac61e2/files/publish-job-orders-on-job-sites	v_carerix	301	text/html; charset=utf-8	0	https://help.carerix.com/en/articles/2398236-publish-job-orders-on-job-sites	curl_rc=0	
+2026-11-28T17:35:47Z	kb.bullhorn.com	https://kb.bullhorn.com/connexys/Content/Topics/English/WebservicesforConnexysResourceManager.html	v_connexys	200	text/html	70994		curl_rc=0	
+2026-11-28T17:35:49Z	www.otys.nl	https://www.otys.nl/	v_otys	301	text/html; charset=iso-8859-1	231	https://www.otys.com/nl	curl_rc=0	
+2026-11-28T17:35:51Z	opendata.infrabel.be	https://opendata.infrabel.be/api/explore/v2.1/catalog/datasets/joblistinfrabel	be_infrabel	200	application/json; charset=utf-8	15759		curl_rc=0	
+2026-11-28T17:36:03Z	help.carerix.com	https://help.carerix.com/en/articles/2398236-publish-job-orders-on-job-sites	v_carerix2	200	text/html; charset=utf-8	109481		curl_rc=0	
+2026-11-28T17:36:05Z	www.otys.com	https://www.otys.com/nl	v_otys2	301	text/html; charset=UTF-8	0	https://www.otys.com/nl/	curl_rc=0	
+2026-11-28T17:36:17Z	www.otys.com	https://www.otys.com/nl/	v_otys3	200	text/html; charset=UTF-8	806827		curl_rc=0	
+2026-11-28T17:36:18Z	company.cvwarehouse.com	https://company.cvwarehouse.com/downloads/Flyers/EN_CVWarehouse_Jobsite_Options.pdf	v_cvwarehouse_flyer	404	text/html	103		curl_rc=0	
+2026-11-28T17:36:26Z	www.cvwarehouse.com	https://www.cvwarehouse.com/	v_cvwarehouse_home	301	text/html; charset=UTF-8	153	http://company.cvwarehouse.com/	curl_rc=0	
+2026-11-28T17:36:38Z	company.cvwarehouse.com	https://company.cvwarehouse.com/	v_cvwarehouse_co	200	text/html	12985		curl_rc=0	
+2026-11-28T17:37:28Z	www.vdab.be	https://www.vdab.be/vindeenjob/vacatures/74660948/storingstechnieker-2-ploegen	be_vdab_vac	200	text/html; charset=utf-8	46710		curl_rc=0	
+2026-11-28T17:39:27Z	www.werkenvoornederland.nl	https://www.werkenvoornederland.nl/robots.txt	nl_wvn_robots	200	text/plain;charset=UTF-8	200		curl_rc=0	
+2026-11-28T17:39:29Z	www.werkenvoornederland.nl	https://www.werkenvoornederland.nl/copyright	nl_wvn_copy	200	text/html;charset=UTF-8	47557		curl_rc=0	
+2026-11-28T17:39:36Z	www.werkenvoornederland.nl	https://www.werkenvoornederland.nl/sitemap-vacatures.xml	nl_wvn_sitemap	200	application/xml;charset=UTF-8	304694		curl_rc=0	
+2026-11-28T17:39:43Z	data.overheid.nl	https://data.overheid.nl/community/datarequest/vacatures-werk-nl	nl_do_request	200	text/html; charset=UTF-8	30653		curl_rc=0	
+2026-11-28T17:39:51Z	data.overheid.nl	https://data.overheid.nl/data/api/3/action/package_search?q=vacatures&rows=40	nl_do_search	200	application/json;charset=utf-8	428210		curl_rc=0	
+2026-11-28T17:40:06Z	www.werk.nl	https://www.werk.nl/robots.txt	nl_werk_robots	200	text/plain; charset=UTF-8	85		curl_rc=0	
+2026-11-28T17:40:08Z	www.werk.nl	https://www.werk.nl/werkzoekenden/vacatures/	nl_werk_vac	302	text/html; charset=iso-8859-1	705	https://login.werk.nl:443/oam/server/obrareq.cgi?encquery%3DuwU8SRooLEZ6VMP8JKPIX%2BMGdmpSAPdWhBv4l6tmWmoYw86hx8o83x4HIBI9JisXZcc3GI5ca4WjrIG6qS3%2F8DpcaPHUkqvwetLYs8P25J%2FgN6G7AcdaktzZKY4tyIN2LM%2B5xWlQg9epxg45BEjo8SGqjNk%2FIyzXn%2BlSlbWlm%2FHS%2FPbi1ZQwPk%2B7oNLx9JpO0ozrAJuWde8%2Ff40hBlsPvWhlvMoczcbacmmPMjFzHm%2BSf195kYMguWbOFaBuVHTauVtxWGd8mCGveNLOEJcBRSP5Xugu7mDEc%2F5ZcM8sySGbFhPyxe60vQTTU%2FUa73a3Eu79jmswiasf7qCc5Bv%2FykfbjWULaE6%2B7BEn8FehmPY%3D%20agentid%3DLN_UWV_EXTERN_ACCESS_SERVER%20ver%3D1%20crmethod%3D2	curl_rc=0	
+2026-11-28T17:40:32Z	www.kvk.nl	https://www.kvk.nl/producten-bestellen/kvk-handelsregister-open-data-set/	nl_kvk_od	200	text/html; charset=utf-8	187281		curl_rc=0	
+2026-11-28T17:40:39Z	www.kvk.nl	https://www.kvk.nl/producten-bestellen/api/	nl_kvk_api	200	text/html; charset=utf-8	185091		curl_rc=0	
+2026-11-28T17:40:42Z	developers.kvk.nl	https://developers.kvk.nl/documentation/open-dataset-basis-bedrijfsgegevens-api	nl_kvk_dev	200	text/html; charset=utf-8	82756		curl_rc=0	
+2026-11-28T17:40:44Z	opendata.kvk.nl	https://opendata.kvk.nl/api/v1/hvds/basisbedrijfsgegevens/kvknummer/12345678	nl_kvk_od_api	404	application/json	121		curl_rc=0	
+2026-11-28T17:41:16Z	www.nationalevacaturebank.nl	https://www.nationalevacaturebank.nl/robots.txt	nl_nvb_robots	200	text/plain	2818		curl_rc=0	
+2026-11-28T17:41:18Z	www.intermediair.nl	https://www.intermediair.nl/robots.txt	nl_im_robots	200	text/plain	3735		curl_rc=0	
+2026-11-28T17:41:31Z	www.jobbird.com	https://www.jobbird.com/robots.txt	nl_jobbird_robots	200	text/plain;charset=UTF-8	1514		curl_rc=0	
+2026-11-28T17:41:33Z	www.jobbird.com	https://www.jobbird.com/nl/algemene-voorwaarden	nl_jobbird_terms	200	text/html; charset=utf-8	60868		curl_rc=0	
+2026-11-28T17:41:34Z	www.monsterboard.nl	https://www.monsterboard.nl/	nl_monsterboard	301	text/html	162	https://www.monster.com/nl/	curl_rc=0	
+2026-11-28T17:41:44Z	developers.homerun.co	https://developers.homerun.co/	v_homerun_dev	200	text/html; charset=UTF-8	607497		curl_rc=0	
+2026-11-28T17:41:45Z	help.homerun.co	https://help.homerun.co/en/articles/5013627-how-to-generate-an-xml-feed	v_homerun_help	200	text/html; charset=utf-8	82259		curl_rc=0	
+2026-11-28T17:41:52Z	www.tellent.com	https://www.tellent.com/hubfs/API%20Changes_Offers%20and%20Rate%20Limiting.pdf	v_tellent_pdf	200	application/pdf	252017		curl_rc=0	
+2026-11-28T17:42:04Z	help.afas.nl	https://help.afas.nl/help/EN/SE/Ins_Ess_Rcruit_Apply_Out.htm	v_afas	200	text/html; charset=utf-8	21219		curl_rc=0	
+2026-11-28T17:42:13Z	data.europa.eu	https://data.europa.eu/api/hub/search/search?q=vacatures&filter=dataset&facets=%7B%22country%22%3A%5B%22nl%22%5D%7D&limit=25&page=0&includes=id,title,modified,catalog.id,publisher.name	nl_deu	200	application/json	53508		curl_rc=0	
+2026-11-28T17:42:28Z	techleap.nl	https://techleap.nl/blog/discover-the-dutch-tech-ecosystem-with-startup-finder/	nl_techleap	308	text/html; charset=utf-8	95	https://techleap.nl/blog/discover-the-dutch-tech-ecosystem-with-startup-finder	curl_rc=0	
+2026-11-28T17:42:33Z	techleap.nl	https://techleap.nl/blog/discover-the-dutch-tech-ecosystem-with-startup-finder	nl_techleap2	404	text/html	376168		curl_rc=0	
+2026-11-28T17:44:55Z	adem.public.lu	https://adem.public.lu/fr/jobboard.html	lu_adem_jb	200	text/html; charset=utf-8	78191		curl_rc=0	
+2026-11-28T17:44:57Z	adem.public.lu	https://adem.public.lu/fr/support/aspects-legaux.html	lu_adem_legal	200	text/html; charset=utf-8	96139		curl_rc=0	
+2026-11-28T17:45:05Z	adem.public.lu	https://adem.public.lu/robots.txt	lu_adem_robots	200	text/plain; charset=utf-8	529		curl_rc=0	
+2026-11-28T17:45:08Z	gouvernement.lu	https://gouvernement.lu/fr/actualites/toutes_actualites/communiques/2026/10-octobre/29-jobboard.html	lu_gouv_press	200	text/html; charset=utf-8	90893		curl_rc=0	
+2026-11-28T17:45:47Z	govjobs.public.lu	https://govjobs.public.lu/fr.html	lu_gov_home	200	text/html; charset=utf-8	45038		curl_rc=0	
+2026-11-28T17:45:49Z	govjobs.public.lu	https://govjobs.public.lu/fr/support/aspects-legaux.html	lu_gov_legal	200	text/html; charset=utf-8	49236		curl_rc=0	
+2026-11-28T17:45:52Z	govjobs.public.lu	https://govjobs.public.lu/robots.txt	lu_gov_robots	200	text/plain; charset=utf-8	529		curl_rc=0	
+2026-11-28T17:48:03Z	data.public.lu	https://data.public.lu/api/1/datasets/skills-required-in-adem-job-vacancies/	lu_dp_skills	200	application/json	10579		curl_rc=0	
+2026-11-28T17:48:12Z	data.public.lu	https://data.public.lu/api/1/datasets/?q=ADEM&page_size=30	lu_dp_adem	200	application/json	10673		curl_rc=0	
+2026-11-28T17:48:15Z	data.public.lu	https://data.public.lu/api/1/datasets/?tag=companies-and-company-ownership&page_size=30	lu_dp_hvd	200	application/json	98254		curl_rc=0	
+2026-11-28T17:48:23Z	download.data.public.lu	https://download.data.public.lu/resources/hvd-annex-5-companies-and-company-ownership-annual-deposits-2026/20261025-042629/hvd.annualdeposits2026.json	lu_hvd_range	206	application/json	4000		curl_rc=0	-r 0-3999
+2026-11-28T17:48:32Z	data.public.lu	https://data.public.lu/en/pages/fact-sheets/hvd/	lu_dp_fact	200	text/html; charset=utf-8	115316		curl_rc=0	
+2026-11-28T17:48:35Z	data.public.lu	https://data.public.lu/api/1/datasets/?q=offres%20d%27emploi%20vacancies&page_size=30	lu_dp_vac	200	application/json	94		curl_rc=0	
+2026-11-28T17:48:47Z	catalog.inspire.geoportail.lu	https://catalog.inspire.geoportail.lu/geonetwork/hvd/eng/csw?service=CSW&version=2.0.2&request=GetRecords&resultType=results&typeNames=csw:Record&elementSetName=summary&constraintLanguage=CQL_TEXT&constraint_language_version=1.1.0&constraint=AnyText%20like%20%27%25compan%25%27&maxRecords=40	lu_hvd_csw	200	application/xml; charset=UTF-8	48684		curl_rc=0	
+2026-11-28T17:48:56Z	www.lbr.lu	https://www.lbr.lu/	lu_lbr	200	text/html	619		curl_rc=0	
+2026-11-28T17:48:58Z	e-justice.europa.eu	https://e-justice.europa.eu/topics/registers-business-insolvency-land/business-registers-eu-countries/lu_en	lu_ejustice	200	text/html; charset=utf-8	75077		curl_rc=0	
+2026-11-28T17:49:17Z	www.jobs.lu	https://www.jobs.lu/robots.txt	lu_jobslu	301		0	https://en.jobs.lu/robots.txt	curl_rc=0	
+2026-11-28T17:49:18Z	en.jobs.lu	https://en.jobs.lu/robots.txt	lu_enjobslu	404	text/html	103		curl_rc=0	
+2026-11-28T17:49:20Z	www.jobfinder.lu	https://www.jobfinder.lu/robots.txt	lu_jobfinder	200	text/plain; charset=UTF-8	117		curl_rc=0	
+2026-11-28T17:49:21Z	www.monster.lu	https://www.monster.lu/	lu_monster	301	text/html	162	https://www.monster.com/fr/	curl_rc=0	
+2026-11-28T17:49:23Z	www.skeeled.com	https://www.skeeled.com/	v_skeeled	200	text/html; charset=UTF-8	48958		curl_rc=0	
+2026-11-28T17:49:29Z	data.europa.eu	https://data.europa.eu/api/hub/search/search?q=job%20vacancies%20offres%20d%27emploi&filter=dataset&facets=%7B%22country%22%3A%5B%22lu%22%5D%7D&limit=15&page=0&includes=id,title,modified,catalog.id,publisher.name	lu_deu	200	application/json	97460		curl_rc=0	
+2026-11-28T17:49:40Z	data.europa.eu	https://data.europa.eu/api/hub/search/datasets/2deb97de-9787-11f0-ab9c-bee5960d250d	lu_deu_adem	200	application/json	10075		curl_rc=0	
+2026-11-28T17:51:41Z	opendata.cro.ie	https://opendata.cro.ie/api/3/action/package_show?id=companies	ie_cro_pkg	200	application/json;charset=utf-8	4467		curl_rc=0	
+2026-11-28T17:51:53Z	opendata.cro.ie	https://opendata.cro.ie/api/3/action/datastore_search?resource_id=3fef41bc-b8f4-4b10-8434-ce51c29b1bba&limit=1	ie_cro_ds	200	application/json;charset=utf-8	4278		curl_rc=0	
+2026-11-28T17:52:06Z	opendata.cro.ie	https://opendata.cro.ie/api/3/action/datastore_search?resource_id=3fef41bc-b8f4-4b10-8434-ce51c29b1bba&filters=%7B%22company_status%22%3A%22Normal%22%7D&limit=3	ie_cro_normal	200	application/json;charset=utf-8	5885		curl_rc=0	
+2026-11-28T17:52:07Z	opendata.cro.ie	https://opendata.cro.ie/api/3/action/package_search?rows=20	ie_cro_list	200	application/json;charset=utf-8	10336		curl_rc=0	
+2026-11-28T17:52:16Z	data.gov.ie	https://data.gov.ie/api/3/action/package_search?q=job%20vacancies	ie_dgi_1	200	application/json;charset=utf-8	13319		curl_rc=0	
+2026-11-28T17:52:18Z	data.gov.ie	https://data.gov.ie/api/3/action/package_search?q=vacancies%20OR%20jobsireland%20OR%20%22job%20postings%22&rows=30	ie_dgi_2	200	application/json;charset=utf-8	223		curl_rc=0	
+2026-11-28T17:52:25Z	data.gov.ie	https://data.gov.ie/api/3/action/package_search?q=vacancies&rows=30	ie_dgi_3	200	application/json;charset=utf-8	196036		curl_rc=0	
+2026-11-28T17:52:27Z	jobsireland.ie	https://jobsireland.ie/robots.txt	ie_ji_robots	200	text/html	38436		curl_rc=0	
+2026-11-28T17:52:36Z	jobsireland.ie	https://jobsireland.ie/en-US/eures-terms-and-conditions	ie_ji_terms	200	text/html	38436		curl_rc=0	
+2026-11-28T17:52:38Z	www.publicjobs.ie	https://www.publicjobs.ie/robots.txt	ie_pj_robots	200	text/plain	244		curl_rc=0	
+2026-11-28T17:52:41Z	www.publicjobs.ie	https://www.publicjobs.ie/en/	ie_pj_home	200	text/html; charset=utf-8	77596		curl_rc=0	
+2026-11-28T17:52:47Z	www.publicjobs.ie	https://www.publicjobs.ie/en/terms-conditions	ie_pj_terms	200	text/html; charset=utf-8	55163		curl_rc=0	
+2026-11-28T17:52:57Z	www.irishjobs.ie	https://www.irishjobs.ie/robots.txt	ie_ij_robots	200	text/plain; charset=utf-8	6236		curl_rc=0	
+2026-11-28T17:52:59Z	www.irishjobs.ie	https://www.irishjobs.ie/recruiters/terms/	ie_ij_terms	200	text/html; charset=UTF-8	128598		curl_rc=0	
+2026-11-28T17:53:16Z	www.jobs.ie	https://www.jobs.ie/robots.txt	ie_jobsie_robots	200	text/plain; charset=utf-8	6191		curl_rc=0	
+2026-11-28T17:53:19Z	www.jobs.ie	https://www.jobs.ie/recruiters/recruitment-news/terms/	ie_jobsie_terms	200	text/html; charset=UTF-8	133088		curl_rc=0	
+2026-11-28T17:53:26Z	docs.hirehive.com	https://docs.hirehive.com/website-integration/jobs-api/list	v_hirehive	200	text/html; charset=utf-8	246437		curl_rc=0	
+2026-11-28T17:53:27Z	intercom.help	https://intercom.help/occupop/en/articles/8867619-choosing-the-best-careers-page-integration-option	v_occupop	404	text/plain; charset=utf-8	9		curl_rc=0	
+2026-11-28T17:53:38Z	occupop.com	https://occupop.com/all-features	v_occupop2	301	text/html	162	https://www.occupop.com/(all-features)	curl_rc=0	
+2026-11-28T17:53:39Z	www.rezoomo.com	https://www.rezoomo.com/	v_rezoomo	200	text/html;charset=UTF-8	178990		curl_rc=0	
+2026-11-28T17:53:41Z	www.oleeo.com	https://www.oleeo.com/	v_oleeo	200	text/html; charset=UTF-8	157788		curl_rc=0	
+2026-11-28T17:53:54Z	www.occupop.com	https://www.occupop.com/(all-features)	v_occupop3	301	text/html	162	https://cezannehr.com/	curl_rc=0	
+2026-11-28T17:54:04Z	www.rezoomo.com	https://www.rezoomo.com/terms-of-use/	v_rezoomo_terms	200	text/html;charset=UTF-8	105783		curl_rc=0	
+2026-11-28T17:54:05Z	data.europa.eu	https://data.europa.eu/api/hub/search/search?q=job%20vacancies&filter=dataset&facets=%7B%22country%22%3A%5B%22ie%22%5D%7D&limit=15&page=0&includes=id,title,modified,catalog.id,publisher.name	ie_deu	200	application/json	40339		curl_rc=0	
