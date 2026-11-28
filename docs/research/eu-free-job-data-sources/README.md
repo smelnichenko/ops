@@ -16,7 +16,7 @@ and its report section exist, with the check's verdict counts.
 | `report/<CC>-<Name>.md`, `report/00-EU-wide.md`, `report/INTRO.md` | The report's sections, written from research + check | one writer per zone |
 | `briefs/` | The instructions each layer worked under | |
 | `status.py` | Rebuilds STATUS.md | |
-| `checkpoint.sh` | Rebuilds STATUS.md and commits this folder locally when something changed; never pushes | run after every step and every few minutes while a pass runs |
+| `checkpoint.sh` | Rebuilds STATUS.md, commits this folder when something changed and pushes the branch (every commit carries [CI SKIP]; never on main) | run after every step and every few minutes while a pass runs |
 | `build_report.py` | Joins `report/` into `docs/eu-free-job-data-sources.md` | |
 
 Zones: EU-wide (EURES, aggregators' APIs, applicant-tracking vendors' public feeds, remote-job

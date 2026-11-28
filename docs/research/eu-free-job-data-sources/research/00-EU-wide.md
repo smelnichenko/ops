@@ -436,3 +436,268 @@ copy of the listings, and none returns the full advert text.
   cannot obtain anymore" (third party: Arbeitnow's blog); masi's sources list also records no usable Indeed route.
 - **Paid only** (named for completeness, not examined): Careerjet Jobs Data API, TheirStack, Coresignal, Techmap,
   LinkUp, Fantastic.jobs, JSearch on RapidAPI. See "Gaps".
+
+## 5. Applicant-tracking vendors with publicly readable job boards
+
+What these have in common: the vendor hosts each employer's careers board and serves it as JSON, XML or RSS at a
+predictable address, without a key, because the employer's own careers page reads it. Country is not a property of
+the vendor: a board is found only by knowing the employer's board name, and each posting carries its own location.
+There is no directory of boards. No vendor publishes a reuse licence for the postings - they are the employer's
+content, published by the employer; the vendor's documentation speaks only of the technical access. All of the
+vendors below except Pinpoint, Breezy HR, HireHive and Manatal are hosts masi reads today, so **only documentation
+was requested**, one page per vendor; field details marked "masi" come from masi's `docs/sources.md`.
+
+### Greenhouse - Job Board API
+- Publisher: Greenhouse Software (US).
+- Documentation: https://developers.greenhouse.io/job-board.html (redirects to `docs.greenhouse.io`).
+- Data or endpoint: `GET https://boards-api.greenhouse.io/v1/boards/{board_token}/jobs` (`?content=true` adds the
+  full description, departments and offices); `/jobs/{job_id}` (`?pay_transparency=true` adds `pay_input_ranges`);
+  `/offices`, `/departments`. JSON, JSONP.
+- Holds: `id`, `title`, `location.name` (free text), `absolute_url`, `updated_at`, `first_published`, `content`
+  (HTML), departments, offices, metadata, pay ranges where set.
+- Access: API. Registration or key: none for reading - "Only the application submission endpoint (POST ...) requires
+  Basic Auth." Cost: free.
+- Licence or terms: none stated; "Requests may be rate limited for security and traffic reasons."
+- Volume: one employer per board. Update cycle: live.
+- Seen on 2026-11-28: the documentation page -> 200, 16 kB. No board was requested.
+- Caveats: board names are not case-sensitive (masi, measured 2026-11-07); a board with content can exceed 2 MB
+  (masi); a gone board answers 404.
+
+### Lever - Postings API
+- Publisher: Lever (Employ Inc., US).
+- Documentation: https://github.com/lever/postings-api
+- Data or endpoint: `GET https://api.lever.co/v0/postings/{site}?mode=json` (`skip`, `limit`; filters `location`,
+  `commitment`, `team`, `department`); **EU instance: `https://api.eu.lever.co/v0/postings/{site}`** for customers
+  hosted in the EU. JSON, HTML or XML by `mode`.
+- Holds: `id`, `text` (title), `categories` (location, commitment, team, department), `country`, `workplaceType`
+  (`on-site`/`remote`/`hybrid`), `description`/`descriptionPlain`, `lists`, `additional`, `salaryRange`
+  (`currency`, `interval`, `min`, `max`), `hostedUrl`, `applyUrl` (the documented field table names no date field).
+- Access: API. Registration or key: none for reading. Cost: free.
+- Licence or terms (exact wording): "Note that all job postings in the `published` state are publicly viewable.
+  These jobs may be scraped by third parties. All other jobs are completely hidden from the jobs API." Rate limits
+  are stated only for application POSTs.
+- Seen on 2026-11-28: the README from `raw.githubusercontent.com` -> 200, 7.9 kB. No board was requested.
+- Caveats: board names are case-sensitive (masi). A customer on the EU instance does not answer on `api.lever.co`
+  (my reading of the two base URLs; not tested).
+
+### Ashby - public job posting API
+- Publisher: Ashby (US).
+- Documentation: https://developers.ashbyhq.com/docs/public-job-posting-api
+- Data or endpoint: `GET https://api.ashbyhq.com/posting-api/job-board/{JOB_BOARD_NAME}?includeCompensation=true`.
+- Holds: `title`, `location`, `secondaryLocations`, `department`, `team`, `isListed`, `isRemote`, `workplaceType`,
+  `descriptionHtml`/`descriptionPlain`, `publishedAt`, `employmentType` ("FullTime", "PartTime", "Intern",
+  "Contract", "Temporary"), `address.postalAddress` (with country), `jobUrl`, `applyUrl`, `compensation`.
+- Access: API. Registration or key: none. Cost: free.
+- Licence or terms: none stated: "This API allows you to get data for all currently published Job Postings for your
+  organization. If you host your own careers page, you can use this data to populate it."
+- Seen on 2026-11-28: the documentation page -> 200, 36 kB. No board was requested.
+- Caveats: `isListed: false` postings are meant to be reachable by direct link only.
+
+### Workable - public account endpoints
+- Publisher: Workable (Greece/US).
+- Documentation: https://workable.readme.io/reference/jobs-1 ("Public Endpoints").
+- Data or endpoint: `GET https://www.workable.com/api/accounts/{subdomain}?details=true` ("Returns a collection of the
+  public jobs for an account"), `/locations`, `/departments`. (masi reads the careers widget instead,
+  `apply.workable.com/api/v1/widget/accounts/{id}`, which is not in the vendor's documentation.)
+- Holds: `title`, `shortcode`, `country`, `state`, `city`, `department`, `telecommuting`, `workplace_type`
+  (`on_site`/`hybrid`/`remote`), `published_on`, `created_at`, `url`, `application_url`, `description` (with
+  `details=true`), `employment_type`, `industry`, `function`, `experience`, `education`.
+- Access: API. Registration or key: none for the public endpoints (the rest of the API needs a token). Cost: free.
+- Licence or terms: none stated on the page.
+- Seen on 2026-11-28: the documentation page -> 200, 45 kB ("Updated over 1 year ago"). No account was requested.
+
+### SmartRecruiters - Posting API
+- Publisher: SmartRecruiters (US; bought by SAP in 2025 - third party, from memory).
+- Documentation: https://developers.smartrecruiters.com/docs/posting-api
+- Data or endpoint: `GET https://api.smartrecruiters.com/v1/companies/{companyIdentifier}/postings` (paged) and
+  `/postings/{postingId}` for the full text.
+- Holds: `name`, `location` (city, region, `country`), `typeOfEmployment`, `releasedDate`, department, function,
+  experience level, `jobAd` sections, `applyUrl` (field names from masi and from memory of the endpoint reference).
+- Access: API. Registration or key: none for public postings (masi reads it so); the overview read today says "Posting
+  API allows for access to a job posting that was previously made public using SmartRecruiters application" and
+  speaks of an API key or OAuth only for *internal* postings. Cost: free.
+- Licence or terms: none stated on the page read.
+- Seen on 2026-11-28: the overview page -> 200, 40 kB ("Updated 3 months ago"). No company was requested.
+- Caveats: the landing page answers 200 for any company name, so a wrong name cannot be told from an empty board (masi).
+
+### Teamtailor - RSS feed (and `jobs.json`)
+- Publisher: Teamtailor (Sweden); many Nordic and Baltic employers.
+- Documentation: https://support.teamtailor.com/en/articles/11171756-rss-feed-how-to-guide
+- Data or endpoint: "Go to the main jobs page of your careers site and add ".rss"", e.g.
+  `https://career.teamtailor.com/jobs.rss` (`offset`, `per_page`; "the RSS feed will show the first 100 jobs").
+  masi reads the same boards' `jobs.json` (a JSON Feed with a schema.org `_jobposting` object per item), which the
+  support article does not mention.
+- Holds: title, description, publication date, job URL, remote status, global ID, locations, department, role,
+  division.
+- Access: feed. Registration or key: none. Cost: free.
+- Licence or terms (exact wording): "all of the data is publicly available"; the feed is meant for "other promotion
+  channels where an XML feed or API integration is not possible".
+- Seen on 2026-11-28: the support article through WebFetch ("Updated over 3 weeks ago"). No board was requested.
+- Caveats: boards live on `{company}.teamtailor.com` or on the employer's own domain.
+
+### Recruitee - Careers Site API
+- Publisher: Recruitee (Netherlands; part of Tellent).
+- Documentation: https://docs.recruitee.com/reference/offers
+- Data or endpoint: `GET https://{yourcompany}.recruitee.com/api/offers/` - "Returns a collection of published company
+  jobs. Offers can be filtered by department or tag."
+- Holds: title, slug, description and requirements (HTML), location, city, `country_code`, remote flag, employment
+  type, department, salary object, dates, careers URL (field names from memory of the reference, not re-read).
+- Access: API. Registration or key: none for the Careers Site API. Cost: free.
+- Licence or terms: none stated on the page read.
+- Seen on 2026-11-28: the reference page -> 200, 40 kB. No company was requested.
+- Caveats: masi's two Recruitee boards were empty on capture, so it has no collector.
+
+### Personio - XML positions feed
+- Publisher: Personio (Germany); widespread among German-speaking and other EU SMEs.
+- Documentation: https://developer.personio.de/docs/retrieving-open-job-positions
+- Data or endpoint: "Current open job postings can be retrieved in XML format under `myaccount.jobs.personio.de/xml`"
+  (`?language=en`).
+- Holds: `id`, `subcompany`, `office`, `department`, `recruitingCategory`, `name`, `jobDescriptions` (name + HTML
+  value blocks), `employmentType` ("permanent", "intern", "trainee", "freelance"), `seniority`, `schedule`,
+  `yearsOfExperience`, `keywords`, `occupation`, `createdAt`; masi also reads `salaryInformation`.
+- Access: feed (XML). Registration or key: none. Cost: free.
+- Licence or terms: none stated.
+- Seen on 2026-11-28: the documentation page -> 200, 40 kB. No account was requested.
+- Caveats: offices are city names; no country field (masi).
+
+### BambooHR, Workday, Phenom, Eightfold, iCIMS, TeamDash - readable, but not documented as public APIs
+- BambooHR (`{company}.bamboohr.com/careers/list` JSON + a detail call per opening), Workday
+  (`{tenant}.wd{N}.myworkdayjobs.com`, the careers site's own `POST .../wday/cxs/{tenant}/{site}/jobs` search and a
+  record per job), Phenom (the site's search widget), Eightfold (`/api/pcsx` search; answers 429 without the careers
+  page's session), an employer's own iCIMS listing, TeamDash (HTML pages): all described in masi's `docs/sources.md`
+  as the careers page's own back end. No vendor documentation presents them as a public API (BambooHR's and
+  Workday's documented APIs need the customer's credentials), and no terms were found that grant reading. They work
+  per employer and can change without notice. No request was made to any of them today.
+
+### Others found (not masi hosts; from third parties, not verified against vendor documentation)
+- Pinpoint: `https://{company}.pinpointhq.com/postings.json` (JSON; no posted date). Breezy HR:
+  `https://{company}.breezy.hr/json`. HireHive: `https://{company}.hirehive.com/api/v1/jobs`. Manatal:
+  `https://api.careers-page.com/open/v1/career-pages/{client_slug}/job-posts`. Sources: TheirStack's and Cavuno's
+  blog lists, read through WebFetch/WebSearch. A third-party list of this kind is the nearest thing to a maintained
+  comparison of ATS endpoints (topic 10).
+
+## 6. Remote-job feeds and APIs
+
+Every host in this topic is one masi's investigation of 2026-11-10 (`docs/remote-sources-investigation.md`) read, so
+today each got at most one request, to a documentation or terms page. Volumes and place fields below are that
+investigation's measurements ("masi, 11-10"), not today's. Country coverage is by the job's "open to" field, not by
+board: a remote job is open to an EU country when its restriction field says so.
+
+### Himalayas
+- Publisher: Himalayas (himalayas.app).
+- Documentation: https://himalayas.app/api (page says "Current as of Jul 15, 2026" in a search listing); OpenAPI
+  spec and examples on GitHub (`Himalayas-App`).
+- Data or endpoint: `GET https://himalayas.app/jobs/api` (whole feed, cursor), `GET /jobs/api/search` (keyword,
+  `country` as ISO alpha-2, `exclude_worldwide`, seniority, type, timezone; 20 a page), a per-job status endpoint
+  (410 when closed, masi), an RSS feed of the 100 newest, an MCP server.
+- Holds: title, company, `locationRestrictions` (country names; empty = worldwide), `timezoneRestrictions`,
+  seniority, employment type, salary range, description, `pubDate`, `expiryDate`, `applicationLink`, `guid`.
+- Access: API, RSS. Registration or key: "No API key is required. Every endpoint works without one"; a free key
+  (account) gives "60 requests per minute and 10,000 per day". Cost: free.
+- Licence or terms (exact wording, https://himalayas.app/api): "You can show Himalayas jobs on your own job board,
+  website or app without asking us first. Follow our API terms: Use the applicationLink for every Apply button,
+  unchanged. Show a visible link to the job on Himalayas or to himalayas.app as the source. Show the jobs only on
+  sites and apps you operate. Do not pass them on to other job boards, aggregators, Google Jobs or LinkedIn Jobs,
+  including through feeds or JobPosting structured data. Remove jobs once they expire."
+- Volume: 119,569 jobs in the whole feed; 3,904 open to Estonia (masi, 11-10).
+- Update cycle: "Responses are cached for an hour or more".
+- Seen on 2026-11-28: the documentation page -> 200, 41 kB. No data request.
+- Caveats: `totalCount` "is an estimate that can be up to a day old"; no redistribution.
+
+### Jobicy
+- Publisher: Jobicy (jobicy.com).
+- Documentation: https://jobicy.com/jobs-rss-feed (`jobi.cy/apidocs` redirects there).
+- Data or endpoint: the page read today documents `GET https://jobicy.com/api/jobs?count=100&geo=...&industry=...&tag=...`
+  with `nextCursor` pages, and `/api/jobs/status?ids=...` to check stored jobs; plus RSS and an MCP server.
+  (masi's investigation of 11-10 used `/api/v2/remote-jobs` - **the documented path has changed or been renamed
+  since**; not tested.)
+- Holds: title, company, `jobGeo` (regions or country lists), industry, type, level, excerpt and description,
+  salary where given, `pubDate`, `url` (the Jobicy page; the original ATS link only with a paid key).
+- Access: API, RSS. Registration or key: "No API key" for the public API; an optional paid key ("each job with an
+  available direct application URL costs $0.01"). Cost: free.
+- Licence or terms (exact wording): "You may use Jobicy listings in your own products and user experiences without
+  requesting individual permission. Clearly credit Jobicy as the original source when displaying listings." "You may
+  store, cache, process, and retain Jobicy API data without a fixed retention period." "You may use AI models to
+  analyze job data". FAQ: "You can store, cache, process, and redistribute job data as needed, keeping Jobicy
+  credited as the source"; "keep apply links from the free API pointing to the original job pages on Jobicy"; "Start
+  a new automated pass no more than once per hour"; limit "30 requests per second per IP address".
+- Volume: about 100 Estonia-eligible jobs in four days (masi, 11-10); "listings published in the last 7 days" only,
+  with "a three-hour publication delay".
+- Seen on 2026-11-28: the documentation page -> 200, 88 kB. No data request.
+- Caveats: **the most permissive terms of any source in this file** (store, redistribute, analyse), but a 7-day
+  window and remote jobs only.
+
+### We Work Remotely
+- Publisher: We Work Remotely (weworkremotely.com).
+- Documentation: https://weworkremotely.com/remote-job-rss-feed ; terms
+  https://weworkremotely.com/terms-and-conditions
+- Data or endpoint: RSS `https://weworkremotely.com/remote-jobs.rss` and one feed per category (masi).
+- Holds: title, company, `<region>`, `<country>`, category, type, HTML description, `pubDate`, `expires_at` (masi).
+- Access: RSS. Registration or key: none. Cost: free.
+- Licence or terms: "Anyone can use the feed, all we ask is that you attribute the links back to We Work Remotely"
+  (search-result text of the RSS page; the page itself was refused today). masi, 11-10: the terms ("Updated October
+  23, 2026") contain no scraping or automation clause.
+- Volume: 100 items in the all-jobs feed, 27 IT jobs open to Estonia (masi, 11-10).
+- Seen on 2026-11-28: `GET https://weworkremotely.com/remote-job-rss-feed` -> **HTTP 403**, `cf-mitigated: challenge`
+  (Cloudflare "Just a moment..." page) for curl; the host was not asked again.
+- Caveats: **contradiction** - masi's investigation read this site on 11-10 with a browser-like User-Agent; a client
+  that names itself is challenged today. Whether the RSS feeds themselves are challenged too was not tested.
+
+### Remotive
+- Publisher: Remotive (remotive.com).
+- Documentation: https://github.com/remotive-com/remote-jobs-api
+- Data or endpoint: `https://remotive.com/api/remote-jobs` (`category`, `company_name`, `search`, `limit`).
+- Holds: title, company, category, job type, `publication_date`, `candidate_required_location`, salary text,
+  description, URL.
+- Access: API. Registration or key: none. Cost: free; "We offer a private, paid-for API".
+- Licence or terms (exact wording, the README): "Please do not submit Remotive jobs to third Party websites,
+  including but not limited to: Jooble, Neuvoo, Google Jobs, LinkedIn Jobs. Please link back to the URL found on
+  Remotive AND mention Remotive as a source ... If you don't do that, we'll terminate your API access"; "Jobs
+  displayed are delayed by 24 hours"; "we advise max. 4 times a day ... excessive requests (more than 2x per minute)
+  will be blocked."
+- Volume: the free API served 13 jobs in total (masi, 11-10); robots.txt `Disallow: /api/*` (masi).
+- Seen on 2026-11-28: the README from GitHub -> 200, 2 kB. No request to remotive.com.
+- Caveats: too small to matter; no passing on.
+
+### Remote OK
+- Publisher: Remote OK (remoteok.com).
+- Documentation: none beyond the API's own first element (a "legal" notice).
+- Data or endpoint: `https://remoteok.com/api` (JSON).
+- Holds: position, company, tags, location (often blank), salary range, description, date, `apply_url` back to the
+  site (masi).
+- Access: API. Registration or key: none. Cost: free.
+- Licence or terms (as recorded by masi, 11-10): "Please link back ... and mention Remote OK as a source ... If you
+  do not we'll have to suspend API access."; robots `Content-Signal: search=yes,ai-train=no`.
+- Volume: 99 jobs (masi, 11-10).
+- Seen on 2026-11-28: no request (its only documentation is the data endpoint itself).
+
+### Working Nomads
+- Publisher: Working Nomads (workingnomads.com).
+- Documentation: an "API" link in the site footer; terms https://www.workingnomads.com/terms-and-conditions
+- Data or endpoint: `https://www.workingnomads.com/api/exposed_jobs/` (one JSON, masi).
+- Holds: title, company, category, tags, `location` (free text), description, date, URL (masi).
+- Access: API. Registration or key: none. Cost: free.
+- Licence or terms: the terms read today contain no clause on scraping, automated access, feeds or reuse of
+  listings (searched for scrap, robot, automat, crawl, harvest, republish); no API terms page was found.
+- Volume: 36 jobs (masi, 11-10).
+- Seen on 2026-11-28: the terms page -> 200, 19 kB.
+
+### Hacker News "Ask HN: Who is hiring?"
+- Publisher: Y Combinator (Hacker News); search API run by Algolia.
+- Documentation: https://github.com/HackerNews/API (official Firebase API); https://hn.algolia.com/api (search API).
+- Data or endpoint: official: `https://hacker-news.firebaseio.com/v0/item/<id>.json`; Algolia:
+  `https://hn.algolia.com/api/v1/search_by_date?tags=story,author_whoishiring` then `/api/v1/items/{id}` (masi).
+- Holds: one free-text comment per employer, monthly thread; by convention a header line "Company | Role | Location
+  | REMOTE ...". No structured fields.
+- Access: API. Registration or key: none. Cost: free.
+- Licence or terms: the official README: "There is currently no rate limit." No reuse licence is stated there.
+- Volume: 220 postings in November 2026, about 44 remote and open to Europe; 136 links to ATS boards (masi, 11-10).
+- Seen on 2026-11-28: the official README from GitHub -> 200, 5.7 kB; `GET https://hn.algolia.com/api` -> 200, 2.4 kB
+  (a JavaScript page with no readable text for a plain client).
+- Caveats: mostly US employers; the value is the ATS links (topic 5).
+
+### Others (from masi's investigation of 2026-11-10; not requested today)
+- EU Remote Jobs (euremotejobs.com): feed and WordPress REST answer 401 "Not available". Landing.jobs, Welcome to
+  the Jungle / Otta, Wellfound, Arc.dev: terms forbid automated reading. No Fluff Jobs and JustJoin.it (Polish
+  market): robots.txt disallows `/api/`. 4dayweek.io: RSS of 50 jobs without a place field. Remote.co: no
+  connection. europeremotely.com: parked. No further remote-job feed with usable terms turned up in today's search.
