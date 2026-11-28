@@ -113,7 +113,7 @@ snap_state() {  # has | none | gone (no such domain) - libvirt answering is chec
     case "$out" in *"ailed to get domain"*|*"o domain with matching"*) echo gone ;; *) echo error ;; esac
     return
   fi
-  if printf '%s\n' "$out" | grep -qxF "$SNAP"; then echo has; else echo none; fi
+  if grep -qxF "$SNAP" <<< "$out"; then echo has; else echo none; fi
 }
 stale() {  # why the snapshot cannot be reused, one a line; nothing: fresh; exit 1: libvirt not answering
   [ "${COPY_SNAPSHOT:-on}" != off ] || { echo "COPY_SNAPSHOT=off"; return; }
