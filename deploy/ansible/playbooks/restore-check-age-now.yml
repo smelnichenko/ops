@@ -1,0 +1,37 @@
+---
+# The restore check's age check run now: a Job from production's restore-check-age CronJob (infra's
+# cluster-config/restore-check-age.yaml, kube-system - the Pis' last restore checks no older than the limit), waited for
+# until it completes, its verdict said. After a change to the image it runs in (rclone: a unit moving it), its first run
+# on the new image is the change's, judged at once - the CronJob runs every third hour, so the upgrade cycle's hour of
+# holding saw a run a third of the time (the wave-patches review, 2026-11-28). The Job removed once it completed (a failed
+# one stays for its logs - KubeJobFailed then says so). A preview changes nothing.
+#
+# Usage: task check:production:restore-check-age   (production; the copy leaves the Pis' restore checks out)
+- name: The restore check's age check run now
+  hosts: target
+  become: true
+  gather_facts: false
+  vars:
+    kubeconfig: /etc/kubernetes/admin.conf
+    kubectl: "kubectl --kubeconfig {{ kubeconfig }} -n kube-system"
+  tasks:
+    - name: A Job from the restore-check-age CronJob, waited for until it completes (its own deadline is 300 s)
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          j=restore-check-age-now-$(date -u +%Y%m%d%H%M%S)
+          {{ kubectl }} create job --from=cronjob/restore-check-age "$j" > /dev/null
+          if ! {{ kubectl }} wait --for=condition=complete "job/$j" --timeout=330s > /dev/null; then
+            {{ kubectl }} logs "job/$j" --tail=40 || true
+            echo "the restore check's age check $j did not complete"; exit 1
+          fi
+          {{ kubectl }} logs "job/$j" | tail -3
+          {{ kubectl }} delete job "$j" --wait=false > /dev/null
+      register: _age
+      changed_when: true
+      when: not ansible_check_mode
+
+    - name: Its verdict
+      ansible.builtin.debug:
+        msg: "RESTORE CHECK AGE OK: {{ (_age.stdout_lines | default(['(a preview - none run)'])) | join(' | ') }}"

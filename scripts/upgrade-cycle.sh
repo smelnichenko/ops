@@ -398,6 +398,12 @@ ci_pods() {  # the CI step pods live on ten now (wp-*, not finished, not going) 
   return "${PIPESTATUS[0]}"
 }
 boot_s() { local u _; read -r u _ < /proc/uptime; echo "${u%.*}"; }  # seconds since boot: bash's SECONDS follows the wall clock
+cnpg_clusters() {  # production's CNPG clusters with an object store, <namespace>/<name> a line - a read bounded, as ci_pods
+  timeout 60 ssh -o BatchMode=yes -o ConnectTimeout=15 -o ServerAliveInterval=15 "${UPGRADE_CI_HOST:-ten}" \
+    "kubectl --request-timeout=30s get clusters.postgresql.cnpg.io -A -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name} {.spec.backup.barmanObjectStore.destinationPath}{\"\\n\"}{end}'" \
+    < /dev/null 2>> "$log" | awk 'NF == 2 {print $1}'
+  return "${PIPESTATUS[0]}"
+}
 ci_idle() {  # two reads in a row UPGRADE_CI_IDLE_POLL s apart with no live CI step pod (between two steps a pipeline has
   # none), within $1 minutes by the clock since boot; a read that fails is no idle. What was seen last in ci_seen
   local end=$(($(boot_s) + $1 * 60)) idle=0 pods
@@ -872,17 +878,33 @@ for c in "${one_way_taken[@]}"; do  # a store whose backup its own command takes
   grep -qx -- "$c" <<< "$(printf '%s\n' "${cmds[@]}")" \
     || { stopped "a one-way change whose backup its command takes ($c) - not in its plan; nothing merged" "$log"; exit 1; }
 done
-# what production runs only as an Argo hook - k6, schnappy-production-apps' PostSync smoke test: Argo leaves hooks out of
-# its diff, so the apply alone never runs the new version (production met it at the next unrelated sync, a failure
-# failing that deploy - the observability review, 2026-11-25). Its app synced after the apply, the hook to succeed
-if grep -q '^grafana/k6 ' "$ops/.copy/unit-moves-$unit.txt" 2> /dev/null; then
-  cmds+=("deploy:argo:sync -- -e argo_app=schnappy-production-apps")
-fi
+# what production runs only as an Argo hook - k6's PostSync smoke test and its curl, the data chart's init Jobs,
+# SonarQube's setup Job: Argo leaves hooks out of its diff, so the apply alone never runs the new version (production met
+# it at the next unrelated sync, a failure failing that deploy - the observability review, 2026-11-25). Each app whose
+# chart runs a moved image in a hook synced after the apply, its hooks to succeed (scripts/upgrade-hook-apps.py - keyed
+# on k6 alone, curl, aws-cli and postgres rode unrun: the wave-patches review, 2026-11-28); not read: nothing merged
+hook_apps=$(scripts/upgrade-hook-apps.py "$ops/.copy/unit-moves-$unit.txt" "$(repo_dir schnappy/platform)" 2>> "$log") \
+  || { stopped "the apps whose hooks run its moved images not read (scripts/upgrade-hook-apps.py: ${hook_apps:-see the log}) - nothing merged" "$log"; exit 1; }
+for a in $hook_apps; do
+  cmds+=("deploy:argo:sync -- -e argo_app=$a")
+done
 # rclone runs production's backup Jobs (etcd's snapshot, Kafka's dump, ClickHouse's backup and its prune): their first
 # runs on a moved image would be production's own, after the merge (the wave-patches review, 2026-11-28) - each taken
 # once after the apply and waited for, a failure the unit's (the verify's hold then judges the CronJobs' own runs)
+# - and the restore check's age check (kube-system, every third hour: the hold saw a run a third of the time), run now
 if grep -q '^rclone/rclone ' "$ops/.copy/unit-moves-$unit.txt" 2> /dev/null; then
-  cmds+=("deploy:etcd:backup" "check:production:kafka-backup" "check:production:clickhouse-backup")
+  cmds+=("deploy:etcd:backup" "check:production:kafka-backup" "check:production:clickhouse-backup" "check:production:restore-check-age")
+fi
+# CNPG's Postgres image (a version or a digest) restarts every production cluster on it, and its barman-cloud archives
+# each one's WAL: each cluster with an object store (read from ten now - a cluster added is in it) has its archiving
+# checked and a base backup taken after the apply (the wave-patches review, 2026-11-28: four clusters restarted, no
+# backup or archiving check after - broken archiving's first sign would have been WAL piling up); not read: nothing merged
+if grep -q '^ghcr.io/cloudnative-pg/postgresql ' "$ops/.copy/unit-moves-$unit.txt" 2> /dev/null; then
+  clusters=$(cnpg_clusters) && [ -n "$clusters" ] \
+    || { stopped "it moves CNPG's Postgres image: production's CNPG clusters not read (ten) - nothing merged" "$log"; exit 1; }
+  for c in $clusters; do
+    cmds+=("deploy:postgres:base-backup -- -e pg_namespace=${c%/*} -e cluster=${c#*/}")
+  done
 fi
 
 # 6. the apply - CI idle first when the merge restarts it (an hour at most: the gates and the kill switch read after

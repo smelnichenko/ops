@@ -94,6 +94,10 @@ exit "$rc"''')
 stub(os.path.join(OPS, "scripts/upgrade-record.sh"), LOG + '\nexit "$(cat "$ST/record.rc" 2>/dev/null || echo 0)"')
 # the objects a moved chart stopped shipping, deleted on production after the merge (its verdict from a file)
 stub(os.path.join(OPS, "scripts/upgrade-leftovers.py"), LOG + '\nexit "$(cat "$ST/leftovers.rc" 2>/dev/null || echo 0)"')
+# the apps whose hooks run a moved image (its own harness: upgrade-hook-apps): the case's answer, or k6's app when k6 moves
+stub(os.path.join(OPS, "scripts/upgrade-hook-apps.py"), LOG + '''
+if [ -e "$ST/hookapps.rc" ]; then echo "REFUSED: helm/x runs a hook and HOOK_APPS names no production app for it"; exit "$(cat "$ST/hookapps.rc")"; fi
+if [ -e "$ST/hookapps" ]; then cat "$ST/hookapps"; elif grep -q '^grafana/k6 ' "$1" 2>/dev/null; then echo schnappy-production-apps; fi''')
 # the copy's snapshot: used (the copy halted after a run), forget (the proof after a fix on a base built fresh)
 stub(os.path.join(OPS, "scripts/copy-snapshot.sh"), LOG + '\nexit "$(cat "$ST/snap.rc" 2>/dev/null || echo 0)"')
 # the local mains (the start's gate) apart from the unit's branches (fresh: a list, one verdict a call)
@@ -225,7 +229,13 @@ case "$*" in *"amtool config routes test"*) cat "$ST/am" 2>/dev/null || echo ema
   *"ServerAliveInterval=15 ten kubectl --request-timeout=30s -n woodpecker get pods --no-headers --field-selector=status.phase!=Succeeded,status.phase!=Failed -o custom-columns=NAME:.metadata.name,GONE:.metadata.deletionTimestamp")
     if [ -s "$ST/wpods.seq" ]; then head -1 "$ST/wpods.seq" | tr '|' '\n'; [ "$(wc -l < "$ST/wpods.seq")" -le 1 ] || sed -i 1d "$ST/wpods.seq"
     else cat "$ST/wpods" 2>/dev/null; fi
-    exit "$(cat "$ST/wpods.rc" 2>/dev/null || echo 0)" ;; esac''')
+    exit "$(cat "$ST/wpods.rc" 2>/dev/null || echo 0)" ;;
+  # production's CNPG clusters, each with its store's path (the test environment's without one), asked bounded
+  *"ServerAliveInterval=15 ten kubectl --request-timeout=30s get clusters.postgresql.cnpg.io -A -o jsonpath="*)
+    if [ -e "$ST/cnpg" ]; then cat "$ST/cnpg"; else printf '%s\n' "schnappy-infra/schnappy-grafana-pg s3://postgres-backups/" \
+      "schnappy-test/schnappy-test-postgres " "schnappy-production/schnappy-production-postgres s3://postgres-backups/" \
+      "woodpecker/woodpecker-postgres s3://postgres-backups/"; fi
+    exit "$(cat "$ST/cnpg.rc" 2>/dev/null || echo 0)" ;; esac''')
 stub(os.path.join(BIN, "vagrant"), LOG + '\nexit "$(cat "$ST/vagrant.rc" 2>/dev/null || echo 0)"')
 H1 = "schnappy/infra 4 " + "a" * 40 + " " + "e" * 40 + "\nschnappy/ops 7 " + "c" * 40 + " " + "e" * 40 + "\n"
 H2 = "schnappy/infra 4 " + "b" * 40 + " " + "e" * 40 + "\nschnappy/ops 7 " + "c" * 40 + " " + "e" * 40 + "\n"
@@ -853,14 +863,51 @@ merge_at = next((i for i, c in enumerate(calls) if c.startswith("upgrade-label.p
 verify_at = next((i for i, c in enumerate(calls) if c.startswith("upgrade-verify.sh AFTER")), -1)
 # after the merge (the kubeadm step's etcd snapshot before it is the backup a one-way step takes - another matter)
 backups = [words(c, 3) for i, c in enumerate(calls) if merge_at < i < verify_at and c.startswith("task --yes ")
-           and any(t in c for t in ("deploy:etcd:backup", "check:production:kafka-backup", "check:production:clickhouse-backup"))]
-check("a unit moving rclone: etcd's, Kafka's and ClickHouse's backups each taken after the merge, before the verify",
-      (rc, backups), (0, ["task --yes deploy:etcd:backup", "task --yes check:production:kafka-backup", "task --yes check:production:clickhouse-backup"]))
+           and any(t in c for t in ("deploy:etcd:backup", "check:production:kafka-backup", "check:production:clickhouse-backup",
+                                    "check:production:restore-check-age"))]
+check("a unit moving rclone: etcd's, Kafka's and ClickHouse's backups each taken after the merge, before the verify - and "
+      "the restore check's age check run (every third hour: the hold saw one a third of the time - the review, 2026-11-28)",
+      (rc, backups), (0, ["task --yes deploy:etcd:backup", "task --yes check:production:kafka-backup", "task --yes check:production:clickhouse-backup",
+                          "task --yes check:production:restore-check-age"]))
 rc, calls = night("prove wave-patches patch", plan=PLAN, files={"moves": "nginx 1.29.1 1.31.0\n"})
 merge_at = next((i for i, c in enumerate(calls) if c.startswith("upgrade-label.py wave-patches --merge")), -1)
 check("  a unit not moving rclone: no backup after the apply",
       [c for i, c in enumerate(calls) if i > merge_at and c.startswith("task --yes ")
        and any(t in c for t in ("deploy:etcd:backup", "check:production:kafka-backup", "check:production:clickhouse-backup"))], [])
+# a unit moving CNPG's Postgres image (a version or a digest): every production cluster with an object store (read from ten
+# when the plan is made) has its archiving checked and a base backup taken after the merge, before the verify - the
+# test environment's cluster (no store) not; ten not read: stopped, nothing merged, no try (the wave-patches review, 2026-11-28)
+PGMOVE = {"moves": "ghcr.io/cloudnative-pg/postgresql b4bbd2e c437b7c digest\nnginx 1.29.1 1.31.0\n"}
+rc, calls = night("prove wave-patches patch", plan=PLAN, files=PGMOVE)
+merge_at = next((i for i, c in enumerate(calls) if c.startswith("upgrade-label.py wave-patches --merge")), -1)
+verify_at = next((i for i, c in enumerate(calls) if c.startswith("upgrade-verify.sh AFTER")), -1)
+check("a unit moving CNPG's Postgres image: each production cluster with a store backed up after the merge, before the verify",
+      (rc, [c[len("task --yes "):] for i, c in enumerate(calls) if merge_at < i < verify_at and "deploy:postgres:base-backup" in c]),
+      (0, ["deploy:postgres:base-backup -- -e pg_namespace=schnappy-infra -e cluster=schnappy-grafana-pg",
+           "deploy:postgres:base-backup -- -e pg_namespace=schnappy-production -e cluster=schnappy-production-postgres",
+           "deploy:postgres:base-backup -- -e pg_namespace=woodpecker -e cluster=woodpecker-postgres"]))
+for why, extra in (("ten not read", {"cnpg.rc": "255"}), ("none read", {"cnpg": ""})):
+    rc, calls = night("prove wave-patches patch", plan=PLAN, files={**PGMOVE, **extra})
+    check(f"  its clusters {why}: stopped before the merge - nothing merged, no try, said",
+          (rc, merged(calls, "wave-patches"), tries_now("wave-patches"), "production's CNPG clusters not read" in night.out),
+          (1, False, 0, True))
+rc, calls = night("prove wave-patches patch", plan=PLAN, files={"moves": "nginx 1.29.1 1.31.0\n"})
+check("  a unit not moving it: no cluster read, no base backup", ([c for c in calls if "clusters.postgresql.cnpg.io" in c],
+      has(calls, "task --yes deploy:postgres:base-backup")), ([], []))
+# the apps whose hooks run a moved image (scripts/upgrade-hook-apps.py, handed the unit's moves and the platform checkout):
+# each synced after the merge; its answer not had: stopped before the merge (k6 alone keyed it: curl, aws-cli and postgres
+# rode unrun - the review, 2026-11-28)
+rc, calls = night("prove wave-patches patch", plan=PLAN, files={"moves": "curlimages/curl 8.10.1 8.23.0\n",
+                                                              "hookapps": "schnappy-production-data\nschnappy-sonarqube\n"})
+hooks = has(calls, "upgrade-hook-apps.py")
+check("the apps whose hooks run its moved images: each synced after the merge; the script handed the unit's moves and platform",
+      (rc, [words(c, 6) for c in has(calls, "task --yes deploy:argo:sync")],
+       len(hooks) == 1 and hooks[0].split()[1].endswith("/.copy/unit-moves-wave-patches.txt") and hooks[0].split()[2].endswith("/platform")),
+      (0, ["task --yes deploy:argo:sync -- -e argo_app=schnappy-production-data", "task --yes deploy:argo:sync -- -e argo_app=schnappy-sonarqube"], True))
+rc, calls = night("prove wave-patches patch", plan=PLAN, files={"moves": "curlimages/curl 8.10.1 8.23.0\n", "hookapps.rc": "2"})
+check("  its answer not had (a hook it does not know): stopped before the merge - nothing merged, no try, its words said",
+      (rc, merged(calls, "wave-patches"), tries_now("wave-patches"), "HOOK_APPS names no production app" in night.out),
+      (1, False, 0, True))
 rc, calls = night("prove centrifugo-7.x major", files=MAJOR, args=("--dry",))
 check("  --dry: its notes never asked of Forgejo", has(calls, "upgrade-units.py notes"), [])
 for retired in ("notice centrifugo-7.x major", "apply centrifugo-7.x major"):

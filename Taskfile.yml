@@ -1586,6 +1586,15 @@ tasks:
     cmds:
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/clickhouse-backup-check.yml {{.CLI_ARGS}}
 
+  check:production:restore-check-age:
+    desc: "PRODUCTION: the Pis' restore checks judged now - a Job from the restore-check-age CronJob (kube-system), waited for, its verdict said (restore-check-age-now.yml); the upgrade cycle runs it after a unit moving rclone, the image it runs in"
+    dir: deploy/ansible
+    deps: [deploy:install]
+    dotenv: ['../../.env']
+    prompt: "Run the restore check's age check on PRODUCTION?"
+    cmds:
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/restore-check-age-now.yml {{.CLI_ARGS}}
+
   test:copy:clickhouse-restore:
     desc: "Vagrant: ClickHouse's backup restores - production's backup taken (tasks/clickhouse-backup.yml), logs.podlogs restored beside the live table as the backup user, counted, dropped (clickhouse-restore-check.yml)"
     dir: deploy/ansible
