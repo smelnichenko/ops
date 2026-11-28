@@ -315,7 +315,7 @@ e-mail.
 - Caveats: one text for all Indeed country sites; it was read in its French version only.
 
 ### LinkedIn
-- Publisher: LinkedIn (LinkedIn Ireland Unlimited Company for EU members, per the agreement).
+- Publisher: LinkedIn (LinkedIn Ireland Unlimited Company for members in the agreement's "Designated Countries").
 - Documentation: https://www.linkedin.com/legal/user-agreement ("Effective on November 3, 2025").
 - Data or endpoint: https://www.linkedin.com/jobs/ ; no public reading API for jobs.
 - Holds: job adverts. Not examined.
@@ -392,10 +392,15 @@ e-mail.
   https://static.data.gouv.fr/resources/base-sirene-des-entreprises-et-de-leurs-etablissements-siren-siret/20261103-091933/stock-stockunitelegale-csv.zip
   (984,970,049 bytes; also Parquet; establishments file 2.9 GB) - the record says to use the dataset's stable
   URLs for automation; keyless search API `https://recherche-entreprises.api.gouv.fr/search?q=<text>&per_page=1`.
-- Holds: SIREN and SIRET numbers, name, legal form (`nature_juridique`), administrative status
-  (`etat_administratif`), creation and closing dates, activity code (NAF; the NAF 2025 code is already given),
-  head-office address with coordinates, employee bracket, company size class, directors (in the API). **No
-  website, e-mail or telephone field** (none in the API record's keys).
+- Holds: basic data on every registered unit is really free, in bulk and by API, with no approval. Of the
+  eight minimum attributes of Regulation (EU) 2023/138, seen in the API record today: name (`nom_complet`,
+  `nom_raison_sociale`), status (`etat_administratif`, `date_fermeture`), registration date (`date_creation`),
+  registered office address (`siege.adresse`, with coordinates), legal form (`nature_juridique`), registration
+  number (`siren`, `siret`), activity code (`activite_principale`, NAF; the NAF 2025 code is already given).
+  The Member State is not a field of its own (a French register; a `code_pays_etranger` exists for seats
+  abroad). Beyond the minimum: employee bracket (`tranche_effectif_salarie`, with its year), size class
+  (`categorie_entreprise`), number of establishments, directors, collective agreement codes. **No website,
+  e-mail or telephone field** (none among the record's keys).
 - Access: bulk files and API.
 - Registration or key: none for the files or the search API (Insee's own Sirene API needs a free key; not checked).
 - Cost: free.
