@@ -440,7 +440,7 @@ def main(argv):
     if len(argv) == 4 and argv[0] == "--main-ci" and re.fullmatch(r"schnappy/[a-z0-9-]+", argv[1]) \
             and re.fullmatch(SHA, argv[2]) and argv[3].isdigit():
         return main_ci(argv[1], argv[2], int(argv[3]))
-    if len(argv) == 3 and argv[0] == "--main-ci" and re.fullmatch(r"schnappy/[a-z0-9-]+#\d+", argv[1]) and argv[2].isdigit():
+    if len(argv) == 3 and argv[0] == "--main-ci" and re.fullmatch(r"schnappy/[a-z0-9-]+#\d+", argv[1], re.ASCII) and argv[2].isdigit():
         repo, number = argv[1].split("#")
         return main_ci(repo, "#" + number, int(argv[2]))
     if len(argv) == 2 and argv[0] == "--pause" and argv[1]:
