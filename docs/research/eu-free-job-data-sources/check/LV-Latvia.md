@@ -10,12 +10,12 @@ the check.
 
 ## Corrections and unverified claims (apply these first)
 
-- CORRECTED (addition): what the NVA dataset covers, measured on today's file - 1 248 rows from 292 employers;
+- No claim was found wrong. ADDITION (claim 3): what the NVA dataset covers, measured on today's file - 1 248 rows from 292 employers;
   715 rows carry an employer number beginning 90 (the series of public bodies), 532 a number beginning 4 or 5
   (the enterprise register's series); the three largest categories are "Veselības aprūpe / Sociālā aprūpe" 430,
   "Izglītība / Zinātne" 313, "Valsts pārvalde" 152. That fits the description "valsts sektorā" with public
   companies such as hospitals included; it does not prove that no private employer is in it.
-- CORRECTED (addition): rows are not all fresh - `Aktualizacijas_datums` runs from 2025-06-02 to 2026-11-27.
+- ADDITION: rows are not all fresh - `Aktualizacijas_datums` runs from 2025-06-02 to 2026-11-27.
 - UNVERIFIED: cv.lv's terms of use - the terms page is again a script shell (200, 534 383 bytes, interface
   strings only); one guess at the sister host (`https://hr.cv.lv/noteikumi`) answered 404.
 - UNVERIFIED: the outcome of the cv.lv court case (first-instance order not to link; the Senate sending the

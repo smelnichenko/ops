@@ -25,6 +25,8 @@ server; nothing was submitted. Statistics (Jobindsats, Statistics Denmark) were 
 - CORRECTED: the Jobindex v. Google case is over. The appeal (lodged 24 September 2024, straight to the Supreme
   Court) was withdrawn after a settlement in February 2025.
 - CORRECTED: Jobindex's volume is on the terms page read: its header shows "35.000 job i dag".
+- CORRECTED: it-jobbank.dk does offer the same RSS feed as Jobindex (`/jobsoegning.rss?q=`, 14 items); the
+  research had left it untested.
 - CORRECTED: Jobnet's content - besides employers' own adverts, "Jobnet høster job fra virksomheders hjemmesider"
   (STAR's rules), i.e. Jobnet also collects jobs from companies' websites by robot.
 - WRONG (on archive evidence): Ofir as a live board ("holds job adverts", "free to browse", "continuous"). The

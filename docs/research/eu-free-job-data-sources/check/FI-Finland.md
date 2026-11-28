@@ -15,7 +15,7 @@ call to `api.ahtp.fi`. At most three requests per host. Statistics Finland was n
   as employers in the lists. The "one platform" guess is thereby confirmed.
 - CORRECTED: Duunitori's contracting party depends on the country: "Duunitori Oy Suomessa, JobbSafari AB Ruotsissa
   ja Jobbland AS Norjassa" - the same terms govern JobbSafari (Sweden) and Jobbland (Norway).
-- CORRECTED: Duunitori's ban is fuller than the shortened quotation: "Käyttäjä ei saa tallentaa, arkistoida,
+- ADDITION (claim 34, confirmed): Duunitori's ban is fuller than the shortened quotation: "Käyttäjä ei saa tallentaa, arkistoida,
   skrapata tai muutoin järjestelmällisesti kopioida Palvelun sisältöä tai olennaista osaa siitä, paitsi siltä osin
   kuin se on teknisesti välttämätöntä Palvelun valtuutettua käyttöä varten." It binds all users, job seekers
   included.

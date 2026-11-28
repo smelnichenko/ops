@@ -26,7 +26,7 @@ requested (out of purpose); the open data record of Töötukassa's statistics ha
 - CORRECTED: CV Keskus volume IS on the page read: its header shows "Tööpakkumised 3 378" (3 378 job offers).
 - CORRECTED: Töötukassa publishes 17 datasets on the portal as harvested by data.europa.eu (16 besides the
   vacancy statistics), not "about twenty other".
-- CORRECTED (addition): the production file's "ToS allows; polite hourly" for cv.ee is not supported by today's
+- ADDITION (claim 37, confirmed): the production file's "ToS allows; polite hourly" for cv.ee is not supported by today's
   wording: no clause on the page allows automated reading or copying. See claims 20-22.
 - UNVERIFIED: Töötukassa's terms of use - the one request allowed returned the application shell again
   (200, 140 799 bytes, no text); a site-restricted web search did not return the text.

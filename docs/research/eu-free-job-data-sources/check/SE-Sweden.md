@@ -12,11 +12,11 @@ was simplified during the check.
 - CORRECTED: Linköping's feed address in the catalogue record today is
   `https://site106.reachmee.com/Public/rssfeed/external.ashx?id=24&InstallationID=I017&CustomerName=linkoping&lang=SE`
   (`id=24`, not `id=10`).
-- CORRECTED: the EURES statement's page has moved: `.../for-arbetsgivare/rekrytera/rekrytera-i-europa` answers
+- ADDITION (claim 25, confirmed): the EURES statement's page has moved: `.../for-arbetsgivare/rekrytera/rekrytera-i-europa` answers
   301 to `.../for-arbetsgivare/kom-igang-med-din-rekrytering/rekrytera-i-europa`. The statement is there.
-- CORRECTED (two official figures): the file index says "fler än 7 miljoner annonser"; the dataset page says
+- ADDITION (claim 10, confirmed; two official figures): the file index says "fler än 7 miljoner annonser"; the dataset page says
   "Datamängden innehåller cirka 6,9 miljoner annonser". The historical API counts 7 842 069 today.
-- CORRECTED (addition): a JobSearch record holds more than the research lists, among it `application_contacts`
+- ADDITION (claim 4, confirmed): a JobSearch record holds more than the research lists, among it `application_contacts`
   and, inside `employer`, `email` and `phone_number` - fields that can carry a contact person's details.
 - UNVERIFIED: the overview page https://arbetsformedlingen.se/om-webbplatsen/oppna-data and the GitLab pages -
   not requested (three requests to arbetsformedlingen.se were spent on robots.txt and the EURES page).
