@@ -90,6 +90,15 @@ tasks:
     cmds:
       - task: test:backend
 
+  # ops' CI here, as Woodpecker runs it - before any push: .woodpecker/ci.yaml's steps (ansible-lint and the whole unit
+  # suite by default, or the steps named) in their own images, commands, environment and memory limits, as the operator's
+  # user over this tree (scripts/ci-local.sh reads them from ci.yaml). Never beside a copy run: it refuses while the
+  # copy's VMs run
+  test:ci:
+    desc: "Run ops' CI here as Woodpecker runs it: ansible-lint and the whole unit suite (or the steps named: -- <step>...) in CI's images - before any push; refused while the copy's VMs run"
+    cmds:
+      - cmd: scripts/ci-local.sh {{.CLI_ARGS}}
+
   test:backend:
     desc: Run backend tests
     dir: '{{.SRC_DIR}}/monitor'
