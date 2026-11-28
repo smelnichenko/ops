@@ -198,14 +198,26 @@ while [ "$(up)" -lt "$end" ]; do
 done
 # the Jobs made during the hold (a CronJob's run: etcd's snapshot, the restore checks' age, a backup and its prune): one
 # that failed for good (its Failed condition, no success) is the hold's failure - the first runs of an image a unit moved
-# (rclone in production's backup Jobs, the wave-patches review of 2026-11-28); a preview's aside; not read, not quiet
+# (rclone in production's backup Jobs, the wave-patches review of 2026-11-28); a preview's aside; not read, not quiet.
+# And k6's smoke run (the apps' PostSync hook, run by a sync during the hold - the runner's after a unit moving a hook's
+# image, or CD's): k6 exits 0 when its push to Mimir fails, and K6SmokeMetricsMissing stays quiet after any earlier push
+# that day - so each one that succeeded needs a sample of its run behind it, k6_checks_rate{source="k6"} in its namespace
+# no older than its start (read from Mimir through the API server; the wave-patches review, 2026-11-28)
 failed_jobs=$(HOST="$host" FROM="$hold_from" python3 -I - <<'PY_JOBS'
-import json, os, subprocess, sys
+import calendar, json, os, subprocess, sys, time, urllib.parse
+SSH = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15", "-o", "ServerAliveInterval=15", os.environ["HOST"]]
+MIMIR = "/api/v1/namespaces/schnappy-infra/services/schnappy-mimir:9009/proxy/prometheus/api/v1/query?query="
+def read(cmd):
+    r = subprocess.run(SSH + [cmd], stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=120)
+    return json.loads(r.stdout)
+def newest_k6(ns, since):
+    """The newest k6_checks_rate sample's time in ns (seconds), over the time since `since` and ten minutes more; None"""
+    window = max(600, int(time.time() - since) + 600)
+    q = f'max(max_over_time(timestamp(k6_checks_rate{{source="k6",namespace="{ns}"}})[{window}s:30s]))'
+    res = read(f"kubectl --request-timeout=60s get --raw '{MIMIR}{urllib.parse.quote(q)}'")["data"]["result"]
+    return float(res[0]["value"][1]) if res else None
 try:
-    r = subprocess.run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15", "-o", "ServerAliveInterval=15", os.environ["HOST"],
-                        "kubectl --request-timeout=60s get jobs,namespaces -A -o json"],
-                       stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=120)
-    items = json.loads(r.stdout)["items"]
+    items = read("kubectl --request-timeout=60s get jobs,namespaces -A -o json")["items"]
 except (OSError, subprocess.TimeoutExpired, ValueError, KeyError, TypeError):
     sys.exit(3)
 preview = {o["metadata"]["name"] for o in items if o.get("kind") == "Namespace"
@@ -216,6 +228,17 @@ for j in (o for o in items if o.get("kind") == "Job"):
     if m.get("creationTimestamp", "") >= os.environ["FROM"] and gave_up and not st.get("succeeded") and m["namespace"] not in preview:
         reason = next((c.get("reason") for c in st["conditions"] if c.get("type") == "Failed"), "") or "failed"
         print(f"job {m['namespace']}/{m['name']} failed ({reason})")
+    elif (m.get("creationTimestamp", "") >= os.environ["FROM"] and m["name"].endswith("-k6-smoke") and st.get("succeeded")
+          and m["namespace"] not in preview):
+        started = st.get("startTime") or m["creationTimestamp"]
+        try:
+            since = calendar.timegm(time.strptime(started, "%Y-%m-%dT%H:%M:%SZ"))
+            newest = newest_k6(m["namespace"], since)
+        except (OSError, subprocess.TimeoutExpired, ValueError, KeyError, TypeError, IndexError):
+            sys.exit(3)
+        if newest is None or newest < since:
+            print(f"job {m['namespace']}/{m['name']}: its k6 run (started {started}) pushed no metric - no k6_checks_rate "
+                  "sample since in Mimir (k6 exits 0 when its push fails)")
 PY_JOBS
 ) || { echo "NOT QUIET: the Jobs made during the hold not read - none judged"; exit 1; }
 if [ -n "$failed_jobs" ]; then echo "NOT QUIET: a Job made during the hold failed:"; echo "$failed_jobs"; exit 1; fi

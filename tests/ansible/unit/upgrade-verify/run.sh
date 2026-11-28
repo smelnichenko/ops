@@ -26,6 +26,10 @@ case "$*" in
   *"get pods"*) n=$(cat "$W/looks" 2>/dev/null || echo 0); if [ -e "$W/pods.$n.json" ]; then cat "$W/pods.$n.json"; else cat "$W/pods.json"; fi ;;
   # the Jobs made during the hold, read at its end (none unless the case gives them)
   *"get jobs,namespaces -A -o json"*) if [ -e "$W/jobs.json" ]; then cat "$W/jobs.json"; else echo '{"items": []}'; fi ;;
+  # Mimir through the API server: each query recorded; the case's answer (none by default)
+  *"get --raw '/api/v1/namespaces/schnappy-infra/services/schnappy-mimir:9009/proxy/prometheus/api/v1/query?query="*)
+    echo "$*" >> "$W/mimir-q"
+    if [ -e "$W/mimir.json" ]; then cat "$W/mimir.json"; else echo '{"status":"success","data":{"resultType":"vector","result":[]}}'; fi ;;
 
   *"amtool alert query"*) n=$(cat "$W/looks" 2>/dev/null || echo 0); echo $((n + 1)) > "$W/looks"
     if [ -e "$W/alert-looks" ]; then
@@ -69,11 +73,14 @@ def pod(ns, name, phase="Running", ready=(True,), native=None):
     return out
 def run(apps, pods, alerts=(), alert_after=None, down=False, settle="0", hold="2", pods_raw=None, streak="5", revs="",
         alert_until=None, alert_looks=None, bad_app_looks=None, bad_apps=None, apps_by_look=None, pods_by_look=None, final_apps=None,
-        jobs=None):
-    for f in [x for x in os.listdir(W) if x.startswith(("apps-bad.", "pods."))] + ["down", "looks", "alert-after", "alert-until", "alert-looks", "bad-app-looks", "apps-final.json", "jobs.json"]:
+        jobs=None, mimir=None):
+    for f in [x for x in os.listdir(W) if x.startswith(("apps-bad.", "pods."))] + ["down", "looks", "alert-after", "alert-until", "alert-looks", "bad-app-looks", "apps-final.json", "jobs.json", "mimir.json", "mimir-q"]:
         if os.path.exists(os.path.join(W, f)):
             os.remove(os.path.join(W, f))
     json.dump({"items": apps}, open(os.path.join(W, "apps.json"), "w"))
+    if mimir is not None:  # Mimir's answer to the k6 query: a sample's time (seconds), or the raw answer
+        open(os.path.join(W, "mimir.json"), "w").write(mimir if isinstance(mimir, str) else json.dumps(
+            {"status": "success", "data": {"resultType": "vector", "result": [{"metric": {}, "value": [0, str(mimir)]}]}}))
     if jobs is not None:  # a list: those Jobs and namespaces; a string: the read's raw answer
         open(os.path.join(W, "jobs.json"), "w").write(jobs if isinstance(jobs, str) else json.dumps({"items": jobs}))
     if final_apps is not None:  # a list: those apps; a string: the read's raw answer
@@ -196,6 +203,28 @@ rc, out = run(OK_APPS, OK_PODS, hold="2", jobs=[job("kube-system", "old", create
 check("  made before the hold, a preview's, still retrying, succeeding on a retry: quiet", (rc, out.strip().splitlines()[-1]), (0, "SETTLED AND QUIET for 2 min"))
 rc, out = run(OK_APPS, OK_PODS, hold="2", jobs="not json")
 check("  the Jobs not read: not quiet, said - none judged", (rc, out.strip().splitlines()[-1]), (1, "NOT QUIET: the Jobs made during the hold not read - none judged"))
+# k6's smoke run during the hold (the apps' PostSync hook): it exits 0 when its push to Mimir fails, so a sample of its
+# run must be behind it - k6_checks_rate{source="k6"} in its namespace no older than its start (the review, 2026-11-28)
+K6 = job("schnappy-production", "schnappy-production-k6-smoke", failed=0, succeeded=1, gave_up=False)
+START = 4070908800  # 2099-01-01T00:00:00Z, the Job's creation (no startTime: its creation taken)
+rc, out = run(OK_APPS, OK_PODS, hold="2", jobs=[K6], mimir=START + 3)
+q = open(os.path.join(W, "mimir-q")).read() if os.path.exists(os.path.join(W, "mimir-q")) else ""
+import urllib.parse  # noqa: E402
+check("a k6 smoke run during the hold with a sample of it in Mimir: quiet; asked for k6's own metric in its namespace",
+      (rc, out.strip().splitlines()[-1], 'k6_checks_rate{source="k6",namespace="schnappy-production"}' in urllib.parse.unquote(q)),
+      (0, "SETTLED AND QUIET for 2 min", True))
+for why, mimir in (("its newest sample older than its start", START - 100), ("no sample at all", None)):
+    rc, out = run(OK_APPS, OK_PODS, hold="2", jobs=[K6], mimir=mimir)
+    lines = out.strip().splitlines()
+    check(f"  {why}: not quiet, the run named - k6 exits 0 when its push fails", (rc, lines[-2], "pushed no metric" in lines[-1]
+          and "schnappy-production/schnappy-production-k6-smoke" in lines[-1]), (1, "NOT QUIET: a Job made during the hold failed:", True))
+rc, out = run(OK_APPS, OK_PODS, hold="2", jobs=[K6], mimir="not json")
+check("  Mimir not read: not quiet, said", (rc, out.strip().splitlines()[-1]), (1, "NOT QUIET: the Jobs made during the hold not read - none judged"))
+rc, out = run(OK_APPS, OK_PODS, hold="2", jobs=[job("pr-12", "pr-12-k6-smoke", failed=0, succeeded=1, gave_up=False), PREVIEW_NS,
+                                                job("schnappy-production", "schnappy-production-k6-smoke", created="2000-01-01T00:00:00Z",
+                                                    failed=0, succeeded=1, gave_up=False)])
+check("  a preview's k6 run, one made before the hold: none judged, Mimir never asked",
+      (rc, out.strip().splitlines()[-1], os.path.exists(os.path.join(W, "mimir-q"))), (0, "SETTLED AND QUIET for 2 min", False))
 rc, out = run(W_APPS, OK_PODS, hold="2", final_apps="not json")
 lines = out.strip().splitlines()
 check("  the apps left out not read at the end: said so - nothing named, the verdict (the looks') still the last line",
