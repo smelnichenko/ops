@@ -24,7 +24,7 @@
     k8s_version: "1.36"
     # the exact package version: an unpinned install takes the repo's newest patch, not what ten runs
     # renovate: datasource=docker depName=registry.k8s.io/kube-apiserver versioning=semver
-    k8s_package_version: "1.36.6-1.1"
+    k8s_package_version: "1.36.7-1.1"
     # the minor's CNI plugins and crictl, as upgrade-kubeadm.yml's minor_packages pins them: unpinned, a rebuild took
     # the repository's newest, which no run tested
     k8s_cni_version: "1.9.1-1.1"
@@ -54,7 +54,7 @@
     # renovate: datasource=helm depName=cert-manager registryUrl=https://charts.jetstack.io
     cert_manager_version: "v1.21.3"
     # renovate: datasource=helm depName=external-secrets registryUrl=https://charts.external-secrets.io
-    external_secrets_chart_version: "2.12.0"
+    external_secrets_chart_version: "2.15.0"
     # renovate: datasource=helm depName=metrics-server registryUrl=https://kubernetes-sigs.github.io/metrics-server
     metrics_server_chart_version: "3.14.0"
     prometheus_operator_crds_chart_version: "32.0.1"  # operator v0.94.1
@@ -62,7 +62,7 @@
     # so Renovate moves each with infra's chart in the same unit and the copy's proof follows them (copy-unit.sh's
     # FOLLOW) - on the tasks themselves a moved version was a changed task, refused by the proof
     # renovate: datasource=helm depName=cloudnative-pg registryUrl=https://cloudnative-pg.github.io/charts
-    cnpg_chart_version: "0.29.1"
+    cnpg_chart_version: "0.29.2"
     # renovate: datasource=helm depName=strimzi-kafka-operator registryUrl=https://strimzi.io/charts/
     strimzi_chart_version: "1.2.0"
     # renovate: datasource=helm depName=scylla-operator registryUrl=https://scylla-operator-charts.storage.googleapis.com/stable
@@ -84,7 +84,7 @@
     service_cidr: "10.43.0.0/16"
     node_ip: "{{ node_ip_override | default('192.168.11.2') }}"
     # renovate: datasource=helm depName=cilium registryUrl=https://helm.cilium.io
-    cilium_version: "1.20.4"
+    cilium_version: "1.20.5"
     # the Scylla Manager chart's values where Argo does not install it: its and its agents' image tags (production's
     # pins from the step that needs them; empty: the chart's) - tags apart, so a step's default line stays one short line
     scylla_manager_tag: "3.12.1@sha256:ba54287094e7097fb6685717187dca4bee304130b5fbdde1473e70e2bc6e998a"

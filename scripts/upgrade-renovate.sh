@@ -23,7 +23,7 @@
 #        unit's new image, task test:copy:renovate-image)
 set -euo pipefail
 ops=$(cd "$(dirname "$0")/.." && pwd)
-image=renovate/renovate:44.198.3@sha256:bf344aa39d5b592ec728e1db5c3e1d940a5093a89a4598073efcb18d592d121c
+image=renovate/renovate:44.264.1@sha256:35777dd4aa87beee05ba64c7728a2c5e3c70687fdb654909710bac93c697efd1
 repos=schnappy/infra,schnappy/platform,schnappy/ops
 dry=""
 for a in "$@"; do
