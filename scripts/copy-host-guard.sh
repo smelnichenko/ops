@@ -82,7 +82,7 @@ now_s() { local u _; read -r u _ < "$uptime"; echo "${u%.*}"; }  # seconds since
 live_watcher() {
   local p
   p=$(cat "$dir/host-guard.pid" 2> /dev/null) && [[ $p =~ ^[0-9]+$ ]] || return 1
-  tr '\0' ' ' < "/proc/$p/cmdline" 2> /dev/null | grep -q ' _loop \?$'
+  tr '\0' ' ' < "/proc/$p/cmdline" 2> /dev/null | grep ' _loop \?$' > /dev/null
 }
 log() { echo "$(date '+%F %T') $*" >> "$dir/host-guard.log"; }
 
@@ -121,7 +121,7 @@ case "${1:-}" in
         [ "$rest" -le 0 ] || promised=$((promised + rest))
         continue
       fi
-      if [ "${#named[@]}" -gt 0 ] && ! printf '%s\n' "${named[@]}" | grep -qxF "$m"; then continue; fi
+      if [ "${#named[@]}" -gt 0 ] && ! grep -qxF "$m" <<< "$(printf '%s\n' "${named[@]}")"; then continue; fi
       need=$((need + mb))
       starting+="$m ${mb} MB, "
     done <<< "$all"

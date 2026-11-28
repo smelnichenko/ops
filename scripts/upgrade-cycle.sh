@@ -194,7 +194,7 @@ gates() {  # $1: start or merge
     say "REFUSED: a one-way failure's page is open ($(echo $open)) - its fix first, then: scripts/upgrade-notice.sh resolve <unit>"
     return 1
   fi
-  if [ -e "$state/inflight" ] && tail -n 1 "$state/inflight" | grep -q ' verified$'; then
+  if [ -e "$state/inflight" ] && tail -n 1 "$state/inflight" | grep ' verified$' > /dev/null; then
     say "REFUSED: the last apply verified, its record not pushed ($state/inflight) - task test:copy:inventory first (the record carries production's inventory after it), then push it (scripts/upgrade-record.sh) and remove the journal"
     return 1
   fi
@@ -804,7 +804,7 @@ review_unit() {  # 0: clean; 1: findings (in $review); a review that did not fin
   verdict=$(grep -E '^VERDICT: ' "$review" | tail -1)
   passes=$(grep -E '^PASSES: .+' "$review" | tail -1)
   missing=""
-  for p in $REVIEW_PASSES; do tr ',' '\n' <<< "${passes#PASSES: }" | sed 's/^ *//; s/ *$//' | grep -qxi "$p" || missing+=" $p"; done
+  for p in $REVIEW_PASSES; do tr ',' '\n' <<< "${passes#PASSES: }" | sed 's/^ *//; s/ *$//' | grep -xi "$p" > /dev/null || missing+=" $p"; done
   # any finding, whatever its severity - a later CLEAN never takes one back
   if grep -qE '^(FINDING: |VERDICT: (FINDINGS|CRITICAL))' "$review"; then
     say "FINDINGS $unit: $(grep -cE '^FINDING: ' "$review") - $(grep -m1 -E '^(FINDING: |VERDICT: (FINDINGS|CRITICAL))' "$review" | cut -c1-200)"
@@ -869,7 +869,7 @@ done <<< "$plan"
 stop_if_one_way
 pre+=("${one_way_backups[@]}")  # a one-way store's backups, after the plan's own (an etcd snapshot) - each before the merge, the order theirs alone
 for c in "${one_way_taken[@]}"; do  # a store whose backup its own command takes: that command in the plan, or nothing
-  printf '%s\n' "${cmds[@]}" | grep -qx -- "$c" \
+  grep -qx -- "$c" <<< "$(printf '%s\n' "${cmds[@]}")" \
     || { stopped "a one-way change whose backup its command takes ($c) - not in its plan; nothing merged" "$log"; exit 1; }
 done
 # what production runs only as an Argo hook - k6, schnappy-production-apps' PostSync smoke test: Argo leaves hooks out of

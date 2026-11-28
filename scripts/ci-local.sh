@@ -10,7 +10,7 @@
 set -euo pipefail
 ops=$(cd "$(dirname "$0")/.." && pwd)
 cd "$ops"
-if "${CI_LOCAL_VIRSH:-virsh}" -c qemu:///system list --name 2> /dev/null | grep -q '^ops_'; then
+if "${CI_LOCAL_VIRSH:-virsh}" -c qemu:///system list --name 2> /dev/null | grep '^ops_' > /dev/null; then  # read to the end: a reader leaving early is the writer's SIGPIPE
   echo "REFUSED: the copy's VMs run - no heavy local run beside them (vagrant halt first, or wait for the copy run)"
   exit 1
 fi
