@@ -43,7 +43,9 @@ merge that restarts CI (a change under clusters/production/woodpecker, to the wo
 clusters/production/cnpg - a CNPG operator upgrade rolls woodpecker-postgres too) first waits for an idle Woodpecker,
 before the gates and the kill switch are read for it; after the record, infra's and platform's merge pipelines are read
 (ops' merge commit is [CI SKIP]) - one not green is a notice to run it again, not a failure of the apply. "Unproven
-because the copy leaves it out" is no finding on its own: name what that verify would miss.
+because the copy leaves it out" is no finding on its own: name what that verify would miss. `left-out.txt` beside the
+clones names each file of the unit's change that only those apps render (the mirror's left_out: their sources' paths and
+value files, less what an app the copy keeps renders too) - proven by that verify alone, and so marked; empty, none.
 
 Your reviewers and skills run under the same refusals. Hand each the absolute paths of the `.diff` and `.commits` files
 and of the clones, and tell it to read with Read, Grep and Glob alone - its Bash commands are refused.

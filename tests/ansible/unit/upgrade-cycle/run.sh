@@ -115,6 +115,8 @@ case "$*" in
     python3 -c 'import locale; locale.setlocale(locale.LC_ALL, ""); print(locale.getlocale()[1])' > "$ST/build.locale" 2>&1
     exit "$(cat "$ST/build.rc" 2>/dev/null || echo 0)" ;;
   test:copy:unit*) [ ! -e "$ST/slowproof" ] || { touch "$ST/slowproof.started"; for _ in $(seq 50); do sleep 0.1; done; }
+    # the mirror in the proof: what only the copy's left-out apps render, as the case says (none by default)
+    [ ! -e "$ST/leftout" ] || cp "$ST/leftout" "$(dirname "$ST")/ops/.copy/left-out.txt"
     n=$(head -1 "$ST/proofs"); sed -i 1d "$ST/proofs"; exit "${n:-0}" ;;
   "--yes deploy:etcd:backup"*) [ ! -e "$ST/slow" ] || { touch "$ST/slow.started"; for _ in $(seq 30); do sleep 0.1; done; }
     echo "etcd-backup OK: etcd-20261120-120000.db uploaded; current backups:"
@@ -132,6 +134,7 @@ echo "${GIT_AUTHOR_NAME:-} <${GIT_AUTHOR_EMAIL:-}> ${GIT_COMMITTER_NAME:-} <${GI
 case "$*" in
   *"upgrade-cycle review"*) { ls; cat ./*.commits ./*.diff; } > "$ST/review.saw" 2>&1  # what lies beside its clones
     cat ./prod-inventory.txt > "$ST/review.saw-inventory" 2>&1
+    cat ./left-out.txt > "$ST/review.saw-leftout" 2>&1
     n=$(( $(cat "$ST/review.n" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$ST/review.n"
     if [ -e "$ST/verdict.$n" ]; then cat "$ST/verdict.$n"; else cat "$ST/verdict"; fi
     exit "$(cat "$ST/review.rc" 2>/dev/null || echo 0)" ;;
@@ -483,7 +486,7 @@ check("  beside each clone, before the review starts: its diff against main and 
       "refused, platform's and ops' diffs never read) - as text, git's external diff and textconv off",
       (open(os.path.join(ST, "review.saw")).read().splitlines(),
        len([c for c in calls if c.startswith("git -C " + WORK) and "diff --text --no-ext-diff --no-textconv --no-color origin/main...HEAD" in c])),
-      (["context", "infra", "infra.commits", "infra.diff", "infra.pr.md", "ops", "ops.commits", "ops.diff", "pi-versions.yml", "prod-inventory.txt", "the commits of infra", "the commits of ops",
+      (["context", "infra", "infra.commits", "infra.diff", "infra.pr.md", "left-out.txt", "ops", "ops.commits", "ops.diff", "pi-versions.yml", "prod-inventory.txt", "the commits of infra", "the commits of ops",
         "the diff of infra", "the diff of ops"], 2))
 rc, calls = night("prove centrifugo minor")
 check("a unit with no production command: ops brought to origin's main all the same (its ops part may be a file no "
@@ -815,6 +818,18 @@ check("  applied (the unit further): its count of tries starts again",
 check("  its review handed what production runs NOW - the inventory this run read (beside the clones), not ops' committed one",
       open(os.path.join(ST, "review.saw-inventory")).read() if os.path.exists(os.path.join(ST, "review.saw-inventory")) else None,
       "image istio/proxyv2 1.31.4 read-this-run\n")
+# what only the copy's left-out apps render (the mirror's left_out, in the proof): handed to the review as left-out.txt;
+# emptied before each proof - one that mirrors nothing (ops alone) never hands on an earlier unit's (the review, 2026-11-28)
+rc, calls = night("prove centrifugo-7.x major", files={**MAJOR, "leftout": "infra/clusters/production/woodpecker/manifests/postgres.yaml\n"})
+check("  its review handed the changes the copy ran on no app of its own (left-out.txt, the proof's)",
+      open(os.path.join(ST, "review.saw-leftout")).read() if os.path.exists(os.path.join(ST, "review.saw-leftout")) else None,
+      "infra/clusters/production/woodpecker/manifests/postgres.yaml\n")
+setup("prove centrifugo-7.x major", files=MAJOR)
+os.makedirs(os.path.join(OPS, ".copy"), exist_ok=True)
+open(os.path.join(OPS, ".copy/left-out.txt"), "w").write("platform/helm/schnappy-sonarqube/values.yaml\n")  # an earlier unit's
+r = subprocess.run(["bash", os.path.join(OPS, "scripts/upgrade-cycle.sh")], capture_output=True, text=True, env=environ(), timeout=120)
+check("  an earlier unit's list emptied before this proof (it mirrored nothing): the review handed none",
+      open(os.path.join(ST, "review.saw-leftout")).read() if os.path.exists(os.path.join(ST, "review.saw-leftout")) else None, "")
 setup("prove centrifugo-7.x major", files=MAJOR)
 os.remove(os.path.join(OPS, "tests/ansible/copy/prod-inventory.txt"))
 r = subprocess.run(["bash", os.path.join(OPS, "scripts/upgrade-cycle.sh")], capture_output=True, text=True, env=environ(), timeout=120)

@@ -756,6 +756,9 @@ prove() {
   local moves="$ops/.copy/unit-moves-$unit.txt"
   [ -n "$dry" ] || scripts/upgrade-units.py moves "$unit" > "$moves" 2>> "$log" \
     || { stopped "what the unit moves not read - nothing proven" "$log"; exit 1; }
+  # what only the apps the copy leaves out render, the unit's changes there - the mirror writes it in the proof
+  # (scripts/vagrant-gitops-mirror.py's left_out), emptied first: an ops-only unit's proof mirrors nothing
+  [ -n "$dry" ] || : > "$ops/.copy/left-out.txt"
   COPY_UNIT_MOVES="$moves" run task test:copy:unit UNIT="$unit"
 }
 # what was proven is what is reviewed and merged: the heads after each proof the ones read before it
@@ -789,7 +792,10 @@ review_unit() {  # 0: clean; 1: findings (in $review); a review that did not fin
   # compatibility pass judges each version moved against it
   cp -- "$ops/tests/ansible/copy/prod-inventory.txt" "$ops/tests/ansible/copy/pi-versions.yml" "$revdir/" 2>> "$log" \
     || { stopped "production's inventory not handed to the review - nothing applied" "$log"; exit 1; }
-  (cd "$revdir" && timeout "$agent_timeout" "${clean_env[@]}" "$agent" -p "upgrade-cycle review: review the unit renovate/$unit - its diff in each repo cloned here (one directory per repo, its diff against origin/main in <repo>.diff, its commits in <repo>.commits and its pull request's body - Renovate's table and release notes - in <repo>.pr.md beside it; what production runs now in prod-inventory.txt and pi-versions.yml; the repos it does not touch at main in context/) - as the review instructions say. A version left elsewhere that the fix agent cannot move goes on a 'NOTE: <where> - <what>' line, never a FINDING. Each finding, whatever its severity, on a line of its own: 'FINDING: <critical|warning|suggestion> <where> - <what>'. End with two lines: 'PASSES: <the passes that ran, comma-separated>' and 'VERDICT: CLEAN' (no finding at all) or 'VERDICT: FINDINGS <how many>'. Change nothing." \
+  # the unit's changes the copy ran on no app of its own (left-out.txt, the proof's): proven by production's verify alone
+  cp -- "$ops/.copy/left-out.txt" "$revdir/left-out.txt" 2>> "$log" \
+    || { stopped "what the copy left out not handed to the review - nothing applied" "$log"; exit 1; }
+  (cd "$revdir" && timeout "$agent_timeout" "${clean_env[@]}" "$agent" -p "upgrade-cycle review: review the unit renovate/$unit - its diff in each repo cloned here (one directory per repo, its diff against origin/main in <repo>.diff, its commits in <repo>.commits and its pull request's body - Renovate's table and release notes - in <repo>.pr.md beside it; what production runs now in prod-inventory.txt and pi-versions.yml; its changes the copy ran on no app of its own in left-out.txt; the repos it does not touch at main in context/) - as the review instructions say. A version left elsewhere that the fix agent cannot move goes on a 'NOTE: <where> - <what>' line, never a FINDING. Each finding, whatever its severity, on a line of its own: 'FINDING: <critical|warning|suggestion> <where> - <what>'. End with two lines: 'PASSES: <the passes that ran, comma-separated>' and 'VERDICT: CLEAN' (no finding at all) or 'VERDICT: FINDINGS <how many>'. Change nothing." \
      --restricted --tools "Bash,Read,Glob,Grep,Agent,Skill" --agents "$reviewers" \
      --append-system-prompt-file "$ops/.claude/upgrade-agent/review.md" --settings "$ops/.claude/upgrade-agent/review.json" \
      --strict-mcp-config --permission-mode dontAsk --permission-prompts none) < /dev/null > "$review" 2>&1 9>&-
