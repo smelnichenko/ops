@@ -22,6 +22,7 @@ COUNTRIES = [
     ("NL", "Netherlands"), ("PL", "Poland"), ("PT", "Portugal"), ("RO", "Romania"), ("SE", "Sweden"),
     ("SI", "Slovenia"), ("SK", "Slovakia"),
 ]
+REGISTER_COLUMNS = 5  # Company register free | Register and how to get it | Licence | Website or e-mail in the data | Activity codes
 SUMMARY_COLUMNS = 7  # Readable by a program for own job search | Best source | How to read it | What its terms allow | Live vacancies | Full text and how to apply | Update cycle
 
 
@@ -35,12 +36,22 @@ def summary_row(text):
     return None
 
 
+def register_row(text):
+    """The single data row of the table that opens a country's 'Through the employers' section, or None."""
+    lines = text.splitlines()
+    for i, line in enumerate(lines):
+        if line.startswith("| Company register free") and i + 2 < len(lines):
+            cells = [c.strip() for c in lines[i + 2].strip().strip("|").split("|")]
+            return cells if len(cells) == REGISTER_COLUMNS else None
+    return None
+
+
 def anchor(code, name):
     return f"{name.lower()}-{code.lower()}"
 
 
 def main(outputs):
-    problems, bodies, rows = [], [], []
+    problems, bodies, rows, registers = [], [], [], []
     eu = PARTS / "00-EU-wide.md"
     if not eu.exists():
         problems.append("missing report/00-EU-wide.md")
@@ -57,6 +68,11 @@ def main(outputs):
             problems.append(f"{path.name}: summary table row not found or not {SUMMARY_COLUMNS} cells")
             continue
         rows.append(f"| [{name}](#{anchor(code, name)}) | " + " | ".join(cells) + " |")
+        reg = register_row(text)
+        if reg is None:
+            problems.append(f"{path.name}: 'Company register free' table row not found or not {REGISTER_COLUMNS} cells")
+        else:
+            registers.append(f"| [{name}](#{anchor(code, name)}) | " + " | ".join(reg) + " |")
         bodies.append(text)
     if problems:
         print("NOT BUILT:")
@@ -78,6 +94,12 @@ def main(outputs):
            "| Country | Readable by a program for own job search | Best source | How to read it | What its terms allow | Live vacancies | Full text and how to apply | Update cycle |",
            "|---|---|---|---|---|---|---|---|",
            *rows, "",
+           "## Company registers by country", "",
+           "The second route goes through the employers, and starts from a list of companies. "
+           "EU law sets one minimum for all; what each country actually publishes differs.", "",
+           "| Country | Company register free | Register and how to get it | Licence | Website or e-mail in the data | Activity codes |",
+           "|---|---|---|---|---|---|",
+           *registers, "",
            eu.read_text(encoding="utf-8").strip(), "",
            "# Countries", ""]
     for body in bodies:

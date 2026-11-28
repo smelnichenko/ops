@@ -56,6 +56,15 @@ so mention those only where there is something specific to your country.
       registration number, status, legal form, address, activity code)? Does it carry a website or
       e-mail address? Licence, key, update cycle, exact URL. Say whether it is published as an EU
       high-value dataset (category "companies and company ownership").
+      EU law sets a minimum (Regulation (EU) 2023/138, Annex 5: name, status, registration date,
+      registered office address, legal form, registration number, Member State, activity code;
+      CC BY 4.0 or looser; API and bulk download; from 9 June 2024 - see
+      `evidence/regulation-2023-138-companies.md`). Countries differ in whether and how they meet
+      it, so establish the facts for THIS country and do not reason from the rule: which of those
+      eight attributes the free data carries, what it carries beyond them (website, e-mail, phone,
+      number of employees), and - where the register is not free, not in bulk, or behind an
+      approval - say so plainly and name what is free instead (search only, one company per
+      request, a partial extract).
    b. **Applicant-tracking systems employers in the country use**, local vendors above all. For
       each: does an employer's board have a documented public feed (JSON, XML, RSS) readable
       without a key, and what do the vendor's terms say? Take this from the vendor's own

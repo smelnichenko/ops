@@ -72,7 +72,11 @@ Write `report/<CC>-<Name>.md` (same `<CC>-<Name>` as the input files) with exact
 
 ### Through the employers
 
-- **Company register:** name, link, what is free (bulk or API), which fields, licence; whether it carries websites.
+| Company register free | Register and how to get it | Licence | Website or e-mail in the data | Activity codes |
+|---|---|---|---|---|
+| Yes / Partly / No | name; e.g. "bulk CSV and API, no key" | licence | e.g. "website and e-mail" or "neither" | e.g. "NACE, yes" |
+
+- **Company register:** link, what is free and what is not, which fields, update cycle.
 - **Where links to employers' own pages come from:** the free sources that carry them, or "none found".
 
 | Applicant-tracking vendor | Public feed for an employer's board | Documentation | Check |
@@ -107,6 +111,12 @@ Write `report/<CC>-<Name>.md` (same `<CC>-<Name>` as the input files) with exact
   careers feed, with the application going straight to the employer. Write it from the inputs'
   section of the same name. If the inputs have none, write "Not researched." under the heading.
   A vendor counts as having a public feed only if its own documentation says so.
+  Its first table has exactly one data row, short cells, no "|" inside a cell. Countries differ
+  here, so state this country's facts and never what EU law requires in place of them:
+  **Yes** = basic data on every company is free in bulk or by API without approval;
+  **Partly** = free with a limit (one company per request, search only, a partial extract, a key
+  that needs approval, a fee for bulk); **No** = paid or not published; "Not researched" if the
+  inputs have no such section.
 - "Check" column: confirmed / corrected / unverified / none found.
 - Bullets under the last three headings; write "None." under a heading with nothing to say.
 - Plain English, short sentences, no filler, no first person, and no mention of "the research",
