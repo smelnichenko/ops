@@ -65,6 +65,8 @@ INFRA_DROP = [
     "clusters/production/schnappy-test-mesh",
 ]
 
+YAML = (".yaml", ".yml")
+
 # platform paths the Vagrant copy leaves out (see the docstring)
 PLATFORM_DROP = [
     "helm/schnappy-mesh/templates/certificates.yaml",
@@ -197,7 +199,7 @@ def refuse_masked(name, src, ref, drops, base="origin/main"):
     hits = masked(changed, drops, replaced)
     for c in changed:
         sibling = os.path.join(over, re.sub(r"\.ya?ml$", ".vagrant.yaml", c))
-        if c.endswith((".yaml", ".yml")) and os.path.isfile(sibling):
+        if c.endswith(YAML) and os.path.isfile(sibling):
             merge = subprocess.run(["git", "-C", src, "merge-base", base, ref], capture_output=True, text=True,
                                    check=True).stdout.strip()
             hits += [f"{c}: {k}" for k in masked_keys(at(src, merge, c), at(src, ref, c),
@@ -212,23 +214,24 @@ def app_sources(spec):
     return spec.get("sources") or ([spec["source"]] if spec.get("source") else [])
 
 
+def source_paths(source):
+    """(repo, path) one Argo source renders: its path in infra or platform, and its $values files (infra's)."""
+    url = (source.get("repoURL") or "").rstrip("/").removesuffix(".git")
+    repo = next((n for n in ("infra", "platform") if url.endswith("/" + n)), None)
+    out = {(repo, source["path"].rstrip("/"))} if repo and source.get("path") else set()
+    return out | {("infra", v[len("$values/"):]) for v in (source.get("helm") or {}).get("valueFiles") or []
+                  if v.startswith("$values/")}
+
+
 def rendered(src, ref, files):
-    """(repo, path) the Argo apps and sets in files render at ref: each source's path in infra or platform, and its
-    $values files (infra's)."""
+    """(repo, path) the Argo apps and sets in files render at ref: each source's (source_paths)."""
     out = set()
     for f in files:
         r = subprocess.run(["git", "-C", src, "show", f"{ref}:{f}"], capture_output=True, text=True)
-        if r.returncode != 0:
-            continue
-        for d in yaml.safe_load_all(r.stdout):
-            spec = (d.get("spec") or {}) if isinstance(d, dict) else {}
-            for s in app_sources(spec) + app_sources((spec.get("template") or {}).get("spec") or {}):
-                url = (s.get("repoURL") or "").rstrip("/").removesuffix(".git")
-                repo = next((n for n in ("infra", "platform") if url.endswith("/" + n)), None)
-                if repo and s.get("path"):
-                    out.add((repo, s["path"].rstrip("/")))
-                out |= {("infra", v[len("$values/"):]) for v in (s.get("helm") or {}).get("valueFiles") or []
-                        if v.startswith("$values/")}
+        docs = list(yaml.safe_load_all(r.stdout)) if r.returncode == 0 else []
+        for spec in ((d.get("spec") or {}) for d in docs if isinstance(d, dict)):
+            for source in app_sources(spec) + app_sources((spec.get("template") or {}).get("spec") or {}):
+                out |= source_paths(source)
     return out
 
 
@@ -238,7 +241,7 @@ def left_out_paths(src, ref):
     and SonarQube's images read as proven on the copy, their paths in no list)."""
     files = subprocess.run(["git", "-C", src, "ls-tree", "-r", "--name-only", ref, "--", "clusters/production/argocd"],
                            capture_output=True, text=True, check=True).stdout.split()
-    files = [f for f in files if f.endswith((".yaml", ".yml"))]
+    files = [f for f in files if f.endswith(YAML)]
     dropped = [f for f in files if f in INFRA_DROP]
     return rendered(src, ref, dropped) - rendered(src, ref, [f for f in files if f not in INFRA_DROP])
 
@@ -258,7 +261,7 @@ def point_apps_at_copy(repo, forgejo):
     changed = 0
     for root, _, files in os.walk(apps):
         for f in files:
-            if not f.endswith((".yaml", ".yml")):
+            if not f.endswith(YAML):
                 continue
             p = os.path.join(root, f)
             text = open(p).read()
