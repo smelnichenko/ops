@@ -5,7 +5,7 @@ Date: 2026-11-28
 
 | Hosts | Source | What is forbidden | Clause (quoted) | Clause read at | Kind |
 |---|---|---|---|---|---|
-| stepstone.be, www.stepstone.be | StepStone Belgium | for every agent: crawling the result lists (`/5/resultlistpage`, `/5/offres-emploi-resultat.html`, `/5/resultaten-jobs-werk-zoeken.html`), the search pages (`/5/job-search-simple.html`, `/5/advanced-job-search.html`), the apply address (`/5/jobapply`) and the home address with a query string (`/?*`) | "User-agent: *", "Disallow: /?*", "Disallow: /5/resultlistpage", "Disallow: /5/offres-emploi-resultat.html", "Disallow: /5/resultaten-jobs-werk-zoeken.html", "Disallow: /5/job-search-simple.html", "Disallow: /5/advanced-job-search.html", "Disallow: /5/jobapply" | https://www.stepstone.be/robots.txt | robots.txt |
+| stepstone.be, www.stepstone.be | StepStone Belgium | for every agent: crawling the result lists (`/5/resultlistpage`, `/5/offres-emploi-resultat.html`, `/5/resultaten-jobs-werk-zoeken.html`), the search pages (`/5/job-search-simple.html`, `/5/advanced-job-search.html`), the apply address (`/5/jobapply`) and the home address with a query string (`/?*`) | "User-agent: *", "Disallow: /?*", "Disallow: /5/resultlistpage", "Disallow: /5/offres-emploi-resultat.html", "Disallow: /5/resultaten-jobs-werk-zoeken.html", "Disallow: /5/job-search-simple.html", "Disallow: /5/advanced-job-search.html", "Disallow: /5/jobapply" | https://www.stepstone.be/robots.txt | robots.txt-partial |
 
 Notes for the reader of this file (not rows):
 - The StepStone row rests on robots.txt alone. The file opens with "Any other use of robots or failure to obey

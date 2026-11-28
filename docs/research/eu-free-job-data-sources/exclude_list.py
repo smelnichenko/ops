@@ -13,6 +13,9 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 SRC = HERE / "prohibited"
 COLUMNS = ["Hosts", "Source", "What is forbidden", "Clause (quoted)", "Clause read at", "Kind"]
+# terms: a clause of the terms of use; robots.txt: the whole site closed to every agent;
+# robots.txt-partial: only some addresses (search, list or advert pages) closed to every agent.
+KINDS = ("terms", "robots.txt", "robots.txt-partial")
 HOST = re.compile(r"^[a-z\d]([a-z\d-]*[a-z\d])?(\.[a-z\d]([a-z\d-]*[a-z\d])?)+$")
 
 
@@ -44,8 +47,8 @@ def read(path):
         if bad or not hosts:
             problems.append(f"{path.name}: not host names: {bad or cells[0]}")
             continue
-        if cells[5] not in ("terms", "robots.txt"):
-            problems.append(f"{path.name}: Kind is '{cells[5]}', wanted terms or robots.txt")
+        if cells[5] not in KINDS:
+            problems.append(f"{path.name}: Kind is '{cells[5]}', wanted one of {KINDS}")
             continue
         rows.append((hosts, cells))
     return title, status, date, rows, problems
@@ -54,6 +57,7 @@ def read(path):
 def main():
     files = sorted(SRC.glob("*.md"))
     problems, md, tsv, sources, checked = [], [], [], 0, 0
+    by_kind = dict.fromkeys(KINDS, 0)
     for path in files:
         title, status, date, rows, bad = read(path)
         problems += bad
@@ -66,6 +70,7 @@ def main():
         for hosts, cells in rows:
             md.append("| " + " | ".join([", ".join(hosts)] + cells[1:]) + " |")
             sources += 1
+            by_kind[cells[5]] += 1
             checked += status.startswith("checked")
             for host in hosts:
                 tsv.append("\t".join([host, unit, "checked" if status.startswith("checked") else "first-pass",
@@ -83,7 +88,11 @@ def main():
             "reading or copying, with the clause quoted from the publisher's page. A technical refusal, an unclear "
             "term, or a paid service is NOT in this list.", "",
             f"{sources} sources ({checked} confirmed by the independent check, {sources - checked} first pass), "
-            f"{hosts_total} host names, from {len(files)} country files. "
+            f"{hosts_total} host names, from {len(files)} country files. By kind: {by_kind['terms']} by a clause of the "
+            f"terms of use (`terms`), {by_kind['robots.txt']} by a robots.txt that closes the whole site to every agent "
+            f"(`robots.txt`), {by_kind['robots.txt-partial']} by a robots.txt that closes only some addresses - search, "
+            "list or advert pages - to every agent (`robots.txt-partial`; the row says which, and the rest of the site "
+            "stays open). "
             "Machine-readable: `exclude-list.tsv` (host, unit, status, kind, source, what is forbidden, clause URL).", ""]
     (HERE / "EXCLUDE-LIST.md").write_text("\n".join(head + md).rstrip("\n") + "\n", encoding="utf-8")
     (HERE / "exclude-list.tsv").write_text(

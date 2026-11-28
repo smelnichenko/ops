@@ -5,7 +5,7 @@ Date: 2026-11-28
 
 | Hosts | Source | What is forbidden | Clause (quoted) | Clause read at | Kind |
 |---|---|---|---|---|---|
-| adem.public.lu | ADEM JobBoard (public employment service) | for every agent: crawling any address that carries a query string - which covers the JobBoard's list, offer and search addresses (`/ctie/jobboard?id=`, `/ctie/jobboard/offer?id=`, `/ctie/jobboard/search?id=`); pages without a query string are not closed | "User-agent: *", "Disallow: /*?*", "Allow: /*?b=*" | https://adem.public.lu/robots.txt | robots.txt |
+| adem.public.lu | ADEM JobBoard (public employment service) | for every agent: crawling any address that carries a query string - which covers the JobBoard's list, offer and search addresses (`/ctie/jobboard?id=`, `/ctie/jobboard/offer?id=`, `/ctie/jobboard/search?id=`); pages without a query string are not closed | "User-agent: *", "Disallow: /*?*", "Allow: /*?b=*" | https://adem.public.lu/robots.txt | robots.txt-partial |
 
 Notes for the reader of this file (not rows):
 - The row rests on two things seen on 2026-11-28: the robots.txt rule quoted, and the JobBoard page's own

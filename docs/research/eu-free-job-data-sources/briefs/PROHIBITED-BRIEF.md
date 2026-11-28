@@ -49,7 +49,9 @@ Date: <date the clauses were read>
 - **Clause (quoted)**: the deciding words in the original language, in quotation marks, with its
   clause number if it has one. No "|" inside the cell (write "/" instead).
 - **Clause read at**: the exact URL where it was read.
-- **Kind**: `terms` or `robots.txt`.
+- **Kind**: `terms` (a clause of the terms of use), `robots.txt` (the whole site closed to every
+  agent) or `robots.txt-partial` (only some addresses closed to every agent: say which, and what
+  stays open).
 - One row per source. A board that operates in several countries under one set of terms gets one
   row, in the file of the country where the terms were read, with every host the clause covers.
   Boards that are the same everywhere (Indeed, LinkedIn and the like) go in `00-EU-wide` only.
