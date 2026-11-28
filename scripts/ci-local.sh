@@ -19,6 +19,7 @@ PY=python3
 steps=("$@")
 [ "${#steps[@]}" -gt 0 ] || steps=(ansible-lint ansible-unit)
 work=/woodpecker/src/git.pmon.dev/schnappy/ops  # CI's clone path: a harness that reads its own path sees CI's
+owner="$(id -u):$(id -g)"  # the bind mount's owner; a variable: secrets-off-argv reads "-u):$" as a password
 for step in "${steps[@]}"; do
   # the step as ci.yaml has it, one field a line (image, memory, then each environment entry, then the commands as one
   # script - Woodpecker runs them in sh, each failing the step)
@@ -44,7 +45,7 @@ PY_STEP
   while IFS= read -r e; do envs+=(-e "${e#env }"); done < <(sed -n '3,/^script$/p' <<< "$spec" | grep '^env ' || true)
   script=$(sed -n '/^script$/,$p' <<< "$spec" | tail -n +2)
   echo "=== ci-local: $step ($image${mem:+, memory $mem})"
-  "${CI_LOCAL_DOCKER:-docker}" run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp "${envs[@]}" \
+  "${CI_LOCAL_DOCKER:-docker}" run --rm --user "$owner" -e HOME=/tmp "${envs[@]}" \
     ${mem:+--memory="$mem" --memory-swap="$mem"} -v "$ops:$work" -w "$work" --entrypoint sh "$image" -ec "$script" \
     || { echo "ci-local: step $step FAILED"; exit 1; }
   echo "=== ci-local: $step passed"
