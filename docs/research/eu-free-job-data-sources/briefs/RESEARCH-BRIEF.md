@@ -5,28 +5,19 @@ online for free?** "Job data" here means job vacancies and postings (the adverts
 title, employer, place, dates, text), and secondarily official vacancy statistics. The state to
 describe is the one on the day you check; write that date in every file.
 
-## Purpose of the data (added 2026-11-28, 18:40)
+## Purpose of the data
 
-The data is wanted for ONE purpose: one person's own job search and job applications - finding
-vacancies, reading them, and applying, with a program doing the reading for that person. It is NOT
-wanted for redistribution, publishing, resale, statistics, or training of models. Judge every
-source against that purpose, and record four things separately for each, quoting the clause:
+The data is wanted for ONE purpose: one person's own job search and job applications, with a
+program doing the reading for that person. Not for redistribution, resale, statistics or model
+training. So each source gets ONE verdict, and no further analysis of its terms:
 
-1. **Job-seeker use**: do the terms allow using the content to look for work and apply? (They
-   usually do; say so when they do.)
-2. **Automated reading**: do the terms or robots.txt allow, forbid, or not mention a program
-   (bot, crawler, script, API client) reading the vacancies? A ban on bots applies whatever the
-   purpose; a ban only on commercial reuse or redistribution does not block this purpose.
-3. **Keeping a private copy**: allowed, forbidden, or limited (for example "delete an advert once
-   it is withdrawn", "no caching beyond 24 hours")?
-4. **How one applies**: does the record carry an apply link, an employer e-mail or contact, or must
-   the application go through the board's own form or account?
+**Usable for own job search: yes / no / unclear**, with the reason in a few words.
+- "no" needs the one deciding clause, quoted: a ban on bots or automated queries, or the source is
+  paid or for partners only.
+- "unclear" when the terms are silent or could not be read.
+- Clauses that only restrict redistribution or commercial reuse do not count against a source.
 
-Clauses that only restrict redistribution, commercial use or database resale are noted in one line
-and do not make a source unusable. This is a reading of published terms, not legal advice: quote,
-do not interpret beyond the words.
-
-Official vacancy statistics are of no use for this purpose: skip item 6 below, or give it one line.
+Official vacancy statistics are of no use for this purpose: skip item 6 below.
 
 You research the countries named in your task. Another pass covers the EU-wide layer (EURES,
 aggregators' APIs, applicant-tracking vendors' public feeds, remote-job feeds, Eurostat, Cedefop),
@@ -131,8 +122,7 @@ Three to six sentences: the best free source, how it is obtained and on what ter
 - Registration or key:
 - Cost:
 - Licence or terms (exact wording, with URL):
-- For a personal job search: job-seeker use <allowed / forbidden / not stated>; automated reading <allowed / forbidden / not stated>; private copy <allowed / forbidden / limited / not stated>
-- How to apply:
+- Usable for own job search: <yes / no / unclear> - <reason; the deciding clause if "no">
 - Volume:
 - Update cycle:
 - Seen on <date>: <what you requested and what came back>

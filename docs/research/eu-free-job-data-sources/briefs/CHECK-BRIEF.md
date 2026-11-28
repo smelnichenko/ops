@@ -5,24 +5,20 @@ postings) in the EU. A researcher wrote one file per country in `research/`. You
 those files against the live sources, not to trust them. Assume each claim may be wrong until you
 have seen the evidence yourself.
 
-## Purpose of the data (added 2026-11-28, 18:40)
+## Purpose of the data
 
-The data is wanted for ONE purpose: one person's own job search and job applications - finding
-vacancies, reading them, and applying, with a program doing the reading for that person. It is NOT
-wanted for redistribution, publishing, resale, statistics, or training of models. Some research
-files were written before this was stated, so they judge terms more generally. For every source in
-a country's file, read the terms yourself and fill a second table (see Output) with four separate
-readings, each backed by a quoted clause and its URL:
+The data is wanted for ONE purpose: one person's own job search and job applications, with a
+program doing the reading for that person. Not for redistribution, resale, statistics or model
+training. So each source gets ONE verdict, and no further analysis of its terms:
 
-1. **Job-seeker use**: allowed / forbidden / not stated.
-2. **Automated reading** (bot, crawler, script, API client), in the terms and in robots.txt:
-   allowed / forbidden / not stated. A ban on bots applies whatever the purpose; a ban only on
-   commercial reuse or redistribution does not block this purpose - say which kind it is.
-3. **Keeping a private copy**: allowed / forbidden / limited (how) / not stated.
-4. **How one applies**: apply link in the record, employer e-mail or contact, or only through the
-   board's own form or account.
+**Usable for own job search: yes / no / unclear**, with the reason in a few words.
+- "no" needs the one deciding clause, quoted: a ban on bots or automated queries, or the source is
+  paid or for partners only.
+- "unclear" when the terms are silent or could not be read.
+- Clauses that only restrict redistribution or commercial reuse do not count against a source.
 
-This is a reading of published terms, not legal advice: quote, do not interpret beyond the words.
+For every source in a country's file, give that one verdict in a second, short table (see Output).
+Some files written earlier carry four separate readings per source; one verdict is enough.
 Official vacancy statistics are of no use for this purpose; do not spend requests on them.
 
 ## The employer route (added 2026-11-28, 18:43)
@@ -88,15 +84,14 @@ Checked on <date>. Client: <what you used>.
 
 ## For a personal job search and applications
 
-| Source | Job-seeker use | Automated reading | Private copy | How to apply | Basis (quoted clause, URL) |
-|---|---|---|---|---|---|
+| Source | Usable for own job search | Why (the deciding clause if "no") |
+|---|---|---|
 
 ## Found beyond the research
 - sources or facts the research missed, each with its evidence
 ```
 
-In the second table write the reading first in each cell (allowed / forbidden / limited / not
-stated), then a few words. One row per source, including the commercial boards.
+One row per source, including the commercial boards: yes / no / unclear, then a few words.
 
 Verdicts: CONFIRMED / CORRECTED / WRONG / UNVERIFIED / NOT DISPROVED. Put the verdict word first
 in its cell. Write each country's file before starting the next, so an interruption loses at most

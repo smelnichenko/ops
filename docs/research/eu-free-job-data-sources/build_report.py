@@ -23,7 +23,7 @@ COUNTRIES = [
     ("SI", "Slovenia"), ("SK", "Slovakia"),
 ]
 REGISTER_COLUMNS = 5  # Company register free | Register and how to get it | Licence | Website or e-mail in the data | Activity codes
-SUMMARY_COLUMNS = 7  # Readable by a program for own job search | Best source | How to read it | What its terms allow | Live vacancies | Full text and how to apply | Update cycle
+SUMMARY_COLUMNS = 7  # Readable by a program for own job search | Best source | How to read it | Terms in short | Live vacancies | Full text | Update cycle
 
 
 def summary_row(text):
@@ -91,7 +91,7 @@ def main(outputs):
            "## Overview by country", "",
            f"Readable by a program for own job search: {counts['Yes']} yes, {counts['Partly']} partly, {counts['No']} no "
            "(as each country section defines it).", "",
-           "| Country | Readable by a program for own job search | Best source | How to read it | What its terms allow | Live vacancies | Full text and how to apply | Update cycle |",
+           "| Country | Readable by a program for own job search | Best source | How to read it | Terms in short | Live vacancies | Full text | Update cycle |",
            "|---|---|---|---|---|---|---|---|",
            *rows, "",
            "## Company registers by country", "",

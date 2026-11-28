@@ -6,7 +6,7 @@ The reader is the person who asked, and developers of that person's own job-sear
 that finds vacancies, reads them and prepares applications for that one person. The data is not
 wanted for redistribution, publishing, resale, statistics or model training. They have not seen
 the research. Per country they need to know what the program may read at no cost, on what terms,
-how one applies, and which boards are for manual use only.
+and which boards are for manual use only.
 
 ## Inputs
 
@@ -30,13 +30,12 @@ country" in `report/00-EU-wide.md`, and nothing else from that file.
   searched. Do not write "does not exist".
 - A claim in the research with no row in the check: treat as unverified.
 - Something the check found beyond the research: use it, as confirmed.
-- **Terms are judged against the purpose, in four separate readings**, taken from the check's
-  second table: job-seeker use; automated reading by a program; keeping a private copy; how one
-  applies. A ban on bots or automated reading applies whatever the purpose: such a board is for
-  manual use only, however openly it answers a request. A clause that only restricts
-  redistribution, commercial reuse or resale does not block this purpose: mention it in a few
-  words and do not count it against the source. "Not stated" stays "not stated"; do not turn
-  silence into permission or into a ban. Quote the deciding clause.
+- **Terms get one verdict per source: usable for own job search - yes / no / unclear.** Take it
+  from the check's table "For a personal job search and applications" (older check files have
+  several columns there: reduce them to the one verdict - "no" where automated reading is
+  forbidden or the source is paid or partner-only, "unclear" where the terms are silent or unread,
+  otherwise "yes"). Quote the deciding clause for a "no". A clause that only restricts
+  redistribution or commercial reuse does not count against a source. No further analysis.
 - A source that needs a key: say whether the key is free and self-service, needs approval, or
   needs a contract, exactly as the inputs say. Nothing behind a key was tested; say "per its
   documentation" for what it returns.
@@ -54,21 +53,21 @@ Write `report/<CC>-<Name>.md` (same `<CC>-<Name>` as the input files) with exact
 ```
 ## <Name> (<CC>)
 
-| Readable by a program for own job search | Best source | How to read it | What its terms allow | Live vacancies | Full text and how to apply | Update cycle |
+| Readable by a program for own job search | Best source | How to read it | Terms in short | Live vacancies | Full text | Update cycle |
 |---|---|---|---|---|---|---|
-| Yes / Partly / No | name | e.g. "JSON API, no key" | e.g. "CC0" or "job search yes, bots not stated" | number, with whose figure | e.g. "full text; apply link to employer" | e.g. daily |
+| Yes / Partly / No | name | e.g. "JSON API, no key" | e.g. "CC0" or "bots not mentioned" | number, with whose figure | yes / snippets / no | e.g. daily |
 
-**In short.** Two to four sentences: what the tool should read, on what terms, how one applies, and the one thing most likely to trip a developer up.
+**In short.** Two to four sentences: what the tool should read, on what terms, and the one thing most likely to trip a developer up.
 
 ### Sources a program may read
 
-| Source | Publisher | Link | What it holds | Access | Key or registration | Terms for this purpose | How to apply | Updated | Check |
-|---|---|---|---|---|---|---|---|---|---|
+| Source | Publisher | Link | What it holds | Access | Key or registration | Usable for own job search | Updated | Check |
+|---|---|---|---|---|---|---|---|---|
 
 ### Job boards: what their terms say
 
-| Board | Link | Feed or API for reading | Automated reading under its terms | Private copy | How to apply | Check |
-|---|---|---|---|---|---|---|
+| Board | Link | Feed or API for reading | Usable for own job search (why) | Check |
+|---|---|---|---|---|
 
 ### Through the employers
 
@@ -101,8 +100,7 @@ Write `report/<CC>-<Name>.md` (same `<CC>-<Name>` as the input files) with exact
     forbid automated reading.
 - "Sources a program may read" holds only sources whose terms allow or do not forbid automated
   reading: the public employment service first, then public-sector portals, open-data datasets,
-  then the cross-border sources that cover the country. "Terms for this purpose" gives the reading
-  in a few words (for example "open licence CC0", "allowed with key, no forwarding", "not stated").
+  then the cross-border sources that cover the country.
 - "Job boards: what their terms say" lists the main commercial boards whatever their terms; it is
   where a reader sees which boards are for manual use only.
 - "Not usable for this purpose": paid products, partner-only feeds, and sources whose terms forbid

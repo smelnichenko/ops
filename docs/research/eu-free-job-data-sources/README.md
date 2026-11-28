@@ -6,10 +6,12 @@ Started 2026-11-28.
 
 **Purpose (set by the operator on 2026-11-28, 18:40):** the data is for one person's own job search
 and job applications only - a program finds vacancies, reads them and prepares applications for
-that person. Not for redistribution, publishing, resale, statistics or model training. Terms are
-therefore read four ways per source: job-seeker use, automated reading by a program, keeping a
-private copy, and how one applies. A ban on bots counts whatever the purpose; a clause that only
-restricts redistribution or commercial reuse does not block this purpose. The files
+that person. Not for redistribution, publishing, resale, statistics or model training. Each source therefore
+gets one verdict - usable for own job search: yes / no / unclear - with the deciding clause quoted
+for a "no". A ban on bots counts whatever the purpose; a clause that only restricts redistribution
+or commercial reuse does not count against a source. (For half an hour on 2026-11-28 the briefs
+asked for four separate readings per source; files from then carry them, and one verdict is taken
+from them.) The files
 `research/00-EU-wide.md` and the six Nordic and Baltic research files were written before the
 purpose was stated; their checks apply it.
 
