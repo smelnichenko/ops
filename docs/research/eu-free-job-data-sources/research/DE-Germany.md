@@ -10,7 +10,9 @@ www.stellenmarkt.de 2, www.handelsregister.de 2 (one 404), www.ihk.de 2, help.jo
 raw.githubusercontent.com 2, and 1 each to de.indeed.com, www.kleinanzeigen.de, themen.kleinanzeigen.de,
 api.karriere.nrw, karriere.nrw, ckan.open.nrw.de, e-justice.europa.eu, offeneregister.de, api.gleif.org,
 www.bitkom.org, www.haufe.de, static.dvinci-easy.com, support.dvinci.de (403), www.personio.de (429),
-www.startbase.de (403), netzpolitik.org. `rest.arbeitsagentur.de` (the job search's data endpoint) was not
+www.startbase.de (403), netzpolitik.org; for the archives question huggingface.co 3 (one a redirect),
+data.ub.uni-muenchen.de 2 (one a redirect), zenodo.org, ideas.repec.org, doi.org (redirect), iab.de 1 each.
+`rest.arbeitsagentur.de` (the job search's data endpoint) was not
 requested: the agency's terms forbid it (below). LinkedIn was not requested (terms read once for this study's
 France file).
 
@@ -452,6 +454,43 @@ No source with market shares was found.
 - Open municipal trade registers (Oldenburg, above) name businesses with address and activity, city by city,
   without websites.
 
+### Archives of past adverts
+**None found that is free, covers the market and names employers.** Looked in: GovData (the searches above),
+data.europa.eu (Germany), Zenodo (`q=Stellenanzeigen`: 8 records), web search, and the pages of the
+Bundesagentur, its research institute IAB and service.bund.de. What exists:
+- Bundesagentur für Arbeit: publishes no archive of expired adverts; its terms forbid collecting them (above).
+  service.bund.de says of itself: "eine Langzeitarchivierung von Stellenangeboten, Ausschreibungen und
+  Behördendaten erfolgt nicht."
+- IAB "Kompetenz-Kompass" dataset (not open): built inside the agency's research institute from "allen zwischen
+  April 2019 und Dezember 2023 zugegangenen Stellenanzeigen bei der Bundesagentur für Arbeit (BA) [...], die auf
+  der Stellenwebseite der BA veröffentlicht oder für die ein Vermittlungsauftrag für die BA bestand" (IAB
+  Forschungsbericht 01/2025, https://iab.de/publikationen/publikation/?id=14624794 , DOI 10.48720/IAB.FB.2501).
+  The page offers the report (259 pages, open access) and three Excel appendices; it names no download of the
+  dataset and no way to apply for it. Size and fields are not given on the page (the report describes extracted
+  competences, language skills and home-office offers). GET -> 200, 104,849 bytes.
+- A third party's scrape of the Bundesagentur's job search on Hugging Face (and, per its card, Kaggle):
+  https://huggingface.co/datasets/reapxdev/arbeitsagentur-scraper - "Rows in this dataset: 23,612", "Fields: 30",
+  "Collector runs behind it: 54", "Most recent observation: 2026-08-04"; "one structured row per posting, with
+  employer, occupation, location, coordinates, dates and a direct link"; files `arbeitsagentur-scraper.jsonl` and
+  `.csv`. Licence as stated: "This metadata and the published pages are CC BY 4.0; the underlying records remain
+  under the terms of their originating source." So: a small sample (a few per cent of one day's stock), employer
+  named, no registration number mentioned, years 2026 only as far as stated - and collected by a scraper of the
+  kind the agency's terms forbid. The field names were not seen: the data file answers with a redirect to a
+  signed storage address, not followed. GET of the card -> 200, 3,939 bytes; of `dataset.json` -> 200, 1,009 bytes.
+- One academic field: "Auswertung der Stellenanzeigen des Fachportals H-Soz-Kult" (LMU Munich, Open Data LMU,
+  https://data.ub.uni-muenchen.de/110/ , DOI 10.5282/ubm/data.110; also on GovData through open.bydata): "alle
+  Stellen des einschlägigen fachwissenschaftlichen Online-Portals H-Soz-Kult im Zeitraum 2002-2017 (1. Halbjahr)"
+  - history and art-history posts; one SQL file of 34 MB and a 9 kB description; "ODC-ODbL" v1.0. Fields not read
+  (neither file requested). Of no use for picking employers outside universities and museums.
+- Zenodo: the advert datasets among the 8 records are narrow and small - "Stellenkorpus -
+  Forschungsdaten(management) 2020.01.03-2020.11.22" (223 MB, CC BY 4.0) and "Analysematrix von
+  Stellenausschreibungen mit Forschungsdaten(management)-Schwerpunkt in Deutschland" (1.8 MB, CC BY 4.0), both
+  about research-data posts of 2020. Neither opened.
+- EU-wide sources that hold old German adverts with the employer's name are in this study's EU-wide file (topic
+  8: Web Data Commons' JobPosting subset of Common Crawl); nothing specific to Germany was added here.
+- Paid (search results only): Techmap's "historical job postings archive for Germany" on AWS Data Exchange (a
+  one-time purchase), Lightcast and TheirStack.
+
 ## Not free or not allowed
 
 - Bundesagentur für Arbeit Jobsuche: robots, web spiders and unauthorised use of its interfaces forbidden by the
@@ -492,5 +531,8 @@ No source with market shares was found.
   onlyfy, BITE, Haufe/umantis, SAP SuccessFactors and others were not examined (no vendor documentation found or
   opened). No market-share source.
 - **Employer directories**: none with websites was verified; Startbase refused the client.
+- **Archives of past adverts**: the IAB dataset's access conditions were not asked for at the IAB's research
+  data centre (FDZ); the report itself (259 pages) was not read. The Hugging Face file's field names and the
+  H-Soz-Kult file's fields were not seen. Kaggle was not searched directly.
 - **Indeed**: the date of the terms differs between this file (29 June 2026, German page) and the France file
   (1 April 2026, French page).
