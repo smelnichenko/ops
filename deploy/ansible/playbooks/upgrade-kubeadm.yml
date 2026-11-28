@@ -158,19 +158,21 @@
             mode: '0644'
 
         # read from the repository's own index, not apt's lists: a preview (--check) switches no repository to a new minor
-        # and refreshes no lists, and finds the revision all the same
+        # and refreshes no lists, and finds the revision all the same. The index lists kubeadm once an architecture (amd64,
+        # arm64, ppc64le, s390x - each the same version): one line kept, and exactly one required (four copies of the pinned
+        # revision went to apt as one version, the wave-patches proof of 2026-11-28)
         - name: The target's package revision in that repository
           check_mode: false
           ansible.builtin.shell: |
             set -o pipefail
             curl -fsSL --max-time 120 https://pkgs.k8s.io/core:/stable:/v{{ target_minor }}/deb/Packages \
               | awk '/^Package: /{p=$2} /^Version: /{if (p=="kubeadm") print $2}' \
-              {% if target_package %}| grep -Fx '{{ target_package }}'{% else %}| grep -E '^{{ target | regex_escape }}-' | sort -V | tail -1{% endif %}
+              {% if target_package %}| grep -Fx '{{ target_package }}' | sort -u{% else %}| grep -E '^{{ target | regex_escape }}-' | sort -V | tail -1{% endif %}
           args:
             executable: /bin/bash
           register: _package
           changed_when: false
-          failed_when: _package.rc != 0 or _package.stdout | length == 0
+          failed_when: _package.rc != 0 or _package.stdout.splitlines() | length != 1
 
         # a preview (--check) ends here: the checks above ran for real, and everything below acts on the installed kubeadm
         - name: Preview - what the run would do
