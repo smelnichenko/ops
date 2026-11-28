@@ -80,16 +80,24 @@ play = yaml.safe_load(open("deploy/ansible/playbooks/upgrade-kubeadm.yml"))[0]
 flat = lambda ts: [x for t in ts for x in [t] + flat(t.get("block", []) + t.get("rescue", []) + t.get("always", []))]
 sel = next(t for t in flat(play["tasks"]) if t.get("register") == "_package")
 os.makedirs(os.path.join(W, "bin"), exist_ok=True)
-open(os.path.join(W, "bin", "curl"), "w").write("#!/bin/bash\nprintf 'Package: kubeadm\\nVersion: 1.34.12-1.1\\n\\nPackage: kubeadm\\nVersion: 1.34.12-1.2\\n\\nPackage: kubelet\\nVersion: 1.34.12-1.9\\n'\n")
+# the index as pkgs.k8s.io serves it: each version once an architecture (four kubeadm entries a version)
+entries = "".join(f"Package: {p}\\nArchitecture: {a}\\nVersion: {v}\\n\\n" for p, v in (("kubeadm", "1.34.12-1.1"), ("kubeadm", "1.34.12-1.2"), ("kubelet", "1.34.12-1.9"))
+                  for a in ("amd64", "arm64", "ppc64le", "s390x"))
+open(os.path.join(W, "bin", "curl"), "w").write("#!/bin/bash\nprintf '" + entries + "'\n")
 os.chmod(os.path.join(W, "bin", "curl"), 0o755)
 def pick(pkg):
     cmd = render(sel["ansible.builtin.shell"], target="1.34.12", target_minor="1.34", target_package=pkg)
     r = subprocess.run(["bash", "-c", cmd], capture_output=True, text=True, env=dict(os.environ, PATH=os.path.join(W, "bin") + ":" + os.environ["PATH"]))
     return r.stdout.strip()
 print([pick("1.34.12-1.1"), pick(""), pick("1.34.12-1.3")])
+# one line or the task fails (its failed_when): never several versions handed to apt as one
+from templar import condition  # noqa: E402
+fw = sel["failed_when"]
+print([condition(fw, _package={"rc": 0, "stdout": o, "stdout_lines": o.splitlines()}) for o in ("1.34.12-1.1", "1.34.12-1.1\n1.34.12-1.1", "")])
 PYSEL
 )
-if [ "$r" = "['1.34.12-1.1', '1.34.12-1.2', '']" ]; then echo "PASS the package: the given revision exactly (not the newest), the newest when none is given, none when it is gone (failed)"
+if [ "$r" = "['1.34.12-1.1', '1.34.12-1.2', '']
+[False, True, True]" ]; then echo "PASS the package (the index's four architectures a version): the given revision exactly, once (not the newest), the newest when none is given, none when it is gone - one line or the task fails"
 else echo "FAIL the package selection: $r"; fails=$((fails + 1)); fi
 echo "kubeadm-preview: $([ $fails = 0 ] && echo ALL-PASS || echo "$fails FAILED")"
 [ $fails = 0 ]
